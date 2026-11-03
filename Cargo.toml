@@ -11,6 +11,9 @@ publish = false
 
 [workspace.dependencies]
 clap = { version = "4.6", features = ["derive"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+tempfile = "3.27"
+thiserror = "2.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
