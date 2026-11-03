@@ -1,0 +1,16 @@
+Record a structured handoff (JSON: summary, status, changed_files, verification, smoke, blockers, open_questions, next_action, commit, pull_request, brief). Its status moves the item; a terminal status clears the holder. A ready handoff is refused until the handoff gate runs
+
+Usage: seamlane work handoff [OPTIONS] <ID> [FILE]
+
+Arguments:
+  <ID>    
+  [FILE]  Path to the handoff JSON, or - for stdin; omit to read stdin
+
+Options:
+      --db <DB>            Path to the ledger (defaults to seamlane/ledger.db in the user data dir)
+      --stdin              Read the JSON from stdin (the default when no file is given)
+      --dry-run            Run the real write and roll it back; meta.dry_run is true
+      --format <FORMAT>    Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --agent <AGENT>      Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>  Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help               Print help

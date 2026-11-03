@@ -3,9 +3,11 @@
 
 use seamlane_core::cursor::Page;
 use seamlane_core::ledger::{Ledger, Refusal};
-use seamlane_core::work::{ClaimInput, CreateInput, UpdateInput, WorkFilter};
+use std::io::{IsTerminal, Read};
+
+use seamlane_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::cli::{ActorArgs, WorkCmd};
 use crate::output::{CliError, Meta, Outcome};
@@ -124,6 +126,44 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
             None,
             dry(dry_run),
         )??),
+        WorkCmd::Handoff {
+            id,
+            file,
+            stdin: _,
+            dry_run,
+            actor,
+        } => {
+            let raw = match file.filter(|f| f.as_os_str() != "-") {
+                Some(path) => std::fs::read_to_string(&path).map_err(|e| {
+                    Refusal::InvalidInput(format!("could not read {}: {e}", path.display()))
+                })?,
+                None => read_stdin()?,
+            };
+            let input: HandoffInput = serde_json::from_str(&raw)
+                .map_err(|e| Refusal::InvalidInput(format!("handoff JSON: {e}")))?;
+            one(ledger.work_handoff(&actor.resolve(), id, &input, None, dry(dry_run))??)
+        }
+        WorkCmd::Handoffs { id } => items(ledger.work_handoffs(id)?),
+        WorkCmd::Events { id } => items(ledger.work_events(id)?),
+        WorkCmd::Ready {
+            id,
+            yes,
+            no: _,
+            clear,
+            reason,
+            dry_run,
+            actor,
+        } => {
+            // The group makes exactly one of the three true.
+            let ready = (!clear).then_some(yes);
+            let dry_run = dry(dry_run);
+            ledger.work_ready(&actor.resolve(), id, ready, reason, None, dry_run)??;
+            // Daisy's answer for an item off the board; there is no board yet.
+            if dry_run {
+                return one(json!({ "id": id, "ready_override": ready }));
+            }
+            one(json!({ "id": id, "ready_override": ready, "on_board": false }))
+        }
         WorkCmd::Get { id } => one(ledger.work_get(id, &ledger.now()?)??),
         WorkCmd::List {
             status,
@@ -167,6 +207,31 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
             }))
         }
     }
+}
+
+/// Daisy's `arg_or_stdin`: a terminal on stdin is a usage error, not a hang.
+fn read_stdin() -> Result<String, CliError> {
+    if std::io::stdin().is_terminal() {
+        return Err(CliError::Usage {
+            message: "no handoff file and stdin is a terminal; pass a file or pipe the JSON in"
+                .into(),
+            kind: "MissingRequiredArgument".into(),
+            help: String::new(),
+        });
+    }
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(|e| CliError::Internal(format!("reading stdin: {e}")))?;
+    Ok(buf)
+}
+
+fn items(v: Vec<impl Serialize>) -> Result<Outcome, CliError> {
+    Ok(Outcome::Page(Page {
+        items: v.into_iter().map(value).collect::<Result<_, _>>()?,
+        next_cursor: None,
+        has_more: false,
+    }))
 }
 
 fn value(v: impl Serialize) -> Result<Value, CliError> {
