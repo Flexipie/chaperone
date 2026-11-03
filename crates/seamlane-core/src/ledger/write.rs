@@ -141,7 +141,9 @@ fn heartbeat(tx: &Transaction, actor: &Actor, at: &str, lane_id: i64) -> Checked
 /// Every check an event must pass before it is appended: ids it names
 /// exist, keys it takes are free, the fields its kind folds are there,
 /// `changed.from` is the current value, and a live lease held by another
-/// pair is respected. Sets the ids the write assigns and the lease expiry.
+/// pair is respected. Only lease kinds carry a lease or set the holder, and
+/// they leave the actor holding it. Sets the ids the write assigns and the
+/// lease expiry.
 fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
     use EventKind::*;
     let p = &event.payload;
@@ -151,9 +153,12 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             "payload does not survive a round trip; a rest key repeats a typed field"
         ));
     }
+    if !event.kind.leases() && (p.lease_secs.is_some() || p.lease_expires_at.is_some()) {
+        refuse!(invalid(&format!("{} carries no lease", event.kind)));
+    }
     match event.kind {
         SpecCreated | SpecRevised | SpecApproved
-            if event.lane_id.is_some() || !p.changed.is_empty() || p.lease_secs.is_some() =>
+            if event.lane_id.is_some() || !p.changed.is_empty() =>
         {
             refuse!(invalid(
                 "spec events name no lane and change no lane column"
@@ -256,13 +261,23 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 "lease_secs must be {MIN_LEASE_SECS} to {MAX_LEASE_SECS}"
             )));
         }
+        // The lease is the actor's: after the write the holder is its pair.
+        let pair = (
+            after(tx, lane_id, p, "agent")?,
+            after(tx, lane_id, p, "session")?,
+        );
+        let actor = &event.actor;
+        if pair != (actor.agent.clone().into(), actor.session.clone().into()) {
+            refuse!(invalid(&format!(
+                "{} must leave this agent and session holding the lane",
+                event.kind
+            )));
+        }
         p.lease_expires_at = Some(tx.query_row(
             "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1, '+' || ?2 || ' seconds')",
             rusqlite::params![event.at, secs],
             |r| r.get(0),
         )?);
-    } else if p.lease_secs.is_some() || p.lease_expires_at.is_some() {
-        refuse!(invalid(&format!("{} carries no lease", event.kind)));
     }
     for (field, change) in &p.changed {
         if !fold::LANE_COLUMNS.contains(&field.as_str()) {
@@ -274,10 +289,24 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 change.to
             )));
         }
-        if !matches!(change.to, Value::Null | Value::String(_)) && change.to.as_i64().is_none() {
+        let integer = fold::INTEGER_COLUMNS.contains(&field.as_str());
+        let typed = if integer {
+            change.to.as_i64().is_some()
+        } else {
+            change.to.is_string()
+        };
+        if !typed && !change.to.is_null() {
             refuse!(invalid(&format!(
-                "{field} must be text, an integer or null"
+                "{field} must be {} or null",
+                if integer { "an integer" } else { "text" }
             )));
+        }
+        // Only a lease sets the holder; other kinds may only clear it.
+        if matches!(field.as_str(), "agent" | "session")
+            && !event.kind.leases()
+            && !change.to.is_null()
+        {
+            refuse!(invalid(&format!("{} only clears {field}", event.kind)));
         }
         let current = lane_value(tx, lane_id, field)?;
         if current != change.from {
@@ -286,20 +315,18 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 change.from
             )));
         }
-        if field == "spec_id" && !change.to.is_null() {
-            let Some(spec) = change.to.as_i64() else {
-                refuse!(invalid("spec_id must be an integer or null"));
-            };
+        if field == "spec_id"
+            && let Some(spec) = change.to.as_i64()
+        {
             check!(spec_head(tx, spec));
         }
     }
     // The (spec_id, lane_key) pair is unique; refuse here, not as a SQLite error.
     if p.changed.contains_key("spec_id") || p.changed.contains_key("lane_key") {
-        let to = |field: &str| match p.changed.get(field) {
-            Some(change) => Ok(change.to.clone()),
-            None => lane_value(tx, lane_id, field),
-        };
-        let (spec, key) = (to("spec_id")?, to("lane_key")?);
+        let (spec, key) = (
+            after(tx, lane_id, p, "spec_id")?,
+            after(tx, lane_id, p, "lane_key")?,
+        );
         if exists(
             tx,
             "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2 AND id != ?3",
@@ -411,6 +438,14 @@ fn lane_value(tx: &Transaction, lane_id: i64, field: &str) -> Result<Value, Ledg
         [lane_id],
         |r| Ok(to_json(r.get_ref(0)?)),
     )?)
+}
+
+/// A lane column once the event folds: its `changed.to`, else the row's value.
+fn after(tx: &Transaction, lane_id: i64, p: &Payload, field: &str) -> Result<Value, LedgerError> {
+    match p.changed.get(field) {
+        Some(change) => Ok(change.to.clone()),
+        None => lane_value(tx, lane_id, field),
+    }
 }
 
 /// Plain ids, assigned under the write lock.
@@ -693,6 +728,19 @@ mod tests {
             (
                 AT,
                 None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
+                        lease_expires_at: Some(AT.into()),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
                 ev(EventKind::LaneUpdated, Some(1), Some(1), Payload::default()),
             ),
             (
@@ -717,6 +765,11 @@ mod tests {
                 AT,
                 None,
                 ev(EventKind::LaneRenewed, Some(2), None, lease.clone()),
+            ),
+            (
+                AT,
+                None,
+                ev(EventKind::LaneTakenOver, Some(2), None, lease.clone()),
             ),
             (
                 AT,
@@ -768,6 +821,16 @@ mod tests {
                     EventKind::LaneUpdated,
                     Some(1),
                     None,
+                    change("branch", json!(null), json!(1)),
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneUpdated,
+                    Some(1),
+                    None,
                     change("spec_id", json!(1), json!("x")),
                 ),
             ),
@@ -789,6 +852,16 @@ mod tests {
                     Some(1),
                     None,
                     change("lane_key", json!(null), json!("L")),
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneUpdated,
+                    Some(1),
+                    None,
+                    change("agent", json!(null), json!("a")),
                 ),
             ),
             (

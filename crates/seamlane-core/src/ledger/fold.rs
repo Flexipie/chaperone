@@ -31,6 +31,10 @@ pub(super) const LANE_COLUMNS: &[&str] = &[
     "viewer_hint",
 ];
 
+/// The `LANE_COLUMNS` that store an integer; the rest store text.
+pub(super) const INTEGER_COLUMNS: &[&str] =
+    &["spec_id", "pid", "exit_code", "port_base", "port_count"];
+
 pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
     use EventKind::*;
     let p = &e.payload;
