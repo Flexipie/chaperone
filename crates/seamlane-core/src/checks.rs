@@ -96,7 +96,7 @@ impl Ledger {
             return invalid("--decision yes|no goes with merge_verdict, and only there".into());
         }
         let counted = matches!(input.check.as_str(), "plan_check" | "quality_gate");
-        if input.findings.is_some() && !counted || counted && !skipped && input.findings.is_none() {
+        if input.findings.is_some() != (counted && !skipped) {
             return invalid("--findings <n> is required for a plan_check or quality_gate that ran, and only there".into());
         }
         let mut payload = Payload {
