@@ -282,27 +282,6 @@ impl Ledger {
                 if let Some(other) = other {
                     return invalid(format!("job {job} is recorded on work item {other}"));
                 }
-                // Daisy's job ids only go up, and a done job stays done, so
-                // a late write never takes the lane back to an older state.
-                let (newest, finished): (Option<i64>, bool) = conn.query_row(
-                    "SELECT max(json_extract(payload_json, '$.job')),
-                            count(*) FILTER (WHERE kind = 'check.finished'
-                              AND json_extract(payload_json, '$.job') = ?3) > 0
-                     FROM events WHERE lane_id = ?1
-                       AND kind IN ('check.requested', 'check.finished')
-                       AND json_extract(payload_json, '$.check') = ?2",
-                    params![work, check, job],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )?;
-                if newest.is_some_and(|n| n > job) {
-                    return invalid(format!(
-                        "work item {work} has a newer {check} job ({}) than {job}",
-                        newest.unwrap_or_default()
-                    ));
-                }
-                if kind == EventKind::CheckRequested && finished {
-                    return invalid(format!("job {job} is already recorded finished"));
-                }
                 if outcome == Some("ran") && check == "local_review" {
                     let rounds: i64 = conn.query_row(
                         "SELECT count(*) FROM events WHERE lane_id = ?1

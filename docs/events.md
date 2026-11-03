@@ -193,7 +193,9 @@ it. `smoke.recorded` and `kept_tests.recorded` are true once any such check is r
 one's sha, and `review.previous_round_closed` holds when that round has no `open`
 finding. `daisy_review.state` is `running` while a requested job (or a request with no
 job) has no finish, else the latest finished review's (`finished`, or `failed` when
-skipped), else `absent`. Facts whose producer is reserved stay absent, so a gate that
+skipped), else `absent`. A finish recorded after a newer job's finish of the same check
+closes its request and counts its round, but leaves the state, head and newest round on
+the newer job (daisy's job ids only go up). Facts whose producer is reserved stay absent, so a gate that
 reads one denies: `kept_tests.bar_ok`, `verification.unexplained_failures`,
 `brief.oversize`, `review.code_changed_since`, `diff.code_lines`, `ci.state`,
 `threads.human_open`, `pr.is_draft`, `pr.conflicting`, `human.merge_yes`,

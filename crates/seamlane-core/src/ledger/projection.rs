@@ -46,6 +46,9 @@ pub(crate) fn project(
     // A request with no job can never be matched by a finish, so it stays
     // running: it fails closed.
     let (mut requested, mut finished) = (BTreeSet::new(), BTreeSet::new());
+    // The newest daisy job finished per review check. Daisy's ids only go
+    // up, so a late finish of an older job never moves the lane back.
+    let mut newest_job = BTreeMap::new();
     // The first time each quality gate (outcome, reason) was recorded, and
     // the latest one's key.
     let (mut qg_first, mut qg_latest) = (BTreeMap::new(), None);
@@ -86,11 +89,21 @@ pub(crate) fn project(
                         if job.is_some() {
                             finished.insert(job);
                         }
-                        review_state = if ran { "finished" } else { "failed" };
-                        if check == "local_review" && ran {
+                        let older = p.rest.get("job").and_then(Value::as_i64).is_some_and(|id| {
+                            let newest = newest_job.entry(check.to_string()).or_insert(id);
+                            *newest = id.max(*newest);
+                            id < *newest
+                        });
+                        let local_round = check == "local_review" && ran;
+                        if local_round {
                             rounds += 1;
-                            latest_round = Some(e.id);
-                            set(&mut f, "review.local_head", p.head_sha.as_deref());
+                        }
+                        if !older {
+                            review_state = if ran { "finished" } else { "failed" };
+                            if local_round {
+                                latest_round = Some(e.id);
+                                set(&mut f, "review.local_head", p.head_sha.as_deref());
+                            }
                         }
                     }
                     _ => {}
@@ -474,5 +487,48 @@ requires = ["quality_gate_before_pr"]
         );
         lane.check("local_review", "ran", json!({"job": 9}), T[3]);
         assert_eq!(lane.facts().get("daisy_review.state"), &s("running"));
+    }
+
+    /// Older jobs that finish after a newer one close their requests and
+    /// count their rounds, but the lane stays on the newer job.
+    #[test]
+    fn older_job_finished_late_stays_behind() {
+        let lane = Lane::new("code");
+        let local = |job: i64, outcome: &str, head: &str, findings: Vec<Finding>| {
+            let mut p = Payload {
+                check: Some("local_review".into()),
+                outcome: Some(outcome.into()),
+                head_sha: Some(head.into()),
+                findings: Some(Findings::List(findings)),
+                ..Payload::default()
+            };
+            p.rest.insert("job".into(), json!(job));
+            lane.apply(EventKind::CheckFinished, p, T[2]);
+        };
+        for job in [9, 10] {
+            let mut p = Payload {
+                check: Some("local_review".into()),
+                head_sha: Some("abc1234".into()),
+                ..Payload::default()
+            };
+            p.rest.insert("job".into(), json!(job));
+            lane.apply(EventKind::CheckRequested, p, T[1]);
+        }
+        local(11, "ran", "def5678", vec![]);
+        let open = Finding {
+            finding_key: "f1".into(),
+            severity: "nit".into(),
+            title: "t".into(),
+            body: "b".into(),
+            path: None,
+            rest: Default::default(),
+        };
+        local(9, "ran", "abc1234", vec![open]);
+        local(10, "skipped", "abc1234", vec![]);
+        let f = lane.facts();
+        assert_eq!(f.get("daisy_review.state"), &s("finished"));
+        assert_eq!(f.get("review.local_rounds"), &Fact::Int(2));
+        assert_eq!(f.get("review.local_head"), &s("def5678"));
+        assert_eq!(f.get("review.previous_round_closed"), &Fact::Bool(true));
     }
 }
