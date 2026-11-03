@@ -78,8 +78,8 @@ the row. `lane.renewed` carries the lease, and `lane.ready_overridden` changes n
 
 | Kind | Action | Payload |
 | --- | --- | --- |
-| `lane.created` | `create` | `title`, `source`, `source_id`, `repo`, `next_action`, `spec_id`, `lane_key`, `lane_pos` |
-| `lane.claimed` | `claim` | `lease_secs`, `lease_expires_at`, `worktree`, `branch`, `base_sha`, `pipeline_id`, `pipeline_hash`, `route`, `changed` |
+| `lane.created` | `create` | `title`, `source`, `source_id`, `repo`, `next_action`, `spec_id`, `lane_key`, `lane_pos`, `kind` |
+| `lane.claimed` | `claim` | `lease_secs`, `lease_expires_at`, `worktree`, `branch`, `base_sha`, `pipeline_id`, `pipeline_hash`, `pr_flow`, `route`, `changed` |
 | `lane.renewed` | `renew` | `lease_secs`, `lease_expires_at` |
 | `lane.taken_over` | `takeover` | `from {agent, session}`, `reason` (`lease expired` or `forced`), `expired_at` or `live_until`, `lease_secs`, `lease_expires_at`, `changed` |
 | `lane.updated` | `update` | `changed`, optional `reason` |
@@ -89,7 +89,7 @@ the row. `lane.renewed` carries the lease, and `lane.ready_overridden` changes n
 | `lane.handed_off` | `handoff` | `handoff_id`, `handoff` (daisy's `HandoffInput`: `summary`, `status`, `changed_files`, `verification`, `smoke`, `blockers`, `open_questions`, `next_action`, `commit`, `pull_request`, `ready`, `brief`), `changed` |
 | `lane.ready_overridden` | `ready_override` | `ready` (`true`, `false`, or `null` for `--clear`), `reason` |
 
-The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the first
+The stamp (`pipeline_id`, `pipeline_hash`, `pr_flow`, `route`) is written once, on the first
 `lane.claimed`. A takeover keeps it. An unknown hash refuses the claim
 (`pipeline_unknown`).
 
@@ -155,13 +155,13 @@ reasons) are reserved for a `--file` input after M1.
 
 | Table | M1 rule |
 | --- | --- |
-| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the latest handoff's `ready` field, or the `work ready` override, which wins over every handoff until `--clear`, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `id` is the lane id, `idempotency_key` comes from `lane.created`, `lease_state` is computed at read time, and `linear_outbox` and `repo_id` are always null. `phase` is null until the first `phase.entered`, then its `to`; M1's `handoff` has no `from` constraint. `head_event_id` is the id of the lane's latest event of any kind. `spec_id`, `lane_key` and the pipeline columns are nullable until set. `events.idempotency_key` is nullable. |
+| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the latest handoff's `ready` field, or the `work ready` override, which wins over every handoff until `--clear`, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `kind`, `pr_flow`, `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `id` is the lane id, `idempotency_key` comes from `lane.created`, `lease_state` is computed at read time, and `linear_outbox` and `repo_id` are always null. `phase` is null until the first `phase.entered`, then its `to`; M1's `handoff` has no `from` constraint. `head_event_id` is the id of the lane's latest event of any kind. `spec_id`, `lane_key` and the pipeline columns are nullable until set. `events.idempotency_key` is nullable. |
 | `gate_results` | One row per `(lane_id, check, head_sha)`. `status` is `ran` or `skipped`. The latest `check.finished` on that key wins. |
 | `findings` | One row per `(check_event_id, finding_key)`. `status` is `open`, `fixed` or `answered`. |
 
 R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` and `pipeline_version`, and its `gate_results.gate` and `findings.review_event_id` names are replaced by the ones above.
 
-**Lane facts in M1.** No M1 command takes a lane kind, a changes-code flag or a PR flow. So every lane projects `lane.kind` `code`, `lane.changes_code` true and route `code_pr`. A `skipped` plan check or quality gate is recorded, but it does not pass the M1 `handoff` gate. This fails closed until an input for kind exists.
+**Lane facts in M1.** `lane.kind` comes from `work create --kind` (`code`, `measure`, `investigation`, `docs` or `tests`; default `code`, so a lane that says nothing fails closed). `pr.flow` comes from `work claim --pr-flow` (`pr`, `direct` or `none`; default `pr`). The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `no_pr` if the flow is `none`, else `direct` if the flow is `direct`, else `code_pr`. Until `diff_measured` exists, `lane.changes_code` is true exactly when the kind is `code`. So a `docs` or `tests` lane may skip its plan check and quality gate with that reason, and a `code` lane may not.
 
 ## Reserved
 

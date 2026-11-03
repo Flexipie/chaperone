@@ -92,10 +92,10 @@ Every write also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional
 
 | Command | Argv | Kind |
 | --- | --- | --- |
-| `work create` | `--title <t> [--source] [--source-id] [--repo] [--next-action] [--idempotency-key] [--spec] [--lane] [--lane-pos]` | write |
+| `work create` | `--title <t> [--source] [--source-id] [--repo] [--next-action] [--idempotency-key] [--spec] [--lane] [--lane-pos] [--kind code\|measure\|investigation\|docs\|tests]` | write |
 | `work get` | `<id>` | read |
 | `work list` | `[--status] [--agent] [--mine] [--all] [--session] [--mine-agent] [--limit] [--cursor]` | read, paged |
-| `work claim` | `<id> [--worktree] [--branch] [--base-sha] [--lease-secs] [--takeover]` | write |
+| `work claim` | `<id> [--worktree] [--branch] [--base-sha] [--lease-secs] [--takeover] [--pr-flow pr\|direct\|none]` | write |
 | `work update` | `<id> --expected-updated-at <t> [--status] [--reason] [--blocker] [--next-action] [--pr] [--branch] [--base-sha] [--spec] [--lane] [--lane-pos]` | write |
 | `work heartbeat` | `<id>` | write, no event |
 | `work release` | `<id>` | write |
@@ -114,6 +114,8 @@ Every write also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
+
+`--kind` and `--pr-flow` are Seamlane's two additions to daisy's argv. Both are optional. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. `--pr-flow` counts only on the first claim, because the route is stamped then.
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`.
 
@@ -162,7 +164,7 @@ handoff). Routes without a PR skip the PR gates as v17 says. Ready comes from a
 handoff's `ready` (or the owner's `work ready` override), so a handoff cannot mark a lane
 ready without passing this gate. There is no `next_action` fallback for ready (events.md,
 folded rows). A `needs you` handoff is not gated, so it always reaches the owner. A
-missing fact fails closed, and in M1 every lane projects route `code_pr` (events.md, lane
+missing fact fails closed. The route comes from `--kind` and `--pr-flow` (events.md, lane
 facts). The
 denial exits 1 with `gate_denied`, names the failing gate id on stderr, and leaves the
 lane where it was.
