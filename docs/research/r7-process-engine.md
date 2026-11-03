@@ -50,7 +50,7 @@ It fails the versioning bet. A process change would be a harness release, in-fli
 
 ### TOML
 
-TOML has no expressions. That is the property we want. The file names phases, routes, transitions, and gates. Arguments are literals (`min_len = 7`, `value = 750`). Boolean structure is three combinators, `all`, `any`, and `not`, applied to named checks. There is no loop, no function call into the ledger, and no way to read a file from the pipeline document.
+TOML has no expressions. That is the property we want. The file names phases, routes, transitions, and gates. Arguments are literals (`value = 750`), or the name of a `[limits]` entry (`limit = "code_lines"`; amended in [`pipelines/v17.toml`](../../pipelines/v17.toml), whose header lists the argument forms). Boolean structure is three combinators, `all`, `any`, and `not`, applied to named checks. There is no loop, no function call into the ledger, and no way to read a file from the pipeline document.
 
 The host owns the predicate functions and the fact projection. A gate author can require `verdict_on_head` on a new transition without a release. They cannot redefine "sha prefix" inside the pipeline file. That split is what keeps a version diff honest: either a gate id was added, removed, or its arguments changed, or a host function changed in a harness release (rare, reviewed, unit-tested once for every version that names it).
 
@@ -132,9 +132,9 @@ Host functions. The document only names them and passes literal arguments.
 | `present` | The fact path is not absent. |
 | `eq` | Fact equals a literal. |
 | `lte` / `gt` | Numeric comparison. |
-| `sha_prefix_eq` | `left` is 7 to 40 hex digits and `right` starts with `left`. This is the ship-handoff rule. |
+| `sha_prefix_eq` | `left` is 7 to 40 hex digits and `right` starts with `left`. This is the ship-handoff rule. (Amended: the bounds come from `[limits]` `sha_min`/`sha_max`.) |
 | `one_of` | Fact is one of a list of literals. |
-| `plan_check_matches_lane` | `changes_code` implies `outcome = ran`. Otherwise `outcome = skipped` and `reason` is `measure`, `investigation`, or `docs`. |
+| `plan_check_matches_lane` | `changes_code` implies `outcome = ran`. Otherwise `outcome = skipped` and `reason` is `measure`, `investigation`, or `docs`. (Amended: the allowed reasons are the gate's `reasons` argument, which adds `tests`.) |
 | `quality_gate_matches_lane` | Same shape: ran when there is code, `skipped` only when there is not. |
 | `event_before` | Both events exist and `earlier.at` is before `later.at`. Vacuous when the later event is absent (no PR on this route). |
 | `reviewed_head_ok` | `review.local_head` equals `commit.sha`, or `review.code_changed_since` is false. |
@@ -151,7 +151,7 @@ The stamp is the id plus the semantic hash of the flattened document:
 1. Resolve `extends` (child gates and transitions replace the parent row with the same id; `drop` lists removals).
 2. Drop comments and formatting.
 3. Sort object keys. Sort gate tables and transition tables by `id`. Preserve `requires` order, because the first failing gate is part of the behavior.
-4. Serialize with JSON Canonicalization (RFC 8785) and take SHA-256.
+4. Serialize with JSON Canonicalization (RFC 8785) and take SHA-256. (Amended: sorted `serde_json` without RFC 8785, [ADR 0004](../decisions/0004-pipeline-semantic-hash.md).)
 
 A comment-only edit does not fork the cohort. An argument change does. `lane-stats` groups by the hash, and prints the id as the label. Today's grouping key, the `## vN` heading, becomes that label.
 
@@ -169,6 +169,8 @@ target_lanes = 25
 The engine does not refuse to publish the next version when the count is under 25. The freeze rule is an editorial rule with a stated exception (a broken gate). The number is there so the report can say a version closed early.
 
 ## v17 document
+
+The published v17 is [`pipelines/v17.toml`](../../pipelines/v17.toml), which amends the draft below with the fixes agreed for #1 (its header lists them). The draft stays as written.
 
 Route choice at claim: `investigation` if `lane.kind` is `investigation`; else `no_pr` if `pr.flow` is `none`; else `direct` if `pr.flow` is `direct`; else `code_pr`.
 
