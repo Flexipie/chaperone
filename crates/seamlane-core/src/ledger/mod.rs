@@ -22,7 +22,7 @@ pub use event::{
 };
 use migrate::user_version;
 pub(crate) use write::Checked;
-pub use write::{KINDS, PR_FLOWS, STATUSES};
+pub use write::{KINDS, PR_FLOWS, SOURCES, STATUSES};
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
 

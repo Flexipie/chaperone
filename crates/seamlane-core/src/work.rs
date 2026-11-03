@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 
 use crate::cursor::{self, Cursor, Page};
 use crate::ledger::{
-    Actor, Applied, Checked, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal, STATUSES,
+    Actor, Applied, Checked, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal, SOURCES,
+    STATUSES,
 };
 
 const ENTITY: &str = "work item";
@@ -283,24 +284,28 @@ fn get_row(conn: &Connection, id: i64, now: &str) -> Result<Option<WorkItem>, Le
 
 /// A spec by id, or by its parent key in any case.
 fn resolve_spec(conn: &Connection, spec: &str) -> Checked<i64> {
-    let found = match spec.parse::<i64>() {
-        Ok(id) => conn.query_row("SELECT id FROM specs WHERE id = ?1", [id], |r| r.get(0)),
-        Err(_) => conn.query_row(
-            "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE",
-            [spec],
-            |r| r.get(0),
-        ),
-    }
-    .optional()?;
-    Ok(found.ok_or_else(|| Refusal::NotFoundRef {
-        entity: "spec",
-        reference: spec.into(),
-    }))
+    let spec = spec.trim();
+    Ok(match spec.parse::<i64>() {
+        Ok(id) => conn
+            .query_row("SELECT id FROM specs WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?
+            .ok_or(Refusal::NotFound { entity: "spec", id }),
+        Err(_) => conn
+            .query_row(
+                "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE",
+                [spec],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| Refusal::NotFoundRef {
+                entity: "spec",
+                reference: spec.into(),
+            }),
+    })
 }
 
 /// Daisy's create rules: trimmed title, a known source with a source id in
-/// its shape, a Linear key uppercased, lane and key length caps. Kind and
-/// pr_flow default to the strictest route.
+/// its shape, a Linear key uppercased, lane and key length caps.
 fn create_payload(input: &CreateInput) -> Result<(Payload, Option<String>), Refusal> {
     let invalid = |m: String| Err(Refusal::InvalidInput(m));
     let trimmed = |s: &Option<String>| {
@@ -314,6 +319,9 @@ fn create_payload(input: &CreateInput) -> Result<(Payload, Option<String>), Refu
         return invalid("title is empty".into());
     }
     let source = input.source.as_deref().unwrap_or("manual");
+    if !SOURCES.contains(&source) {
+        return invalid(format!("source must be one of {SOURCES:?}, got '{source}'"));
+    }
     let source_id = trimmed(&input.source_id).map(|s| {
         if source == "linear" {
             s.to_uppercase()
