@@ -133,6 +133,14 @@ impl ErrorBody {
                     format!("held by {by} until {until}; pass --takeover to take it"),
                     Some(json!({ "by": by, "until": until })),
                 ),
+                Refusal::PipelineUnknown {
+                    pipeline_id,
+                    pipeline_hash,
+                } => body(
+                    "pipeline_unknown",
+                    format!("this binary cannot load pipeline {pipeline_id} {pipeline_hash}"),
+                    Some(json!({ "pipeline_id": pipeline_id, "pipeline_hash": pipeline_hash })),
+                ),
             },
             CliError::Ledger(l) => {
                 let mismatch = |found: Value, hint: &str| {

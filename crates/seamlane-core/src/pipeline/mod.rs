@@ -10,6 +10,7 @@ mod hash;
 mod load;
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -155,8 +156,54 @@ impl Pipeline {
     }
 }
 
+/// The documents this binary can load, newest last. A claim stamps the
+/// newest; a lane stamped with anything else is `pipeline_unknown`.
+static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
+    [include_str!("../../../../pipelines/v17.toml")]
+        .iter()
+        .map(|src| {
+            Pipeline::load(src).expect("embedded pipelines load (v17_loads_with_pinned_hash)")
+        })
+        .collect()
+});
+
+/// The pipeline a new claim stamps.
+pub fn current() -> &'static Pipeline {
+    &KNOWN[KNOWN.len() - 1]
+}
+
+/// The loaded document for a lane's stamp, `None` when this binary has no
+/// document with that id and hash.
+pub fn by_stamp(id: &str, hash: &str) -> Option<&'static Pipeline> {
+    KNOWN.iter().find(|p| p.id == id && p.hash == hash)
+}
+
+impl Route {
+    /// The route a lane takes, chosen once at its first claim (events.md,
+    /// lane facts in M1): an investigation, else direct on a direct flow,
+    /// else a PR.
+    pub fn for_lane(kind: &str, pr_flow: &str) -> Route {
+        match (kind, pr_flow) {
+            ("investigation", _) => Route::Investigation,
+            (_, "direct") => Route::Direct,
+            _ => Route::CodePr,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Route::CodePr => "code_pr",
+            Route::Direct => "direct",
+            Route::NoPr => "no_pr",
+            Route::Investigation => "investigation",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     const V17: &str = include_str!("../../../../pipelines/v17.toml");
@@ -217,6 +264,33 @@ requires = ["a"]
         assert!(handoff.iter().all(|t| t.from.is_none()));
         let ready = handoff.iter().find(|t| t.to == Phase::Ready).unwrap();
         assert!(!ready.routes.contains(&Route::Investigation));
+    }
+
+    #[test]
+    fn current_is_v17_and_by_stamp_needs_id_and_hash() {
+        assert_eq!(
+            (current().id.as_str(), current().hash.as_str()),
+            ("v17", V17_HASH)
+        );
+        assert!(by_stamp("v17", V17_HASH).is_some());
+        assert!(by_stamp("v17", "forged").is_none());
+        assert!(by_stamp("v18", V17_HASH).is_none());
+    }
+
+    #[test]
+    fn route_for_lane() {
+        for (kind, flow, route) in [
+            ("code", "pr", Route::CodePr),
+            ("docs", "pr", Route::CodePr),
+            ("measure", "pr", Route::CodePr),
+            ("code", "direct", Route::Direct),
+            ("docs", "direct", Route::Direct),
+            ("investigation", "pr", Route::Investigation),
+            ("investigation", "direct", Route::Investigation),
+        ] {
+            assert_eq!(Route::for_lane(kind, flow), route, "{kind} {flow}");
+            assert_eq!(json!(route), json!(route.as_str()));
+        }
     }
 
     #[test]
