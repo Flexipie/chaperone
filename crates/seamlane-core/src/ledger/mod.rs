@@ -7,7 +7,7 @@ mod error;
 mod event;
 mod fold;
 mod migrate;
-mod projection;
+pub(crate) mod projection;
 mod write;
 
 use std::ffi::OsString;

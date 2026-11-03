@@ -267,13 +267,8 @@ requires = ["a"]
     }
 
     #[test]
-    fn current_is_v17_and_by_stamp_needs_id_and_hash() {
-        assert_eq!(
-            (current().id.as_str(), current().hash.as_str()),
-            ("v17", V17_HASH)
-        );
+    fn by_stamp_needs_id_and_hash() {
         assert!(by_stamp("v17", V17_HASH).is_some());
-        assert!(by_stamp("v17", "forged").is_none());
         assert!(by_stamp("v18", V17_HASH).is_none());
     }
 

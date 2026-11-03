@@ -639,12 +639,12 @@ fn insert(tx: &Transaction, e: &Event) -> Result<i64, LedgerError> {
     )?)
 }
 
-pub(crate) const EVENT_COLUMNS: &str =
+pub(super) const EVENT_COLUMNS: &str =
     "id, kind, lane_id, spec_id, actor_agent, actor_session, idempotency_key, payload_json, at";
 
 /// Reads an `EVENT_COLUMNS` row. A kind or payload this binary cannot read
 /// is an error, never a skipped event.
-pub(crate) fn event_from_row(r: &Row) -> Result<Event, LedgerError> {
+pub(super) fn event_from_row(r: &Row) -> Result<Event, LedgerError> {
     let kind: String = r.get(1)?;
     let payload: String = r.get(7)?;
     Ok(Event {

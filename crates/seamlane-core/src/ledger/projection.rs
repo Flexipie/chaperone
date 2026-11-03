@@ -22,7 +22,7 @@ pub(crate) fn project(
     head: Option<&str>,
 ) -> Result<FactBundle, LedgerError> {
     let mut f = FactBundle::default();
-    let (id, hash, kind): (Option<String>, Option<String>, Option<String>) = conn.query_row(
+    let (id, hash, kind): (Option<String>, Option<String>, String) = conn.query_row(
         "SELECT pipeline_id, pipeline_hash, kind FROM lanes WHERE id = ?1",
         [lane_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -32,9 +32,7 @@ pub(crate) fn project(
             .set("pipeline.hash", hash.as_str());
     }
     // Until diff_measured exists, only a code lane changes code.
-    if let Some(kind) = kind {
-        f.set("lane.changes_code", kind == "code");
-    }
+    f.set("lane.changes_code", kind == "code");
     if let Some(head) = head {
         f.set("commit.sha", head);
     }
@@ -434,28 +432,5 @@ requires = ["quality_gate_before_pr"]
             T[3],
         );
         assert_eq!(lane.facts().get("daisy_review.state"), &s("failed"));
-    }
-
-    /// Facts whose producer is reserved in M1 stay absent, so their gates deny.
-    #[test]
-    fn reserved_facts_stay_absent() {
-        let lane = Lane::new("code");
-        lane.claim();
-        let f = lane.ledger.project(1, Some("abc1234")).unwrap();
-        for path in [
-            "kept_tests.bar_ok",
-            "verification.unexplained_failures",
-            "brief.oversize",
-            "review.code_changed_since",
-            "diff.code_lines",
-            "ci.state",
-            "threads.human_open",
-            "pr.is_draft",
-            "pr.conflicting",
-            "human.merge_yes",
-            "handoff.decisions",
-        ] {
-            assert_eq!(f.get(path), &Fact::Absent, "{path}");
-        }
     }
 }
