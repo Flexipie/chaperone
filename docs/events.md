@@ -1,0 +1,200 @@
+# Event schema
+
+Version **0**, 2026-11-03. The event schema and the integration contract share this
+number ([CONTRIBUTING.md](../CONTRIBUTING.md) "Versions"). A removed or renamed kind or
+field bumps it. A new nullable field does not. Kind and field names become one-way once
+a real ledger exists (after the first demo).
+
+This file is the source the `EventKind` enum is checked against (the drift test, #5).
+The CLI that writes these events is [cli-contract.md](cli-contract.md). Evidence:
+[R5](research/r5-state-and-storage.md) (log and fold), [R7](research/r7-process-engine.md)
+(engine), [R10](research/r10-verification-review-layer.md) (checks).
+[ADR 0003](decisions/0003-seamlane-replaces-daisy.md) is why daisy reads none of this.
+
+## Envelope
+
+One row in `events`. The log is the truth. Every other table is a fold of it.
+
+| Field | Type | Rule |
+| --- | --- | --- |
+| `id` | integer | Log order. Assigned by the write, never reused. |
+| `kind` | text | One of the M1 kinds below. A reserved kind is refused. |
+| `lane_id` | integer, nullable | Null for spec events. |
+| `spec_id` | integer, nullable | Null for a lane created without `--spec`. |
+| `actor` | `{agent, session, tool}` | From `--agent` / `--session` (or `DAISY_AGENT` / `DAISY_SESSION`). `tool` is always `seamlane`. |
+| `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (daisy's rule, key only). |
+| `at` | RFC 3339 UTC, ms | Passed in. The write function does not read the clock. |
+| `payload` | JSON object | Typed per kind, below. |
+
+## Write rules
+
+These rules keep every write small, single and fail-closed.
+
+- **One command, one event, one transaction.** Each command appends exactly one event and
+  folds it inside one `BEGIN IMMEDIATE` transaction. A crash leaves the event and its
+  fold both there or both absent.
+- **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
+  `gate.denied` and nothing else. Its key is
+  `deny:<lane_id>:<transition>:<gate>:<lane head event id>`, so a retry with no new facts
+  replays the same denial instead of appending again.
+- **Replays.** A retry with the same key returns the stored event, even if the new
+  payload differs. Commands that take no `--idempotency-key` derive one: `check record`
+  uses `check:` plus the sha256 of its canonical payload, and `reviews record` uses
+  `review:<job>:requested` or `review:<job>:finished`.
+- **Small payloads.** No secrets (redacted at write, [R13](research/r13-security-and-trust.md)),
+  no blobs. Evidence files sit beside the ledger, named by content hash, and the payload
+  carries only the hash (`evidence_ref`). Spec bodies are capped at 256 KiB, handoff
+  summaries at 4000 characters, and finding bodies at daisy's 600 characters. Over a
+  cap is `invalid_input`.
+- **Heartbeat writes no event.** It touches only `last_heartbeat_at` and
+  `lease_expires_at` on the lane row. Those two columns are outside the fold:
+  `rebuild()` keeps their live values and folds everything else from the log.
+- **One event folds status.** A gated move folds status through `phase.entered`. An
+  ungated move folds it through the command's own event (`lane.updated`, and so on).
+  Status is never folded twice by one command.
+
+## M1 kinds
+
+### Spec
+
+| Kind | Command | Payload |
+| --- | --- | --- |
+| `spec.created` | `spec create` | `parent_key`, `title`, `version` (1), `body` |
+| `spec.revised` | `spec update`, `spec decide` | `version`, `body`, `reason`, optional `decision {slice, key, question, answer, where, date}` (set by `decide`) |
+| `spec.approved` | `spec approve` | `version` |
+
+### Lane
+
+A lane is a work item. `work events` shows the daisy action in the second column, so
+`lane-stats` reads the ledger unchanged. Every kind that changes the row carries
+`changed {field: {from, to}}`, which is how `rebuild()` reproduces the row.
+
+| Kind | Action | Payload |
+| --- | --- | --- |
+| `lane.created` | `create` | `title`, `source`, `source_id`, `repo`, `next_action`, `spec_id`, `lane_key`, `lane_pos` |
+| `lane.claimed` | `claim` | `lease_secs`, `lease_expires_at`, `worktree`, `branch`, `base_sha`, `pipeline_id`, `pipeline_hash`, `route`, `changed` |
+| `lane.renewed` | `renew` | `lease_secs`, `lease_expires_at` |
+| `lane.taken_over` | `takeover` | `from {agent, session}`, `reason` (`lease expired` or `forced`), `expired_at` or `live_until`, `lease_secs`, `lease_expires_at`, `changed` |
+| `lane.updated` | `update` | `changed`, optional `reason` |
+| `lane.reopened` | `reopen` | `changed` (status `done` or `cancelled` to `queued`), `reason` |
+| `lane.cancelled` | `cancel` | `changed`, `reason` |
+| `lane.released` | `release` | `changed` (status `claimed` to `queued`, holder cleared) |
+| `lane.handed_off` | `handoff` | `handoff_id`, `handoff` (daisy's `HandoffInput`: `summary`, `status`, `changed_files`, `verification`, `smoke`, `blockers`, `open_questions`, `next_action`, `commit`, `pull_request`, `ready`, `brief`), `changed` |
+| `lane.ready_overridden` | `ready_override` | `ready` (`true`, `false`, or `null` for `--clear`), `reason` |
+
+The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the first
+`lane.claimed`. A takeover keeps it. An unknown hash refuses the claim
+(`pipeline_unknown`).
+
+### Engine
+
+| Kind | Written when | Payload |
+| --- | --- | --- |
+| `phase.entered` | A gated command passes (`work handoff` to `review` or `done`, `work update --status done`) | `transition`, `from`, `to`, `status`, `head_sha`, plus the command's fields: `changed`, and `handoff_id` and `handoff` for a handoff |
+| `gate.denied` | A gated command fails | `transition`, `gate` (the first failing gate id), `fact_paths` (what that gate read), `head_sha` |
+
+A passing gated handoff appends `phase.entered` *instead of* `lane.handed_off`. It is
+the command's one event. `work events` shows it with the command's action (`handoff` or
+`update`).
+
+### Checks
+
+| Kind | Command | Payload |
+| --- | --- | --- |
+| `check.requested` | `reviews record`, job still queued or running | `check` (`local_review` or `pr_review`), `job`, `head_sha` |
+| `check.finished` | `check record`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
+| `finding.updated` | none in M1 (folded and tested through `Ledger::apply`, #16) | `check_event_id`, `finding_key`, `status` (`fixed` with `commit`, or `answered` with one line) |
+
+A requested check with no finish projects `running`, never absent.
+
+### PR
+
+| Kind | Command | Payload |
+| --- | --- | --- |
+| `pr.opened` | `work update --pr` when the PR goes from null to set | `pr`, `head_sha`, `changed` |
+
+It is that update's one event, in place of `lane.updated`. When the PR first arrives in
+a handoff, the handoff's event carries `changed.pr` from null, and the fact
+`pr.opened_at` is the `at` of whichever event first set the PR.
+
+## `check.finished` payloads
+
+`producer` says who ran the check:
+
+- `{kind: "session", agent, session}`: a fresh subagent, through `check record`. The
+  write is refused (`invalid_input`, nothing written) when `producer.session` equals the
+  lane's session (its holder, or its last holder once released). A subagent that
+  inherits `DAISY_SESSION` is refused, so it fails closed until it passes its own
+  `--session`. This is an honor system until adapters own sessions
+  ([R4](research/r4-agent-cli-integration.md)).
+- `{kind: "daisy_worker", job}`: daisy's review worker, through `reviews record`. The
+  session rule does not apply, whoever runs the command. The job is checkable with
+  `daisy-cli reviews get <job>`.
+
+| Check | Producer | Fields (after `check`, `outcome`, `head_sha`, `producer`) |
+| --- | --- | --- |
+| `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation` or `docs`. |
+| `quality_gate` | session | `ran`: `findings` (count). `skipped`: `reason` `no_code`. |
+| `merge_verdict` | session | `ran` only. `decision` `yes` or `no`. The verdict sha is `head_sha`, from `--head`, never the model's prose. |
+| `smoke` | session | `ran`, or `skipped` with `reason` `nothing_runs` or `attempt_failed`. |
+| `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
+| `local_review` | daisy_worker | `job`, `round`, `score`, `verdict`, `findings[]` of `finding_key`, `severity` (`blocker`, `convention`, `risk`, `nit`, `question`), `path`, `line`, `title`, `body`, `verified` |
+| `pr_review` | daisy_worker | Same as `local_review`, without `round`, plus `pr`. |
+
+Finding bodies are untrusted text. They are stored, and they never satisfy a gate. R10's
+richer fields (smoke cases with evidence hashes, kept-test items with bars, verdict
+reasons) are reserved for a `--file` input after M1.
+
+## Folded rows
+
+| Table | M1 rule |
+| --- | --- |
+| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status: ready is `next_action` plus the handoff's `ready`. `spec_id`, `pipeline_id`, `pipeline_hash` and `route` are nullable until claim. |
+| `gate_results` | One row per `(lane_id, check, head_sha)`. `status` is `ran` or `skipped`. The latest `check.finished` on that key wins. |
+| `findings` | One row per `(check_event_id, finding_key)`. `status` is `open`, `fixed` or `answered`. |
+
+R5's `passed | failed`, `declined` and `ready` values are replaced by the ones above.
+
+## Reserved
+
+Named so nothing else takes the name. The write refuses these kinds in M1.
+
+| Kind | From | Why not M1 |
+| --- | --- | --- |
+| `session.started`, `turn.finished`, `session.exited`, `tool.started`, `tool.finished`, `usage.reported`, `permission.denied` | [R4](research/r4-agent-cli-integration.md) v0 lifecycle | No adapter in M1. Tokens still come from transcripts. |
+| `agent.stalled`, `agent.blocked`, `agent.killed` | [R8](research/r8-process-terminal-runtime.md) | Needs `seamlane supervise`. |
+| `reservation.written`, `intent.granted`, `intent.denied`, `path.released`, `seam.published`, `seam.acked`, `seam.rejected`, `message.sent`, `stack.rebased`, `stack.layer_opened` | [R9](research/r9-coordination-between-lanes.md) | Coordination is Phase 3. |
+| `evidence.recorded`, `escape.judged`, `price.published`, `pr.merged`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |
+| `question.opened` | [R12](research/r12-interfaces-and-attention.md) | Attention is later. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`) are payload values, not kinds. |
+| `human.merge_yes` | [R10](research/r10-verification-review-layer.md) | Needs a user-attributed adapter. M1's done is the `handoff` transition. |
+
+Reserved `check.finished` values. No M1 command produces them, so they are not
+accepted yet:
+
+| Check | R10 record |
+| --- | --- |
+| `verification` | `/ship` step 1 command list |
+| `diff_measured` | `diff.measured`, the step 2 numstat |
+| `commit_classified` | `commit.classified`, host classifier |
+| `ci_snapshot`, `threads_snapshot`, `pr_snapshot` | `ci.snapshot`, `threads.snapshot`, `pr.snapshot` |
+| `brief`, `decision_list` | Lane-written brief and investigation list |
+
+Not event kinds, though research spells them with a dot:
+
+- MCP tools: `lane.read`, `lane.message`, `evidence.attach`. R9's agent calls
+  `intent.submit`, `seam.publish`, `seam.ack` and `seam.reject` produce the reserved
+  `seam.*` and `intent.*` events above.
+- R9 inbox message types (carried by `message.sent`): `seam.revised`, `base.moved`,
+  `dependency.cleared`, `overlap.needs_human`.
+- Fact paths (`plan_check.outcome`, `verdict.sha`, `commit.sha`, `smoke.recorded`, ...)
+  and table columns (`gate_results.evidence_ref`). Facts are R7's fact bundle.
+
+## Replaced names
+
+| Old name | Where | Now |
+| --- | --- | --- |
+| `gate.recorded` | R5, R11, ROADMAP | `check.finished`, folded into `gate_results` |
+| `review.finished` | R11 | `check.finished` with `check` `local_review` or `pr_review` |
+| `finding.opened`, `finding.recorded` | R5, R11 | `findings[]` on `check.finished`, then `finding.updated` |
+| `lane.status_changed` | R5, R11 | `lane.updated` (`changed.status`), or `phase.entered` on a gated move |
+| `handoff.recorded` | R11 | `lane.handed_off`, or `phase.entered` on a gated handoff |

@@ -1,5 +1,7 @@
 # R15: Migration from today's setup
 
+> Superseded in part by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md): the router, marker, id floor, merged reads and daisy reading ledger views are out. Seamlane replaces daisy.
+
 Status: draft, 2026-11-02. The milestone 1 plan. It sequences [R5](r5-state-and-storage.md), [R7](r7-process-engine.md), [R8](r8-process-terminal-runtime.md), and [R10](r10-verification-review-layer.md) so a lane that is already claimed keeps its process, its work-item id, and its herdr pane.
 
 ## Question
