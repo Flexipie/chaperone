@@ -246,9 +246,13 @@ mod tests {
         let conn = ledger.conn();
         conn.execute_batch(
             "INSERT INTO events (lane_id, kind, payload_json, at)
-             VALUES (NULL, 'lane.created', '{}', '2026-11-03T00:00:00.000Z');
-             INSERT INTO lanes (id, status, head_event_id, updated_at)
-             VALUES (1, 'blocked', 1, '2026-11-03T00:00:00.000Z');",
+             VALUES (NULL, 'lane.created',
+                     '{\"title\":\"t\",\"source\":\"manual\",\"kind\":\"code\",\"pr_flow\":\"pr\"}',
+                     '2026-11-03T00:00:00.000Z');
+             INSERT INTO lanes (id, title, source, kind, pr_flow, status, head_event_id,
+                                created_at, updated_at)
+             VALUES (1, 't', 'manual', 'code', 'pr', 'blocked', 1,
+                     '2026-11-03T00:00:00.000Z', '2026-11-03T00:00:00.000Z');",
         )
         .unwrap();
         for (lane, payload) in [

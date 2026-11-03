@@ -1209,7 +1209,10 @@ mod tests {
     fn approval_and_spec_clear_commit() {
         let dir = tempfile::tempdir().unwrap();
         let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
-        let me = Actor::default();
+        let me = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
         let spec = Payload {
             parent_key: Some("Flexipie/harness#1".into()),
             title: Some("t".into()),
@@ -1222,7 +1225,7 @@ mod tests {
         };
         for m in [
             ev(EventKind::SpecCreated, None, None, spec),
-            ev(EventKind::LaneCreated, None, Some(1), Payload::default()),
+            ev(EventKind::LaneCreated, None, Some(1), lane()),
             ev(EventKind::SpecApproved, None, Some(1), approve),
             ev(
                 EventKind::LaneUpdated,
