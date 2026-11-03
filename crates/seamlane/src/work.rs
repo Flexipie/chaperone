@@ -234,7 +234,7 @@ fn items(v: Vec<impl Serialize>) -> Result<Outcome, CliError> {
     }))
 }
 
-fn value(v: impl Serialize) -> Result<Value, CliError> {
+pub(crate) fn value(v: impl Serialize) -> Result<Value, CliError> {
     serde_json::to_value(v).map_err(|e| CliError::Internal(e.to_string()))
 }
 

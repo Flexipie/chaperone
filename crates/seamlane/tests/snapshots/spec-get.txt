@@ -1,0 +1,12 @@
+A spec with its slices and decisions parsed from the body
+
+Usage: seamlane spec get [OPTIONS] <SPEC>
+
+Arguments:
+  <SPEC>  The spec id or its parent key (any case)
+
+Options:
+      --db <DB>            Path to the ledger (defaults to seamlane/ledger.db in the user data dir)
+      --version <VERSION>  An older version (default: the newest)
+      --format <FORMAT>    Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help               Print help
