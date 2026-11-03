@@ -59,6 +59,8 @@ pub enum CliError {
     },
     ReadOnly(&'static str),
     Internal(String),
+    /// A failed `daisy-cli reviews get`, as `reviews record` reports it.
+    Daisy(ErrorBody),
 }
 
 impl From<Refusal> for CliError {
@@ -90,7 +92,7 @@ impl CliError {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ErrorBody {
     pub code: &'static str,
     pub message: String,
@@ -220,6 +222,7 @@ impl ErrorBody {
                 )
             }
             CliError::Internal(m) => body("internal", m.clone(), None),
+            CliError::Daisy(b) => b.clone(),
         }
     }
 }
@@ -229,6 +232,7 @@ pub fn exit_code(e: &CliError) -> i32 {
         "usage" => 2,
         "schema_mismatch" => 3,
         "conflict" => 4,
+        "runtime_unavailable" => 5,
         _ => 1,
     }
 }

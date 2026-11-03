@@ -1,0 +1,17 @@
+Record one check result on a work item. Refused from any session that has held it: pass your own --session. The same result again replays and writes nothing
+
+Usage: seamlane check record [OPTIONS] --work <WORK> --check <CHECK> --head <HEAD> --outcome <OUTCOME>
+
+Options:
+      --db <DB>              Path to the ledger (defaults to seamlane/ledger.db in the user data dir)
+      --work <WORK>          
+      --check <CHECK>        [possible values: plan_check, quality_gate, merge_verdict, smoke, kept_tests]
+      --format <FORMAT>      Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --head <HEAD>          The commit checked, 7 to 40 lowercase hex digits
+      --outcome <OUTCOME>    [possible values: ran, skipped]
+      --reason <REASON>      Why it was skipped; required with skipped, from the check's list
+      --decision <DECISION>  merge_verdict only, required there [possible values: yes, no]
+      --findings <FINDINGS>  Findings raised; plan_check and quality_gate that ran only, required there
+      --agent <AGENT>        Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>    Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help                 Print help

@@ -1,6 +1,7 @@
 //! seamlane: the lane CLI, with daisy-cli's argv, envelope and exit codes
 //! (docs/cli-contract.md), so a skill switches by changing the binary path.
 
+mod checks;
 mod cli;
 mod output;
 mod spec;
@@ -65,6 +66,9 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         }
         Cmd::Work(cmd) => work::run(&Ledger::open(&path)?, cmd, meta),
         Cmd::Spec(cmd) => spec::run(&Ledger::open(&path)?, cmd, meta),
+        Cmd::Check(cmd) => checks::check(&Ledger::open(&path)?, cmd),
+        Cmd::Reviews(cmd) => checks::reviews(&Ledger::open(&path)?, cmd),
+        Cmd::Jobs(cmd) => checks::jobs(&Ledger::open(&path)?, cmd),
     }
 }
 

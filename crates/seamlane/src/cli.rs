@@ -45,6 +45,12 @@ pub enum Cmd {
     Work(WorkCmd),
     #[command(subcommand)]
     Spec(SpecCmd),
+    #[command(subcommand)]
+    Check(CheckCmd),
+    #[command(subcommand)]
+    Reviews(ReviewsCmd),
+    #[command(subcommand)]
+    Jobs(JobsCmd),
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Seamlane ledger
     Migrate,
@@ -56,6 +62,9 @@ impl Cmd {
     pub fn write_name(&self) -> Option<&'static str> {
         match self {
             Cmd::Migrate => Some("migrate"),
+            Cmd::Check(CheckCmd::Record { .. }) => Some("check record"),
+            Cmd::Reviews(ReviewsCmd::Record { .. }) => Some("reviews record"),
+            Cmd::Reviews(ReviewsCmd::Get { .. }) | Cmd::Jobs(JobsCmd::Get { .. }) => None,
             Cmd::Work(WorkCmd::Create { .. }) => Some("work create"),
             Cmd::Work(WorkCmd::Claim { .. }) => Some("work claim"),
             Cmd::Work(WorkCmd::Heartbeat { .. }) => Some("work heartbeat"),
@@ -377,4 +386,74 @@ pub enum SpecCmd {
         #[command(flatten)]
         actor: ActorArgs,
     },
+}
+
+/// Check results a fresh session records for a lane: plan check, quality
+/// gate, merge verdict, smoke and kept tests
+#[derive(Subcommand, Debug)]
+pub enum CheckCmd {
+    /// Record one check result on a work item. Refused from any session
+    /// that has held it: pass your own --session. The same result again
+    /// replays and writes nothing
+    Record {
+        #[arg(long)]
+        work: i64,
+        #[arg(long, value_parser = PossibleValuesParser::new(
+            ["plan_check", "quality_gate", "merge_verdict", "smoke", "kept_tests"]))]
+        check: String,
+        /// The commit checked, 7 to 40 lowercase hex digits
+        #[arg(long)]
+        head: String,
+        #[arg(long, value_parser = PossibleValuesParser::new(["ran", "skipped"]))]
+        outcome: String,
+        /// Why it was skipped; required with skipped, from the check's list
+        #[arg(long)]
+        reason: Option<String>,
+        /// merge_verdict only, required there
+        #[arg(long, value_parser = PossibleValuesParser::new(["yes", "no"]))]
+        decision: Option<String>,
+        /// Findings raised; plan_check and quality_gate that ran only,
+        /// required there
+        #[arg(long)]
+        findings: Option<u64>,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+}
+
+/// Daisy's review jobs, as recorded in the ledger. The worker stays in
+/// daisy; lanes keep `daisy-cli reviews local` and `reviews get --wait`
+#[derive(Subcommand, Debug)]
+pub enum ReviewsCmd {
+    /// Read a daisy review job with `daisy-cli reviews get` and record it on
+    /// a work item: requested while it runs, finished (with its findings)
+    /// once done. Recording the same state again writes nothing
+    Record {
+        #[arg(long)]
+        work: i64,
+        /// The daisy review job id
+        #[arg(long)]
+        job: i64,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// A recorded review job in daisy's shape. Daisy's free text (summary,
+    /// impact, report path) is null; read it from daisy
+    Get {
+        job: i64,
+        /// Accepted for daisy's argv; a recorded job answers at once
+        #[arg(long)]
+        wait: bool,
+        /// Accepted for daisy's argv; unused
+        #[arg(long)]
+        timeout_secs: Option<u64>,
+    },
+}
+
+/// Recorded daisy jobs
+#[derive(Subcommand, Debug)]
+pub enum JobsCmd {
+    /// A recorded review job in daisy's job shape; what only daisy knows
+    /// (cost, tokens, job dir) is null
+    Get { id: i64 },
 }

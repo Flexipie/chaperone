@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub use error::PipelineError;
 pub use eval::Denied;
 pub use facts::{Fact, FactBundle};
+pub(crate) use hash::canonical_string;
 
 /// Transition ids the host calls by name. A document without them does not load.
 pub const REQUIRED_TRANSITIONS: &[&str] = &["handoff"];

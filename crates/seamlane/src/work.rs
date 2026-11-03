@@ -238,6 +238,6 @@ pub(crate) fn value(v: impl Serialize) -> Result<Value, CliError> {
     serde_json::to_value(v).map_err(|e| CliError::Internal(e.to_string()))
 }
 
-fn one(v: impl Serialize) -> Result<Outcome, CliError> {
+pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
     Ok(Outcome::One(value(v)?))
 }

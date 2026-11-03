@@ -11,7 +11,7 @@ pub(super) fn semantic_hash(doc: &Value) -> String {
     format!("{:x}", Sha256::digest(canonical_string(doc)))
 }
 
-pub(super) fn canonical_string(value: &Value) -> String {
+pub(crate) fn canonical_string(value: &Value) -> String {
     let mut out = String::new();
     canonical(value, &mut out);
     out
