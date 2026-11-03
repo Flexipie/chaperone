@@ -1,0 +1,225 @@
+use super::{Fact, FactBundle, Literal, Operand, Phase, Pipeline, Pred, Route};
+
+/// The fact `stamp_hash` compares the lane's stamp with. The evaluator
+/// answers it from the loaded document, so no bundle can supply it.
+const LOADED_HASH: &str = "loaded.hash";
+
+/// Why a transition did not apply: the first gate that did not hold, and
+/// every fact path that gate read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Denied {
+    pub gate: String,
+    pub fact_paths: Vec<String>,
+}
+
+impl Pipeline {
+    /// Decides transition `transition` to `to` for a lane on `route`. Each
+    /// required gate of that row is checked in order. A transition with no
+    /// row for this route and target is denied as an unstamped lane is
+    /// (docs/cli-contract.md), never passed. Whether the lane is in the row's
+    /// `from` phase is the caller's to check.
+    pub fn evaluate(
+        &self,
+        transition: &str,
+        route: Route,
+        to: Phase,
+        facts: &FactBundle,
+    ) -> Result<(), Denied> {
+        let Some(row) = self
+            .transitions
+            .iter()
+            .find(|t| t.id == transition && t.to == to && t.routes.contains(&route))
+        else {
+            return Err(Denied {
+                gate: "stamp_ok".into(),
+                fact_paths: vec!["lane.pipeline_hash".into()],
+            });
+        };
+        let eval = Eval {
+            pipeline: self,
+            facts,
+            loaded: Fact::Str(self.hash.clone()),
+        };
+        for gate in &row.requires {
+            if eval.gate(gate) != Some(true) {
+                return Err(eval.deny(gate));
+            }
+        }
+        Ok(())
+    }
+}
+
+struct Eval<'a> {
+    pipeline: &'a Pipeline,
+    facts: &'a FactBundle,
+    loaded: Fact,
+}
+
+impl Eval<'_> {
+    fn fact(&self, path: &str) -> &Fact {
+        if path == LOADED_HASH {
+            &self.loaded
+        } else {
+            self.facts.get(path)
+        }
+    }
+
+    /// The fact, or `None` when it is absent.
+    fn val(&self, path: &str) -> Option<&Fact> {
+        match self.fact(path) {
+            Fact::Absent => None,
+            fact => Some(fact),
+        }
+    }
+
+    /// `Some(holds)`, or `None` when a fact the gate needs is absent. `None`
+    /// denies wherever it lands, `not` included, so absence fails closed.
+    fn gate(&self, id: &str) -> Option<bool> {
+        Some(match &self.pipeline.gates[id].pred {
+            Pred::Present { field } => self.val(field).is_some(),
+            Pred::Eq { field, value } => {
+                let fact = self.val(field)?;
+                match value {
+                    Operand::Literal(lit) => *fact == literal(lit),
+                    Operand::Fact(other) => fact == self.val(other)?,
+                }
+            }
+            Pred::Lte { field, value } => matches!(self.val(field)?, Fact::Int(n) if n <= value),
+            Pred::Gt { field, value } => matches!(self.val(field)?, Fact::Int(n) if n > value),
+            Pred::OneOf { field, values } => {
+                let fact = self.val(field)?;
+                values.iter().any(|lit| *fact == literal(lit))
+            }
+            Pred::ShaPrefixEq {
+                left,
+                right,
+                min_len,
+                max_len,
+            } => match (self.val(left)?, self.val(right)?) {
+                (Fact::Str(short), Fact::Str(head)) => {
+                    (*min_len..=*max_len).contains(&(short.len() as i64))
+                        && short.bytes().all(|b| b.is_ascii_hexdigit())
+                        && head.starts_with(short.as_str())
+                }
+                _ => false,
+            },
+            Pred::PlanCheckMatchesLane { reasons } => self.matches_lane("plan_check", reasons)?,
+            Pred::QualityGateMatchesLane { reasons } => {
+                self.matches_lane("quality_gate", reasons)?
+            }
+            // Vacuous when the later event has not happened (no PR yet).
+            Pred::EventBefore { earlier, later } => match (self.fact(earlier), self.fact(later)) {
+                (_, Fact::Absent) => true,
+                (Fact::Time(a), Fact::Time(b)) => a < b,
+                (Fact::Absent, _) => return None,
+                _ => false,
+            },
+            Pred::All(of) => {
+                for g in of {
+                    if self.gate(g)? {
+                        continue;
+                    }
+                    return Some(false);
+                }
+                true
+            }
+            Pred::Any(of) => {
+                let checks: Vec<_> = of.iter().map(|g| self.gate(g)).collect();
+                if checks.contains(&Some(true)) {
+                    true
+                } else if checks.contains(&None) {
+                    return None;
+                } else {
+                    false
+                }
+            }
+            Pred::Not(of) => !self.gate(of)?,
+        })
+    }
+
+    /// A check that ran always matches. A skip matches only on a lane with no
+    /// code and with an allowed reason.
+    fn matches_lane(&self, check: &str, reasons: &[String]) -> Option<bool> {
+        match self.val(&format!("{check}.outcome"))? {
+            Fact::Str(o) if o == "ran" => Some(true),
+            Fact::Str(o) if o == "skipped" => {
+                let code = self.val("lane.changes_code")?;
+                let reason = self.val(&format!("{check}.reason"))?;
+                Some(
+                    *code == Fact::Bool(false)
+                        && matches!(reason, Fact::Str(r) if reasons.contains(r)),
+                )
+            }
+            _ => Some(false),
+        }
+    }
+
+    /// The denial for a gate that did not hold. An `all` names its first
+    /// member that did not hold, so the denial is the specific gate.
+    fn deny(&self, id: &str) -> Denied {
+        if let Pred::All(of) = &self.pipeline.gates[id].pred {
+            for g in of {
+                if self.gate(g) != Some(true) {
+                    return self.deny(g);
+                }
+            }
+        }
+        let mut fact_paths = Vec::new();
+        self.reads(id, &mut fact_paths);
+        Denied {
+            gate: id.into(),
+            fact_paths,
+        }
+    }
+
+    fn reads(&self, id: &str, out: &mut Vec<String>) {
+        match &self.pipeline.gates[id].pred {
+            Pred::Present { field }
+            | Pred::Lte { field, .. }
+            | Pred::Gt { field, .. }
+            | Pred::OneOf { field, .. } => push(out, field),
+            Pred::Eq { field, value } => {
+                push(out, field);
+                if let Operand::Fact(other) = value {
+                    push(out, other);
+                }
+            }
+            Pred::ShaPrefixEq { left, right, .. } => {
+                push(out, left);
+                push(out, right);
+            }
+            Pred::EventBefore { earlier, later } => {
+                push(out, earlier);
+                push(out, later);
+            }
+            Pred::PlanCheckMatchesLane { .. } => lane_paths(out, "plan_check"),
+            Pred::QualityGateMatchesLane { .. } => lane_paths(out, "quality_gate"),
+            Pred::All(of) | Pred::Any(of) => {
+                for g in of {
+                    self.reads(g, out);
+                }
+            }
+            Pred::Not(of) => self.reads(of, out),
+        }
+    }
+}
+
+fn push(out: &mut Vec<String>, path: &str) {
+    if !out.iter().any(|p| p == path) {
+        out.push(path.into());
+    }
+}
+
+fn lane_paths(out: &mut Vec<String>, check: &str) {
+    push(out, &format!("{check}.outcome"));
+    push(out, "lane.changes_code");
+    push(out, &format!("{check}.reason"));
+}
+
+fn literal(lit: &Literal) -> Fact {
+    match lit {
+        Literal::Bool(b) => Fact::Bool(*b),
+        Literal::Int(i) => Fact::Int(*i),
+        Literal::Str(s) => Fact::Str(s.clone()),
+    }
+}

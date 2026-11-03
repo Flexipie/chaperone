@@ -4,6 +4,8 @@
 //! evaluates gates it understood.
 
 mod error;
+mod eval;
+mod facts;
 mod hash;
 mod load;
 
@@ -12,14 +14,19 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use error::PipelineError;
+pub use eval::Denied;
+pub use facts::{Fact, FactBundle};
 
 /// Transition ids the host calls by name. A document without them does not load.
 pub const REQUIRED_TRANSITIONS: &[&str] = &["handoff"];
 
-/// Event names `event_before` may compare: the ones the facts carry a time
-/// for. Any other name would make the gate vacuously pass, so it is a load
-/// error. Widen it when the projection times more events.
-pub const EVENTS: &[&str] = &["pr.opened", "quality_gate"];
+/// Event names `event_before` may compare, with the fact path that carries
+/// each one's time. Any other name would make the gate vacuously pass, so it
+/// is a load error. Widen it when the projection times more events.
+pub const EVENTS: &[(&str, &str)] = &[
+    ("pr.opened", "pr.opened_at"),
+    ("quality_gate", "quality_gate.at"),
+];
 
 #[derive(Debug, Clone)]
 pub struct Pipeline {
@@ -76,6 +83,7 @@ pub enum Pred {
     QualityGateMatchesLane {
         reasons: Vec<String>,
     },
+    /// The time fact paths of the two events (from [`EVENTS`]).
     EventBefore {
         earlier: String,
         later: String,

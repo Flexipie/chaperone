@@ -47,6 +47,29 @@ jobs:
           tool: nextest
       - run: cargo nextest run --workspace --locked --profile ci
 
+  # Branch coverage is nightly-only (-Zcoverage-options=branch), so this job
+  # alone runs a pinned nightly. Gated files: a missed branch fails the job.
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      NIGHTLY: nightly-2026-10-20
+      GATED: crates/seamlane-core/src/pipeline/eval.rs
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,nextest
+      - run: cargo +"$NIGHTLY" llvm-cov nextest -p seamlane-core --locked --branch --json --summary-only --output-path cov.json
+      - name: no missed branch in a gated file
+        run: |
+          for f in $GATED; do
+            jq -e --arg f "$PWD/$f" '[.data[0].files[] | select(.filename == $f)
+              | .summary.branches | select(.count > 0 and .covered == .count)] | length == 1' cov.json \
+              || { echo "missed branch, or no branch data, in $f"; exit 1; }
+          done
+
   doc:
     runs-on: ubuntu-latest
     steps:
