@@ -42,14 +42,16 @@ CREATE TABLE spec_versions (
 CREATE TABLE lanes (
   id               INTEGER PRIMARY KEY,
   spec_id          INTEGER,
-  lane_key         TEXT NOT NULL,
+  lane_key         TEXT,
   pipeline_id      TEXT,                -- pipeline_id, pipeline_hash, route: set at claim
   pipeline_hash    TEXT,
   route            TEXT,
   status           TEXT NOT NULL,       -- queued|claimed|active|blocked|review|done|cancelled
   agent            TEXT,
   session          TEXT,
-  lease_expires_at TEXT,
+  lease_secs       INTEGER,
+  lease_expires_at TEXT,             -- lease_expires_at, last_heartbeat_at: outside the fold
+  last_heartbeat_at TEXT,
   head_sha         TEXT,
   branch           TEXT,
   worktree_path    TEXT,
