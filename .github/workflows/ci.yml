@@ -48,14 +48,18 @@ jobs:
       - run: cargo nextest run --workspace --locked --profile ci
 
   # Branch coverage is nightly-only (-Zcoverage-options=branch), so this job
-  # alone runs a pinned nightly. Gated files: a missed branch or region fails
-  # the job (plain match arms are regions, not branches).
+  # alone runs a pinned nightly. GATED files: a missed branch or region fails
+  # the job (plain match arms are regions, not branches). BRANCH_GATED files
+  # (the ledger write path): a missed branch fails it; their regions include
+  # the error arm of every `?` on a SQLite call, which no test reaches
+  # without fault injection.
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       NIGHTLY: nightly-2026-10-20
       GATED: crates/seamlane-core/src/pipeline/eval.rs
+      BRANCH_GATED: crates/seamlane-core/src/ledger/write.rs crates/seamlane-core/src/ledger/fold.rs
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
@@ -73,6 +77,14 @@ jobs:
               | .summary | select(.branches.count > 0 and .branches.covered == .branches.count
                 and .regions.covered == .regions.count)] | length == 1' cov.json \
               || { echo "missed branch or region, or no branch data, in $f"; exit 1; }
+          done
+          for f in $BRANCH_GATED; do
+            jq -e --arg f "$PWD/$f" '[.data[0].files[] | select(.filename == $f)
+              | .summary | select(.branches.count > 0 and .branches.covered == .branches.count)]
+              | length == 1' cov.json \
+              || { echo "missed branch, or no branch data, in $f"
+                   jq --arg f "$PWD/$f" '.data[0].files[] | select(.filename == $f) | .summary.branches' cov.json
+                   exit 1; }
           done
 
   doc:

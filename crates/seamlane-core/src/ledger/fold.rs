@@ -215,3 +215,43 @@ impl Ledger {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A log this binary did not write (a column the write refuses, a lane
+    /// with no lane.created) fails the rebuild, and the tables stay as they were.
+    #[test]
+    fn rebuild_refuses_a_foreign_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let conn = ledger.conn();
+        conn.execute_batch(
+            "INSERT INTO events (lane_id, kind, payload_json, at)
+             VALUES (NULL, 'lane.created', '{}', '2026-11-03T00:00:00.000Z');
+             INSERT INTO lanes (id, status, head_event_id, updated_at)
+             VALUES (1, 'queued', 1, '2026-11-03T00:00:00.000Z');",
+        )
+        .unwrap();
+        for payload in [
+            r#"{"changed":{"bogus":{"from":null,"to":1}}}"#,
+            r#"{"changed":{"status":{"from":"queued","to":"active"}}}"#,
+        ] {
+            // The second names lane 9, which no event created.
+            let lane = if payload.contains("bogus") { 1 } else { 9 };
+            conn.execute(
+                "INSERT INTO events (id, lane_id, kind, payload_json, at)
+                 VALUES (2, ?1, 'lane.updated', ?2, '2026-11-03T00:00:00.000Z')",
+                params![lane, payload],
+            )
+            .unwrap();
+            assert!(ledger.rebuild().is_err(), "{payload}");
+            let lanes: i64 = conn
+                .query_row("SELECT count(*) FROM lanes", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(lanes, 1, "{payload}");
+            conn.execute("DELETE FROM events WHERE id = 2", []).unwrap();
+        }
+    }
+}
