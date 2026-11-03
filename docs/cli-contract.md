@@ -108,7 +108,7 @@ Every write also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional
 | `spec list` | | read |
 | `spec update` | `<spec> --file <path\|-> --reason <r> [--expected-version <n>]` | write |
 | `spec approve` | `<spec>` | write |
-| `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--agreed-where <w>]` (alias `--where`) | write |
+| `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id>` | read |

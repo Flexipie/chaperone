@@ -165,7 +165,7 @@ Named so nothing else takes the name. The write refuses these kinds in M1.
 | `agent.stalled`, `agent.blocked`, `agent.killed` | [R8](research/r8-process-terminal-runtime.md) | Needs `seamlane supervise`. |
 | `reservation.written`, `intent.granted`, `intent.denied`, `path.released`, `seam.published`, `seam.acked`, `seam.rejected`, `message.sent`, `stack.rebased`, `stack.layer_opened` | [R9](research/r9-coordination-between-lanes.md) | Coordination is Phase 3. |
 | `evidence.recorded`, `escape.judged`, `price.published`, `pr.merged`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |
-| `question.opened` | [R12](research/r12-interfaces-and-attention.md) | Attention is later. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`) are payload values, not kinds. |
+| `question.opened` | [R12](research/r12-interfaces-and-attention.md) | Attention is later. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`, `question.overlap`) are payload values, not kinds. |
 | `human.merge_yes` | [R10](research/r10-verification-review-layer.md) | Needs a user-attributed adapter. M1's done is the `handoff` transition. |
 
 Reserved `check.finished` values. No M1 command produces them, so they are not
