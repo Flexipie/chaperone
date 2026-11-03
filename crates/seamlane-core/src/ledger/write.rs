@@ -49,9 +49,10 @@ macro_rules! check {
 
 impl Ledger {
     /// `at` is the caller's clock, RFC 3339 UTC with milliseconds
-    /// (`2026-11-03T05:35:23.321Z`); the write never reads the wall clock.
-    /// `key` is the idempotency key: a stored event with the same key is
-    /// returned as it was, whatever the new payload says.
+    /// (`2026-11-03T05:35:23.321Z`); given one, the write never reads the
+    /// wall clock. `key` is the idempotency key: a stored event of the same
+    /// kind with that key is returned as it was, whatever the new payload
+    /// says; another kind's key is `invalid_input`.
     pub fn apply(
         &self,
         actor: &Actor,
@@ -90,8 +91,9 @@ impl Ledger {
     /// [`Ledger::apply_with`] for a command whose event depends on the row:
     /// `plan` builds the mutation inside the transaction, after the schema
     /// and actor checks, so what it read cannot change before the write.
-    /// With `at` None the clock is read once the write lock is held, so no
-    /// event is older than one committed before it. `read` gets that `at`.
+    /// With `at` None the clock is read once the write lock is held, so an
+    /// event is not timed before one that committed while it waited (as long
+    /// as the wall clock does not step back). `read` gets that `at`.
     pub(crate) fn apply_planned<T>(
         &self,
         actor: &Actor,
