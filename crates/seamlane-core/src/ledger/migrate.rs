@@ -6,7 +6,7 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::LedgerError;
 
-pub fn user_version(conn: &Connection) -> Result<i64, LedgerError> {
+pub(crate) fn user_version(conn: &Connection) -> Result<i64, LedgerError> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
 }
 
@@ -64,9 +64,16 @@ pub(super) fn backup(conn: &Connection, path: &Path, version: i64) -> Result<(),
         let target = pending
             .to_str()
             .ok_or_else(|| std::io::Error::other("backup path is not UTF-8"))?;
-        conn.execute("VACUUM main INTO ?1", [target])?;
+        if let Err(e) = conn.execute("VACUUM main INTO ?1", [target]) {
+            let _ = std::fs::remove_file(&pending);
+            return Err(e.into());
+        }
         std::fs::File::open(&pending)?.sync_all()?;
         std::fs::rename(&pending, &done)?;
+        // The rename and a new backups dir are durable before the migration
+        // commits, so a power cut cannot leave an upgrade with no backup.
+        std::fs::File::open(&dir)?.sync_all()?;
+        std::fs::File::open(dir.parent().unwrap_or(Path::new(".")))?.sync_all()?;
         return Ok(());
     }
     unreachable!("backup names exhausted")

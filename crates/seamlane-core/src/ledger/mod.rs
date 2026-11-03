@@ -14,7 +14,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags};
 
 pub use error::LedgerError;
-pub use migrate::user_version;
+use migrate::user_version;
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
 
@@ -28,7 +28,7 @@ impl Ledger {
     /// Opens an existing ledger at this binary's schema version. A missing
     /// file or any other version is refused, and a newer file is not written.
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
-        let found = version_on_disk(path)?.ok_or_else(|| LedgerError::Missing(path.into()))?;
+        let (found, _) = probe(path)?.ok_or_else(|| LedgerError::Missing(path.into()))?;
         if found != SCHEMA_VERSION {
             return Err(LedgerError::SchemaMismatch {
                 found,
@@ -53,18 +53,6 @@ impl Ledger {
         migrations: &[&str],
     ) -> Result<Self, LedgerError> {
         let supported = migrations.len() as i64;
-        let refuse_newer = |found: i64| {
-            if found > supported {
-                Err(LedgerError::SchemaMismatch { found, supported })
-            } else {
-                Ok(())
-            }
-        };
-        // Read-only first: a read-write close would checkpoint a newer
-        // binary's WAL into the file we are refusing.
-        if let Some(found) = version_on_disk(path)? {
-            refuse_newer(found)?;
-        }
         let dir = path.parent().unwrap_or(Path::new(""));
         std::fs::create_dir_all(dir)?;
         // Serialises create, backup and migrate across processes. Switching
@@ -76,14 +64,21 @@ impl Ledger {
             .write(true)
             .open(lock_path(path))?;
         lock.lock()?;
+        // Read-only, under the lock: a read-write close would checkpoint a
+        // newer binary's WAL into the file we are refusing.
+        let found = match probe(path)? {
+            None => 0,
+            Some((found, _)) if found > supported => {
+                return Err(LedgerError::SchemaMismatch { found, supported });
+            }
+            Some((0, true)) => return Err(LedgerError::NotALedger(path.into())),
+            Some((found, _)) => found,
+        };
         let conn = Connection::open(path)?;
-        conn.busy_timeout(Duration::from_millis(5000))?;
-        let found = user_version(&conn)?;
-        refuse_newer(found)?;
+        apply_pragmas(&conn)?;
         if found > 0 && found < supported {
             migrate::backup(&conn, path, found)?;
         }
-        apply_pragmas(&conn)?;
         migrate::migrate(&conn, migrations)?;
         drop(lock);
         std::fs::create_dir_all(dir.join("evidence").join("sha256"))?;
@@ -120,15 +115,17 @@ fn apply_pragmas(conn: &Connection) -> Result<(), LedgerError> {
     Ok(())
 }
 
-/// `user_version` read on a read-only connection, which cannot checkpoint
-/// or otherwise write the file. `None` when there is no file.
-fn version_on_disk(path: &Path) -> Result<Option<i64>, LedgerError> {
-    if !path.exists() {
+/// `user_version`, and whether the file has any schema, read on a read-only
+/// connection, which cannot checkpoint or otherwise write the file. `None`
+/// when there is no file.
+fn probe(path: &Path) -> Result<Option<(i64, bool)>, LedgerError> {
+    if !path.try_exists()? {
         return Ok(None);
     }
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(Duration::from_millis(5000))?;
-    Ok(Some(user_version(&conn)?))
+    let has_schema = conn.query_row("SELECT count(*) > 0 FROM sqlite_schema", [], |r| r.get(0))?;
+    Ok(Some((user_version(&conn)?, has_schema)))
 }
 
 fn lock_path(path: &Path) -> PathBuf {
@@ -213,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn open_never_creates_or_migrates() {
+    fn missing_or_foreign_file_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.db");
         assert!(matches!(Ledger::open(&path), Err(LedgerError::Missing(_))));
@@ -232,7 +229,16 @@ mod tests {
             }
         ));
         assert!(err.to_string().contains("seamlane migrate"), "{err}");
-        assert_eq!(user_version(&read_only(&path)).unwrap(), 0);
+        // Not a ledger: some other SQLite file at v0 is never migrated.
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            Ledger::open_and_migrate(&path),
+            Err(LedgerError::NotALedger(_))
+        ));
+        assert!(
+            before == std::fs::read(&path).unwrap(),
+            "foreign file changed"
+        );
         assert!(!has_table(&read_only(&path), "events"));
     }
 
