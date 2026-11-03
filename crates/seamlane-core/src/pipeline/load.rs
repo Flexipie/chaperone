@@ -70,9 +70,6 @@ pub(super) fn load(src: &str) -> Result<Pipeline, PipelineError> {
     let mut transitions = raw.transitions;
     let mut rows = HashSet::new();
     for t in &mut transitions {
-        if t.routes.is_empty() {
-            return Err(PipelineError::NoRoutes(t.id.clone()));
-        }
         t.routes.sort();
         for route in &t.routes {
             if !rows.insert((t.id.clone(), *route, t.to)) {

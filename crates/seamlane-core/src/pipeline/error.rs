@@ -22,8 +22,6 @@ pub enum PipelineError {
         route: String,
         to: String,
     },
-    #[error("transition {0} has no routes")]
-    NoRoutes(String),
     #[error("required transition {0} is missing")]
     MissingTransition(&'static str),
     #[error("gate {0} is part of a cycle")]
