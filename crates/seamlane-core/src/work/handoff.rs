@@ -49,7 +49,6 @@ pub struct HandoffInput {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Verification {
     pub command: String,
-    /// passed | failed | skipped
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,

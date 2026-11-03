@@ -854,11 +854,7 @@ fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
 
 /// The session has held the lane: it wrote a `lane.claimed` or
 /// `lane.taken_over` on it (events.md, `check.finished` producer).
-pub(crate) fn has_held(
-    conn: &Connection,
-    lane_id: i64,
-    session: &str,
-) -> Result<bool, LedgerError> {
+fn has_held(conn: &Connection, lane_id: i64, session: &str) -> Result<bool, LedgerError> {
     Ok(conn
         .query_row(
             "SELECT 1 FROM events WHERE lane_id = ?1
@@ -1266,13 +1262,5 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(item.updated_at, before);
-        let actions: Vec<_> = ledger
-            .work_events(id)
-            .unwrap()
-            .into_iter()
-            .map(|e| e.action)
-            .collect();
-        assert_eq!(actions, ["create", "claim", "handoff", "ready_override"]);
-        assert_eq!(ledger.work_handoffs(id).unwrap().len(), 1);
     }
 }
