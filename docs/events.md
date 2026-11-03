@@ -22,7 +22,7 @@ One row in `events`. The log is the truth. Every other table is a fold of it. Th
 | `lane_id` | integer, nullable | Null for spec events. |
 | `spec_id` | integer, nullable | Null for a lane created without `--spec`. |
 | `actor` | `{agent, session, tool}` | From `--agent` / `--session` (or `DAISY_AGENT` / `DAISY_SESSION`). `tool` is always `seamlane`. |
-| `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (daisy's rule, key only). A key already used by another kind is `invalid_input`. |
+| `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (by key and kind, never the payload). A key already used by another kind is `invalid_input`. |
 | `at` | RFC 3339 UTC, ms | Passed in, or for a CLI command read once the write lock is held, so no event is older than one committed before it. |
 | `payload` | JSON object | Typed per kind, below. |
 
