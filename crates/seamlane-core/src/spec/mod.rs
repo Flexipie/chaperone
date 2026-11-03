@@ -234,7 +234,7 @@ impl Ledger {
         spec_id: Option<i64>,
         payload: Payload,
     ) -> Checked<Spec> {
-        self.spec_write_planned(actor, at, dry_run, |_, _| {
+        self.spec_write_planned(actor, Some(at), dry_run, |_, _| {
             Ok(Ok(Mutation::Event {
                 kind,
                 lane_id: None,
@@ -249,17 +249,21 @@ impl Ledger {
     fn spec_write_planned(
         &self,
         actor: &Actor,
-        at: &str,
+        at: Option<&str>,
         dry_run: bool,
         plan: impl FnOnce(&Connection, &str) -> Checked<Mutation>,
     ) -> Checked<Spec> {
-        let (applied, spec) =
-            self.apply_planned(actor, None, Some(at), dry_run, plan, |conn, applied, _| {
-                match applied {
-                    Applied::Committed(e) => read(conn, e.spec_id.unwrap_or_default(), None),
-                    _ => Ok(None),
-                }
-            })?;
+        let (applied, spec) = self.apply_planned(
+            actor,
+            None,
+            at,
+            dry_run,
+            plan,
+            |conn, applied, _| match applied {
+                Applied::Committed(e) => read(conn, e.spec_id.unwrap_or_default(), None),
+                _ => Ok(None),
+            },
+        )?;
         match (applied, spec.flatten()) {
             (Applied::Refused(r), _) => Ok(Err(r)),
             (_, Some(spec)) => Ok(Ok(spec)),

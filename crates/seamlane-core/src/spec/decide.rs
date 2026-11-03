@@ -9,7 +9,7 @@ use crate::ledger::{Actor, Checked, EventKind, Ledger, Mutation, Payload, Refusa
 use crate::work::resolve_spec;
 
 /// What a decision says. Neither `slice` nor `key` makes it spec-wide.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 pub struct DecideInput {
     pub slice: Option<u32>,
     /// The slice by its issue key instead of its number.
@@ -26,13 +26,14 @@ fn one_line(s: &str) -> String {
 
 impl Ledger {
     /// The decision as a new version of the newest body, read and written
-    /// in one transaction, so two decides at once both land.
+    /// in one transaction, so two decides at once both land. With `at`
+    /// None the clock is read once the write lock is held.
     pub fn spec_decide(
         &self,
         actor: &Actor,
         spec: &str,
         input: &DecideInput,
-        at: &str,
+        at: Option<&str>,
         dry_run: bool,
     ) -> Checked<Spec> {
         let (question, answer) = (one_line(&input.question), one_line(&input.answer));

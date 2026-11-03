@@ -53,7 +53,7 @@ impl Ledger {
                 None => {
                     return Ok(Err(Refusal::NotFoundRef {
                         entity: "spec with a slice for",
-                        reference: key.into(),
+                        reference: key.trim().into(),
                     }));
                 }
             },
@@ -66,7 +66,7 @@ impl Ledger {
             Some(view) => Ok(view),
             None => Err(Refusal::NotFoundRef {
                 entity: "slice",
-                reference: format!("{key} in spec {} v{}", s.id, s.version),
+                reference: format!("{} in spec {} v{}", key.trim(), s.id, s.version),
             }),
         })
     }

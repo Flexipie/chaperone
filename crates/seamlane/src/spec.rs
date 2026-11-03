@@ -100,7 +100,7 @@ pub fn run(ledger: &Ledger, cmd: SpecCmd, meta: &mut Meta) -> Result<Outcome, Cl
                 answer,
                 agreed_where,
             };
-            ledger.spec_decide(&actor.resolve(), &spec, &input, &now, dry_run)??
+            ledger.spec_decide(&actor.resolve(), &spec, &input, None, dry_run)??
         }
     };
     Ok(Outcome::One(spec_out(&spec)?))
