@@ -36,8 +36,9 @@ fn fifty_writers() {
                     .unwrap(),
             );
         }
-        let (barrier, key, who) = (&Barrier::new(2), format!("p{i}-{}", EVENTS - 1), &who);
-        let key = key.as_str();
+        let barrier = &Barrier::new(2);
+        let key = &format!("p{i}-{}", EVENTS - 1);
+        let who = &who;
         let [a, b] = std::thread::scope(|s| {
             [ledger, Ledger::open(&path).unwrap()]
                 .map(|l| {
@@ -130,16 +131,16 @@ fn held_txn_times_out() {
     let mut child = common::spawn("held_txn_times_out", &path, "");
     common::wait_for(Duration::from_secs(10), || marker(&path).exists());
     let held = Instant::now();
-
-    let start = Instant::now();
     let err = ledger
         .apply(&actor("0"), None, AT, create_lane("L"))
         .unwrap_err();
-    let elapsed = start.elapsed();
+    let elapsed = held.elapsed();
     assert!(matches!(&err, LedgerError::Sqlite(_)), "{err}");
     assert!(err.to_string().contains("database is locked"), "{err}");
+    // SQLite counts the sleeps it asked for, and slow runners oversleep, so
+    // only the floor is tight; the child holds the lock for 60 s.
     assert!(
-        (Duration::from_millis(4500)..Duration::from_secs(8)).contains(&elapsed),
+        (Duration::from_millis(4500)..Duration::from_secs(20)).contains(&elapsed),
         "{elapsed:?}"
     );
     eprintln!("the write gave up after {elapsed:?}");

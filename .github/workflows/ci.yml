@@ -63,7 +63,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov,nextest
-      - run: cargo +"$NIGHTLY" llvm-cov nextest -p seamlane-core --locked --branch --json --summary-only --output-path cov.json
+      # Crash and concurrency tests gate nothing here, and instrumentation
+      # eats the 50 writers' headroom under busy_timeout.
+      - run: cargo +"$NIGHTLY" llvm-cov nextest -p seamlane-core --locked --branch --json --summary-only --output-path cov.json -E 'not (binary(crash) | binary(concurrency))'
       - name: no missed branch or region in a gated file
         run: |
           for f in $GATED; do
