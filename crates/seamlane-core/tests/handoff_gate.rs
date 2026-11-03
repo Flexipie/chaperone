@@ -298,3 +298,31 @@ fn the_write_gates_every_path() {
     assert_eq!(e.kind, EventKind::GateDenied);
     assert_eq!(lane.count("phase.entered"), 0);
 }
+
+/// A denial key another kind already took is refused, never read as a pass.
+#[test]
+fn a_taken_denial_key_is_refused() {
+    let lane = Lane::new();
+    let create = CreateInput {
+        title: "t".into(),
+        kind: "code".into(),
+        pr_flow: "pr".into(),
+        idempotency_key: Some("deny:1:handoff:plan_check_recorded:2".into()),
+        ..CreateInput::default()
+    };
+    let me = &lane.lane;
+    lane.ledger
+        .work_create(me, &create, Some(T0), false)
+        .unwrap()
+        .unwrap();
+    let update = UpdateInput {
+        status: Some("done".into()),
+        ..UpdateInput::default()
+    };
+    let r = lane
+        .ledger
+        .work_update(me, 1, &update, None, Some(T2), false)
+        .unwrap();
+    assert!(matches!(r, Err(Refusal::InvalidInput(_))), "{r:?}");
+    assert_eq!(lane.count("gate.denied"), 0);
+}

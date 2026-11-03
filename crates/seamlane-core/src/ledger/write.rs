@@ -204,8 +204,17 @@ fn write(
                     Ok(None) => {}
                     Ok(Some(denial)) => {
                         let key = denial.idempotency_key.as_deref().unwrap_or_default();
-                        if let Some(stored) = by_key(tx, key)? {
-                            return Ok(Applied::Replayed(stored));
+                        match by_key(tx, key)? {
+                            Some(stored) if stored.kind == EventKind::GateDenied => {
+                                return Ok(Applied::Replayed(stored));
+                            }
+                            Some(stored) => {
+                                return Ok(Applied::Refused(invalid(&format!(
+                                    "the denial key {key} belongs to a {} event",
+                                    stored.kind
+                                ))));
+                            }
+                            None => {}
                         }
                         event = denial;
                     }

@@ -489,7 +489,8 @@ impl Ledger {
     /// Records a handoff, as daisy's `record_handoff`: validated, owner
     /// checked, its `status` moved by `transition_ok` (a terminal one clears
     /// the holder), and its first blocker, `next_action`, PR and commit
-    /// applied to the item. One `lane.handed_off`.
+    /// applied to the item. One `lane.handed_off`, or for a ready or done
+    /// handoff the gated `phase.entered` (or `gate.denied`).
     pub fn work_handoff(
         &self,
         actor: &Actor,

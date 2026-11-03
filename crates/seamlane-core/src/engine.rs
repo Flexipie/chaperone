@@ -68,10 +68,7 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
             let facts = project(conn, lane_id, p.head_sha.as_deref())?;
             doc.evaluate(&transition, route, to, &facts)
         }
-        _ => Err(Denied {
-            gate: "stamp_ok".into(),
-            fact_paths: vec!["lane.pipeline_hash".into()],
-        }),
+        _ => Err(Denied::unstamped()),
     };
     let Err(Denied { gate, fact_paths }) = decided else {
         return Ok(Ok(None));

@@ -12,6 +12,17 @@ pub struct Denied {
     pub fact_paths: Vec<String>,
 }
 
+impl Denied {
+    /// The denial for a lane with no stamp, or no row for its route
+    /// (docs/cli-contract.md).
+    pub fn unstamped() -> Denied {
+        Denied {
+            gate: "stamp_ok".into(),
+            fact_paths: vec!["lane.pipeline_hash".into()],
+        }
+    }
+}
+
 impl Pipeline {
     /// Decides transition `transition` to `to` for a lane on `route`. Each
     /// required gate of that row is checked in order. A transition with no
@@ -30,10 +41,7 @@ impl Pipeline {
             .iter()
             .find(|t| t.id == transition && t.to == to && t.routes.contains(&route))
         else {
-            return Err(Denied {
-                gate: "stamp_ok".into(),
-                fact_paths: vec!["lane.pipeline_hash".into()],
-            });
+            return Err(Denied::unstamped());
         };
         let eval = Eval {
             pipeline: self,
