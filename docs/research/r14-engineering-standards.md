@@ -36,7 +36,7 @@ The seven properties:
 6. **Closed vocabulary.** A document that names an unknown predicate fails to load.
 7. **Lease.** Two claimants, one `changes() = 1`. The loser appends no event.
 
-`at` is an argument of the write function ([R5](r5-state-and-storage.md)). Property tests pass the clock in. The write function does not read the wall clock, so a replay of the sha seed is the same run.
+`at` is an argument of the write function ([R5](r5-state-and-storage.md)). Property tests pass the clock in. The write function reads the wall clock only when no clock is passed (a CLI command, under the write lock), so a replay of the sha seed is the same run.
 
 The three crash tests:
 

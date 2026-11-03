@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::cursor::{self, Cursor, Page};
 use crate::ledger::{
-    Actor, Applied, Change, Checked, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal,
-    SOURCES, STATUSES, lease_held,
+    Actor, Applied, Change, Checked, EventKind, Ledger, LedgerError, MAX_LEASE_SECS,
+    MIN_LEASE_SECS, Mutation, Payload, Refusal, SOURCES, STATUSES, lease_held,
 };
 
 const ENTITY: &str = "work item";
@@ -226,6 +226,13 @@ impl Ledger {
         at: Option<&str>,
         dry_run: bool,
     ) -> Checked<WorkItem> {
+        // Before the row is read, as daisy: a bad length is never a conflict.
+        let secs = input.lease_secs.unwrap_or(DEFAULT_LEASE_SECS);
+        if !(MIN_LEASE_SECS..=MAX_LEASE_SECS).contains(&secs) {
+            return Ok(Err(Refusal::InvalidInput(format!(
+                "lease_secs must be between {MIN_LEASE_SECS} and {MAX_LEASE_SECS}, got {secs}"
+            ))));
+        }
         self.write_lane(actor, id, at, dry_run, |_, item| {
             use EventKind::*;
             if is_terminal(&item.status) {
@@ -235,7 +242,7 @@ impl Ledger {
                 ))));
             }
             let mut p = Payload {
-                lease_secs: Some(input.lease_secs.unwrap_or(DEFAULT_LEASE_SECS)),
+                lease_secs: Some(secs),
                 ..Payload::default()
             };
             let from = || json!({ "agent": item.agent, "session": item.session });

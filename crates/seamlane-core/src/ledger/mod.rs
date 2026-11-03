@@ -21,7 +21,7 @@ pub use event::{
     Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
 };
 use migrate::user_version;
-pub(crate) use write::{Checked, lease_held};
+pub(crate) use write::{Checked, MAX_LEASE_SECS, MIN_LEASE_SECS, lease_held};
 pub use write::{KINDS, PR_FLOWS, SOURCES, STATUSES};
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];

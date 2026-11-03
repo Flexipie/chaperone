@@ -182,11 +182,21 @@ impl ErrorBody {
                 message.clone(),
                 Some(json!({ "kind": kind, "help": help })),
             ),
-            CliError::ReadOnly(command) => body(
-                "read_only",
-                format!("seamlane is read-only here (DAISY_CLI_READONLY=1): `{command}` writes"),
-                Some(json!({ "command": command, "mutability": "write" })),
-            ),
+            CliError::ReadOnly(command) => {
+                // Cancel is daisy's one destructive work command.
+                let (mutability, writes) = if *command == "work cancel" {
+                    ("destructive", "writes (destructive)")
+                } else {
+                    ("write", "writes")
+                };
+                body(
+                    "read_only",
+                    format!(
+                        "seamlane is read-only here (DAISY_CLI_READONLY=1): `{command}` {writes}"
+                    ),
+                    Some(json!({ "command": command, "mutability": mutability })),
+                )
+            }
             CliError::Internal(m) => body("internal", m.clone(), None),
         }
     }

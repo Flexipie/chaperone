@@ -13,8 +13,8 @@ use serde_json::Value;
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
 use super::{Ledger, LedgerError, check_schema, fold};
 
-const MIN_LEASE_SECS: i64 = 30;
-const MAX_LEASE_SECS: i64 = 86_400;
+pub(crate) const MIN_LEASE_SECS: i64 = 30;
+pub(crate) const MAX_LEASE_SECS: i64 = 86_400;
 pub const STATUSES: &[&str] = &[
     "queued",
     "claimed",
