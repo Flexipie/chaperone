@@ -14,7 +14,7 @@ pub fn user_version(conn: &Connection) -> Result<i64, LedgerError> {
 /// together with its `user_version` bump, so a failure rolls back that
 /// migration whole. The version is re-read under the write lock, so a
 /// concurrent migrator's work is skipped, not applied twice.
-pub fn migrate(conn: &Connection, migrations: &[&str]) -> Result<(), LedgerError> {
+pub(crate) fn migrate(conn: &Connection, migrations: &[&str]) -> Result<(), LedgerError> {
     let supported = migrations.len() as i64;
     for (i, sql) in migrations.iter().enumerate() {
         let version = i as i64 + 1;

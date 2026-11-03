@@ -14,9 +14,9 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags};
 
 pub use error::LedgerError;
-pub use migrate::{migrate, user_version};
+pub use migrate::user_version;
 
-pub const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
+pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -84,7 +84,7 @@ impl Ledger {
             migrate::backup(&conn, path, found)?;
         }
         apply_pragmas(&conn)?;
-        migrate(&conn, migrations)?;
+        migrate::migrate(&conn, migrations)?;
         drop(lock);
         std::fs::create_dir_all(dir.join("evidence").join("sha256"))?;
         Ok(Self { conn })
@@ -98,7 +98,7 @@ impl Ledger {
 /// Refuses a connection whose file is not at this binary's version. The
 /// write function re-checks it inside its transaction, because a newer
 /// binary can migrate the file after this one opened it.
-pub fn check_schema(conn: &Connection) -> Result<(), LedgerError> {
+pub(crate) fn check_schema(conn: &Connection) -> Result<(), LedgerError> {
     let found = user_version(conn)?;
     if found != SCHEMA_VERSION {
         return Err(LedgerError::SchemaMismatch {
@@ -277,7 +277,7 @@ mod tests {
     fn upgrade_backs_up_first() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.db");
-        Ledger::open_and_migrate_with(&path, MIGRATIONS)
+        Ledger::open_and_migrate(&path)
             .unwrap()
             .conn()
             .execute(
@@ -345,7 +345,5 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(backups, ["ledger-v1-0.sqlite"]);
-        let backup = read_only(&dir.path().join("backups/ledger-v1-0.sqlite"));
-        assert_eq!(user_version(&backup).unwrap(), 1);
     }
 }

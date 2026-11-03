@@ -71,7 +71,7 @@ CREATE INDEX lanes_holder ON lanes (agent, session);
 -- different row, so it cannot satisfy the head.
 CREATE TABLE gate_results (
   lane_id      INTEGER NOT NULL,
-  gate         TEXT NOT NULL,           -- the check name
+  gate         TEXT NOT NULL,
   head_sha     TEXT NOT NULL,
   status       TEXT NOT NULL,           -- ran | skipped
   evidence_ref TEXT,
