@@ -11,7 +11,7 @@ are in [events.md](events.md).
 
 | Flag or env | Rule |
 | --- | --- |
-| `--db <PATH>` | The ledger file. Without it, the default ledger path (#4). |
+| `--db <PATH>` | The ledger file. Without it, the CLI's default path in the user data dir (`dirs`, #7). Core takes a path and reads no environment. |
 | `--format json\|jsonl` | `json` (default) is one object. `jsonl` is one item per line, then a trailer. |
 | `--agent`, `DAISY_AGENT` | `[a-z0-9._-]{1,40}`. Required by every write. |
 | `--session`, `DAISY_SESSION` | `[A-Za-z0-9._:-]{1,120}`. Required by every write. |
@@ -38,7 +38,7 @@ output has snapshot tests.
 | 0 | `ok` | |
 | 1 | `error` | Every error code without its own exit. |
 | 2 | `usage` | Bad argv. |
-| 3 | `schema_mismatch` | The ledger's `user_version` is newer than this binary. The file is left untouched. |
+| 3 | `schema_mismatch` | The ledger's `user_version` is not this binary's, or its `application_id` is not Seamlane's. The file is left untouched. |
 | 4 | `conflict` | A CAS miss, a held lease, or a stale `--expected-version`. |
 | 5 | `runtime_unavailable` | Only passed through from `daisy-cli reviews get`. |
 
@@ -52,7 +52,7 @@ Daisy's ten codes, plus two from the engine.
 | `invalid_input` | 1 | | Validation, caps, and the check session rule. Writes nothing. |
 | `busy` | 1 | | `retryable: true`. `SQLITE_BUSY` after the 5 s busy timeout. |
 | `conflict` | 4 | `entity` (or `by`, `until` for a held lease) | Pass `--takeover` for a lease. |
-| `schema_mismatch` | 3 | `found`, `supported`, `hint` | |
+| `schema_mismatch` | 3 | `found`, `supported`, `hint` | Newer file: refused, upgrade the binary. Older or missing file: `hint` says run `seamlane migrate`. Foreign file (wrong `application_id`): refused. |
 | `usage` | 2 | `kind`, `help` | |
 | `db` | 1 | | |
 | `internal` | 1 | | |
@@ -114,8 +114,11 @@ Every write also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
+| `migrate` | (uses `--db`) | write, no event |
 
 `work create --kind` and `--pr-flow` are Seamlane's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
+
+`seamlane migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing file. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`.
 

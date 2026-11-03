@@ -13,7 +13,7 @@ The CLI that writes these events is [cli-contract.md](cli-contract.md). Evidence
 
 ## Envelope
 
-One row in `events`. The log is the truth. Every other table is a fold of it.
+One row in `events`. The log is the truth. Every other table is a fold of it. The ledger file carries `PRAGMA user_version` (migrations) and a `PRAGMA application_id` set in 0001 (#7). Open checks both and refuses a mismatch ([cli-contract.md](cli-contract.md) exit 3).
 
 | Field | Type | Rule |
 | --- | --- | --- |
