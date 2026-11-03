@@ -50,9 +50,11 @@ jobs:
   # Branch coverage is nightly-only (-Zcoverage-options=branch), so this job
   # alone runs a pinned nightly. GATED files: a missed branch or region fails
   # the job (plain match arms are regions, not branches). BRANCH_GATED files
-  # (the ledger write path): a missed branch fails it; their regions include
-  # the error arm of every `?` on a SQLite call, which no test reaches
-  # without fault injection.
+  # (the ledger write path): a branch side no test takes fails it, counted
+  # across the unit and integration test builds (llvm's file summary scores
+  # each function by its best single build). Their regions are not gated:
+  # they include the error arm of every `?` on a SQLite call, which no test
+  # reaches without fault injection.
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -69,7 +71,7 @@ jobs:
           tool: cargo-llvm-cov,nextest
       # Crash and concurrency tests gate nothing here, and instrumentation
       # eats the 50 writers' headroom under busy_timeout.
-      - run: cargo +"$NIGHTLY" llvm-cov nextest -p seamlane-core --locked --branch --json --summary-only --output-path cov.json -E 'not (binary(crash) | binary(concurrency))'
+      - run: cargo +"$NIGHTLY" llvm-cov nextest -p seamlane-core --locked --branch --json --output-path cov.json -E 'not (binary(crash) | binary(concurrency))'
       - name: no missed branch or region in a gated file
         run: |
           for f in $GATED; do
@@ -79,12 +81,10 @@ jobs:
               || { echo "missed branch or region, or no branch data, in $f"; exit 1; }
           done
           for f in $BRANCH_GATED; do
-            jq -e --arg f "$PWD/$f" '[.data[0].files[] | select(.filename == $f)
-              | .summary | select(.branches.count > 0 and .branches.covered == .branches.count)]
-              | length == 1' cov.json \
-              || { echo "missed branch, or no branch data, in $f"
-                   jq --arg f "$PWD/$f" '.data[0].files[] | select(.filename == $f) | .summary.branches' cov.json
-                   exit 1; }
+            missed=$(jq -c --arg f "$PWD/$f" '[.data[0].files[] | select(.filename == $f) | .branches[]]
+              | if length == 0 then ["no branch data"] else group_by(.[0:4])
+                | map(select((map(.[4]) | add) == 0 or (map(.[5]) | add) == 0) | "\(.[0][0]):\(.[0][1])") end' cov.json)
+            [ "$missed" = "[]" ] || { echo "missed branches in $f: $missed"; exit 1; }
           done
 
   doc:
