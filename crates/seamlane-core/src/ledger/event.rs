@@ -89,10 +89,44 @@ impl fmt::Display for EventKind {
     }
 }
 
+/// Who writes an event. Every event needs both: ownership is the pair.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Actor {
     pub agent: Option<String>,
     pub session: Option<String>,
+}
+
+impl Actor {
+    /// Agent `[a-z0-9._-]{1,40}`, session `[A-Za-z0-9._:-]{1,120}`, daisy's
+    /// allowlist: both land in `by` strings a consumer prints.
+    pub fn check(&self) -> Result<(), Refusal> {
+        let (Some(agent), Some(session)) = (&self.agent, &self.session) else {
+            return Err(Refusal::InvalidInput(
+                "a write needs an agent and a session (--agent/--session or \
+                 DAISY_AGENT/DAISY_SESSION)"
+                    .into(),
+            ));
+        };
+        let agent_ok = (1..=40).contains(&agent.len())
+            && agent.bytes().all(|b| {
+                b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+            });
+        if !agent_ok {
+            return Err(Refusal::InvalidInput(format!(
+                "agent must match [a-z0-9._-]{{1,40}}, got '{agent}'"
+            )));
+        }
+        let session_ok = (1..=120).contains(&session.len())
+            && session
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'));
+        if !session_ok {
+            return Err(Refusal::InvalidInput(format!(
+                "session must match [A-Za-z0-9._:-]{{1,120}}, got '{session}'"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -158,6 +192,20 @@ pub struct Payload {
     pub finding_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_pos: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_flow: Option<String>,
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }

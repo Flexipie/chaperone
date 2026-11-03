@@ -315,6 +315,10 @@ impl World {
                     spec.map(|s| s as i64 + 1),
                     Payload {
                         lane_key: Some(format!("L{key}")),
+                        title: Some("t".into()),
+                        source: Some("manual".into()),
+                        kind: Some("code".into()),
+                        pr_flow: Some("pr".into()),
                         ..Payload::default()
                     },
                 ),
