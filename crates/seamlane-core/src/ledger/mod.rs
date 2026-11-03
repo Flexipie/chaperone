@@ -21,7 +21,7 @@ pub use event::{
     Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
 };
 use migrate::user_version;
-pub(crate) use write::Checked;
+pub(crate) use write::{Checked, MAX_LEASE_SECS, MIN_LEASE_SECS, lease_held};
 pub use write::{KINDS, PR_FLOWS, SOURCES, STATUSES};
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
@@ -107,7 +107,8 @@ impl Ledger {
     }
 
     /// The CLI's clock, RFC 3339 UTC with milliseconds, the form `apply`
-    /// takes. Core functions never call it themselves.
+    /// takes. The write calls it only when no clock is passed, under the
+    /// write lock.
     pub fn now(&self) -> Result<String, LedgerError> {
         Ok(self
             .conn

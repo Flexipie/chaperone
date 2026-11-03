@@ -11,6 +11,23 @@ fn help_matches_snapshots() {
             &["work", "create"],
             include_str!("snapshots/work-create.txt"),
         ),
+        (&["work", "claim"], include_str!("snapshots/work-claim.txt")),
+        (
+            &["work", "heartbeat"],
+            include_str!("snapshots/work-heartbeat.txt"),
+        ),
+        (
+            &["work", "update"],
+            include_str!("snapshots/work-update.txt"),
+        ),
+        (
+            &["work", "release"],
+            include_str!("snapshots/work-release.txt"),
+        ),
+        (
+            &["work", "cancel"],
+            include_str!("snapshots/work-cancel.txt"),
+        ),
         (&["work", "get"], include_str!("snapshots/work-get.txt")),
         (&["work", "list"], include_str!("snapshots/work-list.txt")),
         (&["migrate"], include_str!("snapshots/migrate.txt")),

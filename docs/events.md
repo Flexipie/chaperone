@@ -22,8 +22,8 @@ One row in `events`. The log is the truth. Every other table is a fold of it. Th
 | `lane_id` | integer, nullable | Null for spec events. |
 | `spec_id` | integer, nullable | Null for a lane created without `--spec`. |
 | `actor` | `{agent, session, tool}` | From `--agent` / `--session` (or `DAISY_AGENT` / `DAISY_SESSION`). `tool` is always `seamlane`. |
-| `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (daisy's rule, key only). |
-| `at` | RFC 3339 UTC, ms | Passed in. The write function does not read the clock. |
+| `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (by key and kind, never the payload). A key already used by another kind is `invalid_input`. |
+| `at` | RFC 3339 UTC, ms | Passed in, or for a CLI command read once the write lock is held, so an event is not timed before one that committed while it waited (as long as the wall clock does not step back). |
 | `payload` | JSON object | Typed per kind, below. |
 
 ## Write rules
@@ -41,7 +41,7 @@ These rules keep every write small, single and fail-closed.
 - **Lane commands other than `work ready` bump `updated_at`.** `gate.denied`, `check.*`,
   `finding.updated` and `lane.ready_overridden` do not touch the lane row's `updated_at`, so a subagent
   recording a check never makes the lane's next `--expected-updated-at` stale.
-- **Replays.** A retry with the same key returns the stored event, even if the new
+- **Replays.** A retry with the same key and kind returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
   uses `check:` plus the sha256 of its canonical payload, and `reviews record` uses
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
@@ -79,13 +79,13 @@ the row. `lane.renewed` carries the lease, and `lane.ready_overridden` changes n
 | Kind | Action | Payload |
 | --- | --- | --- |
 | `lane.created` | `create` | `title`, `source`, `source_id`, `repo`, `next_action`, `spec_id`, `lane_key`, `lane_pos`, `kind`, `pr_flow` |
-| `lane.claimed` | `claim` | `lease_secs`, `lease_expires_at`, `worktree`, `branch`, `base_sha`, `pipeline_id`, `pipeline_hash`, `route`, `changed` |
-| `lane.renewed` | `renew` | `lease_secs`, `lease_expires_at` |
+| `lane.claimed` | `claim` | `lease_secs`, `lease_expires_at`, `pipeline_id`, `pipeline_hash`, `route`, `changed` (holder, `queued` to `claimed`, and any `--worktree` as `worktree_path`, `--branch`, `--base-sha`) |
+| `lane.renewed` | `renew` | `lease_secs`, `lease_expires_at`, optional `changed` (`worktree_path`, `branch`, `base_sha`) |
 | `lane.taken_over` | `takeover` | `from {agent, session}`, `reason` (`lease expired` or `forced`), `expired_at` or `live_until`, `lease_secs`, `lease_expires_at`, `changed` |
 | `lane.updated` | `update` | `changed`, optional `reason` |
 | `lane.reopened` | `reopen` | `changed` (status `done` or `cancelled` to `queued`), `reason` |
 | `lane.cancelled` | `cancel` | `changed`, `reason` |
-| `lane.released` | `release` | `changed` (status `claimed` to `queued`, holder cleared) |
+| `lane.released` | `release` | `changed` (holder cleared; status `claimed` to `queued`, any other status kept) |
 | `lane.handed_off` | `handoff` | `handoff_id`, `handoff` (daisy's `HandoffInput`: `summary`, `status`, `changed_files`, `verification`, `smoke`, `blockers`, `open_questions`, `next_action`, `commit`, `pull_request`, `ready`, `brief`), `changed` |
 | `lane.ready_overridden` | `ready_override` | `ready` (`true`, `false`, or `null` for `--clear`), `reason` |
 
@@ -119,7 +119,7 @@ A requested review with no finish projects the fact `daisy_review.state` as `run
 | `pr.opened` | `work update --pr` when the PR goes from null to set | `pr`, `head_sha` (the latest handoff's `commit`, null if none), `changed` |
 
 It is that update's one event, in place of `lane.updated`, and `work events` shows it as `update`. When the PR first arrives in
-a handoff, the handoff's event carries `changed.pr` from null, and the fact
+a handoff, the handoff's event carries `changed.pr_ref` from null, and the fact
 `pr.opened_at` is the `at` of whichever event first set the PR.
 
 ## `check.finished` payloads
@@ -155,7 +155,7 @@ reasons) are reserved for a `--file` input after M1.
 
 | Table | M1 rule |
 | --- | --- |
-| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the latest handoff's `ready` field, or the `work ready` override, which wins over every handoff until `--clear`, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `kind`, `pr_flow`, `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `id` is the lane id, `idempotency_key` comes from `lane.created`, `lease_state` is computed at read time, and `linear_outbox` and `repo_id` are always null. `phase` is null until the first `phase.entered`, then its `to`; M1's `handoff` has no `from` constraint. `head_event_id` is the id of the lane's latest event of any kind. `spec_id`, `lane_key` and the pipeline columns are nullable until set. `events.idempotency_key` is nullable. |
+| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the latest handoff's `ready` field, or the `work ready` override, which wins over every handoff until `--clear`, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `kind`, `pr_flow`, `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `id` is the lane id, `idempotency_key` comes from `lane.created`, `lease_state` is computed at read time, and `linear_outbox` and `repo_id` are always null. `phase` is null until the first `phase.entered`, then its `to`; M1's `handoff` has no `from` constraint. `head_event_id` is the id of the lane's latest event of any kind. `spec_id`, `lane_key` and the pipeline columns are nullable until set. One item per `(spec_id, lane_key, lane_pos)` slot (a null `lane_pos` is one slot), so a stack's layers share a lane. `events.idempotency_key` is nullable. |
 | `gate_results` | One row per `(lane_id, gate, head_sha)`, where column `gate` holds the `check.finished` payload's `check` (named `gate` because `CHECK` is an SQL keyword). `status` is `ran` or `skipped`. The latest `check.finished` on that key wins. |
 | `findings` | One row per `(check_event_id, finding_key)`. `status` is `open`, `fixed` or `answered`. |
 | handoffs | A handoff is a `lane.handed_off`, or a `phase.entered` that carries `handoff`. `work handoffs`, "the latest handoff" (ready, `pr.opened.head_sha`, the `update --status done` commit) and lane-stats read both. |

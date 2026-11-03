@@ -18,6 +18,11 @@ pub(super) const LANE_COLUMNS: &[&str] = &[
     "pipeline_hash",
     "route",
     "status",
+    "next_action",
+    "blocker",
+    "pr_ref",
+    "base_sha",
+    "lane_pos",
     "agent",
     "session",
     "head_sha",
@@ -32,8 +37,14 @@ pub(super) const LANE_COLUMNS: &[&str] = &[
 ];
 
 /// The `LANE_COLUMNS` that store an integer; the rest store text.
-pub(super) const INTEGER_COLUMNS: &[&str] =
-    &["spec_id", "pid", "exit_code", "port_base", "port_count"];
+pub(super) const INTEGER_COLUMNS: &[&str] = &[
+    "spec_id",
+    "lane_pos",
+    "pid",
+    "exit_code",
+    "port_base",
+    "port_count",
+];
 
 pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
     use EventKind::*;
@@ -100,12 +111,16 @@ fn fold_lane(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
         )?)?;
     }
     // A cleared holder takes its lease with it, so no read sees a live
-    // lease on an unheld lane.
+    // lease on an unheld lane. A lease restarts the claim and heartbeat
+    // clocks, as daisy's claim does.
     let released = p.changed.get("session").is_some_and(|c| c.to.is_null());
     if e.kind.leases() || released {
+        let since = e.kind.leases().then_some(&e.at);
         one(conn.execute(
-            "UPDATE lanes SET lease_secs = ?2, lease_expires_at = ?3 WHERE id = ?1",
-            params![e.lane_id, p.lease_secs, p.lease_expires_at],
+            "UPDATE lanes SET lease_secs = ?2, lease_expires_at = ?3, claimed_at = ?4,
+               last_heartbeat_at = ?4
+             WHERE id = ?1",
+            params![e.lane_id, p.lease_secs, p.lease_expires_at, since],
         )?)?;
     }
     one(conn.execute(
