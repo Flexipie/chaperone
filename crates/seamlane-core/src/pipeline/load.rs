@@ -293,15 +293,15 @@ impl Args<'_> {
             })
     }
 
+    /// The time fact path of a known event.
     fn event(&mut self, key: &str) -> Result<String, PipelineError> {
         let event = self.str(key)?;
-        if EVENTS.contains(&event.as_str()) {
-            Ok(event)
-        } else {
-            Err(PipelineError::UnknownEvent {
+        match EVENTS.iter().find(|(name, _)| *name == event) {
+            Some((_, path)) => Ok((*path).into()),
+            None => Err(PipelineError::UnknownEvent {
                 gate: self.gate.into(),
                 event,
-            })
+            }),
         }
     }
 
