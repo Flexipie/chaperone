@@ -50,7 +50,7 @@ It fails the versioning bet. A process change would be a harness release, in-fli
 
 ### TOML
 
-TOML has no expressions. That is the property we want. The file names phases, routes, transitions, and gates. Arguments are literals (`min_len = 7`, `value = 750`). Boolean structure is three combinators, `all`, `any`, and `not`, applied to named checks. There is no loop, no function call into the ledger, and no way to read a file from the pipeline document.
+TOML has no expressions. That is the property we want. The file names phases, routes, transitions, and gates. Arguments are literals (`min_len = 7`, `value = 750`), or the name of a `[limits]` entry (amended in [`pipelines/v17.toml`](../../pipelines/v17.toml)). Boolean structure is three combinators, `all`, `any`, and `not`, applied to named checks. There is no loop, no function call into the ledger, and no way to read a file from the pipeline document.
 
 The host owns the predicate functions and the fact projection. A gate author can require `verdict_on_head` on a new transition without a release. They cannot redefine "sha prefix" inside the pipeline file. That split is what keeps a version diff honest: either a gate id was added, removed, or its arguments changed, or a host function changed in a harness release (rare, reviewed, unit-tested once for every version that names it).
 
@@ -169,6 +169,8 @@ target_lanes = 25
 The engine does not refuse to publish the next version when the count is under 25. The freeze rule is an editorial rule with a stated exception (a broken gate). The number is there so the report can say a version closed early.
 
 ## v17 document
+
+The published v17 is [`pipelines/v17.toml`](../../pipelines/v17.toml), which amends the draft below with the fixes agreed for #1 (its header lists them). The draft stays as written.
 
 Route choice at claim: `investigation` if `lane.kind` is `investigation`; else `no_pr` if `pr.flow` is `none`; else `direct` if `pr.flow` is `direct`; else `code_pr`.
 
