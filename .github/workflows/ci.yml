@@ -48,14 +48,17 @@ jobs:
       - run: cargo nextest run --workspace --locked --profile ci
 
   # Branch coverage is nightly-only (-Zcoverage-options=branch), so this job
-  # alone runs a pinned nightly. Gated files: a missed branch or region fails
-  # the job (plain match arms are regions, not branches).
+  # alone runs a pinned nightly. GATED files: a missed branch or region fails
+  # the job (plain match arms are regions, not branches). LEDGER_GATED files
+  # (the write path): the same, counted across the unit and integration test
+  # builds, with the `?` of a SQLite call exempt (.github/scripts/coverage_gate.py).
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       NIGHTLY: nightly-2026-10-20
       GATED: crates/seamlane-core/src/pipeline/eval.rs
+      LEDGER_GATED: crates/seamlane-core/src/ledger/write.rs crates/seamlane-core/src/ledger/fold.rs
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
@@ -63,7 +66,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov,nextest
-      - run: cargo +"$NIGHTLY" llvm-cov nextest -p seamlane-core --locked --branch --json --summary-only --output-path cov.json
+      # Crash and concurrency tests gate nothing here, and instrumentation
+      # eats the 50 writers' headroom under busy_timeout.
+      - run: cargo +"$NIGHTLY" llvm-cov nextest -p seamlane-core --locked --branch --json --output-path cov.json -E 'not (binary(crash) | binary(concurrency))'
       - name: no missed branch or region in a gated file
         run: |
           for f in $GATED; do
@@ -72,6 +77,7 @@ jobs:
                 and .regions.covered == .regions.count)] | length == 1' cov.json \
               || { echo "missed branch or region, or no branch data, in $f"; exit 1; }
           done
+          python3 .github/scripts/coverage_gate.py cov.json $LEDGER_GATED
 
   doc:
     runs-on: ubuntu-latest

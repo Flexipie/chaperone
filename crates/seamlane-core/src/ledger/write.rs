@@ -627,6 +627,111 @@ mod tests {
                 ev(EventKind::LaneUpdated, Some(1), None, Payload::default()),
             ),
             (AT, Some("k"), Mutation::Heartbeat { lane_id: 1 }),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecApproved,
+                    None,
+                    Some(1),
+                    Payload {
+                        version: Some(1),
+                        ..change("status", json!("queued"), json!("done"))
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecCreated,
+                    Some(1),
+                    None,
+                    Payload {
+                        parent_key: Some("Flexipie/harness#2".into()),
+                        ..spec.clone()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecCreated,
+                    None,
+                    None,
+                    Payload {
+                        parent_key: Some("Flexipie/harness#2".into()),
+                        changed: change("status", json!("queued"), json!("done")).changed,
+                        ..spec.clone()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecRevised,
+                    Some(1),
+                    Some(1),
+                    Payload {
+                        version: Some(2),
+                        body: Some("b".into()),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecRevised,
+                    None,
+                    Some(1),
+                    Payload {
+                        version: Some(2),
+                        body: Some("b".into()),
+                        ..change("status", json!("queued"), json!("done"))
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecCreated,
+                    None,
+                    Some(1),
+                    Payload {
+                        parent_key: Some("Flexipie/harness#2".into()),
+                        ..spec.clone()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    change("status", json!(null), json!("queued")),
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::CheckFinished,
+                    Some(1),
+                    None,
+                    Payload {
+                        check: Some("smoke".into()),
+                        outcome: Some("ran".into()),
+                        ..Payload::default()
+                    },
+                ),
+            ),
             (AT, None, Mutation::Heartbeat { lane_id: 9 }),
             (AT, None, Mutation::Heartbeat { lane_id: 1 }),
             (AT, None, Mutation::Heartbeat { lane_id: 2 }),
@@ -975,6 +1080,17 @@ mod tests {
                         change("agent", json!("b"), json!(null)),
                     ),
                 ),
+                (
+                    &other,
+                    AT,
+                    None,
+                    ev(
+                        EventKind::LaneUpdated,
+                        Some(2),
+                        None,
+                        change("session", json!("t"), json!(null)),
+                    ),
+                ),
             ]);
         for (i, (who, at, key, m)) in cases.enumerate() {
             let applied = ledger.apply(who, key, at, m).unwrap();
@@ -984,5 +1100,47 @@ mod tests {
             );
             assert_eq!(events(&ledger), 4, "case {i}");
         }
+    }
+
+    /// The accepting side of guard branches the property ops never take:
+    /// a spec approval, and a lane leaving its spec.
+    #[test]
+    fn approval_and_spec_clear_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let me = Actor::default();
+        let spec = Payload {
+            parent_key: Some("Flexipie/harness#1".into()),
+            title: Some("t".into()),
+            body: Some("b".into()),
+            ..Payload::default()
+        };
+        let approve = Payload {
+            version: Some(1),
+            ..Payload::default()
+        };
+        for m in [
+            ev(EventKind::SpecCreated, None, None, spec),
+            ev(EventKind::LaneCreated, None, Some(1), Payload::default()),
+            ev(EventKind::SpecApproved, None, Some(1), approve),
+            ev(
+                EventKind::LaneUpdated,
+                Some(1),
+                None,
+                change("spec_id", json!(1), json!(null)),
+            ),
+        ] {
+            let applied = ledger.apply(&me, None, AT, m).unwrap();
+            assert!(matches!(applied, Applied::Committed(_)), "{applied:?}");
+        }
+        let (status, spec_id): (String, Option<i64>) = ledger
+            .conn()
+            .query_row(
+                "SELECT specs.status, lanes.spec_id FROM specs, lanes",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((status.as_str(), spec_id), ("approved", None));
     }
 }

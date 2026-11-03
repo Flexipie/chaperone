@@ -215,3 +215,45 @@ impl Ledger {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A log this binary did not write (a lane column the write refuses to
+    /// set, a lane no event created) fails the rebuild, and the tables stay
+    /// as they were: the seeded `blocked` is not what a refold would write.
+    #[test]
+    fn rebuild_refuses_a_foreign_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let conn = ledger.conn();
+        conn.execute_batch(
+            "INSERT INTO events (lane_id, kind, payload_json, at)
+             VALUES (NULL, 'lane.created', '{}', '2026-11-03T00:00:00.000Z');
+             INSERT INTO lanes (id, status, head_event_id, updated_at)
+             VALUES (1, 'blocked', 1, '2026-11-03T00:00:00.000Z');",
+        )
+        .unwrap();
+        for (lane, payload) in [
+            (1, r#"{"changed":{"lease_secs":{"from":null,"to":60}}}"#),
+            (
+                9,
+                r#"{"changed":{"status":{"from":"queued","to":"active"}}}"#,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO events (id, lane_id, kind, payload_json, at)
+                 VALUES (2, ?1, 'lane.updated', ?2, '2026-11-03T00:00:00.000Z')",
+                params![lane, payload],
+            )
+            .unwrap();
+            assert!(ledger.rebuild().is_err(), "{payload}");
+            let status: String = conn
+                .query_row("SELECT status FROM lanes", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(status, "blocked", "{payload}");
+            conn.execute("DELETE FROM events WHERE id = 2", []).unwrap();
+        }
+    }
+}
