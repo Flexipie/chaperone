@@ -43,7 +43,7 @@ These rules keep every write small, single and fail-closed.
   recording a check never makes the lane's next `--expected-updated-at` stale.
 - **Replays.** A retry with the same key and kind returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
-  uses `check:` plus the sha256 of its canonical payload and the id of the lane's newest
+  uses `check:` plus the sha256 of the lane id, its canonical payload and the id of the lane's newest
   `check.finished` for that check with a different payload (so a retry replays, and a
   result that flips back, such as no, yes, no, appends), and `reviews record` uses
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already

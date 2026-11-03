@@ -118,7 +118,8 @@ impl Ledger {
         // Read before the write lock: a result that commits in between can
         // only make a retry append a duplicate.
         let latest = newest_other(self.conn(), input.work, &input.check, &payload)?;
-        let canonical = canonical_string(&json!({"payload": payload, "after": latest}));
+        let canonical =
+            canonical_string(&json!({"work": input.work, "payload": payload, "after": latest}));
         let key = format!("check:{:x}", Sha256::digest(canonical));
         let (applied, _) = self.apply_planned(
             actor,
