@@ -2,12 +2,14 @@
 //! 256 cases, the clock passed in, and the seed taken from the commit sha
 //! (`SEAMLANE_SEED` overrides it) and printed, so a failure replays.
 
-use std::collections::BTreeMap;
-use std::path::Path;
+mod common;
 
+use std::collections::BTreeMap;
+
+use common::{dump, read_only};
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngSeed};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
 use seamlane_core::ledger::{
     Actor, Applied, Change, EventKind, Finding, Findings, Ledger, Mutation, Payload, Refusal,
 };
@@ -503,43 +505,6 @@ impl World {
                 .unwrap(),
         )
     }
-}
-
-fn read_only(path: &Path) -> Connection {
-    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap()
-}
-
-/// Every row of every table, events included, as text.
-fn dump(db: &Connection) -> BTreeMap<String, Vec<String>> {
-    let tables = [
-        "events",
-        "specs",
-        "spec_versions",
-        "lanes",
-        "gate_results",
-        "findings",
-        "messages",
-    ];
-    tables
-        .iter()
-        .map(|t| {
-            let mut stmt = db
-                .prepare(&format!("SELECT * FROM {t} ORDER BY 1, 2, 3"))
-                .unwrap();
-            let n = stmt.column_count();
-            let rows = stmt
-                .query_map([], |r| {
-                    let cells: Vec<_> = (0..n)
-                        .map(|i| format!("{:?}", r.get_ref(i).unwrap()))
-                        .collect();
-                    Ok(cells.join("|"))
-                })
-                .unwrap()
-                .map(Result::unwrap)
-                .collect();
-            (t.to_string(), rows)
-        })
-        .collect()
 }
 
 fn lanes_without_lease(db: &Connection) -> Vec<String> {

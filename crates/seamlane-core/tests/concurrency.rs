@@ -79,9 +79,11 @@ fn fifty_writers() {
     assert_consistent(&path);
 }
 
-/// Why the write function begins `IMMEDIATE`: two deferred transactions
-/// that read and then both write. Once the first commits, the second gets
-/// `SQLITE_BUSY_SNAPSHOT` at once, and `busy_timeout` does not wait for it.
+/// Why the write function begins `IMMEDIATE`, shown on raw connections: two
+/// deferred transactions that read and then both write. Once the first
+/// commits, the second gets `SQLITE_BUSY_SNAPSHOT` at once, and
+/// `busy_timeout` does not wait for it. `fifty_writers` is what fails if
+/// `apply` itself begins deferred.
 #[test]
 fn deferred_txns_busy_snapshot() {
     let (_dir, path, ledger) = common::ledger();
@@ -127,6 +129,7 @@ fn held_txn_times_out() {
     let (_dir, path, ledger) = common::ledger();
     let mut child = common::spawn("held_txn_times_out", &path, "");
     common::wait_for(Duration::from_secs(10), || marker(&path).exists());
+    let held = Instant::now();
 
     let start = Instant::now();
     let err = ledger
@@ -141,6 +144,8 @@ fn held_txn_times_out() {
     );
     eprintln!("the write gave up after {elapsed:?}");
 
+    // Released after at least 6 s held.
+    std::thread::sleep(Duration::from_secs(6).saturating_sub(held.elapsed()));
     child.kill();
     assert_eq!(
         common::count(&read_only(&path), "SELECT count(*) FROM events"),

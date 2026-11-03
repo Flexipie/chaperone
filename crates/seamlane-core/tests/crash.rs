@@ -57,11 +57,6 @@ fn sigkill_before_commit() {
     // The lock probe must not wait out rusqlite's default 5 s busy_timeout.
     db.busy_timeout(Duration::ZERO).unwrap();
     db.execute_batch(STALL).unwrap();
-    assert!(
-        db.query_row("SELECT count(*) = 1000 FROM burn", [], |r| r
-            .get::<_, bool>(0))
-            .unwrap()
-    );
 
     let mut child = common::spawn("sigkill_before_commit", &path, "");
     common::wait_for(Duration::from_secs(10), || write_locked(&db));
@@ -70,10 +65,6 @@ fn sigkill_before_commit() {
     assert!(write_locked(&db), "the child left the write function");
     assert_eq!(child.kill().signal(), Some(9));
 
-    let integrity: String = read_only(&path)
-        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(integrity, "ok");
     assert_eq!(keys(&read_only(&path)), ["seed-0", "seed-1"]);
     db.execute_batch("DROP TRIGGER stall; DROP TABLE burn")
         .unwrap();

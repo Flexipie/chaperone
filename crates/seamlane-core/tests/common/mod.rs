@@ -162,9 +162,8 @@ pub fn assert_consistent(path: &Path) {
     assert_eq!(before, dump(&db), "the tables differ from the folded log");
 }
 
-/// Every row of every table, events included, as text. Same as the
-/// property tests' `dump`, kept apart so those tests stay one file.
-fn dump(db: &Connection) -> BTreeMap<String, Vec<String>> {
+/// Every row of every table, events included, as text.
+pub fn dump(db: &Connection) -> BTreeMap<String, Vec<String>> {
     let tables = [
         "events",
         "specs",
