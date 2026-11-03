@@ -1,6 +1,6 @@
 //! Specs: the dispatch spec of one parent issue (a Linear key, a daisy issue
 //! or a GitHub issue), versioned in the ledger, in daisy's `spec` shapes.
-//! Every write is one event through [`Ledger::apply_with`]: `spec.created`
+//! Every write is one event through `Ledger::apply_planned`: `spec.created`
 //! at version 1, `spec.revised` appends a version, `spec.approved` marks it
 //! agreed. Nothing edits a version in place.
 
