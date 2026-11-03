@@ -323,17 +323,14 @@ impl Ledger {
                 id: job,
             }));
         };
-        let (work, started, finished, round): (i64, String, Option<String>, Option<i64>) =
-            self.conn().query_row(
-                &format!(
-                    "SELECT lane_id, min(at),
-                            max(iif(kind = 'check.finished', at, NULL)),
-                            max(json_extract(payload_json, '$.round'))
-                     FROM events WHERE {JOB_EVENTS}"
-                ),
-                [job],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )?;
+        let (work, started, finished): (i64, String, Option<String>) = self.conn().query_row(
+            &format!(
+                "SELECT lane_id, min(at), max(iif(kind = 'check.finished', at, NULL))
+                 FROM events WHERE {JOB_EVENTS}"
+            ),
+            [job],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
         let issue_key = match (&view["pr_ref"], &view["branch"]) {
             (Value::String(pr), _) => json!(pr),
             (_, Value::String(branch)) => json!(format!("local:{branch}")),
@@ -343,7 +340,7 @@ impl Ledger {
         let only_daisy = "base_sha blocking_questions_json cache_read_tokens cache_write_tokens \
             cost_usd gates_pass job_dir linear_failures_json mode model_phases not_before \
             not_ready_because open_blockers phase_started_at plan_kind progress_json queue_pos \
-            ready repo_id request_json scope_pass stranded tokens_in tokens_out turns";
+            ready repo_id request_json round scope_pass stranded tokens_in tokens_out turns";
         for k in only_daisy.split_whitespace() {
             out.insert(k.into(), Value::Null);
         }
@@ -366,7 +363,6 @@ impl Ledger {
             ("id".into(), json!(job)),
             ("issue_key".into(), issue_key),
             ("kind".into(), json!("review")),
-            ("round".into(), json!(round)),
             ("started_at".into(), json!(started)),
             ("finished_at".into(), json!(finished)),
             ("work_id".into(), json!(work)),

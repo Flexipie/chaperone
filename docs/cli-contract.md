@@ -149,7 +149,10 @@ waiting. `reviews get` and `jobs get`
 answer from what was recorded, in daisy's shape (the job's `check.finished`, else its
 `check.requested`). Their keys are daisy's. Daisy's free text (`summary`, `impact`,
 `intent_note`, `verdict_reason`, `error`, `report_path`, `worktree_path`) is not stored and
-reads as null, and so does what only daisy knows in `jobs get` (cost, tokens, `job_dir`).
+reads as null, and so does what only daisy knows in `jobs get` (cost, tokens, `job_dir`,
+`round`). In `jobs get`, `work_id` is the lane the job is recorded on, `started_at` is when
+Seamlane first recorded the job, and `finished_at` is when it recorded the finish (null
+before), not daisy's times.
 Findings come from the stored payload, and each one's `outcome` is its row's `fixed` or
 `answered`, else null. `reviews record` prints the `reviews get` answer.
 
