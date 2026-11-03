@@ -4,7 +4,10 @@
 //! [`Ledger::open_and_migrate`].
 
 mod error;
+mod event;
+mod fold;
 mod migrate;
+mod write;
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -14,6 +17,9 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags};
 
 pub use error::LedgerError;
+pub use event::{
+    Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
+};
 use migrate::user_version;
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
@@ -91,13 +97,14 @@ impl Ledger {
         Ok(Self { conn })
     }
 
-    pub fn conn(&self) -> &Connection {
+    #[cfg(test)]
+    pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
 }
 
-/// Refuses a connection whose file is not at this binary's version. The
-/// write function re-checks it inside its transaction, because a newer
+/// Refuses a connection whose file is not at this binary's version.
+/// [`Ledger::apply`] re-checks it inside its transaction, because a newer
 /// binary can migrate the file after this one opened it.
 pub(crate) fn check_schema(conn: &Connection) -> Result<(), LedgerError> {
     let found = user_version(conn)?;

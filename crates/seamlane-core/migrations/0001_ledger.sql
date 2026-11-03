@@ -1,7 +1,8 @@
 -- Ledger v1. R5 tables and column names. Statuses follow the M1
 -- vocabularies (wire statuses, ran|skipped, open|fixed|answered); the check
--- name stays in gate_results.gate because CHECK is an SQL keyword. Work-item
--- columns arrive with the CLI slices.
+-- name stays in gate_results.gate because CHECK is an SQL keyword. The lease
+-- columns the write function needs are here; the other work-item columns
+-- arrive with the CLI slices.
 -- Editable until the first demo, then frozen: later changes are new files.
 
 -- Append-only log. No AUTOINCREMENT: a rolled-back insert must not burn an
@@ -42,14 +43,16 @@ CREATE TABLE spec_versions (
 CREATE TABLE lanes (
   id               INTEGER PRIMARY KEY,
   spec_id          INTEGER,
-  lane_key         TEXT NOT NULL,
+  lane_key         TEXT,
   pipeline_id      TEXT,                -- pipeline_id, pipeline_hash, route: set at claim
   pipeline_hash    TEXT,
   route            TEXT,
   status           TEXT NOT NULL,       -- queued|claimed|active|blocked|review|done|cancelled
   agent            TEXT,
   session          TEXT,
-  lease_expires_at TEXT,
+  lease_secs       INTEGER,
+  lease_expires_at TEXT,             -- lease_expires_at, last_heartbeat_at: outside the fold
+  last_heartbeat_at TEXT,
   head_sha         TEXT,
   branch           TEXT,
   worktree_path    TEXT,
