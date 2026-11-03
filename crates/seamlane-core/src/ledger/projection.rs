@@ -2,7 +2,7 @@
 //! these facts, never events or prose. A fact no M1 event produces stays
 //! absent, so a gate that reads it denies (events.md, facts in M1).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{Connection, params};
 use serde_json::Value;
@@ -43,7 +43,12 @@ pub(crate) fn project(
     let mut rows = stmt.query([lane_id])?;
     let (mut smoke, mut kept, mut rounds) = (false, false, 0);
     let mut latest_round: Option<i64> = None;
+    // A request with no job can never be matched by a finish, so it stays
+    // running: it fails closed.
     let (mut requested, mut finished) = (BTreeSet::new(), BTreeSet::new());
+    // The first time each quality gate (outcome, reason) was recorded, and
+    // the latest one's key.
+    let (mut qg_first, mut qg_latest) = (BTreeMap::new(), None);
     let mut review_state = "absent";
     while let Some(row) = rows.next()? {
         let e: Event = event_from_row(row)?;
@@ -55,47 +60,37 @@ pub(crate) fn project(
         let job = p.rest.get("job").map(Value::to_string);
         match (e.kind, p.check.as_deref()) {
             (EventKind::CheckRequested, _) => {
-                requested.extend(job);
+                requested.insert(job);
             }
             (EventKind::CheckFinished, Some(check)) => {
                 let ran = p.outcome.as_deref() == Some("ran");
                 let text = |key: &str| p.rest.get(key).and_then(Value::as_str);
                 match check {
                     "plan_check" | "quality_gate" => {
-                        f.set(
-                            &format!("{check}.outcome"),
-                            p.outcome.as_deref().unwrap_or_default(),
-                        );
-                        match text("reason") {
-                            Some(r) => f.set(&format!("{check}.reason"), r),
-                            None => f.set(&format!("{check}.reason"), Fact::Absent),
-                        };
-                        // The first quality gate is the one the PR must follow.
-                        if check == "quality_gate"
-                            && matches!(f.get("quality_gate.at"), Fact::Absent)
-                        {
-                            f.set("quality_gate.at", Fact::Time(e.at.clone()));
+                        set(&mut f, &format!("{check}.outcome"), p.outcome.as_deref());
+                        set(&mut f, &format!("{check}.reason"), text("reason"));
+                        if check == "quality_gate" {
+                            let key = (p.outcome.clone(), text("reason").map(String::from));
+                            qg_first.entry(key.clone()).or_insert_with(|| e.at.clone());
+                            qg_latest = Some(key);
                         }
                     }
-                    "merge_verdict" => {
-                        match text("decision") {
-                            Some(d) => f.set("verdict.decision", d),
-                            None => f.set("verdict.decision", Fact::Absent),
-                        };
-                        f.set("verdict.sha", p.head_sha.as_deref().unwrap_or_default());
+                    // Only a verdict that ran is one (events.md: `ran` only).
+                    "merge_verdict" if ran => {
+                        set(&mut f, "verdict.decision", text("decision"));
+                        set(&mut f, "verdict.sha", p.head_sha.as_deref());
                     }
                     "smoke" => smoke = true,
                     "kept_tests" => kept = true,
                     "local_review" | "pr_review" => {
-                        finished.extend(job);
+                        if job.is_some() {
+                            finished.insert(job);
+                        }
                         review_state = if ran { "finished" } else { "failed" };
                         if check == "local_review" && ran {
                             rounds += 1;
                             latest_round = Some(e.id);
-                            f.set(
-                                "review.local_head",
-                                p.head_sha.as_deref().unwrap_or_default(),
-                            );
+                            set(&mut f, "review.local_head", p.head_sha.as_deref());
                         }
                     }
                     _ => {}
@@ -103,6 +98,11 @@ pub(crate) fn project(
             }
             _ => {}
         }
+    }
+    // Recording the same result again after the PR keeps its first time; a
+    // different result is timed from when it was first recorded.
+    if let Some(at) = qg_latest.and_then(|k| qg_first.remove(&k)) {
+        f.set("quality_gate.at", Fact::Time(at));
     }
     f.set("smoke.recorded", smoke)
         .set("kept_tests.recorded", kept)
@@ -121,6 +121,11 @@ pub(crate) fn project(
         f.set("review.previous_round_closed", open == 0);
     }
     Ok(f)
+}
+
+/// A text fact, absent when the field is.
+fn set(f: &mut FactBundle, path: &str, v: Option<&str>) {
+    f.set(path, v.map_or(Fact::Absent, |v| Fact::Str(v.into())));
 }
 
 #[cfg(test)]
@@ -257,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_check_and_quality_gate_take_the_latest_outcome_and_first_time() {
+    fn plan_check_and_quality_gate_take_the_latest_outcome() {
         let lane = Lane::new("docs");
         for check in ["plan_check", "quality_gate"] {
             lane.check(check, "skipped", json!({"reason": "docs"}), T[1]);
@@ -271,7 +276,7 @@ mod tests {
         }
         assert_eq!(
             lane.facts().get("quality_gate.at"),
-            &Fact::Time(T[1].into())
+            &Fact::Time(T[2].into())
         );
         assert_eq!(lane.facts().get("plan_check.at"), &Fact::Absent);
     }
@@ -331,6 +336,28 @@ requires = ["quality_gate_before_pr"]
             T[3],
         );
         assert_eq!(lane.facts().get("pr.opened_at"), &Fact::Time(T[2].into()));
+
+        // A skip before the PR does not time a gate that ran after it.
+        let skip = Lane::new("code");
+        skip.check(
+            "quality_gate",
+            "skipped",
+            json!({"reason": "no_code"}),
+            T[1],
+        );
+        skip.change(
+            EventKind::LaneUpdated,
+            "pr_ref",
+            json!(null),
+            json!("o/r#1"),
+            T[2],
+        );
+        skip.check("quality_gate", "ran", json!({}), T[3]);
+        assert_eq!(
+            skip.facts().get("quality_gate.at"),
+            &Fact::Time(T[3].into())
+        );
+        assert!(!eval(&skip.facts()));
     }
 
     #[test]
@@ -342,6 +369,9 @@ requires = ["quality_gate_before_pr"]
         }
         assert_eq!(f.get("smoke.recorded"), &Fact::Bool(false));
         assert_eq!(f.get("kept_tests.recorded"), &Fact::Bool(false));
+        // A skipped verdict is no verdict.
+        lane.check("merge_verdict", "skipped", json!({"decision": "yes"}), T[1]);
+        assert_eq!(lane.facts().get("verdict.decision"), &Fact::Absent);
         lane.check("merge_verdict", "ran", json!({"decision": "no"}), T[1]);
         lane.check("merge_verdict", "ran", json!({"decision": "yes"}), T[2]);
         lane.check("smoke", "skipped", json!({"reason": "nothing_runs"}), T[2]);
@@ -432,5 +462,17 @@ requires = ["quality_gate_before_pr"]
             T[3],
         );
         assert_eq!(lane.facts().get("daisy_review.state"), &s("failed"));
+        // A request with no job never finishes.
+        lane.apply(
+            EventKind::CheckRequested,
+            Payload {
+                check: Some("local_review".into()),
+                head_sha: Some("abc1234".into()),
+                ..Payload::default()
+            },
+            T[3],
+        );
+        lane.check("local_review", "ran", json!({"job": 9}), T[3]);
+        assert_eq!(lane.facts().get("daisy_review.state"), &s("running"));
     }
 }

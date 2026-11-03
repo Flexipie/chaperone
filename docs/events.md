@@ -169,14 +169,16 @@ R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` an
 
 **Facts in M1.** The projection reads the lane row's stamp and kind and the lane's events,
 never prose. `commit.sha` is the head the gated command names (the handoff's `commit`, or for
-`update --status done` the latest handoff's), never a stored one. `plan_check.*`,
-`quality_gate.outcome`/`reason` and `verdict.*` come from the latest `check.finished` of
-that check. `quality_gate.at` is the first quality gate's `at`, so recording one again
-after the PR does not fail `quality_gate_before_pr`. `smoke.recorded` and
+`update --status done` the latest handoff's), never a stored one. `plan_check.*` and
+`quality_gate.outcome`/`reason` come from the latest `check.finished` of that check, and
+`verdict.*` from the latest `merge_verdict` that ran. `quality_gate.at` is the `at` of the
+first quality gate with the latest one's outcome and reason, so recording the same result
+again after the PR does not fail `quality_gate_before_pr`, and a skip before the PR does
+not time a gate that ran after it. `smoke.recorded` and
 `kept_tests.recorded` are true once any such check is recorded. `review.local_rounds`
 counts `ran` local reviews, `review.local_head` is the newest one's sha, and
 `review.previous_round_closed` holds when that round has no `open` finding.
-`daisy_review.state` is `running` while a requested job has no finish, else the latest
+`daisy_review.state` is `running` while a requested job (or a request with no job) has no finish, else the latest
 finished review's (`finished`, or `failed` when skipped), else `absent`. Facts whose
 producer is reserved stay absent, so a gate that reads one denies: `kept_tests.bar_ok`,
 `verification.unexplained_failures`, `brief.oversize`, `review.code_changed_since`,
