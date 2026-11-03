@@ -155,7 +155,9 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
         SpecCreated | SpecRevised | SpecApproved
             if event.lane_id.is_some() || !p.changed.is_empty() || p.lease_secs.is_some() =>
         {
-            refuse!(invalid("spec events name no lane and change no lane column"));
+            refuse!(invalid(
+                "spec events name no lane and change no lane column"
+            ));
         }
         SpecCreated => {
             let (Some(key), Some(_), Some(_)) = (&p.parent_key, &p.title, &p.body) else {
