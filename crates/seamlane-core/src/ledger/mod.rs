@@ -21,10 +21,15 @@ pub use event::{
     Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
 };
 use migrate::user_version;
+pub(crate) use write::Checked;
+pub use write::{KINDS, PR_FLOWS, SOURCES, STATUSES};
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
+
+/// `PRAGMA application_id`, set by 0001: "SEAM".
+pub const APPLICATION_ID: i64 = 0x5345_414D;
 
 pub struct Ledger {
     conn: Connection,
@@ -34,7 +39,11 @@ impl Ledger {
     /// Opens an existing ledger at this binary's schema version. A missing
     /// file or any other version is refused, and a newer file is not written.
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
-        let (found, _) = probe(path)?.ok_or_else(|| LedgerError::Missing(path.into()))?;
+        let probed = probe(path)?.ok_or_else(|| LedgerError::Missing(path.into()))?;
+        if foreign(probed) {
+            return Err(LedgerError::NotALedger(path.into()));
+        }
+        let found = probed.0;
         if found != SCHEMA_VERSION {
             return Err(LedgerError::SchemaMismatch {
                 found,
@@ -78,13 +87,13 @@ impl Ledger {
         // newer binary's WAL into the file we are refusing.
         let found = match probe(path)? {
             None => 0,
-            Some((found, _)) if found > supported => {
-                return Err(LedgerError::SchemaMismatch { found, supported });
-            }
-            Some((found, has_schema)) if found < 0 || (found == 0 && has_schema) => {
+            Some(probed) if foreign(probed) => {
                 return Err(LedgerError::NotALedger(path.into()));
             }
-            Some((found, _)) => found,
+            Some((found, ..)) if found > supported => {
+                return Err(LedgerError::SchemaMismatch { found, supported });
+            }
+            Some((found, ..)) => found,
         };
         let conn = Connection::open(path)?;
         apply_pragmas(&conn)?;
@@ -97,10 +106,27 @@ impl Ledger {
         Ok(Self { conn })
     }
 
-    #[cfg(test)]
+    /// The CLI's clock, RFC 3339 UTC with milliseconds, the form `apply`
+    /// takes. Core functions never call it themselves.
+    pub fn now(&self) -> Result<String, LedgerError> {
+        Ok(self
+            .conn
+            .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| {
+                r.get(0)
+            })?)
+    }
+
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
+}
+
+/// Not ours: anything but an empty file that lacks Seamlane's
+/// `application_id` at a positive version. Checked before the version, so
+/// another program's database is never told to upgrade or migrate.
+fn foreign((found, has_schema, app): (i64, bool, i64)) -> bool {
+    let empty = found == 0 && !has_schema;
+    !empty && (found < 1 || app != APPLICATION_ID)
 }
 
 /// Refuses a connection whose file is not at this binary's version.
@@ -128,17 +154,30 @@ fn apply_pragmas(conn: &Connection) -> Result<(), LedgerError> {
     Ok(())
 }
 
-/// `user_version`, and whether the file has any schema, read on a read-only
-/// connection, which cannot checkpoint or otherwise write the file. `None`
-/// when there is no file.
-fn probe(path: &Path) -> Result<Option<(i64, bool)>, LedgerError> {
+/// `user_version`, whether the file has any schema, and `application_id`,
+/// read on a read-only connection, which cannot checkpoint or otherwise
+/// write the file. `None` when there is no file. A file that is not SQLite
+/// at all is not a ledger.
+fn probe(path: &Path) -> Result<Option<(i64, bool, i64)>, LedgerError> {
     if !path.try_exists()? {
         return Ok(None);
     }
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(Duration::from_millis(5000))?;
-    let has_schema = conn.query_row("SELECT count(*) > 0 FROM sqlite_schema", [], |r| r.get(0))?;
-    Ok(Some((user_version(&conn)?, has_schema)))
+    let read = || -> Result<_, LedgerError> {
+        let has_schema =
+            conn.query_row("SELECT count(*) > 0 FROM sqlite_schema", [], |r| r.get(0))?;
+        let app = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+        Ok((user_version(&conn)?, has_schema, app))
+    };
+    match read() {
+        Err(LedgerError::Sqlite(e))
+            if e.sqlite_error_code() == Some(rusqlite::ErrorCode::NotADatabase) =>
+        {
+            Err(LedgerError::NotALedger(path.into()))
+        }
+        probed => probed.map(Some),
+    }
 }
 
 fn lock_path(path: &Path) -> PathBuf {
@@ -183,6 +222,7 @@ mod tests {
         assert_eq!(pragma::<i64>(conn, "busy_timeout"), 5000);
         assert_eq!(pragma::<i64>(conn, "foreign_keys"), 1);
         assert_eq!(user_version(conn).unwrap(), 1);
+        assert_eq!(pragma::<i64>(conn, "application_id"), APPLICATION_ID);
         for table in [
             "events",
             "specs",
@@ -229,10 +269,8 @@ mod tests {
         assert!(matches!(Ledger::open(&path), Err(LedgerError::Missing(_))));
         assert!(!path.exists());
 
-        Connection::open(&path)
-            .unwrap()
-            .execute_batch("CREATE TABLE old (a)")
-            .unwrap();
+        // An empty file is a ledger not yet migrated.
+        File::create(&path).unwrap();
         let err = Ledger::open(&path).err().unwrap();
         assert!(matches!(
             err,
@@ -242,24 +280,37 @@ mod tests {
             }
         ));
         assert!(err.to_string().contains("seamlane migrate"), "{err}");
-        // Not a ledger: another SQLite file at v0, or at a negative
-        // user_version, is never migrated.
-        for version in [0, -1] {
+
+        // Not a ledger, never read or migrated: another SQLite file at v0,
+        // at a negative user_version, or at v1 or above without Seamlane's
+        // application_id; or a file that is not SQLite at all.
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE old (a)")
+            .unwrap();
+        for version in [0, -1, 1, 40] {
             Connection::open(&path)
                 .unwrap()
                 .pragma_update(None, "user_version", version)
                 .unwrap();
             let before = std::fs::read(&path).unwrap();
-            assert!(matches!(
-                Ledger::open_and_migrate(&path),
-                Err(LedgerError::NotALedger(_))
-            ));
+            for result in [Ledger::open(&path), Ledger::open_and_migrate(&path)] {
+                assert!(
+                    matches!(result, Err(LedgerError::NotALedger(_))),
+                    "v{version}"
+                );
+            }
             assert!(
                 before == std::fs::read(&path).unwrap(),
                 "v{version} changed"
             );
         }
         assert!(!has_table(&read_only(&path), "events"));
+        let text = dir.path().join("notes.txt");
+        std::fs::write(&text, "not a database, just some text").unwrap();
+        for result in [Ledger::open(&text), Ledger::open_and_migrate(&text)] {
+            assert!(matches!(result, Err(LedgerError::NotALedger(_))));
+        }
     }
 
     #[test]
@@ -274,7 +325,8 @@ mod tests {
         newer
             .execute_batch(
                 "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;
-                 CREATE TABLE t (a); INSERT INTO t VALUES (1); PRAGMA user_version = 2;",
+                 CREATE TABLE t (a); INSERT INTO t VALUES (1); PRAGMA user_version = 2;
+                 PRAGMA application_id = 1397047629;",
             )
             .unwrap();
         std::fs::copy(&src, &path).unwrap();

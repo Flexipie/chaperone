@@ -1,8 +1,8 @@
 -- Ledger v1. R5 tables and column names. Statuses follow the M1
 -- vocabularies (wire statuses, ran|skipped, open|fixed|answered); the check
--- name stays in gate_results.gate because CHECK is an SQL keyword. The lease
--- columns the write function needs are here; the other work-item columns
--- arrive with the CLI slices.
+-- name stays in gate_results.gate because CHECK is an SQL keyword. The lanes
+-- columns are daisy's work item fields plus Seamlane's kind, pr_flow, phase
+-- and pipeline stamp (events.md "Folded rows").
 -- Editable until the first demo, then frozen: later changes are new files.
 
 -- Append-only log. No AUTOINCREMENT: a rolled-back insert must not burn an
@@ -42,14 +42,27 @@ CREATE TABLE spec_versions (
 
 CREATE TABLE lanes (
   id               INTEGER PRIMARY KEY,
+  title            TEXT NOT NULL,
+  source           TEXT NOT NULL,       -- linear|github|note|issue|manual
+  source_id        TEXT,                -- stored as given
+  repo_slug        TEXT,                -- --repo, stored as given
+  kind             TEXT NOT NULL,       -- code|docs|measure|investigation
+  pr_flow          TEXT NOT NULL,       -- pr|direct
+  phase            TEXT,                -- null until the first phase.entered
+  next_action      TEXT,
+  blocker          TEXT,
+  pr_ref           TEXT,
+  base_sha         TEXT,
   spec_id          INTEGER,
   lane_key         TEXT,
+  lane_pos         INTEGER,
   pipeline_id      TEXT,                -- pipeline_id, pipeline_hash, route: set at claim
   pipeline_hash    TEXT,
   route            TEXT,
   status           TEXT NOT NULL,       -- queued|claimed|active|blocked|review|done|cancelled
   agent            TEXT,
   session          TEXT,
+  claimed_at       TEXT,
   lease_secs       INTEGER,
   lease_expires_at TEXT,             -- lease_expires_at, last_heartbeat_at: outside the fold
   last_heartbeat_at TEXT,
@@ -64,6 +77,7 @@ CREATE TABLE lanes (
   port_count       INTEGER,
   viewer_hint      TEXT,
   head_event_id    INTEGER NOT NULL,
+  created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL,
   UNIQUE (spec_id, lane_key)
 );
@@ -110,3 +124,7 @@ CREATE TABLE messages (
   at           TEXT NOT NULL
 );
 CREATE INDEX messages_to ON messages (to_lane_id, id);
+
+-- 'SEAM'. Open refuses a file without it, so another SQLite file that
+-- happens to be at user_version 1 is never read or written as a ledger.
+PRAGMA application_id = 1397047629;

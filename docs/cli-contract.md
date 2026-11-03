@@ -38,7 +38,7 @@ output has snapshot tests.
 | 0 | `ok` | |
 | 1 | `error` | Every error code without its own exit. |
 | 2 | `usage` | Bad argv. |
-| 3 | `schema_mismatch` | The ledger's `user_version` is not this binary's, or its `application_id` is not Seamlane's. The file is left untouched. |
+| 3 | `schema_mismatch` | The ledger's `user_version` is not this binary's, or its `application_id` is not Seamlane's, or it is not SQLite at all. The file is left untouched. |
 | 4 | `conflict` | A CAS miss, a held lease, or a stale `--expected-version`. |
 | 5 | `runtime_unavailable` | Only passed through from `daisy-cli reviews get`. |
 
@@ -118,7 +118,7 @@ Every write except `migrate` also takes `--agent`, `--session` and `--dry-run`. 
 
 `work create --kind` and `--pr-flow` are Seamlane's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
 
-`seamlane migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing or empty file. It refuses a file whose `application_id` is set and is not Seamlane's, and a version-0 file that already has tables, so it never applies 0001 over someone else's database. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
+`seamlane migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing or empty file. It refuses a non-empty file whose `application_id` is not Seamlane's, a file that is not SQLite, and a version-0 file that already has tables, so it never applies 0001 over someone else's database. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`.
 

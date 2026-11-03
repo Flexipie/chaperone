@@ -315,6 +315,10 @@ impl World {
                     spec.map(|s| s as i64 + 1),
                     Payload {
                         lane_key: Some(format!("L{key}")),
+                        title: Some("t".into()),
+                        source: Some("manual".into()),
+                        kind: Some("code".into()),
+                        pr_flow: Some("pr".into()),
                         ..Payload::default()
                     },
                 ),
@@ -596,7 +600,7 @@ proptest! {
         prop_assert!(matches!(won, Applied::Committed(_)));
         let events = w.count("events");
         let lost = w.ledger.apply(&second.0, None, &at, second.1).unwrap();
-        prop_assert!(matches!(lost, Applied::Refused(Refusal::Conflict(_) | Refusal::LeaseHeld { .. })), "{:?}", lost);
+        prop_assert!(matches!(lost, Applied::Refused(Refusal::Conflict { .. } | Refusal::LeaseHeld { .. })), "{:?}", lost);
         prop_assert_eq!(w.count("events"), events);
 
         let before = dump(&w.db);

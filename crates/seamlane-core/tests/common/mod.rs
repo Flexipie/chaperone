@@ -95,6 +95,10 @@ pub fn create_lane(lane_key: &str) -> Mutation {
         spec_id: None,
         payload: Payload {
             lane_key: Some(lane_key.into()),
+            title: Some("t".into()),
+            source: Some("manual".into()),
+            kind: Some("code".into()),
+            pr_flow: Some("pr".into()),
             ..Payload::default()
         },
     }

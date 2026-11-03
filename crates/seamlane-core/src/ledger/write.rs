@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use rusqlite::types::ValueRef;
-use rusqlite::{OptionalExtension, Params, Row, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, Params, Row, Transaction, TransactionBehavior};
 use serde_json::Value;
 
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
@@ -15,7 +15,7 @@ use super::{Ledger, LedgerError, check_schema, fold};
 
 const MIN_LEASE_SECS: i64 = 30;
 const MAX_LEASE_SECS: i64 = 86_400;
-const STATUSES: &[&str] = &[
+pub const STATUSES: &[&str] = &[
     "queued",
     "claimed",
     "active",
@@ -25,7 +25,11 @@ const STATUSES: &[&str] = &[
     "cancelled",
 ];
 
-type Checked<T> = Result<Result<T, Refusal>, LedgerError>;
+pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
+pub const KINDS: &[&str] = &["code", "docs", "measure", "investigation"];
+pub const PR_FLOWS: &[&str] = &["pr", "direct"];
+
+pub(crate) type Checked<T> = Result<Result<T, Refusal>, LedgerError>;
 
 macro_rules! refuse {
     ($r:expr) => {
@@ -55,63 +59,101 @@ impl Ledger {
         at: &str,
         mutation: Mutation,
     ) -> Result<Applied, LedgerError> {
+        Ok(self
+            .apply_with(actor, key, at, mutation, false, |_, _| Ok(()))?
+            .0)
+    }
+
+    /// [`Ledger::apply`], then `read` on the same transaction before it
+    /// commits, so the caller sees the rows the event left. `read` runs on
+    /// a committed, replayed or heartbeat write, never on a refusal, and an
+    /// error from it rolls the write back. With `dry_run` nothing commits.
+    pub fn apply_with<T>(
+        &self,
+        actor: &Actor,
+        key: Option<&str>,
+        at: &str,
+        mutation: Mutation,
+        dry_run: bool,
+        read: impl FnOnce(&Connection, &Applied) -> Result<T, LedgerError>,
+    ) -> Result<(Applied, Option<T>), LedgerError> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        check_schema(&tx)?;
-        let canonical: bool = tx.query_row(
-            "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1) IS ?1",
-            [at],
-            |r| r.get(0),
-        )?;
-        if !canonical {
-            return Ok(Applied::Refused(Refusal::InvalidInput(format!(
-                "at {at} is not RFC 3339 UTC with milliseconds"
-            ))));
+        let applied = write(&tx, actor, key, at, mutation)?;
+        if matches!(applied, Applied::Refused(_)) {
+            return Ok((applied, None));
         }
-        let applied = match mutation {
-            Mutation::Heartbeat { lane_id } => {
-                if key.is_some() {
-                    return Ok(Applied::Refused(Refusal::InvalidInput(
-                        "a heartbeat takes no idempotency key".into(),
-                    )));
-                }
-                match heartbeat(&tx, actor, at, lane_id)? {
-                    Ok(until) => Applied::Heartbeat {
-                        lane_id,
-                        lease_expires_at: until,
-                    },
-                    Err(r) => return Ok(Applied::Refused(r)),
-                }
+        let out = read(&tx, &applied)?;
+        if !dry_run {
+            tx.commit()?;
+        }
+        Ok((applied, Some(out)))
+    }
+}
+
+fn write(
+    tx: &Transaction,
+    actor: &Actor,
+    key: Option<&str>,
+    at: &str,
+    mutation: Mutation,
+) -> Result<Applied, LedgerError> {
+    check_schema(tx)?;
+    let canonical: bool = tx.query_row(
+        "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1) IS ?1",
+        [at],
+        |r| r.get(0),
+    )?;
+    if !canonical {
+        return Ok(Applied::Refused(Refusal::InvalidInput(format!(
+            "at {at} is not RFC 3339 UTC with milliseconds"
+        ))));
+    }
+    if let Err(r) = actor.check() {
+        return Ok(Applied::Refused(r));
+    }
+    let applied = match mutation {
+        Mutation::Heartbeat { lane_id } => {
+            if key.is_some() {
+                return Ok(Applied::Refused(Refusal::InvalidInput(
+                    "a heartbeat takes no idempotency key".into(),
+                )));
             }
-            Mutation::Event {
+            match heartbeat(tx, actor, at, lane_id)? {
+                Ok(until) => Applied::Heartbeat {
+                    lane_id,
+                    lease_expires_at: until,
+                },
+                Err(r) => return Ok(Applied::Refused(r)),
+            }
+        }
+        Mutation::Event {
+            kind,
+            lane_id,
+            spec_id,
+            payload,
+        } => {
+            if let Some(event) = key.map(|k| by_key(tx, k)).transpose()?.flatten() {
+                return Ok(Applied::Replayed(event));
+            }
+            let mut event = Event {
+                id: 0,
                 kind,
                 lane_id,
                 spec_id,
+                actor: actor.clone(),
+                idempotency_key: key.map(String::from),
                 payload,
-            } => {
-                if let Some(event) = key.map(|k| by_key(&tx, k)).transpose()?.flatten() {
-                    return Ok(Applied::Replayed(event));
-                }
-                let mut event = Event {
-                    id: 0,
-                    kind,
-                    lane_id,
-                    spec_id,
-                    actor: actor.clone(),
-                    idempotency_key: key.map(String::from),
-                    payload,
-                    at: at.into(),
-                };
-                if let Err(r) = guard(&tx, &mut event)? {
-                    return Ok(Applied::Refused(r));
-                }
-                event.id = insert(&tx, &event)?;
-                fold::fold(&tx, &event)?;
-                Applied::Committed(event)
+                at: at.into(),
+            };
+            if let Err(r) = guard(tx, &mut event)? {
+                return Ok(Applied::Refused(r));
             }
-        };
-        tx.commit()?;
-        Ok(applied)
-    }
+            event.id = insert(tx, &event)?;
+            fold::fold(tx, &event)?;
+            Applied::Committed(event)
+        }
+    };
+    Ok(applied)
 }
 
 /// Extends the lease by the lane's own `lease_secs`. Exact holder pair, not
@@ -172,7 +214,10 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
                 refuse!(invalid("spec.created assigns the spec id and version 1"));
             }
             if exists(tx, "SELECT 1 FROM specs WHERE external_key = ?1", [key])? {
-                refuse!(Refusal::Conflict(format!("spec {key} exists")));
+                refuse!(Refusal::Conflict {
+                    entity: "spec",
+                    message: format!("spec {key} exists"),
+                });
             }
             event.spec_id = Some(next_id(tx, "specs")?);
         }
@@ -194,6 +239,19 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
                     "lane.created assigns the lane id and changes no column"
                 ));
             }
+            // The route is chosen from kind and pr_flow at claim, so they are
+            // never guessed later.
+            let vocab =
+                |v: &Option<String>, of: &[&str]| v.as_deref().is_some_and(|v| of.contains(&v));
+            if p.title.is_none()
+                || !vocab(&p.source, SOURCES)
+                || !vocab(&p.kind, KINDS)
+                || !vocab(&p.pr_flow, PR_FLOWS)
+            {
+                refuse!(invalid(&format!(
+                    "lane.created needs a title, source {SOURCES:?}, kind {KINDS:?} and pr_flow {PR_FLOWS:?}"
+                )));
+            }
             if let Some(spec) = event.spec_id {
                 check!(spec_head(tx, spec));
                 if let Some(lane_key) = &p.lane_key
@@ -203,9 +261,10 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
                         rusqlite::params![spec, lane_key],
                     )?
                 {
-                    refuse!(Refusal::Conflict(format!(
-                        "lane {lane_key} exists on spec {spec}"
-                    )));
+                    refuse!(Refusal::Conflict {
+                        entity: "work item",
+                        message: format!("lane {lane_key} exists on spec {spec}"),
+                    });
                 }
             }
             event.lane_id = Some(next_id(tx, "lanes")?);
@@ -244,9 +303,6 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
         refuse!(invalid("only the holder renews its lease"));
     }
     if event.kind.leases() {
-        if event.actor.session.is_none() {
-            refuse!(invalid(&format!("{} needs an agent session", event.kind)));
-        }
         let secs = p.lease_secs.unwrap_or(0);
         if !(MIN_LEASE_SECS..=MAX_LEASE_SECS).contains(&secs) {
             refuse!(invalid(&format!(
@@ -302,10 +358,10 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
         }
         let current = lane_value(tx, lane_id, field)?;
         if current != change.from {
-            refuse!(Refusal::Conflict(format!(
-                "{field} is {current}, not {}",
-                change.from
-            )));
+            refuse!(Refusal::Conflict {
+                entity: "work item",
+                message: format!("{field} is {current}, not {}", change.from),
+            });
         }
         if field == "spec_id"
             && let Some(spec) = change.to.as_i64()
@@ -335,9 +391,10 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2 AND id != ?3",
             rusqlite::params![fold::sql_value(&spec), fold::sql_value(&key), lane_id],
         )? {
-            refuse!(Refusal::Conflict(format!(
-                "lane {key} exists on spec {spec}"
-            )));
+            refuse!(Refusal::Conflict {
+                entity: "work item",
+                message: format!("lane {key} exists on spec {spec}"),
+            });
         }
     }
     match event.kind {
@@ -549,6 +606,16 @@ mod tests {
         }
     }
 
+    fn lane() -> Payload {
+        Payload {
+            title: Some("t".into()),
+            source: Some("manual".into()),
+            kind: Some("code".into()),
+            pr_flow: Some("pr".into()),
+            ..Payload::default()
+        }
+    }
+
     fn finding(key: &str) -> Finding {
         Finding {
             finding_key: key.into(),
@@ -583,6 +650,14 @@ mod tests {
             session: None,
             ..me.clone()
         };
+        let bad_agent = Actor {
+            agent: Some("Codex".into()),
+            ..me.clone()
+        };
+        let bad_session = Actor {
+            session: Some("s 1".into()),
+            ..me.clone()
+        };
         let lease = Payload {
             lease_secs: Some(60),
             ..Payload::default()
@@ -594,10 +669,7 @@ mod tests {
         held.lease_secs = Some(60);
         for (who, m) in [
             (&me, ev(EventKind::SpecCreated, None, None, spec.clone())),
-            (
-                &me,
-                ev(EventKind::LaneCreated, None, Some(1), Payload::default()),
-            ),
+            (&me, ev(EventKind::LaneCreated, None, Some(1), lane())),
             (
                 &me,
                 ev(
@@ -606,7 +678,7 @@ mod tests {
                     Some(1),
                     Payload {
                         lane_key: Some("L".into()),
-                        ..Payload::default()
+                        ..lane()
                     },
                 ),
             ),
@@ -828,10 +900,58 @@ mod tests {
                 None,
                 ev(EventKind::LaneCreated, Some(1), None, Payload::default()),
             ),
+            (AT, None, ev(EventKind::LaneCreated, None, Some(9), lane())),
             (
                 AT,
                 None,
-                ev(EventKind::LaneCreated, None, Some(9), Payload::default()),
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
+                        title: None,
+                        ..lane()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
+                        kind: Some("chore".into()),
+                        ..lane()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
+                        source: Some("jira".into()),
+                        ..lane()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
+                        pr_flow: Some("merge".into()),
+                        ..lane()
+                    },
+                ),
             ),
             (
                 AT,
@@ -1070,6 +1190,18 @@ mod tests {
                     ev(EventKind::LaneClaimed, Some(1), None, lease),
                 ),
                 (
+                    &bad_agent,
+                    AT,
+                    None,
+                    ev(EventKind::LaneCreated, None, None, lane()),
+                ),
+                (
+                    &bad_session,
+                    AT,
+                    None,
+                    ev(EventKind::LaneCreated, None, None, lane()),
+                ),
+                (
                     &other,
                     AT,
                     None,
@@ -1102,13 +1234,46 @@ mod tests {
         }
     }
 
+    /// A dry run is the real write, read inside its transaction, then
+    /// rolled back: the next real write gets the same lane id.
+    #[test]
+    fn dry_run_rolls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let me = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
+        let create = || ev(EventKind::LaneCreated, None, None, lane());
+        let count = |c: &Connection, table: &str| -> Result<i64, LedgerError> {
+            Ok(c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?)
+        };
+        let (applied, seen) = ledger
+            .apply_with(&me, Some("k"), AT, create(), true, |c, _| count(c, "lanes"))
+            .unwrap();
+        assert!(matches!(applied, Applied::Committed(_)), "{applied:?}");
+        assert_eq!(seen, Some(1));
+        for table in ["events", "lanes"] {
+            assert_eq!(count(ledger.conn(), table).unwrap(), 0, "{table}");
+        }
+        ledger.apply(&me, Some("k"), AT, create()).unwrap();
+        let id: i64 = ledger
+            .conn()
+            .query_row("SELECT id FROM lanes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(id, 1);
+    }
+
     /// The accepting side of guard branches the property ops never take:
     /// a spec approval, and a lane leaving its spec.
     #[test]
     fn approval_and_spec_clear_commit() {
         let dir = tempfile::tempdir().unwrap();
         let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
-        let me = Actor::default();
+        let me = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
         let spec = Payload {
             parent_key: Some("Flexipie/harness#1".into()),
             title: Some("t".into()),
@@ -1121,7 +1286,7 @@ mod tests {
         };
         for m in [
             ev(EventKind::SpecCreated, None, None, spec),
-            ev(EventKind::LaneCreated, None, Some(1), Payload::default()),
+            ev(EventKind::LaneCreated, None, Some(1), lane()),
             ev(EventKind::SpecApproved, None, Some(1), approve),
             ev(
                 EventKind::LaneUpdated,

@@ -61,9 +61,25 @@ pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
         )?)?,
         LaneCreated => {
             conn.execute(
-                "INSERT INTO lanes (id, spec_id, lane_key, status, head_event_id, updated_at)
-                 VALUES (?1, ?2, ?3, 'queued', ?4, ?5)",
-                params![e.lane_id, e.spec_id, p.lane_key, e.id, e.at],
+                "INSERT INTO lanes (id, title, source, source_id, repo_slug, kind, pr_flow,
+                   next_action, spec_id, lane_key, lane_pos, status, head_event_id,
+                   created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'queued', ?12, ?13, ?13)",
+                params![
+                    e.lane_id,
+                    p.title,
+                    p.source,
+                    p.source_id,
+                    p.repo,
+                    p.kind,
+                    p.pr_flow,
+                    p.next_action,
+                    e.spec_id,
+                    p.lane_key,
+                    p.lane_pos,
+                    e.id,
+                    e.at
+                ],
             )?;
         }
         _ => fold_lane(conn, e)?,
@@ -230,9 +246,13 @@ mod tests {
         let conn = ledger.conn();
         conn.execute_batch(
             "INSERT INTO events (lane_id, kind, payload_json, at)
-             VALUES (NULL, 'lane.created', '{}', '2026-11-03T00:00:00.000Z');
-             INSERT INTO lanes (id, status, head_event_id, updated_at)
-             VALUES (1, 'blocked', 1, '2026-11-03T00:00:00.000Z');",
+             VALUES (NULL, 'lane.created',
+                     '{\"title\":\"t\",\"source\":\"manual\",\"kind\":\"code\",\"pr_flow\":\"pr\"}',
+                     '2026-11-03T00:00:00.000Z');
+             INSERT INTO lanes (id, title, source, kind, pr_flow, status, head_event_id,
+                                created_at, updated_at)
+             VALUES (1, 't', 'manual', 'code', 'pr', 'blocked', 1,
+                     '2026-11-03T00:00:00.000Z', '2026-11-03T00:00:00.000Z');",
         )
         .unwrap();
         for (lane, payload) in [
