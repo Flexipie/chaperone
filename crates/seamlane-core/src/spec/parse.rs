@@ -91,12 +91,12 @@ fn heading_title(heading: &str) -> String {
     t.trim().to_string()
 }
 
-fn is_heading(line: &str) -> bool {
+pub(crate) fn is_heading(line: &str) -> bool {
     line.starts_with("## ") || line.starts_with("### ")
 }
 
 /// A `##`/`###` heading's text, lowercased.
-fn heading_text(line: &str) -> String {
+pub(crate) fn heading_text(line: &str) -> String {
     line.trim_start_matches('#').trim().to_lowercase()
 }
 

@@ -58,6 +58,10 @@ fn help_matches_snapshots() {
             &["spec", "approve"],
             include_str!("snapshots/spec-approve.txt"),
         ),
+        (
+            &["spec", "decide"],
+            include_str!("snapshots/spec-decide.txt"),
+        ),
         (&["check"], include_str!("snapshots/check.txt")),
         (
             &["check", "record"],
