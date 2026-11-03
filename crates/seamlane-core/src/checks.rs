@@ -372,7 +372,8 @@ impl Ledger {
 }
 
 /// The newest result for `check` on the lane that says something other
-/// than `payload`. A retry finds the same one, so its key replays; a flip
+/// than `payload`. A retry finds the same one, so its key replays (unless
+/// another session recorded this check since); a flip
 /// back finds the result it flips from, so it appends.
 fn newest_other(
     conn: &Connection,

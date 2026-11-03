@@ -130,7 +130,7 @@ Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `do
 `check record` is new (#16, next to `reviews record`). The recorder passes its own
 `--session`. The write is refused when that session is any session that has held the
 lane (events.md, producer). `--head` is 7 to
-40 hex digits. `--reason` is required with `skipped` and must be one the check allows
+40 lowercase hex digits. `--reason` is required with `skipped` and must be one the check allows
 (events.md). `--decision` is required for `merge_verdict` and refused for every other
 check. `--findings <n>` is required for a `plan_check` or `quality_gate` that ran and
 refused elsewhere. It prints `{event_id, work_id, kind, replayed, at, payload}`.
@@ -157,7 +157,9 @@ Findings come from the stored payload, and each one's `outcome` is its row's `fi
 `answered`, else null. `reviews record` prints the `reviews get` answer.
 
 `reviews record` refuses (`invalid_input`, nothing written): a view whose `job_id` is not
-`--job`, a job recorded on another lane, and a finding with no id, severity or title. Daisy
+`--job`, a view with no `done` or `status`, a done job with a status other than
+`reviewed`, `posted`, `failed` or `cancelled`, a job recorded on another lane, a finding with
+no id, severity or title, and findings whose ids repeat. Daisy
 is found at `/Applications/daisy.app/Contents/MacOS/daisy-cli`
 ([R15](research/r15-migration.md)), or at `SEAMLANE_DAISY_CLI`, and given 30 s. Its exit
 5 (`runtime_unavailable`) and its `not_found` pass through. Any other failure, a timeout or output that is not daisy's envelope
