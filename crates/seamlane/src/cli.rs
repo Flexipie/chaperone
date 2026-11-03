@@ -55,6 +55,11 @@ impl Cmd {
         match self {
             Cmd::Migrate => Some("migrate"),
             Cmd::Work(WorkCmd::Create { .. }) => Some("work create"),
+            Cmd::Work(WorkCmd::Claim { .. }) => Some("work claim"),
+            Cmd::Work(WorkCmd::Heartbeat { .. }) => Some("work heartbeat"),
+            Cmd::Work(WorkCmd::Update { .. }) => Some("work update"),
+            Cmd::Work(WorkCmd::Release { .. }) => Some("work release"),
+            Cmd::Work(WorkCmd::Cancel { .. }) => Some("work cancel"),
             Cmd::Work(WorkCmd::Get { .. } | WorkCmd::List { .. }) => None,
         }
     }
@@ -126,6 +131,95 @@ pub enum WorkCmd {
         /// How it lands: through a PR, or direct
         #[arg(long, value_parser = PossibleValuesParser::new(PR_FLOWS), default_value = "pr")]
         pr_flow: String,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Take (or renew, or take over) the lease on an item. Needs an agent
+    /// and a session
+    Claim {
+        id: i64,
+        #[arg(long)]
+        worktree: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        base_sha: Option<String>,
+        /// Lease length in seconds, 30..=86400 (default 900)
+        #[arg(long)]
+        lease_secs: Option<i64>,
+        /// Take an item another pair holds LIVE; recorded with their name
+        #[arg(long)]
+        takeover: bool,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Extend your lease by its own length. Writes no event
+    Heartbeat {
+        id: i64,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Change status or fields. --expected-updated-at is the item's current
+    /// updated_at; a stale one is refused as a conflict (exit 4)
+    Update {
+        id: i64,
+        /// queued | claimed | active | blocked | review | done | cancelled
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        reason: Option<String>,
+        /// Required (or --reason) when moving to blocked
+        #[arg(long)]
+        blocker: Option<String>,
+        #[arg(long)]
+        next_action: Option<String>,
+        /// owner/repo#N
+        #[arg(long)]
+        pr: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        base_sha: Option<String>,
+        /// The spec this item is a slice of (its id or parent key)
+        #[arg(long)]
+        spec: Option<String>,
+        #[arg(long)]
+        lane: Option<String>,
+        #[arg(long)]
+        lane_pos: Option<i64>,
+        #[arg(long)]
+        expected_updated_at: String,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Give the item up: clears the holder; claimed goes back to queued
+    Release {
+        id: i64,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Cancel an item (a status, not a delete)
+    Cancel {
+        id: i64,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        expected_updated_at: Option<String>,
         /// Run the real write and roll it back; meta.dry_run is true
         #[arg(long)]
         dry_run: bool,

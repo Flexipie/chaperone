@@ -78,9 +78,11 @@ CREATE TABLE lanes (
   viewer_hint      TEXT,
   head_event_id    INTEGER NOT NULL,
   created_at       TEXT NOT NULL,
-  updated_at       TEXT NOT NULL,
-  UNIQUE (spec_id, lane_key)
+  updated_at       TEXT NOT NULL
 );
+-- One item per slot of a lane: a stack's layers differ by lane_pos. A
+-- null lane_pos is one slot, not a distinct value per row.
+CREATE UNIQUE INDEX lanes_slot ON lanes (spec_id, lane_key, ifnull(lane_pos, ''));
 CREATE INDEX lanes_status ON lanes (status, updated_at);
 CREATE INDEX lanes_holder ON lanes (agent, session);
 

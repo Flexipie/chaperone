@@ -548,8 +548,8 @@ proptest! {
         }
     }
 
-    /// The same key inserts one row: a retry, even with another payload,
-    /// returns the stored event and changes nothing.
+    /// The same key inserts one row: a retry of the same kind, even with
+    /// another payload, returns the stored event and changes nothing.
     #[test]
     fn retry_replays_one_row(steps in proptest::collection::vec(step(), 1..40)) {
         let mut w = World::new();
@@ -558,7 +558,7 @@ proptest! {
             let Some(key) = event.idempotency_key.clone() else { continue };
             let before = dump(&w.db);
             let other = Mutation::Event {
-                kind: EventKind::LaneUpdated,
+                kind: event.kind,
                 lane_id: Some(999),
                 spec_id: None,
                 payload: Payload::default(),

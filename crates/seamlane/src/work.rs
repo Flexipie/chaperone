@@ -3,15 +3,22 @@
 
 use seamlane_core::cursor::Page;
 use seamlane_core::ledger::{Ledger, Refusal};
-use seamlane_core::work::{CreateInput, WorkFilter};
+use seamlane_core::work::{ClaimInput, CreateInput, UpdateInput, WorkFilter};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::{ActorArgs, WorkCmd};
 use crate::output::{CliError, Meta, Outcome};
 
+/// Writes read the clock under the write lock; reads use `now`.
 pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, CliError> {
     let now = ledger.now()?;
+    let mut dry = |dry_run: bool| {
+        if dry_run {
+            meta.dry_run = Some(true);
+        }
+        dry_run
+    };
     match cmd {
         WorkCmd::Create {
             title,
@@ -41,11 +48,84 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
                 kind,
                 pr_flow,
             };
-            if dry_run {
-                meta.dry_run = Some(true);
-            }
-            one(ledger.work_create(&actor.resolve(), &input, &now, dry_run)??)
+            one(ledger.work_create(&actor.resolve(), &input, None, dry(dry_run))??)
         }
+        WorkCmd::Claim {
+            id,
+            worktree,
+            branch,
+            base_sha,
+            lease_secs,
+            takeover,
+            dry_run,
+            actor,
+        } => {
+            let input = ClaimInput {
+                worktree_path: worktree,
+                branch,
+                base_sha,
+                lease_secs,
+                takeover,
+            };
+            one(ledger.work_claim(&actor.resolve(), id, &input, None, dry(dry_run))??)
+        }
+        WorkCmd::Heartbeat { id, dry_run, actor } => {
+            one(ledger.work_heartbeat(&actor.resolve(), id, None, dry(dry_run))??)
+        }
+        WorkCmd::Update {
+            id,
+            status,
+            reason,
+            blocker,
+            next_action,
+            pr,
+            branch,
+            base_sha,
+            spec,
+            lane,
+            lane_pos,
+            expected_updated_at,
+            dry_run,
+            actor,
+        } => {
+            let input = UpdateInput {
+                status,
+                reason,
+                blocker,
+                next_action,
+                pr_ref: pr,
+                branch,
+                base_sha,
+                spec,
+                lane_key: lane,
+                lane_pos,
+            };
+            one(ledger.work_update(
+                &actor.resolve(),
+                id,
+                &input,
+                Some(&expected_updated_at),
+                None,
+                dry(dry_run),
+            )??)
+        }
+        WorkCmd::Release { id, dry_run, actor } => {
+            one(ledger.work_release(&actor.resolve(), id, None, dry(dry_run))??)
+        }
+        WorkCmd::Cancel {
+            id,
+            reason,
+            expected_updated_at,
+            dry_run,
+            actor,
+        } => one(ledger.work_cancel(
+            &actor.resolve(),
+            id,
+            reason,
+            expected_updated_at.as_deref(),
+            None,
+            dry(dry_run),
+        )??),
         WorkCmd::Get { id } => one(ledger.work_get(id, &now)??),
         WorkCmd::List {
             status,

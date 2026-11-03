@@ -77,12 +77,47 @@ impl Ledger {
         dry_run: bool,
         read: impl FnOnce(&Connection, &Applied) -> Result<T, LedgerError>,
     ) -> Result<(Applied, Option<T>), LedgerError> {
+        self.apply_planned(
+            actor,
+            key,
+            Some(at),
+            dry_run,
+            |_, _| Ok(Ok(mutation)),
+            |conn, applied, _| read(conn, applied),
+        )
+    }
+
+    /// [`Ledger::apply_with`] for a command whose event depends on the row:
+    /// `plan` builds the mutation inside the transaction, after the schema
+    /// and actor checks, so what it read cannot change before the write.
+    /// With `at` None the clock is read once the write lock is held, so no
+    /// event is older than one committed before it. `read` gets that `at`.
+    pub(crate) fn apply_planned<T>(
+        &self,
+        actor: &Actor,
+        key: Option<&str>,
+        at: Option<&str>,
+        dry_run: bool,
+        plan: impl FnOnce(&Connection, &str) -> Checked<Mutation>,
+        read: impl FnOnce(&Connection, &Applied, &str) -> Result<T, LedgerError>,
+    ) -> Result<(Applied, Option<T>), LedgerError> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        let applied = write(&tx, actor, key, at, mutation)?;
+        check_schema(&tx)?;
+        if let Err(r) = actor.check() {
+            return Ok((Applied::Refused(r), None));
+        }
+        let at = match at {
+            Some(at) => at.to_string(),
+            None => self.now()?,
+        };
+        let applied = match plan(&tx, &at)? {
+            Ok(mutation) => write(&tx, actor, key, &at, mutation)?,
+            Err(r) => Applied::Refused(r),
+        };
         if matches!(applied, Applied::Refused(_)) {
             return Ok((applied, None));
         }
-        let out = read(&tx, &applied)?;
+        let out = read(&tx, &applied, &at)?;
         if !dry_run {
             tx.commit()?;
         }
@@ -97,7 +132,6 @@ fn write(
     at: &str,
     mutation: Mutation,
 ) -> Result<Applied, LedgerError> {
-    check_schema(tx)?;
     let canonical: bool = tx.query_row(
         "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1) IS ?1",
         [at],
@@ -107,9 +141,6 @@ fn write(
         return Ok(Applied::Refused(Refusal::InvalidInput(format!(
             "at {at} is not RFC 3339 UTC with milliseconds"
         ))));
-    }
-    if let Err(r) = actor.check() {
-        return Ok(Applied::Refused(r));
     }
     let applied = match mutation {
         Mutation::Heartbeat { lane_id } => {
@@ -133,6 +164,13 @@ fn write(
             payload,
         } => {
             if let Some(event) = key.map(|k| by_key(tx, k)).transpose()?.flatten() {
+                // Scoped to the kind, so one command's key never answers another's.
+                if event.kind != kind {
+                    return Ok(Applied::Refused(invalid(&format!(
+                        "that idempotency key belongs to a {} event",
+                        event.kind
+                    ))));
+                }
                 return Ok(Applied::Replayed(event));
             }
             let mut event = Event {
@@ -257,8 +295,8 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
                 if let Some(lane_key) = &p.lane_key
                     && exists(
                         tx,
-                        "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2",
-                        rusqlite::params![spec, lane_key],
+                        "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2 AND lane_pos IS ?3",
+                        rusqlite::params![spec, lane_key, p.lane_pos],
                     )?
                 {
                     refuse!(Refusal::Conflict {
@@ -306,7 +344,7 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
         let secs = p.lease_secs.unwrap_or(0);
         if !(MIN_LEASE_SECS..=MAX_LEASE_SECS).contains(&secs) {
             refuse!(invalid(&format!(
-                "lease_secs must be {MIN_LEASE_SECS} to {MAX_LEASE_SECS}"
+                "lease_secs must be between {MIN_LEASE_SECS} and {MAX_LEASE_SECS}, got {secs}"
             )));
         }
         // The lease is the actor's: after the write the holder is its pair.
@@ -380,16 +418,26 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             event.kind
         )));
     }
-    // The (spec_id, lane_key) pair is unique; refuse here, not as a SQLite error.
-    if p.changed.contains_key("spec_id") || p.changed.contains_key("lane_key") {
-        let (spec, key) = (
+    // The (spec_id, lane_key, lane_pos) slot is unique; refuse here, not as
+    // a SQLite error.
+    if ["spec_id", "lane_key", "lane_pos"]
+        .iter()
+        .any(|f| p.changed.contains_key(*f))
+    {
+        let (spec, key, pos) = (
             after(tx, lane_id, p, "spec_id")?,
             after(tx, lane_id, p, "lane_key")?,
+            after(tx, lane_id, p, "lane_pos")?,
         );
         if exists(
             tx,
-            "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2 AND id != ?3",
-            rusqlite::params![fold::sql_value(&spec), fold::sql_value(&key), lane_id],
+            "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2 AND lane_pos IS ?3 AND id != ?4",
+            rusqlite::params![
+                fold::sql_value(&spec),
+                fold::sql_value(&key),
+                fold::sql_value(&pos),
+                lane_id
+            ],
         )? {
             refuse!(Refusal::Conflict {
                 entity: "work item",
@@ -481,7 +529,11 @@ fn holder(tx: &Transaction, actor: &Actor, lane_id: i64) -> Checked<(Holder, boo
 }
 
 /// A held lease, `conflict` with `by` and `until` in the CLI contract.
-fn lease_held(agent: Option<String>, session: Option<String>, until: Option<String>) -> Refusal {
+pub(crate) fn lease_held(
+    agent: Option<String>,
+    session: Option<String>,
+    until: Option<String>,
+) -> Refusal {
     Refusal::LeaseHeld {
         by: format!(
             "{}/{}",
@@ -1257,6 +1309,12 @@ mod tests {
             assert_eq!(count(ledger.conn(), table).unwrap(), 0, "{table}");
         }
         ledger.apply(&me, Some("k"), AT, create()).unwrap();
+        // A key answers only its own kind.
+        let update = ev(EventKind::LaneUpdated, Some(1), None, Payload::default());
+        assert!(matches!(
+            ledger.apply(&me, Some("k"), AT, update).unwrap(),
+            Applied::Refused(Refusal::InvalidInput(_))
+        ));
         let id: i64 = ledger
             .conn()
             .query_row("SELECT id FROM lanes", [], |r| r.get(0))

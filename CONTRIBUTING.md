@@ -56,7 +56,7 @@ The whole test job stays under 3 minutes. Crash and concurrency tests do not
 run beside each other (nextest `threads-required`).
 
 Property tests pass the clock in. The write function does not read the wall
-clock. A failing property prints its seed. Re-run that seed before changing
+clock; a CLI command's clock is read once the write lock is held. A failing property prints its seed. Re-run that seed before changing
 the assertion.
 
 The in-process `verdict_on_head` fixture and a lane script that hits the same
