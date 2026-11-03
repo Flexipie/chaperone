@@ -1,6 +1,6 @@
 # R14: Engineering standards
 
-Status: recommendation, 2026-11-02. The bar the first code PR meets. The contributor-facing copy is the draft [CONTRIBUTING.md](../../CONTRIBUTING.md).
+Status: recommendation, 2026-11-02. The bar the first code PR meets. The contributor-facing copy is [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 Language is Rust ([R6](r6-language-and-runtime.md)). Storage is one SQLite file ([R5](r5-state-and-storage.md)). The pipeline is a TOML document ([R7](r7-process-engine.md)). This note decides how that code is laid out, tested, timed, versioned, and reviewed. It does not add a crate.
 
@@ -206,7 +206,7 @@ A user guide (mdBook or equivalent) waits until there is a user besides the auth
 
 ## Contribution rules
 
-The draft at the repo root is the short copy. The rules that are easy to lose:
+The CONTRIBUTING.md at the repo root is the short copy. The rules that are easy to lose:
 
 - A PR that changes `write` or `eval` keeps both at 100% branch coverage.
 - A PR that changes a budget updates the table in this note and shows the measurement.

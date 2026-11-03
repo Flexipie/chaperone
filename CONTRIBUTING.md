@@ -3,22 +3,19 @@
 The bar and the evidence are in
 [docs/research/r14-engineering-standards.md](docs/research/r14-engineering-standards.md).
 This file is the short version a pull request has to meet. These rules apply to
-every PR. The `coverage`, `budgets` and `regress` CI jobs land with the code
-they gate; until then the other five are the required checks.
+every PR.
 
 ## License
 
 Seamlane is dual-licensed under MIT and Apache-2.0 (`MIT OR Apache-2.0`).
 By contributing, you agree that your contribution is available under both
-licenses. `LICENSE-MIT` and `LICENSE-APACHE` land in the first commit that
-contains code. See
+licenses. The texts are in `LICENSE-MIT` and `LICENSE-APACHE`. See
 [ADR 0001](docs/decisions/0001-name-license-oss-posture.md).
 
 ## Setup
 
 Install the Rust toolchain named in `rust-toolchain.toml` (1.95, the compiler
-the startup numbers were measured with). From the repo root, once the workspace
-exists:
+the startup numbers were measured with). From the repo root:
 
 ```sh
 cargo fmt --all -- --check
@@ -68,13 +65,14 @@ fixture does not need the fake agent. The script does.
 
 ## CI plan
 
-Required on every pull request. A red job is a failed PR.
+Required on every pull request. A red job is a failed PR. `coverage`,
+`budgets` and `regress` land with the code they gate; the other jobs run now.
 
 | Job | What it runs |
 | --- | --- |
 | `fmt` | `cargo fmt --all -- --check` |
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
-| `test` | `cargo nextest run --workspace` on Ubuntu and macOS. Timeout 10 min. |
+| `test` | `cargo nextest run --workspace` on Ubuntu and macOS (`test (linux)`, `test (macos)`). Timeout 10 min. |
 | `coverage` | llvm-cov. A missed branch in `write` or `eval` fails the job. |
 | `doc` | `cargo doc -p seamlane-core --no-deps` with warnings denied. |
 | `deny` | `cargo deny check` (licenses and advisories). |
