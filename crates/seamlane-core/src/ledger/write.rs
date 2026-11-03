@@ -152,8 +152,10 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
         ));
     }
     match event.kind {
-        SpecCreated | SpecRevised | SpecApproved if event.lane_id.is_some() => {
-            refuse!(invalid("spec events name no lane"));
+        SpecCreated | SpecRevised | SpecApproved
+            if event.lane_id.is_some() || !p.changed.is_empty() || p.lease_secs.is_some() =>
+        {
+            refuse!(invalid("spec events name no lane and change no lane column"));
         }
         SpecCreated => {
             let (Some(key), Some(_), Some(_)) = (&p.parent_key, &p.title, &p.body) else {
@@ -621,6 +623,20 @@ mod tests {
                     Some(1),
                     Payload {
                         version: Some(1),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecApproved,
+                    None,
+                    Some(1),
+                    Payload {
+                        version: Some(1),
+                        lease_secs: Some(60),
                         ..Payload::default()
                     },
                 ),
