@@ -73,8 +73,8 @@ These rules keep every write small, single and fail-closed.
 
 A lane is a work item. `work events` shows the daisy action in the second column, so
 `lane-stats` reads the ledger unchanged. Every kind that changes a lane column other
-than the lease carries `changed {field: {from, to}}`, which is how `rebuild()` reproduces
-the row. `lane.renewed` carries the lease, and `lane.ready_overridden` changes no column.
+than the lease and the stamp carries `changed {field: {from, to}}`, which is how `rebuild()` reproduces
+the row. `lane.renewed` carries the lease, `lane.claimed` the stamp's top-level fields, and `lane.ready_overridden` changes no column.
 
 | Kind | Action | Payload |
 | --- | --- | --- |
@@ -90,8 +90,11 @@ the row. `lane.renewed` carries the lease, and `lane.ready_overridden` changes n
 | `lane.ready_overridden` | `ready_override` | `ready` (`true`, `false`, or `null` for `--clear`), `reason` |
 
 The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the first
-`lane.claimed`. A takeover keeps it. An unknown hash refuses the claim
-(`pipeline_unknown`).
+`lane.claimed`, by the write itself: the newest pipeline the binary loads and the route
+from the lane's kind and flow (lane facts below). Any other event that carries a stamp
+field is `invalid_input`. A takeover keeps it. A claim, renewal or takeover on a lane
+stamped with a hash this binary cannot load is refused (`pipeline_unknown`) and writes
+nothing.
 
 ### Engine
 
@@ -163,6 +166,22 @@ reasons) are reserved for a `--file` input after M1.
 R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` and `pipeline_version`, and its `findings.review_event_id` name are replaced by the ones above.
 
 **Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr` or `direct`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `direct` if the flow is `direct`, else `code_pr`. Until `diff_measured` exists, `lane.changes_code` is true exactly when the kind is `code`. Skip reasons are checked by list membership: when `changes_code` is false, any reason the check lists is accepted, and when it is true, `skipped` fails the gate. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with an allowed reason, and a `code` lane may not. No M1 input marks a lane test-only, so a test-only lane is `code` and runs both checks; the `tests` reason waits for that input.
+
+**Facts in M1.** The projection reads the lane row's stamp and kind and the lane's events,
+never prose. `commit.sha` is the head the gated command names (the handoff's `commit`, or for
+`update --status done` the latest handoff's), never a stored one. `plan_check.*`,
+`quality_gate.outcome`/`reason` and `verdict.*` come from the latest `check.finished` of
+that check. `quality_gate.at` is the first quality gate's `at`, so recording one again
+after the PR does not fail `quality_gate_before_pr`. `smoke.recorded` and
+`kept_tests.recorded` are true once any such check is recorded. `review.local_rounds`
+counts `ran` local reviews, `review.local_head` is the newest one's sha, and
+`review.previous_round_closed` holds when that round has no `open` finding.
+`daisy_review.state` is `running` while a requested job has no finish, else the latest
+finished review's (`finished`, or `failed` when skipped), else `absent`. Facts whose
+producer is reserved stay absent, so a gate that reads one denies: `kept_tests.bar_ok`,
+`verification.unexplained_failures`, `brief.oversize`, `review.code_changed_since`,
+`diff.code_lines`, `ci.state`, `threads.human_open`, `pr.is_draft`, `pr.conflicting`,
+`human.merge_yes`, `handoff.decisions`.
 
 ## Reserved
 

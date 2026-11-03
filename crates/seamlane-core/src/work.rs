@@ -1263,4 +1263,141 @@ mod tests {
             .unwrap();
         assert_eq!(item.updated_at, before);
     }
+
+    /// The first claim stamps the newest pipeline and the route the lane's
+    /// kind and flow pick, over any stamp the caller passed. A release and
+    /// re-claim keeps it, no other kind may carry one, and a lane stamped
+    /// with a pipeline this binary cannot load refuses claim, renewal and
+    /// takeover and writes nothing.
+    #[test]
+    fn stamp_is_written_once_and_an_unknown_one_refuses() {
+        let (_dir, ledger) = ledger();
+        let (a, b) = (pair("a", "s1"), pair("b", "s2"));
+        for kind in ["investigation", "code"] {
+            let input = CreateInput {
+                title: "t".into(),
+                kind: kind.into(),
+                pr_flow: "direct".into(),
+                ..CreateInput::default()
+            };
+            ledger
+                .work_create(&a, &input, Some(T0), false)
+                .unwrap()
+                .unwrap();
+        }
+        let claim = |who: &Actor, takeover: bool| {
+            let input = ClaimInput {
+                takeover,
+                ..ClaimInput::default()
+            };
+            ledger.work_claim(who, 1, &input, Some(T0), false).unwrap()
+        };
+        let stamp = |id: i64| -> (String, String, String) {
+            ledger
+                .conn()
+                .query_row(
+                    "SELECT pipeline_id, pipeline_hash, route FROM lanes WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap()
+        };
+        let stamped = |id: i64| -> i64 {
+            ledger
+                .conn()
+                .query_row(
+                    "SELECT count(*) FROM events WHERE lane_id = ?1
+                     AND json_extract(payload_json, '$.pipeline_hash') IS NOT NULL",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let v17 = crate::pipeline::current();
+        let want = |route: &str| (v17.id.clone(), v17.hash.clone(), route.to_string());
+
+        let item = claim(&a, false).unwrap();
+        assert_eq!(
+            (item.pipeline_id, item.pipeline_hash, item.route),
+            (
+                Some(v17.id.clone()),
+                Some(v17.hash.clone()),
+                Some("investigation".into())
+            )
+        );
+        ledger
+            .work_release(&a, 1, Some(T0), false)
+            .unwrap()
+            .unwrap();
+        claim(&a, false).unwrap();
+        assert_eq!((stamp(1), stamped(1)), (want("investigation"), 1));
+
+        // A forged stamp: replaced on a first claim, refused on any other kind.
+        let mut held = Payload {
+            lease_secs: Some(60),
+            pipeline_hash: Some("forged".into()),
+            ..Payload::default()
+        };
+        put(&mut held.changed, "agent", &None::<String>, "a");
+        put(&mut held.changed, "session", &None::<String>, "s1");
+        let forged = [
+            Payload {
+                pipeline_id: Some("v18".into()),
+                ..Payload::default()
+            },
+            Payload {
+                pipeline_hash: Some("forged".into()),
+                ..Payload::default()
+            },
+            Payload {
+                route: Some("direct".into()),
+                ..Payload::default()
+            },
+        ];
+        assert!(matches!(
+            ledger
+                .apply(&a, None, T0, lane_event(EventKind::LaneClaimed, 2, held))
+                .unwrap(),
+            Applied::Committed(_)
+        ));
+        assert_eq!(stamp(2), want("direct"));
+        for p in forged {
+            assert_eq!(
+                ledger
+                    .apply(&a, None, T0, lane_event(EventKind::LaneUpdated, 2, p))
+                    .unwrap(),
+                Applied::Refused(Refusal::InvalidInput(
+                    "lane.updated carries no pipeline stamp".into()
+                ))
+            );
+        }
+        ledger.rebuild().unwrap();
+        assert_eq!(
+            (stamp(1), stamp(2)),
+            (want("investigation"), want("direct"))
+        );
+
+        // A newer binary's stamp.
+        ledger
+            .conn()
+            .execute(
+                "UPDATE lanes SET pipeline_hash = 'v18hash' WHERE id = 1",
+                [],
+            )
+            .unwrap();
+        let events = || kinds(&ledger).len();
+        let before = events();
+        let unknown = Err(Refusal::PipelineUnknown {
+            pipeline_id: "v17".into(),
+            pipeline_hash: "v18hash".into(),
+        });
+        assert_eq!(claim(&a, false).map(|_| ()), unknown, "renew");
+        assert_eq!(claim(&b, true).map(|_| ()), unknown, "takeover");
+        ledger
+            .work_release(&a, 1, Some(T0), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(claim(&b, false).map(|_| ()), unknown, "claim");
+        assert_eq!(events(), before + 1);
+    }
 }

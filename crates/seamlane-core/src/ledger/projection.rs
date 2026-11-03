@@ -124,3 +124,338 @@ pub(crate) fn project(
     }
     Ok(f)
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::ledger::{Actor, Applied, Change, Finding, Findings, Ledger, Mutation, Payload};
+    use crate::pipeline::{Phase, Pipeline, Route};
+
+    const T: [&str; 4] = [
+        "2026-11-03T00:00:00.000Z",
+        "2026-11-03T00:00:01.000Z",
+        "2026-11-03T00:00:02.000Z",
+        "2026-11-03T00:00:03.000Z",
+    ];
+
+    struct Lane {
+        _dir: tempfile::TempDir,
+        ledger: Ledger,
+        me: Actor,
+    }
+
+    impl Lane {
+        /// Lane 1 of `kind`, claimed by `me` at T[0].
+        fn new(kind: &str) -> Lane {
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+            let lane = Lane {
+                _dir: dir,
+                ledger,
+                me: Actor {
+                    agent: Some("a".into()),
+                    session: Some("s".into()),
+                },
+            };
+            lane.apply(
+                EventKind::LaneCreated,
+                Payload {
+                    title: Some("t".into()),
+                    source: Some("manual".into()),
+                    kind: Some(kind.into()),
+                    pr_flow: Some("pr".into()),
+                    ..Payload::default()
+                },
+                T[0],
+            );
+            lane
+        }
+
+        fn apply(&self, kind: EventKind, payload: Payload, at: &str) -> Event {
+            let lane_id = (kind != EventKind::LaneCreated).then_some(1);
+            let m = Mutation::Event {
+                kind,
+                lane_id,
+                spec_id: None,
+                payload,
+            };
+            match self.ledger.apply(&self.me, None, at, m).unwrap() {
+                Applied::Committed(e) => e,
+                other => panic!("{other:?}"),
+            }
+        }
+
+        fn change(&self, kind: EventKind, field: &str, from: Value, to: Value, at: &str) {
+            let mut p = Payload::default();
+            p.changed.insert(field.into(), Change { from, to });
+            p.lease_secs = kind.leases().then_some(60);
+            self.apply(kind, p, at);
+        }
+
+        fn claim(&self) {
+            let mut p = Payload {
+                lease_secs: Some(60),
+                ..Payload::default()
+            };
+            p.changed.insert(
+                "agent".into(),
+                Change {
+                    from: json!(null),
+                    to: json!("a"),
+                },
+            );
+            p.changed.insert(
+                "session".into(),
+                Change {
+                    from: json!(null),
+                    to: json!("s"),
+                },
+            );
+            self.apply(EventKind::LaneClaimed, p, T[0]);
+        }
+
+        /// A `check.finished` with `outcome` and the `rest` fields given.
+        fn check(&self, check: &str, outcome: &str, rest: Value, at: &str) -> Event {
+            let mut p = Payload {
+                check: Some(check.into()),
+                outcome: Some(outcome.into()),
+                head_sha: Some("abc1234".into()),
+                ..Payload::default()
+            };
+            if let Value::Object(rest) = rest {
+                p.rest = rest;
+            }
+            self.apply(EventKind::CheckFinished, p, at)
+        }
+
+        fn facts(&self) -> FactBundle {
+            self.ledger.project(1, None).unwrap()
+        }
+    }
+
+    fn s(v: &str) -> Fact {
+        Fact::Str(v.into())
+    }
+
+    #[test]
+    fn stamp_kind_and_head() {
+        let lane = Lane::new("code");
+        let f = lane.facts();
+        assert_eq!(f.get("pipeline.id"), &Fact::Absent);
+        assert_eq!(f.get("lane.changes_code"), &Fact::Bool(true));
+        assert_eq!(f.get("commit.sha"), &Fact::Absent);
+        lane.claim();
+        let v17 = crate::pipeline::current();
+        let f = lane.ledger.project(1, Some("abc1234def")).unwrap();
+        assert_eq!(f.get("pipeline.id"), &s(&v17.id));
+        assert_eq!(f.get("pipeline.hash"), &s(&v17.hash));
+        assert_eq!(f.get("commit.sha"), &s("abc1234def"));
+        assert_eq!(
+            Lane::new("docs").facts().get("lane.changes_code"),
+            &Fact::Bool(false)
+        );
+    }
+
+    #[test]
+    fn plan_check_and_quality_gate_take_the_latest_outcome_and_first_time() {
+        let lane = Lane::new("docs");
+        for check in ["plan_check", "quality_gate"] {
+            lane.check(check, "skipped", json!({"reason": "docs"}), T[1]);
+            let f = lane.facts();
+            assert_eq!(f.get(&format!("{check}.outcome")), &s("skipped"));
+            assert_eq!(f.get(&format!("{check}.reason")), &s("docs"));
+            lane.check(check, "ran", json!({}), T[2]);
+            let f = lane.facts();
+            assert_eq!(f.get(&format!("{check}.outcome")), &s("ran"));
+            assert_eq!(f.get(&format!("{check}.reason")), &Fact::Absent);
+        }
+        assert_eq!(
+            lane.facts().get("quality_gate.at"),
+            &Fact::Time(T[1].into())
+        );
+        assert_eq!(lane.facts().get("plan_check.at"), &Fact::Absent);
+    }
+
+    /// v17's `quality_gate_before_pr` on projected times: the first quality
+    /// gate counts, so one recorded again after the PR does not deny.
+    #[test]
+    fn quality_gate_before_pr_on_projected_times() {
+        let doc = r#"
+schema = 1
+id = "t"
+
+[[gate]]
+id = "quality_gate_before_pr"
+fn = "event_before"
+args = { earlier = "quality_gate", later = "pr.opened" }
+
+[[transition]]
+id = "handoff"
+routes = ["code_pr"]
+to = "done"
+requires = ["quality_gate_before_pr"]
+"#;
+        let p = Pipeline::load(doc).unwrap();
+        let eval = |f: &FactBundle| p.evaluate("handoff", Route::CodePr, Phase::Done, f).is_ok();
+        let lane = Lane::new("code");
+        assert!(eval(&lane.facts()), "no PR yet: vacuous");
+        lane.change(
+            EventKind::LaneUpdated,
+            "pr_ref",
+            json!(null),
+            json!("o/r#1"),
+            T[1],
+        );
+        assert_eq!(lane.facts().get("pr.opened_at"), &Fact::Time(T[1].into()));
+        assert!(!eval(&lane.facts()), "PR with no quality gate");
+        lane.check("quality_gate", "ran", json!({}), T[2]);
+        assert!(!eval(&lane.facts()), "quality gate after the PR");
+
+        let lane = Lane::new("code");
+        lane.check("quality_gate", "ran", json!({}), T[1]);
+        lane.change(
+            EventKind::LaneUpdated,
+            "pr_ref",
+            json!(null),
+            json!("o/r#1"),
+            T[2],
+        );
+        lane.check("quality_gate", "ran", json!({}), T[3]);
+        assert!(eval(&lane.facts()));
+        // A later PR change does not move the time it opened.
+        lane.change(
+            EventKind::LaneUpdated,
+            "pr_ref",
+            json!("o/r#1"),
+            json!("o/r#2"),
+            T[3],
+        );
+        assert_eq!(lane.facts().get("pr.opened_at"), &Fact::Time(T[2].into()));
+    }
+
+    #[test]
+    fn verdict_smoke_and_kept_tests() {
+        let lane = Lane::new("code");
+        let f = lane.facts();
+        for path in ["verdict.decision", "verdict.sha"] {
+            assert_eq!(f.get(path), &Fact::Absent, "{path}");
+        }
+        assert_eq!(f.get("smoke.recorded"), &Fact::Bool(false));
+        assert_eq!(f.get("kept_tests.recorded"), &Fact::Bool(false));
+        lane.check("merge_verdict", "ran", json!({"decision": "no"}), T[1]);
+        lane.check("merge_verdict", "ran", json!({"decision": "yes"}), T[2]);
+        lane.check("smoke", "skipped", json!({"reason": "nothing_runs"}), T[2]);
+        lane.check("kept_tests", "skipped", json!({"reason": "none"}), T[2]);
+        let f = lane.facts();
+        assert_eq!(f.get("verdict.decision"), &s("yes"));
+        assert_eq!(f.get("verdict.sha"), &s("abc1234"));
+        assert_eq!(f.get("smoke.recorded"), &Fact::Bool(true));
+        assert_eq!(f.get("kept_tests.recorded"), &Fact::Bool(true));
+    }
+
+    #[test]
+    fn local_rounds_head_and_previous_round_closed() {
+        let lane = Lane::new("code");
+        let f = lane.facts();
+        assert_eq!(f.get("review.local_rounds"), &Fact::Int(0));
+        assert_eq!(f.get("review.local_head"), &Fact::Absent);
+        assert_eq!(f.get("review.previous_round_closed"), &Fact::Absent);
+        let finding = Finding {
+            finding_key: "f1".into(),
+            severity: "nit".into(),
+            title: "t".into(),
+            body: "b".into(),
+            path: None,
+            rest: Default::default(),
+        };
+        let round = lane.apply(
+            EventKind::CheckFinished,
+            Payload {
+                check: Some("local_review".into()),
+                outcome: Some("ran".into()),
+                head_sha: Some("def5678".into()),
+                findings: Some(Findings::List(vec![finding])),
+                ..Payload::default()
+            },
+            T[1],
+        );
+        // A failed review is not a round and leaves the head alone.
+        lane.check(
+            "local_review",
+            "skipped",
+            json!({"reason": "failed", "job": 2}),
+            T[2],
+        );
+        let f = lane.facts();
+        assert_eq!(f.get("review.local_rounds"), &Fact::Int(1));
+        assert_eq!(f.get("review.local_head"), &s("def5678"));
+        assert_eq!(f.get("review.previous_round_closed"), &Fact::Bool(false));
+        lane.apply(
+            EventKind::FindingUpdated,
+            Payload {
+                check_event_id: Some(round.id),
+                finding_key: Some("f1".into()),
+                status: Some("fixed".into()),
+                ..Payload::default()
+            },
+            T[3],
+        );
+        assert_eq!(
+            lane.facts().get("review.previous_round_closed"),
+            &Fact::Bool(true)
+        );
+    }
+
+    #[test]
+    fn daisy_review_state() {
+        let lane = Lane::new("code");
+        assert_eq!(lane.facts().get("daisy_review.state"), &s("absent"));
+        let requested = |job: i64| {
+            let mut p = Payload {
+                check: Some("pr_review".into()),
+                head_sha: Some("abc1234".into()),
+                ..Payload::default()
+            };
+            p.rest.insert("job".into(), json!(job));
+            lane.apply(EventKind::CheckRequested, p, T[1]);
+        };
+        requested(7);
+        assert_eq!(lane.facts().get("daisy_review.state"), &s("running"));
+        lane.check("pr_review", "ran", json!({"job": 7}), T[2]);
+        assert_eq!(lane.facts().get("daisy_review.state"), &s("finished"));
+        requested(8);
+        assert_eq!(lane.facts().get("daisy_review.state"), &s("running"));
+        lane.check(
+            "local_review",
+            "skipped",
+            json!({"job": 8, "reason": "cancelled"}),
+            T[3],
+        );
+        assert_eq!(lane.facts().get("daisy_review.state"), &s("failed"));
+    }
+
+    /// Facts whose producer is reserved in M1 stay absent, so their gates deny.
+    #[test]
+    fn reserved_facts_stay_absent() {
+        let lane = Lane::new("code");
+        lane.claim();
+        let f = lane.ledger.project(1, Some("abc1234")).unwrap();
+        for path in [
+            "kept_tests.bar_ok",
+            "verification.unexplained_failures",
+            "brief.oversize",
+            "review.code_changed_since",
+            "diff.code_lines",
+            "ci.state",
+            "threads.human_open",
+            "pr.is_draft",
+            "pr.conflicting",
+            "human.merge_yes",
+            "handoff.decisions",
+        ] {
+            assert_eq!(f.get(path), &Fact::Absent, "{path}");
+        }
+    }
+}
