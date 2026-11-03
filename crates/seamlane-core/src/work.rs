@@ -1260,20 +1260,8 @@ mod tests {
             );
         }
         assert_eq!(kinds(&ledger).len(), 2);
-        // Ready and done are gated: with no checks recorded, one denial,
-        // which the second attempt replays.
-        for (status, ready) in [("active", Some(true)), ("done", None)] {
-            assert!(matches!(
-                handoff("s".into(), status, ready),
-                Err(Refusal::GateDenied { .. })
-            ));
-        }
-        assert_eq!(
-            kinds(&ledger),
-            ["lane.created", "lane.claimed", "gate.denied"]
-        );
-        // A needs-you handoff is not.
-        assert_eq!(handoff("s".into(), "blocked", None).unwrap().id, 4);
+        // A needs-you handoff is not gated (ready and done: tests/handoff_gate.rs).
+        assert_eq!(handoff("s".into(), "blocked", None).unwrap().id, 3);
         assert_eq!(ledger.work_get(id, T1).unwrap().unwrap().status, "blocked");
         assert!(matches!(
             ledger

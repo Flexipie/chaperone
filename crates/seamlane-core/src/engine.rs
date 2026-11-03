@@ -5,7 +5,7 @@
 //! `gate.denied` instead, which moves nothing.
 
 use rusqlite::{Connection, OptionalExtension};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::ledger::projection::project;
 use crate::ledger::{Checked, Event, EventKind, Mutation, Payload, Refusal};
@@ -28,7 +28,7 @@ pub(crate) fn enter(
         spec_id: None,
         payload: Payload {
             transition: Some(transition.into()),
-            to: Some(to.as_str().into()),
+            to: json!(to).as_str().map(String::from),
             status: Some(status.into()),
             head_sha: head,
             ..payload
@@ -42,13 +42,13 @@ pub(crate) fn enter(
 /// pipeline; a stamp this binary cannot load is refused (`pipeline_unknown`).
 pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<Option<Event>> {
     let p = &entered.payload;
-    let (Some(transition), Some(to)) = (&p.transition, &p.to) else {
-        return Ok(Err(Refusal::InvalidInput(
-            "phase.entered needs a transition and a phase to".into(),
-        )));
-    };
+    // The guard has refused any transition but the host's.
+    let transition = p.transition.clone().unwrap_or_default();
+    let to = p.to.clone().unwrap_or_default();
     let Ok(to) = serde_json::from_value::<Phase>(Value::String(to.clone())) else {
-        return Ok(Err(Refusal::InvalidInput(format!("{to} is not a phase"))));
+        return Ok(Err(Refusal::InvalidInput(format!(
+            "phase.entered needs a phase to, got '{to}'"
+        ))));
     };
     let (id, hash, route): (Option<String>, Option<String>, Option<String>) = conn.query_row(
         "SELECT pipeline_id, pipeline_hash, route FROM lanes WHERE id = ?1",
@@ -66,7 +66,7 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
             let route: Route =
                 serde_json::from_value(Value::String(route)).map_err(std::io::Error::other)?;
             let facts = project(conn, lane_id, p.head_sha.as_deref())?;
-            doc.evaluate(transition, route, to, &facts)
+            doc.evaluate(&transition, route, to, &facts)
         }
         _ => Err(Denied {
             gate: "stamp_ok".into(),
@@ -93,7 +93,7 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
             latest.unwrap_or(0)
         )),
         payload: Payload {
-            transition: Some(transition.clone()),
+            transition: Some(transition),
             gate: Some(gate),
             fact_paths: Some(fact_paths),
             head_sha: p.head_sha.clone(),
