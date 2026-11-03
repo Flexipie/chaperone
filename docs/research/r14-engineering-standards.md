@@ -46,7 +46,7 @@ The three crash tests:
 
 The four concurrency tests:
 
-1. **50 processes, 40 events each**, `synchronous=FULL`, `busy_timeout` 5000, `BEGIN IMMEDIATE`, one event plus the fold, then a retry of the last key. Zero errors, zero projection mismatches, zero duplicate keys. The retry raises `UNIQUE` and does not insert.
+1. **50 processes, 40 events each**, `synchronous=FULL`, `busy_timeout` 5000, `BEGIN IMMEDIATE`, one event plus the fold, then a retry of the last key. Zero errors, zero projection mismatches, zero duplicate keys. The retry returns the stored event (`Replayed`) and does not insert.
 2. Two deferred transactions that both go on to write. The second receives `SQLITE_BUSY_SNAPSHOT` immediately. This keeps the "always `BEGIN IMMEDIATE`" rule from regressing.
 3. One transaction held open for 6 s. The other writer fails at about 5 s with "database is locked", and integrity still holds.
 4. Two processes claim one lane. One event, one winner.
