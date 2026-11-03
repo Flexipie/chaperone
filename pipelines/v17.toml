@@ -1,0 +1,395 @@
+# v17, transcribed from docs/research/r7-process-engine.md "v17 document" with the fixes
+# agreed in the spec for #1 (2026-11-03):
+# - the gated `handoff` transition with no `from`, the M1 transition (docs/cli-contract.md);
+# - `verdict_no_below_cap`, a NO verdict under the round cap goes back to addressing;
+# - the direct route has its own ask_verdict and to_ready rows without the PR gates;
+# - `tests` is an allowed skip reason for the plan check and the quality gate;
+# - gates read their numbers from [limits] by name;
+# - no `since` field.
+#
+# Rows may share an id when no route has two rows with the same id and `to`. The caller
+# names the id, and the lane's route (and, for handoff, the target) picks the row.
+#
+# Published ids are immutable. A fix is a new file (v17.1), not an edit of this one.
+# The semantic hash covers [limits], the gates and the transitions. Comments, key order,
+# `published` and [cohort] do not change it.
+
+schema = 1
+id = "v17"
+published = "2026-11-01T17:30:00Z"
+
+[cohort]
+target_lanes = 25
+
+[limits]
+local_rounds = 3
+investigation_rounds = 1
+code_lines = 750
+brief_chars = 500
+look_at = 3
+sha_min = 7
+sha_max = 40
+
+# --- gates ---------------------------------------------------------------
+
+[[gate]]
+id = "stamp_ok"
+fn = "all"
+args = { of = ["stamp_id", "stamp_hash"] }
+
+[[gate]]
+id = "stamp_id"
+fn = "eq"
+args = { field = "pipeline.id", value = "v17" }
+
+[[gate]]
+id = "stamp_hash"
+fn = "eq"
+args = { field = "pipeline.hash", value_from = "loaded.hash" }
+
+[[gate]]
+id = "plan_check_recorded"
+fn = "plan_check_matches_lane"
+args = { reasons = ["measure", "investigation", "docs", "tests"] }
+
+[[gate]]
+id = "quality_gate_recorded"
+fn = "quality_gate_matches_lane"
+args = { reasons = ["no_code", "tests"] }
+
+[[gate]]
+id = "quality_gate_before_pr"
+fn = "event_before"
+args = { earlier = "quality_gate", later = "pr.opened" }
+
+[[gate]]
+id = "verdict_is_yes"
+fn = "eq"
+args = { field = "verdict.decision", value = "yes" }
+
+[[gate]]
+id = "verdict_is_no"
+fn = "eq"
+args = { field = "verdict.decision", value = "no" }
+
+[[gate]]
+id = "verdict_on_head"
+fn = "sha_prefix_eq"
+args = { left = "verdict.sha", right = "commit.sha", min_limit = "sha_min", max_limit = "sha_max" }
+
+[[gate]]
+id = "smoke_recorded"
+fn = "eq"
+args = { field = "smoke.recorded", value = true }
+
+[[gate]]
+id = "kept_tests_recorded"
+fn = "all"
+args = { of = ["kept_present", "kept_bar"] }
+
+[[gate]]
+id = "kept_present"
+fn = "eq"
+args = { field = "kept_tests.recorded", value = true }
+
+[[gate]]
+id = "kept_bar"
+fn = "eq"
+args = { field = "kept_tests.bar_ok", value = true }
+
+[[gate]]
+id = "no_unexplained_failures"
+fn = "eq"
+args = { field = "verification.unexplained_failures", value = 0 }
+
+[[gate]]
+id = "brief_ok"
+fn = "eq"
+args = { field = "brief.oversize", value = false }
+
+[[gate]]
+id = "rounds_at_most"
+fn = "lte"
+args = { field = "review.local_rounds", limit = "local_rounds" }
+
+# Below the cap: at most the cap and not at it, so the cap is written once.
+[[gate]]
+id = "rounds_below_cap"
+fn = "all"
+args = { of = ["rounds_at_most", "rounds_not_at_cap"] }
+
+[[gate]]
+id = "rounds_not_at_cap"
+fn = "not"
+args = { of = "rounds_at_cap" }
+
+[[gate]]
+id = "rounds_at_cap"
+fn = "eq"
+args = { field = "review.local_rounds", limit = "local_rounds" }
+
+[[gate]]
+id = "previous_round_closed"
+fn = "eq"
+args = { field = "review.previous_round_closed", value = true }
+
+[[gate]]
+id = "code_changed_since_review"
+fn = "eq"
+args = { field = "review.code_changed_since", value = true }
+
+[[gate]]
+id = "reviewed_head_ok"
+fn = "any"
+args = { of = ["head_eq", "no_code_since_review"] }
+
+[[gate]]
+id = "head_eq"
+fn = "eq"
+args = { field = "review.local_head", value_from = "commit.sha" }
+
+[[gate]]
+id = "no_code_since_review"
+fn = "eq"
+args = { field = "review.code_changed_since", value = false }
+
+[[gate]]
+id = "code_lines_at_most"
+fn = "lte"
+args = { field = "diff.code_lines", limit = "code_lines" }
+
+[[gate]]
+id = "code_lines_over"
+fn = "gt"
+args = { field = "diff.code_lines", limit = "code_lines" }
+
+[[gate]]
+id = "ci_not_red"
+fn = "one_of"
+args = { field = "ci.state", values = ["green", "none"] }
+
+[[gate]]
+id = "no_human_threads"
+fn = "eq"
+args = { field = "threads.human_open", value = 0 }
+
+[[gate]]
+id = "daisy_review_settled"
+fn = "one_of"
+args = { field = "daisy_review.state", values = ["absent", "finished"] }
+
+[[gate]]
+id = "pr_mergeable"
+fn = "all"
+args = { of = ["pr_not_draft", "pr_not_conflicting"] }
+
+[[gate]]
+id = "pr_not_draft"
+fn = "eq"
+args = { field = "pr.is_draft", value = false }
+
+[[gate]]
+id = "pr_not_conflicting"
+fn = "eq"
+args = { field = "pr.conflicting", value = false }
+
+[[gate]]
+id = "human_merge_yes"
+fn = "eq"
+args = { field = "human.merge_yes", value = true }
+
+[[gate]]
+id = "one_local_review_at_most"
+fn = "lte"
+args = { field = "review.local_rounds", limit = "investigation_rounds" }
+
+[[gate]]
+id = "decision_list_present"
+fn = "present"
+args = { field = "handoff.decisions" }
+
+# Ready on code_pr. Investigation has no transition that names this.
+[[gate]]
+id = "ready_evidence"
+fn = "all"
+args = { of = [
+  "stamp_ok", "plan_check_recorded", "quality_gate_recorded", "quality_gate_before_pr",
+  "verdict_is_yes", "verdict_on_head", "reviewed_head_ok",
+  "smoke_recorded", "kept_tests_recorded", "no_unexplained_failures", "brief_ok",
+  "rounds_at_most", "ci_not_red", "no_human_threads", "daisy_review_settled", "pr_mergeable",
+  "code_lines_at_most",
+] }
+
+# Ready on direct: ready_evidence without the PR gates (no PR, no threads, no pr.opened).
+[[gate]]
+id = "ready_evidence_direct"
+fn = "all"
+args = { of = [
+  "stamp_ok", "plan_check_recorded", "quality_gate_recorded",
+  "verdict_is_yes", "verdict_on_head", "reviewed_head_ok",
+  "smoke_recorded", "kept_tests_recorded", "no_unexplained_failures", "brief_ok",
+  "rounds_at_most", "ci_not_red", "daisy_review_settled",
+  "code_lines_at_most",
+] }
+
+# --- M1: the gated handoff -------------------------------------------------
+
+# A handoff with ready: true enters ready. A handoff to done, or `work update --status
+# done`, enters done. Any phase. An investigation has no ready row, so it is denied.
+[[transition]]
+id = "handoff"
+routes = ["code_pr", "direct"]
+to = "ready"
+requires = ["stamp_ok", "plan_check_recorded", "quality_gate_recorded", "verdict_is_yes", "verdict_on_head"]
+
+[[transition]]
+id = "handoff"
+routes = ["code_pr", "direct", "investigation"]
+to = "done"
+requires = ["stamp_ok", "plan_check_recorded", "quality_gate_recorded", "verdict_is_yes", "verdict_on_head"]
+
+# --- code_pr -------------------------------------------------------------
+
+[[transition]]
+id = "claim_to_plan"
+routes = ["code_pr", "direct", "no_pr", "investigation"]
+from = "claimed"
+to = "planning"
+
+[[transition]]
+id = "plan_to_build"
+routes = ["code_pr", "direct", "no_pr", "investigation"]
+from = "planning"
+to = "building"
+requires = ["plan_check_recorded"]
+
+[[transition]]
+id = "build_to_pre_pr"
+routes = ["code_pr", "direct", "investigation"]
+from = "building"
+to = "pre_pr"
+
+[[transition]]
+id = "open_pr"
+routes = ["code_pr", "investigation"]
+from = "pre_pr"
+to = "pr_open"
+requires = ["quality_gate_recorded", "code_lines_at_most", "smoke_recorded", "kept_tests_recorded"]
+
+[[transition]]
+id = "oversize_stop"
+routes = ["code_pr", "direct", "investigation"]
+from = "pre_pr"
+to = "needs_you"
+requires = ["code_lines_over"]
+
+[[transition]]
+id = "pr_to_addressing"
+routes = ["code_pr", "investigation"]
+from = "pr_open"
+to = "addressing"
+
+[[transition]]
+id = "start_local_review"
+routes = ["code_pr", "direct"]
+from = "addressing"
+to = "local_review"
+requires = ["rounds_below_cap"]
+
+[[transition]]
+id = "next_local_round"
+routes = ["code_pr", "direct"]
+from = "local_review"
+to = "local_review"
+requires = ["previous_round_closed", "code_changed_since_review", "rounds_below_cap"]
+
+[[transition]]
+id = "enter_final_head"
+routes = ["code_pr", "direct"]
+from = "local_review"
+to = "final_head"
+requires = ["previous_round_closed", "rounds_at_most"]
+
+[[transition]]
+id = "ask_verdict"
+routes = ["code_pr"]
+from = "final_head"
+to = "verdict"
+requires = ["reviewed_head_ok", "ci_not_red", "no_human_threads", "daisy_review_settled", "pr_mergeable", "quality_gate_before_pr"]
+
+[[transition]]
+id = "to_ready"
+routes = ["code_pr"]
+from = "verdict"
+to = "ready"
+requires = ["ready_evidence"]
+
+[[transition]]
+id = "verdict_no_below_cap"
+routes = ["code_pr", "direct"]
+from = "verdict"
+to = "addressing"
+requires = ["verdict_is_no", "rounds_below_cap"]
+
+[[transition]]
+id = "verdict_no_at_cap"
+routes = ["code_pr", "direct"]
+from = "verdict"
+to = "needs_you"
+requires = ["verdict_is_no", "rounds_at_cap"]
+
+[[transition]]
+id = "merge_on_yes"
+routes = ["code_pr", "direct"]
+from = "ready"
+to = "done"
+requires = ["human_merge_yes", "verdict_on_head"]
+
+# --- no_pr: measure or docs, nothing that runs ----------------------------
+
+[[transition]]
+id = "no_pr_done"
+routes = ["no_pr"]
+from = "building"
+to = "done"
+requires = ["plan_check_recorded", "quality_gate_recorded"]
+
+# --- investigation: a doc PR, handoff is needs-you, never ready -----------
+
+[[transition]]
+id = "investigation_review"
+routes = ["investigation"]
+from = "addressing"
+to = "local_review"
+requires = ["one_local_review_at_most"]
+
+[[transition]]
+id = "investigation_needs_you"
+routes = ["investigation"]
+from = "local_review"
+to = "needs_you"
+requires = ["decision_list_present", "one_local_review_at_most", "plan_check_recorded"]
+
+# --- direct: no PR, so no PR gates ------------------------------------------
+
+# direct skips pr_open. addressing is entered from pre_pr.
+[[transition]]
+id = "direct_to_addressing"
+routes = ["direct"]
+from = "pre_pr"
+to = "addressing"
+requires = ["quality_gate_recorded", "code_lines_at_most"]
+
+[[transition]]
+id = "ask_verdict"
+routes = ["direct"]
+from = "final_head"
+to = "verdict"
+requires = ["reviewed_head_ok", "ci_not_red", "daisy_review_settled"]
+
+[[transition]]
+id = "to_ready"
+routes = ["direct"]
+from = "verdict"
+to = "ready"
+requires = ["ready_evidence_direct"]

@@ -151,7 +151,7 @@ The stamp is the id plus the semantic hash of the flattened document:
 1. Resolve `extends` (child gates and transitions replace the parent row with the same id; `drop` lists removals).
 2. Drop comments and formatting.
 3. Sort object keys. Sort gate tables and transition tables by `id`. Preserve `requires` order, because the first failing gate is part of the behavior.
-4. Serialize with JSON Canonicalization (RFC 8785) and take SHA-256.
+4. Serialize with JSON Canonicalization (RFC 8785) and take SHA-256. (Amended: sorted `serde_json` without RFC 8785, [ADR 0004](../decisions/0004-pipeline-semantic-hash.md).)
 
 A comment-only edit does not fork the cohort. An argument change does. `lane-stats` groups by the hash, and prints the id as the label. Today's grouping key, the `## vN` heading, becomes that label.
 
