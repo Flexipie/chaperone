@@ -88,7 +88,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -114,11 +114,11 @@ Every write also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
-| `migrate` | (uses `--db`) | write, no event |
+| `migrate` | (uses `--db`; no actor flags) | write, no event |
 
 `work create --kind` and `--pr-flow` are Seamlane's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
 
-`seamlane migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing file. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
+`seamlane migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing or empty file. It refuses a file whose `application_id` is set and is not Seamlane's, and a version-0 file that already has tables, so it never applies 0001 over someone else's database. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`.
 
@@ -159,13 +159,16 @@ Each command is one transaction that appends one event (events.md, write rules).
 | `work update`, any other change | ungated | `lane.updated`, or `pr.opened` when the PR goes from null to set |
 | `work claim`, `release`, `ready` | ungated | the matching `lane.*` kind |
 | `work heartbeat` | none | none |
+| `migrate` | none | none (schema only) |
+
+A gated command on a lane with no stamp (never claimed) is denied with gate `stamp_ok` and fact path `lane.pipeline_hash`. It is never ungated and never falls back to the latest pipeline. A gated command whose route has no matching transition is denied the same way, never passed.
 
 `handoff` is the M1 gated transition. Its requires list is per route in
 `pipelines/v17.toml` (#12): on `code_pr`, a `plan_check`, a `quality_gate`, and a
 `merge_verdict` with decision `yes` whose sha is a prefix of the handed-off sha
 (`handoff.commit`, or for `update --status done` the commit of the lane's latest
 handoff). `direct` has the same list as `code_pr` (none of the three is a PR gate). On
-`investigation`, a handoff with `ready: true` is always denied: an investigation hands
+`investigation`, a handoff to `done` or `update --status done` needs the same three checks (plan check and quality gate may skip with an allowed reason), and a handoff with `ready: true` is always denied: an investigation hands
 off `needs you`, never ready (R7). `phase.entered.to` is `done` for a handoff to `done`
 or `update --status done`, else `ready`, and `phase.entered.status` is the status the
 command asked for, not R7's mapping from `to`. Ready comes from a
