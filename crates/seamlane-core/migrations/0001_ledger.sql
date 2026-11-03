@@ -1,4 +1,7 @@
--- Ledger v1. R5 tables, with the M1 names from docs/events.md "Folded rows".
+-- Ledger v1. R5 tables and column names. Statuses follow the M1
+-- vocabularies (wire statuses, ran|skipped, open|fixed|answered); the check
+-- name stays in gate_results.gate because CHECK is an SQL keyword. Work-item
+-- columns arrive with the CLI slices.
 -- Editable until the first demo, then frozen: later changes are new files.
 
 -- Append-only log. No AUTOINCREMENT: a rolled-back insert must not burn an
