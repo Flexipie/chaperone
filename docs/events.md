@@ -138,7 +138,7 @@ a handoff, the handoff's event carries `changed.pr` from null, and the fact
 
 | Check | Producer | Fields (after `check`, `outcome`, `head_sha`, `producer`) |
 | --- | --- | --- |
-| `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation`, `docs` or `tests` (a test-only lane counts as no-code). |
+| `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation`, `docs` or `tests`. |
 | `quality_gate` | session | `ran`: `findings` (count). `skipped`: `reason` `no_code` or `tests`. |
 | `merge_verdict` | session | `ran` only. `decision` `yes` or `no`. The verdict sha is `head_sha`, from `--head`, never the model's prose. |
 | `smoke` | session | `ran`, or `skipped` with `reason` `nothing_runs` or `attempt_failed`. |
@@ -161,7 +161,7 @@ reasons) are reserved for a `--file` input after M1.
 
 R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` and `pipeline_version`, and its `gate_results.gate` and `findings.review_event_id` names are replaced by the ones above.
 
-**Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr` or `direct`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `direct` if the flow is `direct`, else `code_pr`. Until `diff_measured` exists, `lane.changes_code` is true exactly when the kind is `code`. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with its reason, and a `code` lane may not.
+**Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr` or `direct`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `direct` if the flow is `direct`, else `code_pr`. Until `diff_measured` exists, `lane.changes_code` is true exactly when the kind is `code`. Skip reasons are checked by list membership: when `changes_code` is false, any reason the check lists is accepted, and when it is true, `skipped` fails the gate. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with an allowed reason, and a `code` lane may not. No M1 input marks a lane test-only, so a test-only lane is `code` and runs both checks; the `tests` reason waits for that input.
 
 ## Reserved
 

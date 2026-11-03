@@ -135,8 +135,9 @@ daisy. A job that is not done (`data.done` false, status `queued` or `running`) 
 `ran` with `producer {kind: daisy_worker, job}`. A done job with status `failed` or
 `cancelled` appends `check.finished` `skipped` with `reason` that status. It projects
 `daisy_review.state` as `failed`, which `daisy_review_settled` rejects (a review that
-never ran is a blocker, not a skip, R10), and adds no local round. The lane re-runs the
-review or hands off `needs you`. `reviews get --wait` does not
+never ran is a blocker, not a skip, R10), and adds no local round. M1's `handoff` does
+not read `daisy_review_settled` (only the three stamps below), so this fact matters from
+the first pipeline that requires it. `reviews get --wait` does not
 block on a job that is only requested, so lanes keep `daisy-cli reviews get --wait` for
 waiting. `reviews get` and `jobs get`
 answer from what was recorded, in daisy's shape.
@@ -160,7 +161,11 @@ Each command is one transaction that appends one event (events.md, write rules).
 `pipelines/v17.toml` (#12): on `code_pr`, a `plan_check`, a `quality_gate`, and a
 `merge_verdict` with decision `yes` whose sha is a prefix of the handed-off sha
 (`handoff.commit`, or for `update --status done` the commit of the lane's latest
-handoff). Routes without a PR skip the PR gates as v17 says. Ready comes from a
+handoff). `direct` has the same list as `code_pr` (none of the three is a PR gate). On
+`investigation`, a handoff with `ready: true` is always denied: an investigation hands
+off `needs you`, never ready (R7). `phase.entered.to` is `done` for a handoff to `done`
+or `update --status done`, else `ready`, and `phase.entered.status` is the status the
+command asked for, not R7's mapping from `to`. Ready comes from a
 handoff's `ready` (or the owner's `work ready` override), so a handoff cannot mark a lane
 ready without passing this gate. There is no `next_action` fallback for ready (events.md,
 folded rows). A `needs you` handoff is not gated, so it always reaches the owner. A
