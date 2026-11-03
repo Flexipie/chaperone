@@ -44,7 +44,7 @@ These rules keep every write small, single and fail-closed.
 - **Replays.** A retry with the same key and kind returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
   uses `check:` plus the sha256 of the lane id, its canonical payload and the id of the lane's newest
-  `check.finished` for that check with a different payload (so a retry replays, and a
+  `check.finished` for that check with a different payload (so a retry replays unless another session recorded the same check since, and a
   result that flips back, such as no, yes, no, appends), and `reviews record` uses
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
   recorded on another lane is `invalid_input`.

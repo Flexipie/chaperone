@@ -78,6 +78,10 @@ impl Ledger {
             ));
         }
         let skipped = input.outcome == "skipped";
+        let verdict = input.check == "merge_verdict";
+        if verdict && skipped {
+            return invalid("merge_verdict is ran only".into());
+        }
         match &input.reason {
             None if skipped => return invalid(format!("skipped needs --reason {reasons:?}")),
             Some(_) if !skipped => return invalid("--reason goes with skipped only".into()),
@@ -85,10 +89,6 @@ impl Ledger {
                 return invalid(format!("{} skips for {reasons:?}, not {r}", input.check));
             }
             _ => {}
-        }
-        let verdict = input.check == "merge_verdict";
-        if verdict && skipped {
-            return invalid("merge_verdict is ran only".into());
         }
         if verdict != input.decision.is_some()
             || !matches!(input.decision.as_deref(), None | Some("yes" | "no"))
