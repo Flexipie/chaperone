@@ -41,7 +41,7 @@ builds only.
 | --- | --- |
 | The write function or the predicate evaluator | Branch coverage of that module stays at 100%. The rebuild property still passes. |
 | A ledger write path | The crash tests (`SIGKILL` before commit, `SIGKILL` in the commit loop) and the 50-process concurrency test, against that write function. |
-| A gate or a pipeline document | A unit pass and a unit fail for the predicate. A refusal appends no event. |
+| A gate or a pipeline document | A unit pass and a unit fail for the predicate. A validation or CAS refusal writes nothing; a gate denial appends one `gate.denied` and leaves the phase. |
 | Spawn, supervise, or the agent argv | A script under the fake agent (`crates/seamlane-fake`) that exits cleanly, and the kill test that records `session.exited` once and does not respawn. |
 | An event kind | `docs/events.md` and the enum updated together. The drift test passes. |
 | A CLI flag | The `--help` snapshot updated in the same commit. |
@@ -95,15 +95,14 @@ in the supervisor. Paste the measured figures into the release notes.
 
 ## Versions
 
-Five axes, so a pipeline tweak is not a binary release and a migration is not
+Four axes, so a pipeline tweak is not a binary release and a migration is not
 a silent CLI break.
 
 | Axis | Rule |
 | --- | --- |
 | Binary `0.y.z` | A minor bump may break CLI flags. A patch bump must not. 1.0 is the vision's milestone 8, not the first public commit. |
 | `PRAGMA user_version` | Older binaries refuse to write. The newer binary is the only migrator. |
-| `reader_contract.version` | Bumps when a view daisy reads changes. |
-| Integration contract | Starts at 0. A removed or renamed field or tool bumps it. A new nullable field does not. |
+| Integration contract | Starts at 0, shared with the event schema ([docs/events.md](docs/events.md)). A removed or renamed field, kind or tool bumps it. A new nullable field does not. |
 | Pipeline id + hash | A published id is immutable. New claims can move. Running lanes stay on the hash they stamped. |
 
 ## Docs and decisions
