@@ -141,6 +141,20 @@ impl ErrorBody {
                     format!("this binary cannot load pipeline {pipeline_id} {pipeline_hash}"),
                     Some(json!({ "pipeline_id": pipeline_id, "pipeline_hash": pipeline_hash })),
                 ),
+                Refusal::GateDenied {
+                    transition,
+                    gate,
+                    fact_paths,
+                } => body(
+                    "gate_denied",
+                    format!(
+                        "gate {gate} denies {transition}; it read {}",
+                        fact_paths.join(", ")
+                    ),
+                    Some(json!({
+                        "transition": transition, "gate": gate, "fact_paths": fact_paths
+                    })),
+                ),
             },
             CliError::Ledger(l) => {
                 let mismatch = |found: Value, hint: &str| {

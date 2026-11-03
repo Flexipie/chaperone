@@ -12,12 +12,16 @@ use serde_json::{Value, json};
 
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
 use crate::cursor::{self, Cursor, Page};
+use crate::engine;
 use crate::ledger::{
-    Actor, Applied, Change, Checked, EventKind, Ledger, LedgerError, MAX_LEASE_SECS,
-    MIN_LEASE_SECS, Mutation, Payload, Refusal, SOURCES, STATUSES, lease_held,
+    Actor, Applied, Change, Checked, Event, EventKind, Ledger, LedgerError, MAX_LEASE_SECS,
+    MIN_LEASE_SECS, Mutation, Payload, Refusal, SOURCES, STATUSES, has_held, lease_held,
 };
+use crate::pipeline::Phase;
 
 const ENTITY: &str = "work item";
+/// The M1 gated transition (pipelines/v17.toml).
+const HANDOFF: &str = "handoff";
 const DEFAULT_LEASE_SECS: i64 = 900;
 /// Daisy's `tool` on handoff and event rows.
 const TOOL: &str = "seamlane";
@@ -418,6 +422,11 @@ impl Ledger {
             if let Some(reason) = &input.reason {
                 p.rest.insert("reason".into(), json!(reason));
             }
+            // Done is gated, on the commit of the latest handoff.
+            if input.status.as_deref() == Some("done") {
+                let head = latest_commit(conn, id)?;
+                return Ok(Ok(engine::enter(id, HANDOFF, Phase::Done, head, "done", p)));
+            }
             // The PR's first arrival is its own event, with the commit of the
             // latest handoff.
             if kind == LaneUpdated
@@ -425,17 +434,7 @@ impl Ledger {
                 && let Some(pr) = &input.pr_ref
             {
                 kind = PrOpened;
-                p.head_sha = conn
-                    .query_row(
-                        &format!(
-                            "SELECT json_extract(payload_json, '$.handoff.commit') FROM events
-                             WHERE {HANDOFFS} ORDER BY id DESC LIMIT 1"
-                        ),
-                        [id],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                    .flatten();
+                p.head_sha = latest_commit(conn, id)?;
                 p.rest.insert("pr".into(), json!(pr));
             }
             Ok(Ok(lane_event(kind, id, p)))
@@ -502,15 +501,6 @@ impl Ledger {
         if let Err(r) = input.validate() {
             return Ok(Err(r));
         }
-        // Ready is gated (cli-contract.md, commands and transitions); until
-        // the gate runs, a stored ready would read as ready without it.
-        if input.ready == Some(true) {
-            return Ok(Err(Refusal::InvalidInput(
-                "a ready handoff needs the handoff gate, which this binary does not run \
-                 yet; hand off without ready"
-                    .into(),
-            )));
-        }
         let stored = serde_json::to_value(input).map_err(std::io::Error::other)?;
         let (applied, _) = self.apply_planned(
             actor,
@@ -553,11 +543,23 @@ impl Ledger {
                     }
                 }
                 p.rest.insert("handoff".into(), stored);
+                // Ready and done are gated (cli-contract.md, commands and
+                // transitions); a needs-you or progress handoff is not.
+                let done = input.status.as_deref() == Some("done");
+                if done || input.ready == Some(true) {
+                    let to = if done { Phase::Done } else { Phase::Ready };
+                    let status = input.status.as_deref().unwrap_or(&item.status);
+                    let head = input.commit.clone();
+                    return Ok(Ok(engine::enter(id, HANDOFF, to, head, status, p)));
+                }
                 Ok(Ok(lane_event(EventKind::LaneHandedOff, id, p)))
             },
             |_, _, _| Ok(()),
         )?;
         match applied {
+            Applied::Committed(e) | Applied::Replayed(e) if e.kind == EventKind::GateDenied => {
+                Ok(Err(denied(e)))
+            }
             Applied::Committed(e) => Ok(Ok(Handoff {
                 id: e.id,
                 work_id: e.lane_id,
@@ -784,10 +786,39 @@ fn get_row(conn: &Connection, id: i64, now: &str) -> Result<Option<WorkItem>, Le
 fn item_of(applied: Applied, item: Option<Option<WorkItem>>) -> Result<WorkItem, Refusal> {
     match (applied, item.flatten()) {
         (Applied::Refused(r), _) => Err(r),
+        (Applied::Committed(e) | Applied::Replayed(e), _) if e.kind == EventKind::GateDenied => {
+            Err(denied(e))
+        }
         (_, Some(item)) => Ok(item),
         // The read runs only after a write that named an existing lane.
         (_, None) => Err(Refusal::InvalidInput("the write left no work item".into())),
     }
+}
+
+/// A gated command's refusal, from the `gate.denied` it appended or replayed.
+fn denied(e: Event) -> Refusal {
+    let p = e.payload;
+    Refusal::GateDenied {
+        transition: p.transition.unwrap_or_default(),
+        gate: p.gate.unwrap_or_default(),
+        fact_paths: p.fact_paths.unwrap_or_default(),
+    }
+}
+
+/// The commit of the lane's latest handoff, the head a `work update`
+/// names (events.md, folded rows).
+fn latest_commit(conn: &Connection, id: i64) -> Result<Option<String>, LedgerError> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT json_extract(payload_json, '$.handoff.commit') FROM events
+                 WHERE {HANDOFFS} ORDER BY id DESC LIMIT 1"
+            ),
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten())
 }
 
 fn lane_event(kind: EventKind, id: i64, payload: Payload) -> Mutation {
@@ -850,20 +881,6 @@ fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
         SpecCreated | SpecRevised | SpecApproved | GateDenied | CheckRequested | CheckFinished
         | FindingUpdated => return None,
     })
-}
-
-/// The session has held the lane: it wrote a `lane.claimed` or
-/// `lane.taken_over` on it (events.md, `check.finished` producer).
-fn has_held(conn: &Connection, lane_id: i64, session: &str) -> Result<bool, LedgerError> {
-    Ok(conn
-        .query_row(
-            "SELECT 1 FROM events WHERE lane_id = ?1
-               AND kind IN ('lane.claimed', 'lane.taken_over') AND actor_session = ?2",
-            rusqlite::params![lane_id, session],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some())
 }
 
 fn is_terminal(status: &str) -> bool {
@@ -1236,7 +1253,6 @@ mod tests {
         for refused in [
             handoff("x".repeat(4001), "active", None),
             handoff("s".into(), "queued", None),
-            handoff("s".into(), "active", Some(true)),
         ] {
             assert!(
                 matches!(refused, Err(Refusal::InvalidInput(_))),
@@ -1244,12 +1260,21 @@ mod tests {
             );
         }
         assert_eq!(kinds(&ledger).len(), 2);
-        assert_eq!(handoff("s".into(), "done", None).unwrap().id, 3);
-        let item = ledger.work_get(id, T1).unwrap().unwrap();
+        // Ready and done are gated: with no checks recorded, one denial,
+        // which the second attempt replays.
+        for (status, ready) in [("active", Some(true)), ("done", None)] {
+            assert!(matches!(
+                handoff("s".into(), status, ready),
+                Err(Refusal::GateDenied { .. })
+            ));
+        }
         assert_eq!(
-            (item.status.as_str(), item.session, item.lease_expires_at),
-            ("done", None, None)
+            kinds(&ledger),
+            ["lane.created", "lane.claimed", "gate.denied"]
         );
+        // A needs-you handoff is not.
+        assert_eq!(handoff("s".into(), "blocked", None).unwrap().id, 4);
+        assert_eq!(ledger.work_get(id, T1).unwrap().unwrap().status, "blocked");
         assert!(matches!(
             ledger
                 .work_ready(&a, id, Some(true), None, Some(T1), false)

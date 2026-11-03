@@ -178,6 +178,25 @@ pub fn by_stamp(id: &str, hash: &str) -> Option<&'static Pipeline> {
     KNOWN.iter().find(|p| p.id == id && p.hash == hash)
 }
 
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Claimed => "claimed",
+            Phase::Planning => "planning",
+            Phase::Building => "building",
+            Phase::PrePr => "pre_pr",
+            Phase::PrOpen => "pr_open",
+            Phase::Addressing => "addressing",
+            Phase::LocalReview => "local_review",
+            Phase::FinalHead => "final_head",
+            Phase::Verdict => "verdict",
+            Phase::Ready => "ready",
+            Phase::NeedsYou => "needs_you",
+            Phase::Done => "done",
+        }
+    }
+}
+
 impl Route {
     /// The route a lane takes, chosen once at its first claim (events.md,
     /// lane facts in M1): an investigation, else direct on a direct flow,
