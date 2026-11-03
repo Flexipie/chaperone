@@ -1,4 +1,4 @@
-Record a structured handoff (JSON: summary, status, changed_files, verification, smoke, blockers, open_questions, next_action, commit, pull_request, brief). Its status moves the item; a terminal status clears the holder. A ready handoff is refused until the handoff gate runs
+Record a structured handoff (JSON: summary, status, changed_files, verification, smoke, blockers, open_questions, next_action, commit, pull_request, brief). Its status moves the item; a terminal status clears the holder. A ready or done handoff runs the handoff gate
 
 Usage: seamlane work handoff [OPTIONS] <ID> [FILE]
 

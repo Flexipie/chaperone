@@ -9,7 +9,7 @@ Commands:
   update     Change status or fields. --expected-updated-at is the item's current updated_at; a stale one is refused as a conflict (exit 4)
   release    Give the item up: clears the holder; claimed goes back to queued
   cancel     Cancel an item (a status, not a delete)
-  handoff    Record a structured handoff (JSON: summary, status, changed_files, verification, smoke, blockers, open_questions, next_action, commit, pull_request, brief). Its status moves the item; a terminal status clears the holder. A ready handoff is refused until the handoff gate runs
+  handoff    Record a structured handoff (JSON: summary, status, changed_files, verification, smoke, blockers, open_questions, next_action, commit, pull_request, brief). Its status moves the item; a terminal status clears the holder. A ready or done handoff runs the handoff gate
   handoffs   Every handoff on an item, oldest first
   events     The item's ledger, oldest first
   ready      Override whether the item is ready: --yes, --no, or --clear to go back to its handoffs. Refused from any session that has held it
