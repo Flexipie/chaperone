@@ -931,7 +931,7 @@ fn check_lane(lane: &Option<String>) -> Result<Option<String>, Refusal> {
 }
 
 /// A spec by id, or by its parent key in any case.
-fn resolve_spec(conn: &Connection, spec: &str) -> Checked<i64> {
+pub(crate) fn resolve_spec(conn: &Connection, spec: &str) -> Checked<i64> {
     let spec = spec.trim();
     Ok(match spec.parse::<i64>() {
         Ok(id) => conn
@@ -1007,7 +1007,7 @@ fn create_payload(input: &CreateInput) -> Result<(Payload, Option<String>), Refu
 }
 
 /// `TEAM-123`: 2 to 10 uppercase letters, a dash, digits.
-fn issue_key_ok(key: &str) -> bool {
+pub(crate) fn issue_key_ok(key: &str) -> bool {
     key.split_once('-').is_some_and(|(team, num)| {
         (2..=10).contains(&team.len())
             && team.chars().all(|c| c.is_ascii_uppercase())
@@ -1017,7 +1017,7 @@ fn issue_key_ok(key: &str) -> bool {
 }
 
 /// `owner/name#digits`.
-fn pr_ref_ok(pr_ref: &str) -> bool {
+pub(crate) fn pr_ref_ok(pr_ref: &str) -> bool {
     let part_ok = |p: &str| {
         !p.is_empty()
             && p.chars()

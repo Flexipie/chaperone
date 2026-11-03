@@ -43,6 +43,8 @@ pub enum Format {
 pub enum Cmd {
     #[command(subcommand)]
     Work(WorkCmd),
+    #[command(subcommand)]
+    Spec(SpecCmd),
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Seamlane ledger
     Migrate,
@@ -68,6 +70,10 @@ impl Cmd {
                 | WorkCmd::Handoffs { .. }
                 | WorkCmd::Events { .. },
             ) => None,
+            Cmd::Spec(SpecCmd::Create { .. }) => Some("spec create"),
+            Cmd::Spec(SpecCmd::Update { .. }) => Some("spec update"),
+            Cmd::Spec(SpecCmd::Approve { .. }) => Some("spec approve"),
+            Cmd::Spec(SpecCmd::Get { .. } | SpecCmd::List) => None,
         }
     }
 }
@@ -305,5 +311,70 @@ pub enum WorkCmd {
         /// Agent for --mine (default: $DAISY_AGENT)
         #[arg(long)]
         mine_agent: Option<String>,
+    },
+}
+
+/// The dispatch spec of a parent issue, versioned. /dispatch writes it,
+/// /issue and /ship read it
+#[derive(Subcommand, Debug)]
+pub enum SpecCmd {
+    /// Create the spec for a parent, at version 1 (draft). One per parent:
+    /// a second create is refused and names the spec to update
+    Create {
+        /// The parent: CORE-1234, PER-12 or owner/repo#12. `--linear` is
+        /// daisy's older name and still works
+        #[arg(long, visible_alias = "linear")]
+        parent: String,
+        /// The markdown body, or - for stdin
+        #[arg(long)]
+        file: PathBuf,
+        /// Defaults to the body's first `# ` heading, else the parent key
+        #[arg(long)]
+        title: Option<String>,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// A spec with its slices and decisions parsed from the body
+    Get {
+        /// The spec id or its parent key (any case)
+        spec: String,
+        /// An older version (default: the newest)
+        #[arg(long)]
+        version: Option<i64>,
+    },
+    /// Every spec at its newest version, most recently changed first
+    List,
+    /// Append a new version
+    Update {
+        /// The spec id or its parent key (any case)
+        spec: String,
+        /// The markdown body, or - for stdin
+        #[arg(long)]
+        file: PathBuf,
+        /// Why it changed, kept with the version
+        #[arg(long)]
+        reason: String,
+        /// Exit 4 unless the newest version is still this one
+        #[arg(long)]
+        expected_version: Option<i64>,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Mark the spec approved (draft -> approved); approving again is a
+    /// no-op
+    Approve {
+        /// The spec id or its parent key (any case)
+        spec: String,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
     },
 }

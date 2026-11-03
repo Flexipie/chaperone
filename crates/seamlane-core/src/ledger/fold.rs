@@ -56,9 +56,10 @@ pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
         }
         SpecRevised => {
             one(conn.execute(
-                "UPDATE specs SET head_version = ?2, head_event_id = ?3, updated_at = ?4
+                "UPDATE specs SET head_version = ?2, head_event_id = ?3, updated_at = ?4,
+                     title = COALESCE(?5, title)
                  WHERE id = ?1",
-                params![e.spec_id, p.version, e.id, e.at],
+                params![e.spec_id, p.version, e.id, e.at, p.title],
             )?)?;
             spec_version(conn, e, p.version.unwrap_or_default())?;
         }

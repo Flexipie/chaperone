@@ -43,6 +43,21 @@ fn help_matches_snapshots() {
             include_str!("snapshots/work-events.txt"),
         ),
         (&["work", "ready"], include_str!("snapshots/work-ready.txt")),
+        (&["spec"], include_str!("snapshots/spec.txt")),
+        (
+            &["spec", "create"],
+            include_str!("snapshots/spec-create.txt"),
+        ),
+        (&["spec", "get"], include_str!("snapshots/spec-get.txt")),
+        (&["spec", "list"], include_str!("snapshots/spec-list.txt")),
+        (
+            &["spec", "update"],
+            include_str!("snapshots/spec-update.txt"),
+        ),
+        (
+            &["spec", "approve"],
+            include_str!("snapshots/spec-approve.txt"),
+        ),
         (&["migrate"], include_str!("snapshots/migrate.txt")),
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_seamlane"))

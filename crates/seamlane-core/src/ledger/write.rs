@@ -39,6 +39,8 @@ const SESSION_CHECKS: &[&str] = &[
 pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
 pub const KINDS: &[&str] = &["code", "docs", "measure", "investigation"];
 pub const PR_FLOWS: &[&str] = &["pr", "direct"];
+/// A spec body is a document a person reads; this is far above any real one.
+pub const SPEC_BODY_MAX_BYTES: usize = 256 * 1024;
 
 pub(crate) type Checked<T> = Result<Result<T, Refusal>, LedgerError>;
 
@@ -293,17 +295,24 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             ));
         }
         SpecCreated => {
-            let (Some(key), Some(_), Some(_)) = (&p.parent_key, &p.title, &p.body) else {
+            let (Some(key), Some(_), Some(body)) = (&p.parent_key, &p.title, &p.body) else {
                 refuse!(invalid("spec.created needs parent_key, title and body"));
             };
+            check!(spec_body(body));
             if event.spec_id.is_some() || p.version.is_some_and(|v| v != 1) {
                 refuse!(invalid("spec.created assigns the spec id and version 1"));
             }
-            if exists(tx, "SELECT 1 FROM specs WHERE external_key = ?1", [key])? {
-                refuse!(Refusal::Conflict {
-                    entity: "spec",
-                    message: format!("spec {key} exists"),
-                });
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE",
+                    [key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(id) = existing {
+                refuse!(invalid(&format!(
+                    "{key} already has spec {id}; change it with `spec update {id}`"
+                )));
             }
             event.spec_id = Some(next_id(tx, "specs")?);
         }
@@ -311,12 +320,23 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             let id = check!(need_id(event.spec_id, "spec"));
             let head = check!(spec_head(tx, id));
             let revised = event.kind == SpecRevised;
-            if revised && p.body.is_none() {
-                refuse!(invalid("spec.revised needs a body"));
+            if revised {
+                let Some(body) = &p.body else {
+                    refuse!(invalid("spec.revised needs a body"));
+                };
+                check!(spec_body(body));
             }
+            // No version: the next one. A given version is the caller's
+            // optimistic check, so a stale one is a conflict.
             let want = head + i64::from(revised);
-            if p.version != Some(want) {
-                refuse!(invalid(&format!("{} needs version {want}", event.kind)));
+            let given = p.version;
+            match given {
+                None => event.payload.version = Some(want),
+                Some(v) if v == want => {}
+                Some(_) => refuse!(Refusal::Conflict {
+                    entity: "spec",
+                    message: format!("spec {id} is at version {head}; read it again"),
+                }),
             }
         }
         LaneCreated => {
@@ -619,6 +639,19 @@ pub(crate) fn has_held(
            AND kind IN ('lane.claimed', 'lane.taken_over') AND actor_session = ?2",
         rusqlite::params![lane_id, session],
     )
+}
+
+fn spec_body(body: &str) -> Checked<()> {
+    if body.trim().is_empty() {
+        refuse!(invalid("spec body is empty"));
+    }
+    if body.len() > SPEC_BODY_MAX_BYTES {
+        refuse!(invalid(&format!(
+            "spec body is {} bytes, over the {SPEC_BODY_MAX_BYTES} limit",
+            body.len()
+        )));
+    }
+    Ok(Ok(()))
 }
 
 fn invalid(msg: &str) -> Refusal {
@@ -1484,6 +1517,93 @@ mod tests {
             .query_row("SELECT id FROM lanes", [], |r| r.get(0))
             .unwrap();
         assert_eq!(id, 1);
+    }
+
+    /// Spec keys are unique in any case, bodies are capped, a missing
+    /// version is the next one and a stale one is a conflict.
+    #[test]
+    fn spec_keys_bodies_and_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let me = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
+        let spec = |key: &str, body: String| Payload {
+            parent_key: Some(key.into()),
+            title: Some("t".into()),
+            body: Some(body),
+            ..Payload::default()
+        };
+        let revise = |version: Option<i64>, body: String| Payload {
+            version,
+            body: Some(body),
+            ..Payload::default()
+        };
+        let apply = |kind, spec_id, payload| {
+            ledger
+                .apply(&me, None, AT, ev(kind, None, spec_id, payload))
+                .unwrap()
+        };
+        let big = "a".repeat(SPEC_BODY_MAX_BYTES + 1);
+        assert!(matches!(
+            apply(
+                EventKind::SpecCreated,
+                None,
+                spec("Flexipie/harness#1", "b".into())
+            ),
+            Applied::Committed(_)
+        ));
+        for (kind, spec_id, payload) in [
+            (EventKind::SpecCreated, None, spec("PER-1", " \n".into())),
+            (EventKind::SpecCreated, None, spec("PER-1", big.clone())),
+            (EventKind::SpecRevised, Some(1), revise(None, big)),
+        ] {
+            let applied = apply(kind, spec_id, payload);
+            assert!(
+                matches!(applied, Applied::Refused(Refusal::InvalidInput(_))),
+                "{applied:?}"
+            );
+        }
+        let dup = apply(
+            EventKind::SpecCreated,
+            None,
+            spec("FLEXIPIE/harness#1", "b".into()),
+        );
+        assert!(format!("{dup:?}").contains("already has spec 1"), "{dup:?}");
+        let committed = |applied: Applied| matches!(applied, Applied::Committed(_));
+        assert!(committed(apply(
+            EventKind::SpecRevised,
+            Some(1),
+            revise(None, "b2".into())
+        )));
+        assert!(matches!(
+            apply(
+                EventKind::SpecRevised,
+                Some(1),
+                revise(Some(2), "b3".into())
+            ),
+            Applied::Refused(Refusal::Conflict { entity: "spec", .. })
+        ));
+        assert!(committed(apply(
+            EventKind::SpecApproved,
+            Some(1),
+            Payload::default()
+        )));
+        let versions: Vec<(String, Option<i64>)> = ledger
+            .conn()
+            .prepare("SELECT kind, json_extract(payload_json, '$.version') FROM events ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let want = [
+            ("spec.created", None),
+            ("spec.revised", Some(2)),
+            ("spec.approved", Some(2)),
+        ];
+        assert_eq!(versions, want.map(|(k, v)| (k.to_string(), v)));
     }
 
     /// The accepting side of guard branches the property ops never take:

@@ -4,4 +4,5 @@ pub mod cursor;
 mod engine;
 pub mod ledger;
 pub mod pipeline;
+pub mod spec;
 pub mod work;

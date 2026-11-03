@@ -3,6 +3,7 @@
 
 mod cli;
 mod output;
+mod spec;
 mod work;
 
 use std::io::Write;
@@ -63,6 +64,7 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
             ))
         }
         Cmd::Work(cmd) => work::run(&Ledger::open(&path)?, cmd, meta),
+        Cmd::Spec(cmd) => spec::run(&Ledger::open(&path)?, cmd, meta),
     }
 }
 

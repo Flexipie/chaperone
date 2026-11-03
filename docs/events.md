@@ -66,8 +66,13 @@ These rules keep every write small, single and fail-closed.
 | Kind | Command | Payload |
 | --- | --- | --- |
 | `spec.created` | `spec create` | `parent_key`, `title`, `version` (1), `body` |
-| `spec.revised` | `spec update`, `spec decide` | `version`, `body`, `reason`, optional `decision {slice, key, question, answer, where, date}` (set by `decide`) |
+| `spec.revised` | `spec update`, `spec decide` | `version`, `body`, `reason`, optional `title` (the body's first `# ` heading; folded into `specs.title` when present), optional `decision {slice, key, question, answer, where, date}` (set by `decide`) |
 | `spec.approved` | `spec approve` | `version` |
+
+A spec's `parent_key` is unique ignoring case; a second `spec.created` for it is
+`invalid_input` naming the existing spec. The write fills in a missing `version` (the
+next one for `spec.revised`, the head for `spec.approved`); a given `version` that is not
+that one is `conflict` (exit 4), the `--expected-version` check.
 
 ### Lane
 

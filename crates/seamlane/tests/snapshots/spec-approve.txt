@@ -1,0 +1,14 @@
+Mark the spec approved (draft -> approved); approving again is a no-op
+
+Usage: seamlane spec approve [OPTIONS] <SPEC>
+
+Arguments:
+  <SPEC>  The spec id or its parent key (any case)
+
+Options:
+      --db <DB>            Path to the ledger (defaults to seamlane/ledger.db in the user data dir)
+      --dry-run            Run the real write and roll it back; meta.dry_run is true
+      --agent <AGENT>      Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --format <FORMAT>    Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --session <SESSION>  Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help               Print help
