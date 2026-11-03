@@ -29,7 +29,7 @@ pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
 pub const KINDS: &[&str] = &["code", "docs", "measure", "investigation"];
 pub const PR_FLOWS: &[&str] = &["pr", "direct"];
 
-type Checked<T> = Result<Result<T, Refusal>, LedgerError>;
+pub(crate) type Checked<T> = Result<Result<T, Refusal>, LedgerError>;
 
 macro_rules! refuse {
     ($r:expr) => {

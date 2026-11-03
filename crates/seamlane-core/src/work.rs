@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::cursor::{self, Cursor, Page};
 use crate::ledger::{
-    Actor, Applied, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal, STATUSES,
+    Actor, Applied, Checked, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal, STATUSES,
 };
 
 const ENTITY: &str = "work item";
@@ -122,10 +122,10 @@ pub struct CreateInput {
     pub spec: Option<String>,
     pub lane_key: Option<String>,
     pub lane_pos: Option<i64>,
-    /// code | docs | measure | investigation (default code).
-    pub kind: Option<String>,
-    /// pr | direct (default pr).
-    pub pr_flow: Option<String>,
+    /// code | docs | measure | investigation.
+    pub kind: String,
+    /// pr | direct.
+    pub pr_flow: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -136,8 +136,6 @@ pub struct WorkFilter {
     /// done and cancelled are hidden unless asked for.
     pub include_terminal: bool,
 }
-
-type Checked<T> = Result<Result<T, Refusal>, LedgerError>;
 
 impl Ledger {
     /// Appends one `lane.created`, or with the key of an earlier create
@@ -154,7 +152,7 @@ impl Ledger {
             Ok(v) => v,
             Err(r) => return Ok(Err(r)),
         };
-        let spec_id = match input.spec.as_deref().map(|s| resolve_spec(&self.conn, s)) {
+        let spec_id = match input.spec.as_deref().map(|s| resolve_spec(self.conn(), s)) {
             Some(Ok(Ok(id))) => Some(id),
             Some(Ok(Err(r))) => return Ok(Err(r)),
             Some(Err(e)) => return Err(e),
@@ -192,7 +190,7 @@ impl Ledger {
 
     /// One item, its lease state read against `now`.
     pub fn work_get(&self, id: i64, now: &str) -> Checked<WorkItem> {
-        Ok(get_row(&self.conn, id, now)?.ok_or(Refusal::NotFound { entity: ENTITY, id }))
+        Ok(get_row(self.conn(), id, now)?.ok_or(Refusal::NotFound { entity: ENTITY, id }))
     }
 
     /// Newest activity first, keyset `[updated_at, id]`.
@@ -260,7 +258,7 @@ impl Ledger {
             params.len()
         );
         let rows = self
-            .conn
+            .conn()
             .prepare(&sql)?
             .query_map(
                 rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
@@ -358,8 +356,8 @@ fn create_payload(input: &CreateInput) -> Result<(Payload, Option<String>), Refu
         next_action: trimmed(&input.next_action),
         lane_key,
         lane_pos: input.lane_pos,
-        kind: Some(input.kind.clone().unwrap_or_else(|| "code".into())),
-        pr_flow: Some(input.pr_flow.clone().unwrap_or_else(|| "pr".into())),
+        kind: Some(input.kind.clone()),
+        pr_flow: Some(input.pr_flow.clone()),
         ..Payload::default()
     };
     Ok((payload, key))

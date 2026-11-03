@@ -38,8 +38,8 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
                 spec,
                 lane_key: lane,
                 lane_pos,
-                kind: Some(kind),
-                pr_flow: Some(pr_flow),
+                kind,
+                pr_flow,
             };
             if dry_run {
                 meta.dry_run = Some(true);

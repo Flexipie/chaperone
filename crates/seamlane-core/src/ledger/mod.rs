@@ -21,7 +21,8 @@ pub use event::{
     Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
 };
 use migrate::user_version;
-pub use write::{KINDS, PR_FLOWS, SOURCES, STATUSES};
+pub(crate) use write::Checked;
+pub use write::{KINDS, PR_FLOWS, STATUSES};
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
 
@@ -31,7 +32,7 @@ pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 pub const APPLICATION_ID: i64 = 0x5345_414D;
 
 pub struct Ledger {
-    pub(crate) conn: Connection,
+    conn: Connection,
 }
 
 impl Ledger {
@@ -115,7 +116,6 @@ impl Ledger {
             })?)
     }
 
-    #[cfg(test)]
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }

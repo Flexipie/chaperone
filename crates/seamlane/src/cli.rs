@@ -2,9 +2,10 @@
 
 use std::path::PathBuf;
 
+use clap::builder::PossibleValuesParser;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use seamlane_core::cursor::DEFAULT_LIMIT;
-use seamlane_core::ledger::Actor;
+use seamlane_core::ledger::{Actor, KINDS, PR_FLOWS};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -120,10 +121,10 @@ pub enum WorkCmd {
         #[arg(long)]
         lane_pos: Option<i64>,
         /// What the lane delivers; picks the route at the first claim
-        #[arg(long, value_parser = ["code", "docs", "measure", "investigation"], default_value = "code")]
+        #[arg(long, value_parser = PossibleValuesParser::new(KINDS), default_value = "code")]
         kind: String,
         /// How it lands: through a PR, or direct
-        #[arg(long, value_parser = ["pr", "direct"], default_value = "pr")]
+        #[arg(long, value_parser = PossibleValuesParser::new(PR_FLOWS), default_value = "pr")]
         pr_flow: String,
         /// Run the real write and roll it back; meta.dry_run is true
         #[arg(long)]

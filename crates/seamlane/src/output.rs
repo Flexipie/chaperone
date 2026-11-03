@@ -223,7 +223,6 @@ pub fn render_ok(outcome: &Outcome, meta: &Meta, format: Format) -> String {
             let env = json!({ "ok": true, "data": data, "meta": meta });
             serde_json::to_string_pretty(&env).unwrap_or_default() + "\n"
         }
-        // Item lines, then one trailer: the only line with an `ok` key.
         Format::Jsonl => {
             let mut out = String::new();
             for line in lines {

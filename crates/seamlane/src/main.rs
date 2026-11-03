@@ -36,7 +36,6 @@ fn finish(result: Result<Outcome, CliError>, meta: &Meta, format: Format) -> ! {
         Ok(outcome) => (output::render_ok(outcome, meta, format), 0),
         Err(e) => (output::render_err(e, meta), output::exit_code(e)),
     };
-    // Success on stdout, failure on stderr with stdout empty.
     let _ = if result.is_ok() {
         std::io::stdout().write_all(text.as_bytes())
     } else {
