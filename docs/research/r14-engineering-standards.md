@@ -1,5 +1,7 @@
 # R14: Engineering standards
 
+> Amended by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md): the `reader_contract` axis and daisy reading SQL views are dropped. [CONTRIBUTING.md](../../CONTRIBUTING.md) "Versions" has the four axes.
+
 Status: recommendation, 2026-11-02. The bar the first code PR meets. The contributor-facing copy is the draft [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 Language is Rust ([R6](r6-language-and-runtime.md)). Storage is one SQLite file ([R5](r5-state-and-storage.md)). The pipeline is a TOML document ([R7](r7-process-engine.md)). This note decides how that code is laid out, tested, timed, versioned, and reviewed. It does not add a crate.

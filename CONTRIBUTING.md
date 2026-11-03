@@ -41,7 +41,7 @@ builds only.
 | --- | --- |
 | The write function or the predicate evaluator | Branch coverage of that module stays at 100%. The rebuild property still passes. |
 | A ledger write path | The crash tests (`SIGKILL` before commit, `SIGKILL` in the commit loop) and the 50-process concurrency test, against that write function. |
-| A gate or a pipeline document | A unit pass and a unit fail for the predicate. A validation or CAS refusal writes nothing; a gate denial appends one `gate.denied` and leaves the phase. |
+| A gate or a pipeline document | A unit pass and a unit fail for the predicate. A validation or CAS refusal writes nothing; a gate denial appends one `gate.denied` and leaves the lane where it was. |
 | Spawn, supervise, or the agent argv | A script under the fake agent (`crates/seamlane-fake`) that exits cleanly, and the kill test that records `session.exited` once and does not respawn. |
 | An event kind | `docs/events.md` and the enum updated together. The drift test passes. |
 | A CLI flag | The `--help` snapshot updated in the same commit. |
