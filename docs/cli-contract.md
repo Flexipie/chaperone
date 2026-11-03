@@ -130,9 +130,10 @@ Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `do
 `check record` is new (#16, next to `reviews record`). The recorder passes its own
 `--session`. The write is refused when that session is any session that has held the
 lane (events.md, producer). `--head` is 7 to
-40 hex digits. `--reason` is required with `skipped` and must be one the check allows
+40 lowercase hex digits. `--reason` is required with `skipped` and must be one the check allows
 (events.md). `--decision` is required for `merge_verdict` and refused for every other
-check.
+check. `--findings <n>` is required for a `plan_check` or `quality_gate` that ran and
+refused elsewhere. It prints `{event_id, work_id, kind, replayed, at, payload}`.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is Seamlane's only call into
 daisy. A job that is not done (`data.done` false, status `queued` or `running`) appends
@@ -145,7 +146,27 @@ not read `daisy_review_settled` (only the three stamps below), so this fact matt
 the first pipeline that requires it. `reviews get --wait` does not
 block on a job that is only requested, so lanes keep `daisy-cli reviews get --wait` for
 waiting. `reviews get` and `jobs get`
-answer from what was recorded, in daisy's shape.
+answer from what was recorded, in daisy's shape (the job's `check.finished`, else its
+`check.requested`). Their keys are daisy's. Daisy's free text (`summary`, `impact`,
+`intent_note`, `verdict_reason`, `error`, `report_path`, `worktree_path`) is not stored and
+reads as null, and so does what only daisy knows in `jobs get` (cost, tokens, `job_dir`,
+`round`). In `jobs get`, `work_id` is the lane the job is recorded on, `started_at` is when
+Seamlane first recorded the job, and `finished_at` is when it recorded the finish (null
+before), not daisy's times.
+Findings come from the stored payload, and each one's `outcome` is its row's `fixed` or
+`answered`, else null. `reviews record` prints the `reviews get` answer.
+
+`reviews record` refuses (`invalid_input`, nothing written): a view whose `job_id` is not
+`--job`, a view with no `done` or `status`, a done job with a status other than
+`reviewed`, `posted`, `failed` or `cancelled`, a job recorded on another lane, a finding with
+no id, severity or title, and findings whose ids repeat. Daisy
+is found at `/Applications/daisy.app/Contents/MacOS/daisy-cli`
+([R15](research/r15-migration.md)), or at `SEAMLANE_DAISY_CLI`, and given 30 s. Its exit
+5 (`runtime_unavailable`) and its `not_found` pass through. Any other failure, a timeout or output that is not daisy's envelope
+is `internal`, with what daisy said in `details`, so daisy's exit codes never take
+Seamlane's meanings.
+`SEAMLANE_DAISY_CLI` is trusted like `--session` (an honor system until adapters): whoever
+runs `reviews record` can point it at any program.
 
 ## Commands and transitions
 

@@ -228,7 +228,7 @@ pub struct Payload {
 
 impl Payload {
     /// The finding rows a check folds: the list form only.
-    pub(super) fn finding_list(&self) -> &[Finding] {
+    pub(crate) fn finding_list(&self) -> &[Finding] {
         match &self.findings {
             Some(Findings::List(list)) => list,
             _ => &[],

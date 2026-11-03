@@ -43,7 +43,9 @@ These rules keep every write small, single and fail-closed.
   recording a check never makes the lane's next `--expected-updated-at` stale.
 - **Replays.** A retry with the same key and kind returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
-  uses `check:` plus the sha256 of its canonical payload, and `reviews record` uses
+  uses `check:` plus the sha256 of the lane id, its canonical payload and the id of the lane's newest
+  `check.finished` for that check with a different payload (so a retry replays unless another session recorded the same check since, and a
+  result that flips back, such as no, yes, no, appends), and `reviews record` uses
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
   recorded on another lane is `invalid_input`.
 - **Small payloads.** No secrets (redacted at write, [R13](research/r13-security-and-trust.md)),
@@ -115,7 +117,7 @@ nothing.
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha` |
+| `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha`, `review` |
 | `check.finished` | `check record`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
 | `finding.updated` | none in M1 (folded and tested through `Ledger::apply`, #16) | `check_event_id`, `finding_key`, `status` (`fixed` with `commit`, or `answered` with one line) |
 
@@ -152,9 +154,14 @@ a handoff, the handoff's event carries `changed.pr_ref` from null, and the fact
 | `merge_verdict` | session | `ran` only. `decision` `yes` or `no`. The verdict sha is `head_sha`, from `--head`, never the model's prose. |
 | `smoke` | session | `ran`, or `skipped` with `reason` `nothing_runs` or `attempt_failed`. |
 | `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
-| `local_review` | daisy_worker | `job`, `round`, `score`, `verdict`, `findings[]` of `finding_key`, `severity` (`blocker`, `convention`, `risk`, `nit`, `question`), `path`, `line`, `title`, `body`, `verified` |
+| `local_review` | daisy_worker | `job`, `round`, `score`, `verdict`, `findings[]` of `finding_key`, `severity` (`blocker`, `convention`, `risk`, `nit`, `question`), `path`, `line`, `title`, `body`, `verified`, `lenses`, `body_truncated`; `review` |
 | `pr_review` | daisy_worker | Same as `local_review`, without `round`, plus `pr`. |
-| `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. No score or findings. It sets no `review.local_head`, adds no round, and projects `daisy_review.state` as `failed`, which no gate accepts. |
+| `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. `review`. No score or findings. It sets no `review.local_head`, adds no round, and projects `daisy_review.state` as `failed`, which no gate accepts. |
+
+`job` is daisy's job id as a JSON integer. `round` is the lane's count of `ran` local
+reviews including this one, not daisy's round, so `jobs get` reports `round` null. `review` holds daisy's scalars only (`status`, `phase`,
+`source`, `pr_ref`, `branch`, `repo`), for `reviews get` and `jobs get`; daisy's free text
+is not stored.
 
 Finding bodies are untrusted text. They are stored, and they never satisfy a gate. R10's
 richer fields (smoke cases with evidence hashes, kept-test items with bars, verdict
@@ -186,7 +193,9 @@ it. `smoke.recorded` and `kept_tests.recorded` are true once any such check is r
 one's sha, and `review.previous_round_closed` holds when that round has no `open`
 finding. `daisy_review.state` is `running` while a requested job (or a request with no
 job) has no finish, else the latest finished review's (`finished`, or `failed` when
-skipped), else `absent`. Facts whose producer is reserved stay absent, so a gate that
+skipped), else `absent`. A finish recorded after a newer job's finish of the same check
+closes its request and counts its round, but leaves the state, head and newest round on
+the newer job (daisy's job ids only go up). Facts whose producer is reserved stay absent, so a gate that
 reads one denies: `kept_tests.bar_ok`, `verification.unexplained_failures`,
 `brief.oversize`, `review.code_changed_since`, `diff.code_lines`, `ci.state`,
 `threads.human_open`, `pr.is_draft`, `pr.conflicting`, `human.merge_yes`,

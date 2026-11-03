@@ -1,0 +1,13 @@
+Daisy's review jobs, as recorded in the ledger. The worker stays in daisy; lanes keep `daisy-cli reviews local` and `reviews get --wait`
+
+Usage: seamlane reviews [OPTIONS] <COMMAND>
+
+Commands:
+  record  Read a daisy review job with `daisy-cli reviews get` and record it on a work item: requested while it runs, finished (with its findings) once done. Recording the same state again writes nothing
+  get     A recorded review job in daisy's shape. Daisy's free text (summary, impact, report path) is null; read it from daisy
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>          Path to the ledger (defaults to seamlane/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help
