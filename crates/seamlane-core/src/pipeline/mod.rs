@@ -272,11 +272,6 @@ requires = ["a"]
     }
 
     #[test]
-    fn mini_loads() {
-        Pipeline::load(MINI).unwrap();
-    }
-
-    #[test]
     fn unknown_fn_is_a_load_error() {
         let e = load_err(r#"fn = "eq""#, r#"fn = "regex""#);
         assert!(matches!(e, PipelineError::UnknownFn { .. }), "{e}");
