@@ -37,14 +37,6 @@ pub struct SliceView {
     pub siblings: Vec<SiblingView>,
 }
 
-impl SpecSection {
-    pub(crate) fn has_key(&self, key: &str) -> bool {
-        self.key
-            .as_deref()
-            .is_some_and(|k| k.trim().eq_ignore_ascii_case(key.trim()))
-    }
-}
-
 impl Ledger {
     /// The slice whose section names `key`, from `spec` (by id or parent
     /// key) or else the newest-changed spec that has it, at `version`.
@@ -54,7 +46,6 @@ impl Ledger {
         key: &str,
         version: Option<i64>,
     ) -> Checked<SliceView> {
-        let key = key.trim();
         let found = match spec {
             Some(s) => s.to_string(),
             None => match spec_for_key(self.conn(), key)? {

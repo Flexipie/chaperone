@@ -41,11 +41,6 @@ impl Ledger {
                 "a decision needs a --question and an --answer".into(),
             )));
         }
-        if input.slice.is_some() && input.key.is_some() {
-            return Ok(Err(Refusal::InvalidInput(
-                "pass --slice or --key, not both".into(),
-            )));
-        }
         let agreed_where = input
             .agreed_where
             .as_deref()
@@ -60,7 +55,7 @@ impl Ledger {
                 return Ok(Err(Refusal::NotFound { entity: "spec", id }));
             };
             let sections = parse::parse_spec_sections(&head.body);
-            let section = match (input.slice, input.key.as_deref().map(str::trim)) {
+            let section = match (input.slice, input.key.as_deref()) {
                 (Some(n), _) => match sections.iter().find(|s| s.n == Some(n)) {
                     Some(s) => Some(s),
                     None => {
@@ -129,7 +124,6 @@ impl Ledger {
 /// is created before the first slice when there is none, else at the end.
 fn append_decision(body: &str, line: &str) -> String {
     let lines: Vec<&str> = body.lines().collect();
-    let any_heading = |l: &str| l.starts_with("# ") || is_heading(l);
     let mut out: Vec<String> = Vec::new();
     if let Some(start) = lines
         .iter()
@@ -137,7 +131,7 @@ fn append_decision(body: &str, line: &str) -> String {
     {
         let end = lines[start + 1..]
             .iter()
-            .position(|l| any_heading(l))
+            .position(|l| l.starts_with("# ") || is_heading(l))
             .map_or(lines.len(), |i| start + 1 + i);
         // After the section's last non-blank line, so the blank line before
         // the next heading stays.
