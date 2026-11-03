@@ -41,7 +41,7 @@ You ──► herdr pane ──► agent CLI (Claude / Codex / Cursor)
               │
               └── attach / spawn unchanged in early phases
 
-Seamlane ◄── daisy-cli router, ledger, gates, MCP ◄── agents (events, checks)
+Seamlane ◄── seamlane CLI (daisy-cli argv), ledger, gates, MCP ◄── agents (events, checks)
               │
               └── later: optional `seamlane attach` if you want; herdr still fine
 ```
@@ -63,12 +63,12 @@ reimplementing daisy’s full personal hub ([VISION](VISION.md)).
 
 One paragraph per layer; detail in linked research.
 
-1. **CLI surface** — Skills keep calling **`daisy-cli` at today’s absolute path**; router sends
-   harness-owned ids to `seamlane` ([R15](research/r15-migration.md)).
-2. **Ledger** — Append-only events + projected rows; daisy **read-only** on same file ([R5](research/r5-state-and-storage.md)).
+1. **CLI surface**: `seamlane` keeps `daisy-cli`'s argv, envelope and exit codes, so skills
+   switch by binary path after the demo; no router ([cli-contract.md](cli-contract.md), [ADR 0003](decisions/0003-seamlane-replaces-daisy.md)).
+2. **Ledger**: Append-only events + projected rows, standalone; daisy does not read it ([R5](research/r5-state-and-storage.md), [events.md](events.md)).
 3. **Engine** — Load pinned TOML pipeline; deny transitions; stamp process version on claim ([R7](research/r7-process-engine.md)).
-4. **Verification** — Plan check, quality gate, reviews, verdict, smoke → `check.finished` /
-   `gate.recorded`; reviewer worker in daisy app ([R10](research/r10-verification-review-layer.md)).
+4. **Verification**: Plan check, quality gate, reviews, verdict, smoke → `check.finished`,
+   folded into `gate_results`; reviewer worker in daisy app ([R10](research/r10-verification-review-layer.md)).
 5. **Adapters** — Per CLI: brief file, harness MCP, stream-json lifecycle ([R4](research/r4-agent-cli-integration.md)).
 6. **Coordination** — Spec reservations, seam revisions, `seam.ack` / `seam.reject` only ([R9](research/r9-coordination-between-lanes.md)).
 7. **Observability** — All `lane-stats` numbers become ledger queries; five metrics first ([R11](research/r11-observability-cost-metrics.md)).
@@ -99,7 +99,7 @@ Gate stamps without context improvement is a failed experiment; both matter.
 - [x] Research R1–R15
 - [x] Lock roadmap (this file)
 - [ ] ADRs 0002+ or treat this roadmap as architecture record
-- [ ] Publish integration contract + event schema drafts (versioned) before implementation
+- [x] Publish integration contract + event schema drafts (versioned) before implementation: [events.md](events.md), [cli-contract.md](cli-contract.md)
 - [ ] GitHub org `seamlane` when ready; no empty crate/npm squat
 
 **Exit:** First Rust PR has a bar ([R14](research/r14-engineering-standards.md)).
@@ -110,22 +110,26 @@ Gate stamps without context improvement is a failed experiment; both matter.
 
 Goal: **enforced v17 gates on new ledger lanes** while **herdr + spawn + skills** stay how you work.
 
-Implementation follows [R15](research/r15-migration.md) phases 0–6:
+Slices of #1 (one issue each). Seamlane replaces daisy's ledger; no router, no dual store
+([ADR 0003](decisions/0003-seamlane-replaces-daisy.md)).
 
-| Step | Deliverable |
-| --- | --- |
-| 1.1 | Ledger SQLite file (R5 schema, runtime columns nullable) |
-| 1.2 | `daisy-cli` **router** at existing path; marker off → all creates still daisy |
-| 1.3 | **Marker on**: new work/spec keys → ledger only; in-flight daisy ids unchanged |
-| 1.4 | Engine on ledger lanes: v17 stamped at claim; deny handoff/done without plan check, QG, verdict-on-sha |
-| 1.5 | Review jobs → check events; worker still in daisy app |
-| 1.6 | Merged **read** path: daisy, `lane-stats`, `lane-brief` see both stores |
+| Step | Issue | Deliverable |
+| --- | --- | --- |
+| 1.1 | #2 | Event schema, CLI contract, ADR 0003 (docs) |
+| 1.2 | #3 | Rust workspace scaffold with CI |
+| 1.3 | #4 | Ledger file with migrations (R5 schema, runtime columns nullable) |
+| 1.4 | #5, #6 | The one write function; crash and concurrency tests |
+| 1.5 | #7, #8, #9 | `seamlane work` in daisy's shape: create/get/list, claim/update/heartbeat/release/cancel, handoff/handoffs/events/ready |
+| 1.6 | #10, #11 | `seamlane spec`: create/get/list/update/approve, decide and `get --key` |
+| 1.7 | #12, #13, #14 | Pipeline loader, hash and `v17.toml`; predicate evaluator; fact projection and stamp at claim |
+| 1.8 | #15 | Engine refuses handoff and done without plan check, QG and a YES verdict on the sha |
+| 1.9 | #16 | `check record` and `reviews record` write check events; worker still in daisy app |
 
 **Still in dotfiles for M1:** all pipeline skills, `ship-handoff`, `spawn`, herdr parent,
 `lane-stats` transcript scan, `pipeline-profile`, changelog.
 
 **Not in M1:** MCP adapters on the hot path, `seamlane supervise`, coordination (R9), usage events
-replacing transcript tokens, history import (R15 phase 7).
+replacing transcript tokens, switching the skills to `seamlane` (after the demo).
 
 **Exit:** M1 success bar table above on ledger-lane cohorts; zero stopped in-flight lanes.
 
@@ -184,7 +188,6 @@ replacing transcript tokens, history import (R15 phase 7).
 ### Phase 7 — Interfaces
 
 - **`seamlane attention`** shipped in M1 or early Phase 2; this phase adds **TUI** and/or **local web**
-- daisy may become a **client** of ledger read APIs ([VISION](VISION.md))
 - Notification subscriber replaces agents calling `herdr notification show` ([R12](research/r12-interfaces-and-attention.md))
 
 **Exit:** One glance answers needs-you / ready / stuck / expensive without opening every pane.
@@ -200,14 +203,10 @@ fake-agent whole-lane tests, perf budgets in CI, versioned public contract, secu
 
 ---
 
-## Migration and dual-store (reference)
+## Migration
 
-Until every active lane is ledger-native or done:
-
-- One id, one store for life ([R15](research/r15-migration.md))
-- Router lookup: daisy id → daisy code; ledger id → `seamlane`
-- New ids start at `max(daisy_id) + 1_000_000`
-- Phase 7 **history import** from finished daisy rows only (prose parsers), after M1 ship
+No router and no dual store: see [ADR 0003](decisions/0003-seamlane-replaces-daisy.md).
+Lanes in flight finish in daisy; new lanes move when the skills switch to `seamlane`.
 
 ## Research index
 
@@ -231,9 +230,10 @@ Until every active lane is ledger-native or done:
 
 ## Next actions (implementation)
 
-1. Draft **versioned** event schema + integration contract markdown in `docs/`.
-2. Scaffold **Rust workspace** per R14 (`seamlane`, `seamlane-core`, …).
-3. Implement R15 **phase 1** (ledger file + write function + tests).
-4. Implement **router** + **marker** + **engine** through M1 exit criteria.
+1. Scaffold **Rust workspace** per R14 (`seamlane`, `seamlane-core`, …) (#3).
+2. Ledger file, write function and its tests (#4 to #6).
+3. `seamlane work` and `spec` in daisy's shape (#7 to #11).
+4. Pipeline, evaluator, projection, engine refusals and check events through M1 exit criteria (#12 to #16).
+5. After the demo: switch the skills to `seamlane`.
 
 [PLAN.md](PLAN.md) is superseded by this file.

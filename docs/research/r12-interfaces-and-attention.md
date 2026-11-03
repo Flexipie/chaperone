@@ -1,5 +1,7 @@
 # R12: Interfaces and attention
 
+> Amended by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md): daisy does not read the ledger, so the "Daisy client" row below is out.
+
 Status: recommendation, 2026-11-02. The screens, the "needs you" rules, and the first interface. Evidence for a decision record. Builds on [VISION.md](../VISION.md) bet 5, [r1-landscape.md](r1-landscape.md) bet 5, and [r2-own-evidence.md](r2-own-evidence.md).
 
 ## Pick

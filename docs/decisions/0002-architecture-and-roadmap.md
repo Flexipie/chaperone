@@ -20,3 +20,4 @@ Adopt the locked decisions, architecture layers, success bar, and phases 0–8 i
 - Implementation PRs trace to a roadmap phase and research id where relevant.
 - herdr remains the default place to start agents through at least milestone 1; Seamlane does not replace it as the primary terminal experience.
 - `daisy-cli` router and dual-store migration proceed per R15 before optional runtime takeover (phase 6).
+  Amended by [ADR 0003](0003-seamlane-replaces-daisy.md): no router and no dual store; Seamlane replaces daisy.

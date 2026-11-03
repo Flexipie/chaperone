@@ -75,8 +75,7 @@ landscape research has to show which are really unserved.
 - A chat UI. The agents' own terminals stay the place to talk to them.
 - Replacing the issue tracker or GitHub. It reads and writes them; they stay the source
   of truth for issues and code.
-- Reimplementing daisy's personal hub (notes, inbox, mirrors). daisy may become a
-  client of this.
+- Reimplementing daisy's personal hub (notes, inbox, mirrors).
 
 ## Where it could go
 
