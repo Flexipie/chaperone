@@ -512,7 +512,7 @@ impl Ledger {
             )));
         }
         let stored = serde_json::to_value(input).map_err(std::io::Error::other)?;
-        let (applied, handoff) = self.apply_planned(
+        let (applied, _) = self.apply_planned(
             actor,
             None,
             at,
@@ -555,27 +555,23 @@ impl Ledger {
                 p.rest.insert("handoff".into(), stored);
                 Ok(Ok(lane_event(EventKind::LaneHandedOff, id, p)))
             },
-            |_, applied, _| {
-                Ok(match applied {
-                    Applied::Committed(e) => Some(Handoff {
-                        id: e.id,
-                        work_id: e.lane_id,
-                        job_id: None,
-                        agent: e.actor.agent.clone(),
-                        session: e.actor.session.clone(),
-                        tool: TOOL.into(),
-                        handoff: input.clone(),
-                        created_at: e.at.clone(),
-                    }),
-                    _ => None,
-                })
-            },
+            |_, _, _| Ok(()),
         )?;
-        Ok(match (applied, handoff.flatten()) {
-            (Applied::Refused(r), _) => Err(r),
-            (_, Some(h)) => Ok(h),
-            (_, None) => Err(Refusal::InvalidInput("the write left no handoff".into())),
-        })
+        match applied {
+            Applied::Committed(e) => Ok(Ok(Handoff {
+                id: e.id,
+                work_id: e.lane_id,
+                job_id: None,
+                agent: e.actor.agent,
+                session: e.actor.session,
+                tool: TOOL.into(),
+                handoff: input.clone(),
+                created_at: e.at,
+            })),
+            Applied::Refused(r) => Ok(Err(r)),
+            // No key and no heartbeat, so nothing else comes back.
+            other => Err(std::io::Error::other(format!("handoff write returned {other:?}")).into()),
+        }
     }
 
     /// The owner's override of ready: `Some(true)` ready, `Some(false)` not,
@@ -592,7 +588,11 @@ impl Ledger {
         dry_run: bool,
     ) -> Checked<WorkItem> {
         self.write_lane(actor, id, at, dry_run, |conn, _| {
-            let session = actor.session.as_deref().unwrap_or_default();
+            let Some(session) = actor.session.as_deref() else {
+                return Ok(Err(Refusal::InvalidInput(
+                    "work ready needs a session".into(),
+                )));
+            };
             if has_held(conn, id, session)? {
                 return Ok(Err(Refusal::InvalidInput(format!(
                     "work ready is the owner's override; session {session} has held work item {id}"

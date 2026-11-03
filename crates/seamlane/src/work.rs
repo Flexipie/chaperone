@@ -1,10 +1,10 @@
 //! `seamlane work ...`: runs a parsed command against the ledger and
 //! returns an `Outcome`; rendering is `output`'s.
 
-use seamlane_core::cursor::Page;
-use seamlane_core::ledger::{Ledger, Refusal};
 use std::io::{IsTerminal, Read};
 
+use seamlane_core::cursor::Page;
+use seamlane_core::ledger::{Ledger, Refusal};
 use seamlane_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter};
 use serde::Serialize;
 use serde_json::{Value, json};

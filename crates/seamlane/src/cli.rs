@@ -260,12 +260,16 @@ pub enum WorkCmd {
     #[command(group = clap::ArgGroup::new("verdict").required(true).args(["yes", "no", "clear"]))]
     Ready {
         id: i64,
+        /// Mark the item ready, whatever its handoffs say
         #[arg(long)]
         yes: bool,
+        /// Mark the item not ready, whatever its handoffs say
         #[arg(long)]
         no: bool,
+        /// Drop the override; ready comes from the latest handoff again
         #[arg(long)]
         clear: bool,
+        /// Why, kept on the event
         #[arg(long)]
         reason: Option<String>,
         /// Run the real write and roll it back; meta.dry_run is true
