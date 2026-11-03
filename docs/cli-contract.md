@@ -157,14 +157,14 @@ Findings come from the stored payload, and each one's `outcome` is its row's `fi
 `answered`, else null. `reviews record` prints the `reviews get` answer.
 
 `reviews record` refuses (`invalid_input`, nothing written): a view whose `job_id` is not
-`--job`, a job recorded on another lane, a job older than the lane's newest recorded job for
-the same check (daisy's ids only go up), a request for a job already recorded finished, and
-a finding with no id, severity or title. Daisy is found at
-`/Applications/daisy.app/Contents/MacOS/daisy-cli` ([R15](research/r15-migration.md)), or
-at `SEAMLANE_DAISY_CLI`, and given 30 s. Its exit 5 (`runtime_unavailable`) and its
-`not_found` pass through. Any other failure, a timeout or output that is not daisy's envelope
+`--job`, a job recorded on another lane, and a finding with no id, severity or title. Daisy
+is found at `/Applications/daisy.app/Contents/MacOS/daisy-cli`
+([R15](research/r15-migration.md)), or at `SEAMLANE_DAISY_CLI`, and given 30 s. Its exit
+5 (`runtime_unavailable`) and its `not_found` pass through. Any other failure, a timeout or output that is not daisy's envelope
 is `internal`, with what daisy said in `details`, so daisy's exit codes never take
 Seamlane's meanings.
+`SEAMLANE_DAISY_CLI` is trusted like `--session` (an honor system until adapters): whoever
+runs `reviews record` can point it at any program.
 
 ## Commands and transitions
 
