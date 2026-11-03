@@ -255,6 +255,10 @@ pub enum Refusal {
         entity: &'static str,
         id: i64,
     },
+    NotFoundRef {
+        entity: &'static str,
+        reference: String,
+    },
     /// A `changed.from` that is not the current value, or a key already taken.
     Conflict(String),
     LeaseHeld {

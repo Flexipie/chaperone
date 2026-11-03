@@ -1,0 +1,11 @@
+One item with its lease state
+
+Usage: seamlane work get [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --db <DB>          Path to the ledger (defaults to seamlane/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

@@ -9,6 +9,11 @@ publish.workspace = true
 
 [dependencies]
 clap.workspace = true
+dirs.workspace = true
+rusqlite.workspace = true
+seamlane-core = { path = "../seamlane-core" }
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

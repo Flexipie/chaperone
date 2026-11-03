@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 clap = { version = "4.6", features = ["derive"] }
+dirs = "6.0"
 proptest = "1.9"
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }

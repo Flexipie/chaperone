@@ -1,0 +1,163 @@
+//! The clap surface, daisy-cli's argv. Nothing here touches the ledger.
+
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use seamlane_core::cursor::DEFAULT_LIMIT;
+use seamlane_core::ledger::Actor;
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "seamlane",
+    version,
+    about,
+    after_help = "Every command prints one {ok, data, meta} object on stdout, or an \
+                  {ok: false, error, meta} object on stderr. Exit codes: 0 ok, 1 error, \
+                  2 usage, 3 schema mismatch, 4 conflict, 5 runtime unavailable. Only \
+                  `seamlane migrate` creates or migrates the ledger; every other command \
+                  exits 3 on any other schema version."
+)]
+pub struct Cli {
+    /// Path to the ledger (defaults to seamlane/ledger.db in the user data dir)
+    #[arg(long, global = true)]
+    pub db: Option<PathBuf>,
+    /// Output format: json is one {ok, data, meta} object; jsonl is one
+    /// item per line followed by a trailer that is the only line with an
+    /// `ok` key
+    #[arg(long, global = true, value_enum, default_value_t = Format::Json)]
+    pub format: Format,
+    #[command(subcommand)]
+    pub cmd: Cmd,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Json,
+    Jsonl,
+}
+
+// Parsed once per process, never stored in bulk.
+#[allow(clippy::large_enum_variant)]
+#[derive(Subcommand, Debug)]
+pub enum Cmd {
+    #[command(subcommand)]
+    Work(WorkCmd),
+    /// Create the ledger, or migrate it to this binary's version after a
+    /// backup. Refuses a file that is not a Seamlane ledger
+    Migrate,
+}
+
+impl Cmd {
+    /// The command's name when it writes, refused under
+    /// `DAISY_CLI_READONLY=1` (a dry run included: it takes the write lock).
+    pub fn write_name(&self) -> Option<&'static str> {
+        match self {
+            Cmd::Migrate => Some("migrate"),
+            Cmd::Work(WorkCmd::Create { .. }) => Some("work create"),
+            Cmd::Work(WorkCmd::Get { .. } | WorkCmd::List { .. }) => None,
+        }
+    }
+}
+
+/// Who is acting. Every write needs the (agent, session) pair; the ledger
+/// refuses one without it.
+#[derive(Args, Debug, Clone, Default)]
+pub struct ActorArgs {
+    /// Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+    #[arg(long, global = true)]
+    pub agent: Option<String>,
+    /// Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+    #[arg(long, global = true)]
+    pub session: Option<String>,
+}
+
+impl ActorArgs {
+    /// Flags first, then the environment.
+    pub fn resolve(&self) -> Actor {
+        let pick = |flag: &Option<String>, var: &str| {
+            flag.clone()
+                .or_else(|| std::env::var(var).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        Actor {
+            agent: pick(&self.agent, "DAISY_AGENT"),
+            session: pick(&self.session, "DAISY_SESSION"),
+        }
+    }
+}
+
+/// Leased work records. Claim an item before working on it, heartbeat
+/// while you hold it, hand it off when you stop
+#[derive(Subcommand, Debug)]
+pub enum WorkCmd {
+    /// Create a work item (queued). Idempotent when --idempotency-key is
+    /// passed: a repeat returns the existing item and writes nothing
+    Create {
+        #[arg(long)]
+        title: String,
+        /// linear | github | note | issue | manual (default manual)
+        #[arg(long)]
+        source: Option<String>,
+        /// CORE-123 for linear, owner/repo#N for github, PER-12 for issue,
+        /// an id for note; stored as given
+        #[arg(long)]
+        source_id: Option<String>,
+        /// The repo the work happens in, stored as given
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
+        next_action: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+        /// The spec this item is a slice of (its id or parent key)
+        #[arg(long)]
+        spec: Option<String>,
+        /// The lane it runs in, e.g. CORE-4040:B (one herdr workspace)
+        #[arg(long)]
+        lane: Option<String>,
+        /// Its order in the lane (a stack's layer)
+        #[arg(long)]
+        lane_pos: Option<i64>,
+        /// What the lane delivers; picks the route at the first claim
+        #[arg(long, value_parser = ["code", "docs", "measure", "investigation"], default_value = "code")]
+        kind: String,
+        /// How it lands: through a PR, or direct
+        #[arg(long, value_parser = ["pr", "direct"], default_value = "pr")]
+        pr_flow: String,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// One item with its lease state
+    Get { id: i64 },
+    /// List items, newest activity first; done and cancelled hidden
+    /// unless --all
+    List {
+        #[arg(long)]
+        status: Option<String>,
+        /// Only items held by this agent (any session)
+        #[arg(long, conflicts_with = "mine")]
+        agent: Option<String>,
+        /// Only items held by my (agent, session) pair
+        #[arg(long)]
+        mine: bool,
+        /// Include done and cancelled
+        #[arg(long)]
+        all: bool,
+        /// Page size, 1..=500
+        #[arg(long, default_value_t = DEFAULT_LIMIT)]
+        limit: u32,
+        /// Resume from a previous page's next_cursor
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Session for --mine (default: $DAISY_SESSION)
+        #[arg(long)]
+        session: Option<String>,
+        /// Agent for --mine (default: $DAISY_AGENT)
+        #[arg(long)]
+        mine_agent: Option<String>,
+    },
+}
