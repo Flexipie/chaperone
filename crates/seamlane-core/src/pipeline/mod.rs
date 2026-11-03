@@ -16,18 +16,10 @@ pub use error::PipelineError;
 /// Transition ids the host calls by name. A document without them does not load.
 pub const REQUIRED_TRANSITIONS: &[&str] = &["handoff"];
 
-/// Event names `event_before` may compare. Any other name would make the gate
-/// vacuously pass, so it is a load error.
-pub const EVENTS: &[&str] = &[
-    "pr.opened",
-    "plan_check",
-    "quality_gate",
-    "merge_verdict",
-    "smoke",
-    "kept_tests",
-    "local_review",
-    "pr_review",
-];
+/// Event names `event_before` may compare: the ones the facts carry a time
+/// for. Any other name would make the gate vacuously pass, so it is a load
+/// error. Widen it when the projection times more events.
+pub const EVENTS: &[&str] = &["pr.opened", "quality_gate"];
 
 #[derive(Debug, Clone)]
 pub struct Pipeline {
@@ -37,8 +29,8 @@ pub struct Pipeline {
     pub hash: String,
     pub limits: BTreeMap<String, i64>,
     pub gates: BTreeMap<String, Gate>,
-    /// In document order. Rows may share an id when no route has two rows
-    /// with the same id and `to`.
+    /// Rows may share an id; `(id, route, to)` is unique and picks the row.
+    /// Their order is not behaviour (the hash sorts them).
     pub transitions: Vec<Transition>,
 }
 
@@ -362,6 +354,23 @@ args = { of = ["a"] }"#,
         for (from, to) in cases {
             let e = load_err(from, to);
             assert!(matches!(e, PipelineError::BadArgs { .. }), "{to}: {e}");
+        }
+        let sha = |min: i64, max: i64| {
+            MINI.replace("n = 1", &format!("n = 1\nlo = {min}\nhi = {max}"))
+                .replace(
+                    r#"fn = "eq"
+args = { field = "x", value = 1 }"#,
+                    r#"fn = "sha_prefix_eq"
+args = { left = "a", right = "b", min_limit = "lo", max_limit = "hi" }"#,
+                )
+        };
+        Pipeline::load(&sha(7, 40)).unwrap();
+        for (min, max) in [(0, 40), (50, 40)] {
+            let e = Pipeline::load(&sha(min, max)).unwrap_err();
+            assert!(
+                matches!(e, PipelineError::BadArgs { .. }),
+                "{min}..{max}: {e}"
+            );
         }
         let e = load_err(r#"value = 1 }"#, r#"limit = "m" }"#);
         assert!(matches!(e, PipelineError::UnknownLimit { .. }), "{e}");

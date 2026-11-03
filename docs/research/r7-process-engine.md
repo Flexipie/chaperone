@@ -50,7 +50,7 @@ It fails the versioning bet. A process change would be a harness release, in-fli
 
 ### TOML
 
-TOML has no expressions. That is the property we want. The file names phases, routes, transitions, and gates. Arguments are literals (`min_len = 7`, `value = 750`), or the name of a `[limits]` entry (amended in [`pipelines/v17.toml`](../../pipelines/v17.toml)). Boolean structure is three combinators, `all`, `any`, and `not`, applied to named checks. There is no loop, no function call into the ledger, and no way to read a file from the pipeline document.
+TOML has no expressions. That is the property we want. The file names phases, routes, transitions, and gates. Arguments are literals (`value = 750`), or the name of a `[limits]` entry (`limit = "code_lines"`; amended in [`pipelines/v17.toml`](../../pipelines/v17.toml), whose header lists the argument forms). Boolean structure is three combinators, `all`, `any`, and `not`, applied to named checks. There is no loop, no function call into the ledger, and no way to read a file from the pipeline document.
 
 The host owns the predicate functions and the fact projection. A gate author can require `verdict_on_head` on a new transition without a release. They cannot redefine "sha prefix" inside the pipeline file. That split is what keeps a version diff honest: either a gate id was added, removed, or its arguments changed, or a host function changed in a harness release (rare, reviewed, unit-tested once for every version that names it).
 
@@ -132,9 +132,9 @@ Host functions. The document only names them and passes literal arguments.
 | `present` | The fact path is not absent. |
 | `eq` | Fact equals a literal. |
 | `lte` / `gt` | Numeric comparison. |
-| `sha_prefix_eq` | `left` is 7 to 40 hex digits and `right` starts with `left`. This is the ship-handoff rule. |
+| `sha_prefix_eq` | `left` is 7 to 40 hex digits and `right` starts with `left`. This is the ship-handoff rule. (Amended: the bounds come from `[limits]` `sha_min`/`sha_max`.) |
 | `one_of` | Fact is one of a list of literals. |
-| `plan_check_matches_lane` | `changes_code` implies `outcome = ran`. Otherwise `outcome = skipped` and `reason` is `measure`, `investigation`, or `docs`. |
+| `plan_check_matches_lane` | `changes_code` implies `outcome = ran`. Otherwise `outcome = skipped` and `reason` is `measure`, `investigation`, or `docs`. (Amended: the allowed reasons are the gate's `reasons` argument, which adds `tests`.) |
 | `quality_gate_matches_lane` | Same shape: ran when there is code, `skipped` only when there is not. |
 | `event_before` | Both events exist and `earlier.at` is before `later.at`. Vacuous when the later event is absent (no PR on this route). |
 | `reviewed_head_ok` | `review.local_head` equals `commit.sha`, or `review.code_changed_since` is false. |

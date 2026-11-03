@@ -7,6 +7,13 @@
 # - gates read their numbers from [limits] by name;
 # - no `since` field.
 #
+# Arguments: `field` and `left`/`right` are fact paths. A compared value is exactly one of
+# `value` (a bool, integer or string), `value_from` (another fact path) or `limit` (a
+# [limits] name). `sha_prefix_eq` takes `min_limit`/`max_limit`. The two `*_matches_lane`
+# fns take the allowed skip `reasons`. `event_before` compares `quality_gate` and
+# `pr.opened`. `all`/`any` take `of` (gate ids), `not` takes `of` (one gate id). A
+# `handoff` transition is required.
+#
 # Rows may share an id when no route has two rows with the same id and `to`. The caller
 # names the id, and the lane's route (and, for handoff, the target) picks the row.
 #
