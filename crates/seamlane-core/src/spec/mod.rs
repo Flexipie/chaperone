@@ -1,10 +1,12 @@
 //! Specs: the dispatch spec of one parent issue (a Linear key, a daisy issue
 //! or a GitHub issue), versioned in the ledger, in daisy's `spec` shapes.
-//! Every write is one event through [`Ledger::apply_with`]: `spec.created`
+//! Every write is one event through `Ledger::apply_planned`: `spec.created`
 //! at version 1, `spec.revised` appends a version, `spec.approved` marks it
 //! agreed. Nothing edits a version in place.
 
+pub mod decide;
 pub mod parse;
+pub mod slice;
 
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
@@ -232,19 +234,32 @@ impl Ledger {
         spec_id: Option<i64>,
         payload: Payload,
     ) -> Checked<Spec> {
-        let mutation = Mutation::Event {
-            kind,
-            lane_id: None,
-            spec_id,
-            payload,
-        };
-        let (applied, spec) = self.apply_with(
+        self.spec_write_planned(actor, Some(at), dry_run, |_, _| {
+            Ok(Ok(Mutation::Event {
+                kind,
+                lane_id: None,
+                spec_id,
+                payload,
+            }))
+        })
+    }
+
+    /// [`Ledger::spec_write`] for an event built from the rows inside the
+    /// write transaction.
+    fn spec_write_planned(
+        &self,
+        actor: &Actor,
+        at: Option<&str>,
+        dry_run: bool,
+        plan: impl FnOnce(&Connection, &str) -> Checked<Mutation>,
+    ) -> Checked<Spec> {
+        let (applied, spec) = self.apply_planned(
             actor,
             None,
             at,
-            mutation,
             dry_run,
-            |conn, applied| match applied {
+            plan,
+            |conn, applied, _| match applied {
                 Applied::Committed(e) => read(conn, e.spec_id.unwrap_or_default(), None),
                 _ => Ok(None),
             },

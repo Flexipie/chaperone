@@ -1,0 +1,19 @@
+Record a decision: one line appended to `## decisions` as a new version, `- [slice N] Q: ... A: ... (agreed: <where>, <date>)`. Without --slice or --key it is spec-wide
+
+Usage: seamlane spec decide [OPTIONS] --question <QUESTION> --answer <ANSWER> <SPEC>
+
+Arguments:
+  <SPEC>  The spec id or its parent key (any case)
+
+Options:
+      --db <DB>               Path to the ledger (defaults to seamlane/ledger.db in the user data dir)
+      --slice <SLICE>         The slice by its number
+      --format <FORMAT>       Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --key <KEY>             The slice by its issue key instead of its number
+      --question <QUESTION>   The question, on one line
+      --answer <ANSWER>       The answer, on one line
+      --where <AGREED_WHERE>  Where it was agreed: a PR thread URL, a Slack link, "in chat"
+      --dry-run               Run the real write and roll it back; meta.dry_run is true
+      --agent <AGENT>         Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>     Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help                  Print help

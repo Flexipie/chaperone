@@ -6,6 +6,7 @@ use std::path::Path;
 
 use seamlane_core::cursor::Page;
 use seamlane_core::ledger::{Ledger, Refusal, SPEC_BODY_MAX_BYTES};
+use seamlane_core::spec::decide::DecideInput;
 use seamlane_core::spec::{Spec, parse};
 use serde_json::{Value, json};
 
@@ -34,7 +35,17 @@ pub fn run(ledger: &Ledger, cmd: SpecCmd, meta: &mut Meta) -> Result<Outcome, Cl
                 dry_run,
             )??
         }
-        SpecCmd::Get { spec, version } => ledger.spec_get(&spec, version)??,
+        SpecCmd::Get {
+            spec,
+            version,
+            key: Some(key),
+        } => {
+            let view = ledger.spec_slice(spec.as_deref(), &key, version)??;
+            return Ok(Outcome::One(value(&view)?));
+        }
+        SpecCmd::Get { spec, version, .. } => {
+            ledger.spec_get(spec.as_deref().unwrap_or_default(), version)??
+        }
         SpecCmd::List => {
             let items = ledger.spec_list()?;
             return Ok(Outcome::Page(Page {
@@ -70,6 +81,26 @@ pub fn run(ledger: &Ledger, cmd: SpecCmd, meta: &mut Meta) -> Result<Outcome, Cl
         } => {
             meta.dry_run = dry_run.then_some(true);
             ledger.spec_approve(&actor.resolve(), &spec, &now, dry_run)??
+        }
+        SpecCmd::Decide {
+            spec,
+            slice,
+            key,
+            question,
+            answer,
+            agreed_where,
+            dry_run,
+            actor,
+        } => {
+            meta.dry_run = dry_run.then_some(true);
+            let input = DecideInput {
+                slice,
+                key,
+                question,
+                answer,
+                agreed_where,
+            };
+            ledger.spec_decide(&actor.resolve(), &spec, &input, None, dry_run)??
         }
     };
     Ok(Outcome::One(spec_out(&spec)?))

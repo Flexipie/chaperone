@@ -82,6 +82,7 @@ impl Cmd {
             Cmd::Spec(SpecCmd::Create { .. }) => Some("spec create"),
             Cmd::Spec(SpecCmd::Update { .. }) => Some("spec update"),
             Cmd::Spec(SpecCmd::Approve { .. }) => Some("spec approve"),
+            Cmd::Spec(SpecCmd::Decide { .. }) => Some("spec decide"),
             Cmd::Spec(SpecCmd::Get { .. } | SpecCmd::List) => None,
         }
     }
@@ -346,13 +347,20 @@ pub enum SpecCmd {
         #[command(flatten)]
         actor: ActorArgs,
     },
-    /// A spec with its slices and decisions parsed from the body
+    /// A spec with its slices and decisions parsed from the body. With
+    /// --key, that slice alone: its section, its decisions and the
+    /// spec-wide ones, and its siblings with their work item status and PR.
+    /// --key without a spec finds the spec that has the slice
     Get {
         /// The spec id or its parent key (any case)
-        spec: String,
+        #[arg(required_unless_present = "key")]
+        spec: Option<String>,
         /// An older version (default: the newest)
         #[arg(long)]
         version: Option<i64>,
+        /// A slice's issue key: CORE-1235, PER-12 or owner/repo#12
+        #[arg(long)]
+        key: Option<String>,
     },
     /// Every spec at its newest version, most recently changed first
     List,
@@ -380,6 +388,33 @@ pub enum SpecCmd {
     Approve {
         /// The spec id or its parent key (any case)
         spec: String,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Record a decision: one line appended to `## decisions` as a new
+    /// version, `- [slice N] Q: ... A: ... (agreed: <where>, <date>)`.
+    /// Without --slice or --key it is spec-wide
+    Decide {
+        /// The spec id or its parent key (any case)
+        spec: String,
+        /// The slice by its number
+        #[arg(long, conflicts_with = "key")]
+        slice: Option<u32>,
+        /// The slice by its issue key instead of its number
+        #[arg(long)]
+        key: Option<String>,
+        /// The question, on one line
+        #[arg(long)]
+        question: String,
+        /// The answer, on one line
+        #[arg(long)]
+        answer: String,
+        /// Where it was agreed: a PR thread URL, a Slack link, "in chat"
+        #[arg(long = "where")]
+        agreed_where: Option<String>,
         /// Run the real write and roll it back; meta.dry_run is true
         #[arg(long)]
         dry_run: bool,

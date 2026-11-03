@@ -19,6 +19,15 @@ pub struct SpecSection {
     pub body: String,
 }
 
+impl SpecSection {
+    /// The heading names `key`, ignoring case.
+    pub(crate) fn has_key(&self, key: &str) -> bool {
+        self.key
+            .as_deref()
+            .is_some_and(|k| k.trim().eq_ignore_ascii_case(key.trim()))
+    }
+}
+
 /// One line of the `## decisions` section: `- [slice N] Q: ... A: ...
 /// (agreed: where, date)`. A line without that shape still counts, as
 /// `text` alone.
@@ -91,12 +100,12 @@ fn heading_title(heading: &str) -> String {
     t.trim().to_string()
 }
 
-fn is_heading(line: &str) -> bool {
+pub(crate) fn is_heading(line: &str) -> bool {
     line.starts_with("## ") || line.starts_with("### ")
 }
 
 /// A `##`/`###` heading's text, lowercased.
-fn heading_text(line: &str) -> String {
+pub(crate) fn heading_text(line: &str) -> String {
     line.trim_start_matches('#').trim().to_lowercase()
 }
 
