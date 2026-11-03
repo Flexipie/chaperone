@@ -12,7 +12,8 @@ use serde_json::Value;
 
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
 use super::{Ledger, LedgerError, check_schema, fold};
-use crate::pipeline::Route;
+use crate::engine;
+use crate::pipeline::{REQUIRED_TRANSITIONS, Route};
 
 pub(crate) const MIN_LEASE_SECS: i64 = 30;
 pub(crate) const MAX_LEASE_SECS: i64 = 86_400;
@@ -24,6 +25,15 @@ pub const STATUSES: &[&str] = &[
     "review",
     "done",
     "cancelled",
+];
+
+/// The checks a session produces (events.md, `check.finished` payloads).
+const SESSION_CHECKS: &[&str] = &[
+    "plan_check",
+    "quality_gate",
+    "merge_verdict",
+    "smoke",
+    "kept_tests",
 ];
 
 pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
@@ -189,6 +199,28 @@ fn write(
             if let Err(r) = guard(tx, &mut event)? {
                 return Ok(Applied::Refused(r));
             }
+            if let (EventKind::PhaseEntered, Some(lane)) = (event.kind, event.lane_id) {
+                match engine::deny(tx, lane, &event)? {
+                    Ok(None) => {}
+                    Ok(Some(denial)) => {
+                        let key = denial.idempotency_key.as_deref().unwrap_or_default();
+                        match by_key(tx, key)? {
+                            Some(stored) if stored.kind == EventKind::GateDenied => {
+                                return Ok(Applied::Replayed(stored));
+                            }
+                            Some(stored) => {
+                                return Ok(Applied::Refused(invalid(&format!(
+                                    "the denial key {key} belongs to a {} event",
+                                    stored.kind
+                                ))));
+                            }
+                            None => {}
+                        }
+                        event = denial;
+                    }
+                    Err(r) => return Ok(Applied::Refused(r)),
+                }
+            }
             event.id = insert(tx, &event)?;
             fold::fold(tx, &event)?;
             Applied::Committed(event)
@@ -236,8 +268,12 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             "payload does not survive a round trip; a rest key repeats a typed field"
         ));
     }
-    if !event.kind.leases() && (p.lease_secs.is_some() || p.lease_expires_at.is_some()) {
+    if !event.kind.leases() && p.lease_secs.is_some() {
         refuse!(invalid(&format!("{} carries no lease", event.kind)));
+    }
+    // The expiry is the write's to set, from `at` (lane_guard).
+    if p.lease_expires_at.is_some() {
+        refuse!(invalid("lease_expires_at is set by the write"));
     }
     // The stamp is the write's to set, on lane.claimed only (lane_guard).
     if event.kind != LaneClaimed
@@ -417,6 +453,13 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 change.to
             )));
         }
+        // Done is gated: only the engine's event folds it (events.md).
+        if field == "status" && change.to == "done" && event.kind != PhaseEntered {
+            refuse!(invalid(&format!(
+                "{} cannot move a lane to done",
+                event.kind
+            )));
+        }
         let integer = fold::INTEGER_COLUMNS.contains(&field.as_str());
         let typed = if integer {
             change.to.as_i64().is_some()
@@ -489,6 +532,18 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
     }
     match event.kind {
         CheckFinished => {
+            // The independence rule (R10): a session that has held the lane
+            // never reports its session checks, so a lane cannot stamp its
+            // own handoff. Reviews are daisy's worker's (events.md).
+            // Actor::check has made sure there is a session.
+            let session = event.actor.session.as_deref().unwrap_or_default();
+            if SESSION_CHECKS.contains(&p.check.as_deref().unwrap_or_default())
+                && has_held(tx, lane_id, session)?
+            {
+                refuse!(invalid(&format!(
+                    "session {session} has held lane {lane_id}; record checks from a fresh session"
+                )));
+            }
             if p.check.is_none() || p.head_sha.is_none() {
                 refuse!(invalid("check.finished needs check and head_sha"));
             }
@@ -500,6 +555,30 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             if keys.len() != findings.len() {
                 refuse!(invalid("finding keys repeat"));
             }
+        }
+        // The write decides it after these checks (`engine::deny`), and
+        // takes `from` from the row, never the caller.
+        PhaseEntered => {
+            if !p
+                .transition
+                .as_deref()
+                .is_some_and(|t| REQUIRED_TRANSITIONS.contains(&t))
+            {
+                refuse!(invalid(&format!(
+                    "phase.entered runs only {REQUIRED_TRANSITIONS:?}"
+                )));
+            }
+            let from = lane_value(tx, lane_id, "phase")?;
+            p.rest.insert("from".into(), from);
+        }
+        GateDenied => refuse!(invalid("gate.denied is written by the engine only")),
+        // Ready is gated the same way: an ungated handoff never says ready.
+        LaneHandedOff
+            if p.rest.get("handoff").and_then(|h| h.get("ready")) == Some(&true.into()) =>
+        {
+            refuse!(invalid(
+                "a ready handoff is gated; lane.handed_off cannot carry one"
+            ));
         }
         FindingUpdated => {
             let (Some(check), Some(key)) = (p.check_event_id, &p.finding_key) else {
@@ -527,6 +606,21 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
     Ok(Ok(()))
 }
 
+/// The session has held the lane: it wrote a `lane.claimed` or
+/// `lane.taken_over` on it (events.md, `check.finished` producer).
+pub(crate) fn has_held(
+    conn: &Connection,
+    lane_id: i64,
+    session: &str,
+) -> Result<bool, LedgerError> {
+    exists(
+        conn,
+        "SELECT 1 FROM events WHERE lane_id = ?1
+           AND kind IN ('lane.claimed', 'lane.taken_over') AND actor_session = ?2",
+        rusqlite::params![lane_id, session],
+    )
+}
+
 fn invalid(msg: &str) -> Refusal {
     Refusal::InvalidInput(msg.into())
 }
@@ -544,8 +638,8 @@ fn spec_head(tx: &Transaction, id: i64) -> Checked<i64> {
     Ok(head.ok_or(Refusal::NotFound { entity: "spec", id }))
 }
 
-fn exists(tx: &Transaction, sql: &str, args: impl Params) -> Result<bool, LedgerError> {
-    Ok(tx.query_row(sql, args, |_| Ok(())).optional()?.is_some())
+fn exists(conn: &Connection, sql: &str, args: impl Params) -> Result<bool, LedgerError> {
+    Ok(conn.query_row(sql, args, |_| Ok(())).optional()?.is_some())
 }
 
 type Holder = (Option<String>, Option<String>, Option<i64>, Option<String>);
@@ -1236,6 +1330,34 @@ mod tests {
                 AT,
                 None,
                 ev(EventKind::FindingUpdated, Some(1), None, Payload::default()),
+            ),
+            // The host runs only handoff, and a phase.entered needs a `to`.
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::PhaseEntered,
+                    Some(1),
+                    None,
+                    Payload {
+                        transition: Some("to_ready".into()),
+                        to: Some("ready".into()),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::PhaseEntered,
+                    Some(1),
+                    None,
+                    Payload {
+                        transition: Some("handoff".into()),
+                        ..Payload::default()
+                    },
+                ),
             ),
             (
                 AT,

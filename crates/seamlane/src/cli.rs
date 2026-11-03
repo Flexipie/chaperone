@@ -236,8 +236,7 @@ pub enum WorkCmd {
     /// Record a structured handoff (JSON: summary, status, changed_files,
     /// verification, smoke, blockers, open_questions, next_action, commit,
     /// pull_request, brief). Its status moves the item; a terminal status
-    /// clears the holder. A ready handoff is refused until the handoff gate
-    /// runs
+    /// clears the holder. A ready or done handoff runs the handoff gate
     Handoff {
         id: i64,
         /// Path to the handoff JSON, or - for stdin; omit to read stdin

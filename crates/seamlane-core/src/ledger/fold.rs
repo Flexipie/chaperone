@@ -127,6 +127,12 @@ fn fold_lane(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
             params![e.lane_id, p.pipeline_id, hash, p.route],
         )?)?;
     }
+    if e.kind == EventKind::PhaseEntered {
+        one(conn.execute(
+            "UPDATE lanes SET phase = ?2 WHERE id = ?1",
+            params![e.lane_id, p.to],
+        )?)?;
+    }
     one(conn.execute(
         "UPDATE lanes SET head_event_id = ?2, updated_at = iif(?4, updated_at, ?3) WHERE id = ?1",
         params![e.lane_id, e.id, e.at, e.kind.keeps_updated_at()],

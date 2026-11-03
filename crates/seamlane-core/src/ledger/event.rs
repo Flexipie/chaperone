@@ -213,6 +213,15 @@ pub struct Payload {
     pub pipeline_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+    /// The engine's: on `phase.entered` and `gate.denied`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_paths: Option<Vec<String>>,
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
@@ -254,7 +263,8 @@ pub struct Event {
     pub at: String,
 }
 
-/// Why a write was refused. Nothing was written.
+/// Why a write was refused. Nothing was written, except for
+/// [`Refusal::GateDenied`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
     InvalidInput(String),
@@ -279,6 +289,13 @@ pub enum Refusal {
     PipelineUnknown {
         pipeline_id: String,
         pipeline_hash: String,
+    },
+    /// A gate did not hold: one `gate.denied` was appended (or replayed),
+    /// and the lane did not move.
+    GateDenied {
+        transition: String,
+        gate: String,
+        fact_paths: Vec<String>,
     },
 }
 
