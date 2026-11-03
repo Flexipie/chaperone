@@ -28,7 +28,7 @@ pub const STATUSES: &[&str] = &[
 ];
 
 /// The checks a session produces (events.md, `check.finished` payloads).
-const SESSION_CHECKS: &[&str] = &[
+pub const SESSION_CHECKS: &[&str] = &[
     "plan_check",
     "quality_gate",
     "merge_verdict",
@@ -671,7 +671,7 @@ fn spec_head(tx: &Transaction, id: i64) -> Checked<i64> {
     Ok(head.ok_or(Refusal::NotFound { entity: "spec", id }))
 }
 
-fn exists(conn: &Connection, sql: &str, args: impl Params) -> Result<bool, LedgerError> {
+pub(crate) fn exists(conn: &Connection, sql: &str, args: impl Params) -> Result<bool, LedgerError> {
     Ok(conn.query_row(sql, args, |_| Ok(())).optional()?.is_some())
 }
 

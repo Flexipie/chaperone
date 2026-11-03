@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::builder::PossibleValuesParser;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use seamlane_core::cursor::DEFAULT_LIMIT;
-use seamlane_core::ledger::{Actor, KINDS, PR_FLOWS};
+use seamlane_core::ledger::{Actor, KINDS, PR_FLOWS, SESSION_CHECKS};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -398,8 +398,7 @@ pub enum CheckCmd {
     Record {
         #[arg(long)]
         work: i64,
-        #[arg(long, value_parser = PossibleValuesParser::new(
-            ["plan_check", "quality_gate", "merge_verdict", "smoke", "kept_tests"]))]
+        #[arg(long, value_parser = PossibleValuesParser::new(SESSION_CHECKS))]
         check: String,
         /// The commit checked, 7 to 40 lowercase hex digits
         #[arg(long)]

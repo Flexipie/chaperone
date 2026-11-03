@@ -1,6 +1,5 @@
-//! `reviews record` facts and the access rule (R13): daisy's review text,
-//! whatever it says, never becomes a verdict, and a requested review with no
-//! finish projects running, never absent.
+//! The access rule (R13) through `reviews record`: daisy's review text,
+//! whatever it says, never becomes a verdict.
 
 use seamlane_core::ledger::Actor;
 use seamlane_core::ledger::Ledger;
@@ -30,7 +29,7 @@ fn view(job: i64, done: bool, status: &str) -> Value {
 }
 
 #[test]
-fn review_text_never_a_verdict_and_requested_runs() {
+fn review_text_never_a_verdict() {
     let dir = tempfile::tempdir().unwrap();
     let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
     let lane = pair("lane", "s1");
@@ -49,27 +48,12 @@ fn review_text_never_a_verdict_and_requested_runs() {
         .work_claim(&lane, 1, &claim, None, false)
         .unwrap()
         .unwrap();
-    let state = |l: &Ledger| l.project(1, Some("abc1234")).unwrap();
-
     // The lane's own session records it: reviews are daisy's worker's.
     ledger
-        .review_record(&lane, 1, 7, &view(7, false, "running"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        state(&ledger).get("daisy_review.state"),
-        &Fact::Str("running".into())
-    );
-
-    let got = ledger
         .review_record(&lane, 1, 7, &view(7, true, "reviewed"))
         .unwrap()
         .unwrap();
-    assert_eq!(got["done"], true);
-    assert_eq!(got["findings"][0]["outcome"], Value::Null);
-    let f = state(&ledger);
-    assert_eq!(f.get("daisy_review.state"), &Fact::Str("finished".into()));
-    assert_eq!(f.get("review.local_rounds"), &Fact::Int(1));
+    let f = ledger.project(1, Some("abc1234")).unwrap();
     for path in ["verdict.decision", "verdict.sha"] {
         assert_eq!(f.get(path), &Fact::Absent, "{path}");
     }

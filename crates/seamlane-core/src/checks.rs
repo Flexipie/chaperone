@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::ledger::{
     Actor, Applied, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation, Payload,
-    Refusal,
+    Refusal, exists,
 };
 use crate::pipeline::canonical_string;
 
@@ -197,7 +197,7 @@ impl Ledger {
         };
         p.rest.insert("job".into(), json!(job));
         // Scalars only: daisy's free text (summary, impact, error) is not
-        // stored, so nothing unredacted or uncapped lands in the log.
+        // stored.
         let review: Map<String, Value> = ["status", "phase", "source", "pr_ref", "branch", "repo"]
             .iter()
             .map(|k| (k.to_string(), view.get(*k).cloned().unwrap_or(Value::Null)))
@@ -421,10 +421,7 @@ fn newest_other(
 }
 
 fn lane_exists(conn: &Connection, id: i64) -> Result<bool, LedgerError> {
-    Ok(conn
-        .query_row("SELECT 1 FROM lanes WHERE id = ?1", [id], |_| Ok(()))
-        .optional()?
-        .is_some())
+    exists(conn, "SELECT 1 FROM lanes WHERE id = ?1", [id])
 }
 
 fn check_event(kind: EventKind, lane: i64, payload: Payload) -> Mutation {
