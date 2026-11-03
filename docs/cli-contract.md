@@ -1,6 +1,7 @@
 # CLI contract
 
-Version **0**, 2026-11-03. The `seamlane` binary keeps the argv, the `{ok, data, meta}`
+2026-11-03. Flags follow the binary `0.y.z` axis and the payloads follow the shared
+contract number ([CONTRIBUTING.md](../CONTRIBUTING.md) "Versions"). The `seamlane` binary keeps the argv, the `{ok, data, meta}`
 envelope and the exit codes of `daisy-cli` 0.2.0 (contract 1), so a skill moves from
 daisy to Seamlane by changing the binary path. That switch happens after the first demo
 ([ADR 0003](decisions/0003-seamlane-replaces-daisy.md)). The events each command writes
@@ -111,7 +112,7 @@ Every write also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
-| `reviews get` | `<job id>` | read |
+| `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
 
 Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `done` or
@@ -124,8 +125,11 @@ Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `do
 check.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is Seamlane's only call into
-daisy. A queued or running job appends `check.requested`. A finished job appends
-`check.finished` with `producer {kind: daisy_worker, job}`. `reviews get` and `jobs get`
+daisy. A job that is not done (`data.done` false, status `queued` or `running`) appends
+`check.requested`. A done job with status `reviewed` or `posted` appends `check.finished`
+`ran` with `producer {kind: daisy_worker, job}`. A done job with status `failed` or
+`cancelled` appends `check.finished` `skipped` with `reason` that status. It settles
+`daisy_review.state` as `finished` and adds no local round. `reviews get` and `jobs get`
 answer from what was recorded, in daisy's shape.
 
 ## Commands and transitions
@@ -134,19 +138,24 @@ Each command is one transaction that appends one event (events.md, write rules).
 
 | Command | Transition | Event |
 | --- | --- | --- |
-| `work handoff` with status `review` or `done` | `handoff` (gated) | `phase.entered`, or `gate.denied` |
+| `work handoff` with `ready: true`, or with status `done` | `handoff` (gated) | `phase.entered`, or `gate.denied` |
 | `work update --status done` | `handoff` (gated) | `phase.entered`, or `gate.denied` |
-| `work handoff`, any other status or none | ungated | `lane.handed_off` |
+| `work handoff`, any other (a `needs you` or progress handoff) | ungated | `lane.handed_off` |
 | `work update --status queued` from `done` or `cancelled` | ungated | `lane.reopened` |
 | `work update --status cancelled`, `work cancel` | ungated | `lane.cancelled` |
 | `work update`, any other change | ungated | `lane.updated`, or `pr.opened` when the PR goes from null to set |
 | `work claim`, `release`, `ready` | ungated | the matching `lane.*` kind |
 | `work heartbeat` | none | none |
 
-`handoff` is the M1 gated transition in `pipelines/v17.toml` (#12). It requires a
-`plan_check`, a `quality_gate`, and a `merge_verdict` with decision `yes` whose sha is a
-prefix of the handed-off sha (`handoff.commit`, or for `update --status done` the commit
-of the lane's latest handoff). A missing fact fails closed. The
+`handoff` is the M1 gated transition. Its requires list is per route in
+`pipelines/v17.toml` (#12): on `code_pr`, a `plan_check`, a `quality_gate`, and a
+`merge_verdict` with decision `yes` whose sha is a prefix of the handed-off sha
+(`handoff.commit`, or for `update --status done` the commit of the lane's latest
+handoff). Routes without a PR skip the PR gates as v17 says. Ready comes from a
+handoff's `ready` (or the owner's `work ready` override), so a handoff cannot mark a lane
+ready without passing this gate. A
+`needs you` handoff is not gated, so it always reaches the owner. A missing fact fails
+closed. The
 denial exits 1 with `gate_denied`, names the failing gate id on stderr, and leaves the
 lane where it was.
 
@@ -156,7 +165,9 @@ These fields keep their daisy names and meaning:
 
 - `work events`: `action` and `at` per item. `action` is daisy's word (`create`, `claim`,
   `renew`, `takeover`, `update`, `reopen`, `cancel`, `release`, `handoff`,
-  `ready_override`), mapped from the event kind.
+  `ready_override`), mapped from the event kind (`pr.opened` is `update`, `phase.entered`
+  is the command's). `gate.denied`, `check.*` and `finding.updated` are not lane actions
+  and do not appear in `work events`.
 - `work handoffs`: `created_at` and `handoff.next_action`.
 
 ## Not in M1

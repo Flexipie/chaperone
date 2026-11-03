@@ -35,12 +35,15 @@ These rules keep every write small, single and fail-closed.
   fold both there or both absent.
 - **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
   `gate.denied` and nothing else. Its key is
-  `deny:<lane_id>:<transition>:<gate>:<lane head event id>`, so a retry with no new facts
-  replays the same denial instead of appending again.
+  `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied>`,
+  so a retry with no new facts replays the same denial instead of appending again. A
+  denial does not touch the lane row (no `updated_at` bump), and a replayed denial still
+  exits 1 with `gate_denied`.
 - **Replays.** A retry with the same key returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
   uses `check:` plus the sha256 of its canonical payload, and `reviews record` uses
-  `review:<job>:requested` or `review:<job>:finished`.
+  `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
+  recorded on another lane is `invalid_input`.
 - **Small payloads.** No secrets (redacted at write, [R13](research/r13-security-and-trust.md)),
   no blobs. Evidence files sit beside the ledger, named by content hash, and the payload
   carries only the hash (`evidence_ref`). Spec bodies are capped at 256 KiB, handoff
@@ -48,7 +51,8 @@ These rules keep every write small, single and fail-closed.
   cap is `invalid_input`.
 - **Heartbeat writes no event.** It touches only `last_heartbeat_at` and
   `lease_expires_at` on the lane row. Those two columns are outside the fold:
-  `rebuild()` keeps their live values and folds everything else from the log.
+  `rebuild()` copies their live values from the old row and folds everything else from
+  the log, and the rebuild property compares every column except these two.
 - **One event folds status.** A gated move folds status through `phase.entered`. An
   ungated move folds it through the command's own event (`lane.updated`, and so on).
   Status is never folded twice by one command.
@@ -66,8 +70,9 @@ These rules keep every write small, single and fail-closed.
 ### Lane
 
 A lane is a work item. `work events` shows the daisy action in the second column, so
-`lane-stats` reads the ledger unchanged. Every kind that changes the row carries
-`changed {field: {from, to}}`, which is how `rebuild()` reproduces the row.
+`lane-stats` reads the ledger unchanged. Every kind that changes a lane column other
+than the lease carries `changed {field: {from, to}}`, which is how `rebuild()` reproduces
+the row. `lane.renewed` carries the lease, and `lane.ready_overridden` changes no column.
 
 | Kind | Action | Payload |
 | --- | --- | --- |
@@ -90,7 +95,7 @@ The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the firs
 
 | Kind | Written when | Payload |
 | --- | --- | --- |
-| `phase.entered` | A gated command passes (`work handoff` to `review` or `done`, `work update --status done`) | `transition`, `from`, `to`, `status`, `head_sha`, plus the command's fields: `changed`, and `handoff_id` and `handoff` for a handoff |
+| `phase.entered` | A gated command passes (`work handoff` with `ready: true` or to `done`, `work update --status done`) | `transition`, `from`, `to`, `status`, `head_sha`, plus the command's fields: `changed`, and `handoff_id` and `handoff` for a handoff |
 | `gate.denied` | A gated command fails | `transition`, `gate` (the first failing gate id), `fact_paths` (what that gate read), `head_sha` |
 
 `work events` shows `phase.entered` with the command's action (`handoff` or `update`).
@@ -99,7 +104,7 @@ The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the firs
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `check.requested` | `reviews record`, job still queued or running | `check` (`local_review` or `pr_review`), `job`, `head_sha` |
+| `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha` |
 | `check.finished` | `check record`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
 | `finding.updated` | none in M1 (folded and tested through `Ledger::apply`, #16) | `check_event_id`, `finding_key`, `status` (`fixed` with `commit`, or `answered` with one line) |
 
@@ -109,9 +114,9 @@ A requested review with no finish projects the fact `daisy_review.state` as `run
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `pr.opened` | `work update --pr` when the PR goes from null to set | `pr`, `head_sha`, `changed` |
+| `pr.opened` | `work update --pr` when the PR goes from null to set | `pr`, `head_sha` (the latest handoff's `commit`, null if none), `changed` |
 
-It is that update's one event, in place of `lane.updated`. When the PR first arrives in
+It is that update's one event, in place of `lane.updated`, and `work events` shows it as `update`. When the PR first arrives in
 a handoff, the handoff's event carries `changed.pr` from null, and the fact
 `pr.opened_at` is the `at` of whichever event first set the PR.
 
@@ -131,8 +136,8 @@ a handoff, the handoff's event carries `changed.pr` from null, and the fact
 
 | Check | Producer | Fields (after `check`, `outcome`, `head_sha`, `producer`) |
 | --- | --- | --- |
-| `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation` or `docs`. |
-| `quality_gate` | session | `ran`: `findings` (count). `skipped`: `reason` `no_code`. |
+| `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation`, `docs` or `tests` (a test-only lane counts as no-code). |
+| `quality_gate` | session | `ran`: `findings` (count). `skipped`: `reason` `no_code` or `tests`. |
 | `merge_verdict` | session | `ran` only. `decision` `yes` or `no`. The verdict sha is `head_sha`, from `--head`, never the model's prose. |
 | `smoke` | session | `ran`, or `skipped` with `reason` `nothing_runs` or `attempt_failed`. |
 | `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
