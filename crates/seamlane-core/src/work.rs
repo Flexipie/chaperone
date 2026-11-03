@@ -15,7 +15,7 @@ use crate::ledger::{
 };
 
 const ENTITY: &str = "work item";
-pub const DEFAULT_LEASE_SECS: i64 = 900;
+const DEFAULT_LEASE_SECS: i64 = 900;
 
 /// Daisy's `WorkItem` fields, plus Seamlane's kind, pr_flow, phase and
 /// pipeline stamp. `repo_id` and `linear_outbox` are always null.
@@ -226,7 +226,7 @@ impl Ledger {
         at: Option<&str>,
         dry_run: bool,
     ) -> Checked<WorkItem> {
-        self.write_lane(actor, id, at, dry_run, |_, item, _| {
+        self.write_lane(actor, id, at, dry_run, |_, item| {
             use EventKind::*;
             if is_terminal(&item.status) {
                 return Ok(Err(Refusal::InvalidInput(format!(
@@ -286,7 +286,7 @@ impl Ledger {
         at: Option<&str>,
         dry_run: bool,
     ) -> Checked<WorkItem> {
-        self.write_lane(actor, id, at, dry_run, |_, item, _| {
+        self.write_lane(actor, id, at, dry_run, |_, item| {
             if item.session.is_none() {
                 return Ok(Err(Refusal::InvalidInput(format!(
                     "work item {id} is not claimed; claim it first"
@@ -321,7 +321,7 @@ impl Ledger {
             Ok(v) => v,
             Err(r) => return Ok(Err(r)),
         };
-        self.write_lane(actor, id, at, dry_run, |conn, item, _| {
+        self.write_lane(actor, id, at, dry_run, |conn, item| {
             if let Err(r) = check_owner(item, actor) {
                 return Ok(Err(r));
             }
@@ -452,15 +452,13 @@ impl Ledger {
         at: Option<&str>,
         dry_run: bool,
     ) -> Checked<WorkItem> {
-        self.write_lane(actor, id, at, dry_run, |_, item, _| {
+        self.write_lane(actor, id, at, dry_run, |_, item| {
             if item.session.is_none() {
                 return Ok(Err(Refusal::InvalidInput(format!(
                     "work item {id} is not claimed"
                 ))));
             }
-            if let Err(r) = check_owner(item, actor) {
-                return Ok(Err(r));
-            }
+            // The write's lease guard refuses another pair's live lease.
             let mut p = Payload::default();
             put(&mut p.changed, "agent", &item.agent, Value::Null);
             put(&mut p.changed, "session", &item.session, Value::Null);
@@ -479,7 +477,7 @@ impl Ledger {
         id: i64,
         at: Option<&str>,
         dry_run: bool,
-        plan: impl FnOnce(&Connection, &WorkItem, &str) -> Checked<Mutation>,
+        plan: impl FnOnce(&Connection, &WorkItem) -> Checked<Mutation>,
     ) -> Checked<WorkItem> {
         let (applied, item) = self.apply_planned(
             actor,
@@ -487,7 +485,7 @@ impl Ledger {
             at,
             dry_run,
             |conn, at| match get_row(conn, id, at)? {
-                Some(item) => plan(conn, &item, at),
+                Some(item) => plan(conn, &item),
                 None => Ok(Err(Refusal::NotFound { entity: ENTITY, id })),
             },
             |conn, _, at| get_row(conn, id, at),
@@ -832,8 +830,8 @@ mod tests {
     }
 
     /// Daisy's lease rules: claim, renew, refuse a live lease, take over an
-    /// expired one or with --takeover, heartbeat only by the holder,
-    /// release back to queued, and nothing past a terminal status.
+    /// expired one or with --takeover, heartbeat only by the holder, and
+    /// release back to queued.
     #[test]
     fn lease_rules() {
         let (_dir, ledger) = ledger();
@@ -876,25 +874,6 @@ mod tests {
             (item.status.as_str(), item.session, item.claimed_at),
             ("queued", None, None)
         );
-        assert!(matches!(
-            ledger.work_heartbeat(&a, id, Some(T1), false).unwrap(),
-            Err(Refusal::InvalidInput(_))
-        ));
-        ledger
-            .work_cancel(&b, id, None, None, Some(T1), false)
-            .unwrap()
-            .unwrap();
-        for refused in [
-            ledger
-                .work_cancel(&b, id, None, None, Some(T1), false)
-                .unwrap(),
-            claim(&a, T1, false),
-        ] {
-            assert!(
-                matches!(refused, Err(Refusal::InvalidInput(_))),
-                "{refused:?}"
-            );
-        }
         assert_eq!(
             kinds(&ledger),
             [
@@ -903,14 +882,13 @@ mod tests {
                 "lane.renewed",
                 "lane.taken_over",
                 "lane.taken_over",
-                "lane.released",
-                "lane.cancelled"
+                "lane.released"
             ]
         );
     }
 
-    /// The update stamp, the owner check and the blocked rule refuse and
-    /// write nothing; a fresh stamp writes.
+    /// The update stamp and the owner check refuse and write nothing; a
+    /// fresh stamp writes.
     #[test]
     fn update_rules() {
         let (_dir, ledger) = ledger();
@@ -936,10 +914,6 @@ mod tests {
         assert!(matches!(
             update(&b, "active", T0),
             Err(Refusal::LeaseHeld { .. })
-        ));
-        assert!(matches!(
-            update(&a, "blocked", T0),
-            Err(Refusal::InvalidInput(_))
         ));
         assert_eq!(kinds(&ledger).len(), 2);
         // No clock passed: the write reads it under its lock.

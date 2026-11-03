@@ -55,9 +55,9 @@ The five layers and their time limits:
 The whole test job stays under 3 minutes. Crash and concurrency tests do not
 run beside each other (nextest `threads-required`).
 
-Property tests pass the clock in. The write function does not read the wall
-clock; a CLI command's clock is read once the write lock is held. A failing property prints its seed. Re-run that seed before changing
-the assertion.
+Property tests pass the clock in. The write function reads the clock only
+when none is passed (a CLI command), once the write lock is held. A failing
+property prints its seed. Re-run that seed before changing the assertion.
 
 The in-process `verdict_on_head` fixture and a lane script that hits the same
 refusal are both required once the engine and the supervisor exist. The

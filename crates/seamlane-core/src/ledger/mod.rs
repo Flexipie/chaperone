@@ -107,7 +107,8 @@ impl Ledger {
     }
 
     /// The CLI's clock, RFC 3339 UTC with milliseconds, the form `apply`
-    /// takes. Core functions never call it themselves.
+    /// takes. The write calls it only when no clock is passed, under the
+    /// write lock.
     pub fn now(&self) -> Result<String, LedgerError> {
         Ok(self
             .conn

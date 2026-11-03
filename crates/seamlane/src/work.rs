@@ -10,9 +10,7 @@ use serde_json::Value;
 use crate::cli::{ActorArgs, WorkCmd};
 use crate::output::{CliError, Meta, Outcome};
 
-/// Writes read the clock under the write lock; reads use `now`.
 pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, CliError> {
-    let now = ledger.now()?;
     let mut dry = |dry_run: bool| {
         if dry_run {
             meta.dry_run = Some(true);
@@ -126,7 +124,7 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
             None,
             dry(dry_run),
         )??),
-        WorkCmd::Get { id } => one(ledger.work_get(id, &now)??),
+        WorkCmd::Get { id } => one(ledger.work_get(id, &ledger.now()?)??),
         WorkCmd::List {
             status,
             agent,
@@ -161,7 +159,7 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
                 session,
                 include_terminal: all,
             };
-            let page = ledger.work_list(&filter, limit, cursor.as_deref(), &now)??;
+            let page = ledger.work_list(&filter, limit, cursor.as_deref(), &ledger.now()?)??;
             Ok(Outcome::Page(Page {
                 items: page.items.iter().map(value).collect::<Result<_, _>>()?,
                 next_cursor: page.next_cursor,
