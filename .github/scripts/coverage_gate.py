@@ -2,9 +2,11 @@
 
 Reads the full `cargo llvm-cov --json` export. llvm's file summary scores a
 function by its best single build, and the lib unit tests and the integration
-tests are separate builds, so this merges the builds that ran instead. A
-region that is only the `?` of a fallible call is exempt: no test reaches the
-error arm of a SQLite call without fault injection.
+tests are separate builds, so this merges the builds instead. A region that is
+only a `?` is exempt. Most propagate a SQLite error no test reaches without
+fault injection. The rest propagate a refusal whose own check is gated: the
+schema re-check, a foreign log's unknown kind or bad payload, and a fold that
+changes no row.
 """
 
 import json
@@ -25,11 +27,10 @@ for path in sys.argv[2:]:
     if funcs["covered"] != funcs["count"]:
         missed.append(f"{funcs['count'] - funcs['covered']} functions never called")
     # Keyed by function, span and position among same-span records, so the
-    # copies rustc makes of a guard on an or-pattern stay apart. A copy that
-    # never ran keeps regions the running copies optimised away; skip it.
+    # copies rustc makes of a guard on an or-pattern stay apart.
     taken = defaultdict(lambda: [0, 0])
     for fn in data["functions"]:
-        if fn["count"] == 0 or not fn["filenames"][0].endswith("/" + path):
+        if not fn["filenames"][0].endswith("/" + path):
             continue
         start = tuple(fn["regions"][0][:2])
         seen = defaultdict(int)

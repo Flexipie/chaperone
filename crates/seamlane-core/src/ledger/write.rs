@@ -643,7 +643,15 @@ mod tests {
             (
                 AT,
                 None,
-                ev(EventKind::SpecCreated, Some(1), None, spec.clone()),
+                ev(
+                    EventKind::SpecCreated,
+                    Some(1),
+                    None,
+                    Payload {
+                        parent_key: Some("Flexipie/harness#2".into()),
+                        ..spec.clone()
+                    },
+                ),
             ),
             (
                 AT,
@@ -654,7 +662,8 @@ mod tests {
                     None,
                     Payload {
                         parent_key: Some("Flexipie/harness#2".into()),
-                        ..change("status", json!("queued"), json!("done"))
+                        changed: change("status", json!("queued"), json!("done")).changed,
+                        ..spec.clone()
                     },
                 ),
             ),
