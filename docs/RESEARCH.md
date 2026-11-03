@@ -129,7 +129,7 @@ docs, contribution rules. Benchmarked against well-run projects we respect. Outp
 `CONTRIBUTING.md` and the CI plan.
 Done when: the first code PR has a bar to meet.
 Output: [research/r14-engineering-standards.md](research/r14-engineering-standards.md),
-draft [CONTRIBUTING.md](../CONTRIBUTING.md).
+[CONTRIBUTING.md](../CONTRIBUTING.md).
 
 **R15. Migration from today's setup.**
 What moves from daisy (work, spec, review), dotfiles (skills, `ship-handoff`,
