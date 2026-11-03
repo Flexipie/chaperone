@@ -49,19 +49,16 @@ jobs:
 
   # Branch coverage is nightly-only (-Zcoverage-options=branch), so this job
   # alone runs a pinned nightly. GATED files: a missed branch or region fails
-  # the job (plain match arms are regions, not branches). BRANCH_GATED files
-  # (the ledger write path): a branch side no test takes fails it, counted
-  # across the unit and integration test builds (llvm's file summary scores
-  # each function by its best single build). Their regions are not gated:
-  # they include the error arm of every `?` on a SQLite call, which no test
-  # reaches without fault injection.
+  # the job (plain match arms are regions, not branches). LEDGER_GATED files
+  # (the write path): the same, counted across the unit and integration test
+  # builds, with the `?` of a SQLite call exempt (.github/scripts/coverage_gate.py).
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       NIGHTLY: nightly-2026-10-20
       GATED: crates/seamlane-core/src/pipeline/eval.rs
-      BRANCH_GATED: crates/seamlane-core/src/ledger/write.rs crates/seamlane-core/src/ledger/fold.rs
+      LEDGER_GATED: crates/seamlane-core/src/ledger/write.rs crates/seamlane-core/src/ledger/fold.rs
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
@@ -80,12 +77,7 @@ jobs:
                 and .regions.covered == .regions.count)] | length == 1' cov.json \
               || { echo "missed branch or region, or no branch data, in $f"; exit 1; }
           done
-          for f in $BRANCH_GATED; do
-            missed=$(jq -c --arg f "$PWD/$f" '[.data[0].files[] | select(.filename == $f) | .branches[]]
-              | if length == 0 then ["no branch data"] else group_by(.[0:4])
-                | map(select((map(.[4]) | add) == 0 or (map(.[5]) | add) == 0) | "\(.[0][0]):\(.[0][1])") end' cov.json)
-            [ "$missed" = "[]" ] || { echo "missed branches in $f: $missed"; exit 1; }
-          done
+          python3 .github/scripts/coverage_gate.py cov.json $LEDGER_GATED
 
   doc:
     runs-on: ubuntu-latest

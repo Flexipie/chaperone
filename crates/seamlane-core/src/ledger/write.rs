@@ -643,6 +643,52 @@ mod tests {
             (
                 AT,
                 None,
+                ev(EventKind::SpecCreated, Some(1), None, spec.clone()),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecCreated,
+                    None,
+                    None,
+                    Payload {
+                        parent_key: Some("Flexipie/harness#2".into()),
+                        ..change("status", json!("queued"), json!("done"))
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecRevised,
+                    Some(1),
+                    Some(1),
+                    Payload {
+                        version: Some(2),
+                        body: Some("b".into()),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecRevised,
+                    None,
+                    Some(1),
+                    Payload {
+                        version: Some(2),
+                        body: Some("b".into()),
+                        ..change("status", json!("queued"), json!("done"))
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
                 ev(
                     EventKind::SpecCreated,
                     None,

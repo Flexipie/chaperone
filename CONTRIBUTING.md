@@ -73,7 +73,7 @@ Required on every pull request. A red job is a failed PR. `coverage`,
 | `fmt` | `cargo fmt --all -- --check` |
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `test` | `cargo nextest run --workspace` on Ubuntu and macOS (`test (linux)`, `test (macos)`). Timeout 10 min. |
-| `coverage` | llvm-cov. A missed branch or region in `write` or `eval` fails the job. |
+| `coverage` | llvm-cov. A missed branch or region in `eval`, ledger `write` or `fold` fails the job. In `write` and `fold` the `?` of a SQLite call is exempt: no test reaches its error arm without fault injection. |
 | `doc` | `cargo doc -p seamlane-core --no-deps` with warnings denied. |
 | `deny` | `cargo deny check` (licenses, advisories, bans, sources). |
 | `budgets` | Release build. Coarse ceilings: `--version` p50 ≤ 100 ms, open-and-exit p50 ≤ 150 ms, 1,000 full-sync commits ≤ 10 s, follower p99 ≤ 50 ms, one-shot RSS ≤ 32 MiB. Timeout 20 min. |
