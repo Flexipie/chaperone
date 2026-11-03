@@ -315,6 +315,12 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             }
             let id = check!(need_id(event.lane_id, "lane"));
             check!(lane_guard(tx, event, id));
+            // A handoff's id is its event's, so `work handoffs` and the
+            // stored payload agree whoever wrote it.
+            if event.payload.rest.contains_key("handoff") {
+                let id = next_id(tx, "events")?;
+                event.payload.rest.insert("handoff_id".into(), id.into());
+            }
         }
     }
     Ok(Ok(()))

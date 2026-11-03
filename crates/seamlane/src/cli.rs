@@ -60,7 +60,14 @@ impl Cmd {
             Cmd::Work(WorkCmd::Update { .. }) => Some("work update"),
             Cmd::Work(WorkCmd::Release { .. }) => Some("work release"),
             Cmd::Work(WorkCmd::Cancel { .. }) => Some("work cancel"),
-            Cmd::Work(WorkCmd::Get { .. } | WorkCmd::List { .. }) => None,
+            Cmd::Work(WorkCmd::Handoff { .. }) => Some("work handoff"),
+            Cmd::Work(WorkCmd::Ready { .. }) => Some("work ready"),
+            Cmd::Work(
+                WorkCmd::Get { .. }
+                | WorkCmd::List { .. }
+                | WorkCmd::Handoffs { .. }
+                | WorkCmd::Events { .. },
+            ) => None,
         }
     }
 }
@@ -220,6 +227,51 @@ pub enum WorkCmd {
         reason: Option<String>,
         #[arg(long)]
         expected_updated_at: Option<String>,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Record a structured handoff (JSON: summary, status, changed_files,
+    /// verification, smoke, blockers, open_questions, next_action, commit,
+    /// pull_request, brief). Its status moves the item; a terminal status
+    /// clears the holder. A ready handoff is refused until the handoff gate
+    /// runs
+    Handoff {
+        id: i64,
+        /// Path to the handoff JSON, or - for stdin; omit to read stdin
+        file: Option<PathBuf>,
+        /// Read the JSON from stdin (the default when no file is given)
+        #[arg(long, conflicts_with = "file")]
+        stdin: bool,
+        /// Run the real write and roll it back; meta.dry_run is true
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Every handoff on an item, oldest first
+    Handoffs { id: i64 },
+    /// The item's ledger, oldest first
+    Events { id: i64 },
+    /// Override whether the item is ready: --yes, --no, or --clear to go
+    /// back to its handoffs. Refused from any session that has held it
+    #[command(group = clap::ArgGroup::new("verdict").required(true).args(["yes", "no", "clear"]))]
+    Ready {
+        id: i64,
+        /// Mark the item ready, whatever its handoffs say
+        #[arg(long)]
+        yes: bool,
+        /// Mark the item not ready, whatever its handoffs say
+        #[arg(long)]
+        no: bool,
+        /// Drop the override; ready comes from the latest handoff again
+        #[arg(long)]
+        clear: bool,
+        /// Why, kept on the event
+        #[arg(long)]
+        reason: Option<String>,
         /// Run the real write and roll it back; meta.dry_run is true
         #[arg(long)]
         dry_run: bool,

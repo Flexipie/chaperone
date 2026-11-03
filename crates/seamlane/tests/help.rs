@@ -30,6 +30,19 @@ fn help_matches_snapshots() {
         ),
         (&["work", "get"], include_str!("snapshots/work-get.txt")),
         (&["work", "list"], include_str!("snapshots/work-list.txt")),
+        (
+            &["work", "handoff"],
+            include_str!("snapshots/work-handoff.txt"),
+        ),
+        (
+            &["work", "handoffs"],
+            include_str!("snapshots/work-handoffs.txt"),
+        ),
+        (
+            &["work", "events"],
+            include_str!("snapshots/work-events.txt"),
+        ),
+        (&["work", "ready"], include_str!("snapshots/work-ready.txt")),
         (&["migrate"], include_str!("snapshots/migrate.txt")),
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_seamlane"))

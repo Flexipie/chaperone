@@ -2,12 +2,15 @@
 //! each one event through the write function, planned against the row
 //! inside its transaction.
 
+mod handoff;
+
 use std::collections::BTreeMap;
 
 use rusqlite::{Connection, OptionalExtension, Row, ToSql};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
 use crate::cursor::{self, Cursor, Page};
 use crate::ledger::{
     Actor, Applied, Change, Checked, EventKind, Ledger, LedgerError, MAX_LEASE_SECS,
@@ -16,6 +19,13 @@ use crate::ledger::{
 
 const ENTITY: &str = "work item";
 const DEFAULT_LEASE_SECS: i64 = 900;
+/// Daisy's `tool` on handoff and event rows.
+const TOOL: &str = "seamlane";
+
+/// The events on lane `?1` that carry a handoff (events.md, folded rows):
+/// what `work handoffs` lists and where "the latest handoff" is read.
+const HANDOFFS: &str = "lane_id = ?1 AND kind IN ('lane.handed_off', 'phase.entered')
+      AND json_extract(payload_json, '$.handoff') IS NOT NULL";
 
 /// Daisy's `WorkItem` fields, plus Seamlane's kind, pr_flow, phase and
 /// pipeline stamp. `repo_id` and `linear_outbox` are always null.
@@ -417,9 +427,10 @@ impl Ledger {
                 kind = PrOpened;
                 p.head_sha = conn
                     .query_row(
-                        "SELECT json_extract(payload_json, '$.handoff.commit') FROM events
-                         WHERE lane_id = ?1 AND json_extract(payload_json, '$.handoff') IS NOT NULL
-                         ORDER BY id DESC LIMIT 1",
+                        &format!(
+                            "SELECT json_extract(payload_json, '$.handoff.commit') FROM events
+                             WHERE {HANDOFFS} ORDER BY id DESC LIMIT 1"
+                        ),
                         [id],
                         |r| r.get(0),
                     )
@@ -474,6 +485,182 @@ impl Ledger {
             }
             Ok(Ok(lane_event(EventKind::LaneReleased, id, p)))
         })
+    }
+
+    /// Records a handoff, as daisy's `record_handoff`: validated, owner
+    /// checked, its `status` moved by `transition_ok` (a terminal one clears
+    /// the holder), and its first blocker, `next_action`, PR and commit
+    /// applied to the item. One `lane.handed_off`.
+    pub fn work_handoff(
+        &self,
+        actor: &Actor,
+        id: i64,
+        input: &HandoffInput,
+        at: Option<&str>,
+        dry_run: bool,
+    ) -> Checked<Handoff> {
+        if let Err(r) = input.validate() {
+            return Ok(Err(r));
+        }
+        // Ready is gated (cli-contract.md, commands and transitions); until
+        // the gate runs, a stored ready would read as ready without it.
+        if input.ready == Some(true) {
+            return Ok(Err(Refusal::InvalidInput(
+                "a ready handoff needs the handoff gate, which this binary does not run \
+                 yet; hand off without ready"
+                    .into(),
+            )));
+        }
+        let stored = serde_json::to_value(input).map_err(std::io::Error::other)?;
+        let (applied, _) = self.apply_planned(
+            actor,
+            None,
+            at,
+            dry_run,
+            |conn, at| {
+                let Some(item) = get_row(conn, id, at)? else {
+                    return Ok(Err(Refusal::NotFound { entity: ENTITY, id }));
+                };
+                if let Err(r) = check_owner(&item, actor) {
+                    return Ok(Err(r));
+                }
+                let mut p = Payload::default();
+                if let Some(to) = input.status.as_ref().filter(|s| **s != item.status) {
+                    if !transition_ok(&item.status, to) {
+                        return Ok(Err(Refusal::InvalidInput(format!(
+                            "handoff cannot move work item {id} from {} to {to}",
+                            item.status
+                        ))));
+                    }
+                    if is_terminal(to) && item.session.is_some() {
+                        put(&mut p.changed, "agent", &item.agent, Value::Null);
+                        put(&mut p.changed, "session", &item.session, Value::Null);
+                    }
+                    put(&mut p.changed, "status", &item.status, to);
+                }
+                for (field, from, to) in [
+                    ("blocker", &item.blocker, input.blockers.first()),
+                    ("next_action", &item.next_action, input.next_action.as_ref()),
+                    (
+                        "pr_ref",
+                        &item.pr_ref,
+                        input.pull_request.as_ref().filter(|p| pr_ref_ok(p)),
+                    ),
+                    ("base_sha", &item.base_sha, input.commit.as_ref()),
+                ] {
+                    if let Some(to) = to {
+                        put(&mut p.changed, field, from, to);
+                    }
+                }
+                p.rest.insert("handoff".into(), stored);
+                Ok(Ok(lane_event(EventKind::LaneHandedOff, id, p)))
+            },
+            |_, _, _| Ok(()),
+        )?;
+        match applied {
+            Applied::Committed(e) => Ok(Ok(Handoff {
+                id: e.id,
+                work_id: e.lane_id,
+                job_id: None,
+                agent: e.actor.agent,
+                session: e.actor.session,
+                tool: TOOL.into(),
+                handoff: input.clone(),
+                created_at: e.at,
+            })),
+            Applied::Refused(r) => Ok(Err(r)),
+            // No key and no heartbeat, so nothing else comes back.
+            other => Err(std::io::Error::other(format!("handoff write returned {other:?}")).into()),
+        }
+    }
+
+    /// The owner's override of ready: `Some(true)` ready, `Some(false)` not,
+    /// `None` back to the handoffs. One `lane.ready_overridden`, which
+    /// leaves `updated_at` alone. Refused from any session that has held
+    /// the lane (cli-contract.md).
+    pub fn work_ready(
+        &self,
+        actor: &Actor,
+        id: i64,
+        ready: Option<bool>,
+        reason: Option<String>,
+        at: Option<&str>,
+        dry_run: bool,
+    ) -> Checked<WorkItem> {
+        self.write_lane(actor, id, at, dry_run, |conn, _| {
+            let Some(session) = actor.session.as_deref() else {
+                return Ok(Err(Refusal::InvalidInput(
+                    "work ready needs a session".into(),
+                )));
+            };
+            if has_held(conn, id, session)? {
+                return Ok(Err(Refusal::InvalidInput(format!(
+                    "work ready is the owner's override; session {session} has held work item {id}"
+                ))));
+            }
+            let mut p = Payload::default();
+            p.rest.insert("ready".into(), json!(ready));
+            p.rest.insert("reason".into(), json!(trimmed(&reason)));
+            Ok(Ok(lane_event(EventKind::LaneReadyOverridden, id, p)))
+        })
+    }
+
+    /// Every handoff on an item, oldest first. An unknown item has none.
+    pub fn work_handoffs(&self, id: i64) -> Result<Vec<Handoff>, LedgerError> {
+        let mut stmt = self.conn().prepare(&format!(
+            "SELECT id, lane_id, actor_agent, actor_session,
+                    json_extract(payload_json, '$.handoff'), at
+             FROM events WHERE {HANDOFFS} ORDER BY id"
+        ))?;
+        let mut rows = stmt.query([id])?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            let raw: String = r.get(4)?;
+            out.push(Handoff {
+                id: r.get(0)?,
+                work_id: r.get(1)?,
+                job_id: None,
+                agent: r.get(2)?,
+                session: r.get(3)?,
+                tool: TOOL.into(),
+                handoff: serde_json::from_str(&raw).map_err(std::io::Error::other)?,
+                created_at: r.get(5)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The item's lane actions, oldest first, with daisy's action words.
+    /// Engine and check events are not lane actions and are left out. An
+    /// unknown item has none.
+    pub fn work_events(&self, id: i64) -> Result<Vec<WorkEvent>, LedgerError> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, lane_id, actor_agent, actor_session, kind,
+                    json_extract(payload_json, '$.reason'), payload_json, at,
+                    json_extract(payload_json, '$.handoff') IS NOT NULL
+             FROM events WHERE lane_id = ?1 ORDER BY id",
+        )?;
+        let mut rows = stmt.query([id])?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            let kind: String = r.get(4)?;
+            let kind: EventKind = kind.parse().map_err(std::io::Error::other)?;
+            let Some(action) = action(kind, r.get(8)?) else {
+                continue;
+            };
+            out.push(WorkEvent {
+                id: r.get(0)?,
+                work_id: r.get(1)?,
+                agent: r.get(2)?,
+                session: r.get(3)?,
+                tool: TOOL.into(),
+                action: action.into(),
+                reason: r.get(5)?,
+                detail_json: r.get(6)?,
+                at: r.get(7)?,
+            });
+        }
+        Ok(out)
     }
 
     /// One write on an existing item: `plan` sees the row as of `at`, read
@@ -641,6 +828,42 @@ pub(crate) fn transition_ok(from: &str, to: &str) -> bool {
             | ("queued", "blocked" | "done" | "cancelled")
             | ("done" | "cancelled", "queued")
     )
+}
+
+/// Daisy's action word for a lane event; None for events that are not lane
+/// actions. No catch-all, so a new kind has to be placed here.
+fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
+    use EventKind::*;
+    Some(match kind {
+        LaneCreated => "create",
+        LaneClaimed => "claim",
+        LaneRenewed => "renew",
+        LaneTakenOver => "takeover",
+        LaneUpdated | PrOpened => "update",
+        LaneReopened => "reopen",
+        LaneCancelled => "cancel",
+        LaneReleased => "release",
+        LaneHandedOff => "handoff",
+        LaneReadyOverridden => "ready_override",
+        PhaseEntered if carries_handoff => "handoff",
+        PhaseEntered => "update",
+        SpecCreated | SpecRevised | SpecApproved | GateDenied | CheckRequested | CheckFinished
+        | FindingUpdated => return None,
+    })
+}
+
+/// The session has held the lane: it wrote a `lane.claimed` or
+/// `lane.taken_over` on it (events.md, `check.finished` producer).
+fn has_held(conn: &Connection, lane_id: i64, session: &str) -> Result<bool, LedgerError> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM events WHERE lane_id = ?1
+               AND kind IN ('lane.claimed', 'lane.taken_over') AND actor_session = ?2",
+            rusqlite::params![lane_id, session],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn is_terminal(status: &str) -> bool {
@@ -985,5 +1208,59 @@ mod tests {
                 "{refused:?}"
             );
         }
+    }
+
+    /// A refused handoff writes nothing; a status moves by `transition_ok`
+    /// and a terminal one clears the holder and its lease; ready is
+    /// refused from a session that held the lane and leaves `updated_at`.
+    #[test]
+    fn handoff_and_ready_rules() {
+        let (_dir, ledger) = ledger();
+        let (a, owner) = (pair("a", "s1"), pair("o", "o1"));
+        let id = create(&ledger, None, None).unwrap().id;
+        ledger
+            .work_claim(&a, id, &ClaimInput::default(), Some(T0), false)
+            .unwrap()
+            .unwrap();
+        let handoff = |summary: String, status: &str, ready: Option<bool>| {
+            let input = HandoffInput {
+                summary,
+                status: Some(status.into()),
+                ready,
+                ..HandoffInput::default()
+            };
+            ledger
+                .work_handoff(&a, id, &input, Some(T1), false)
+                .unwrap()
+        };
+        for refused in [
+            handoff("x".repeat(4001), "active", None),
+            handoff("s".into(), "queued", None),
+            handoff("s".into(), "active", Some(true)),
+        ] {
+            assert!(
+                matches!(refused, Err(Refusal::InvalidInput(_))),
+                "{refused:?}"
+            );
+        }
+        assert_eq!(kinds(&ledger).len(), 2);
+        assert_eq!(handoff("s".into(), "done", None).unwrap().id, 3);
+        let item = ledger.work_get(id, T1).unwrap().unwrap();
+        assert_eq!(
+            (item.status.as_str(), item.session, item.lease_expires_at),
+            ("done", None, None)
+        );
+        assert!(matches!(
+            ledger
+                .work_ready(&a, id, Some(true), None, Some(T1), false)
+                .unwrap(),
+            Err(Refusal::InvalidInput(_))
+        ));
+        let before = ledger.work_get(id, T1).unwrap().unwrap().updated_at;
+        let item = ledger
+            .work_ready(&owner, id, Some(true), None, Some(T1), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.updated_at, before);
     }
 }

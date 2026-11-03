@@ -120,6 +120,8 @@ Every write except `migrate` also takes `--agent`, `--session` and `--dry-run`. 
 
 `seamlane migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing or empty file. It refuses a non-empty file whose `application_id` is not Seamlane's, a file that is not SQLite, and a version-0 file that already has tables, so it never applies 0001 over someone else's database. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
 
+`work handoff` reads the JSON from `<file>`, or from stdin when the file is omitted or `-`. Until #15 runs the handoff gate, a handoff with `ready: true` is `invalid_input` (it writes nothing), so no ungated `lane.handed_off` ever says ready. A handoff to `done` is written ungated until then, as `work update --status done` is.
+
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`.
 
 Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `done` or
