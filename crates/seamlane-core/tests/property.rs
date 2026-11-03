@@ -571,8 +571,7 @@ proptest! {
         let mut w = World::new();
         w.apply(&Op::CreateLane { spec: None, key: 0 }, None);
         let claim = |w: &mut World, who| {
-            let (actor, m) = w.mutation(&Op::Claim { lane: 0, who, secs, stale: false, takeover: false }).unwrap();
-            (actor, m)
+            w.mutation(&Op::Claim { lane: 0, who, secs, stale: false, takeover: false }).unwrap()
         };
         let first = claim(&mut w, a);
         let second = claim(&mut w, b);

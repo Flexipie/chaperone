@@ -15,7 +15,6 @@ use super::{Ledger, LedgerError, check_schema, fold};
 
 const MIN_LEASE_SECS: i64 = 30;
 const MAX_LEASE_SECS: i64 = 86_400;
-const DEFAULT_LEASE_SECS: i64 = 900;
 const STATUSES: &[&str] = &[
     "queued",
     "claimed",
@@ -119,17 +118,17 @@ impl Ledger {
 /// a live lease: a holder back from a stall renews instead of re-claiming.
 fn heartbeat(tx: &Transaction, actor: &Actor, at: &str, lane_id: i64) -> Checked<String> {
     let ((_, _, secs, _), same_pair) = check!(holder(tx, actor, lane_id));
-    if !same_pair {
+    let Some(secs) = secs.filter(|_| same_pair) else {
         refuse!(Refusal::InvalidInput(format!(
             "lane {lane_id} is not held by this agent and session"
         )));
-    }
+    };
     let until = tx.query_row(
         "UPDATE lanes SET
              lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', ?1, '+' || ?2 || ' seconds'),
              last_heartbeat_at = ?1
          WHERE id = ?3 RETURNING lease_expires_at",
-        rusqlite::params![at, secs.unwrap_or(DEFAULT_LEASE_SECS), lane_id],
+        rusqlite::params![at, secs, lane_id],
         |r| r.get(0),
     )?;
     Ok(Ok(until))
@@ -224,6 +223,10 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             | FindingUpdated
             | GateDenied
     );
+    // Their exemption must not reach the row: these kinds change no column.
+    if event.kind.keeps_updated_at() && !p.changed.is_empty() {
+        refuse!(invalid(&format!("{} changes no lane column", event.kind)));
+    }
     if event.kind == LaneRenewed && !same_pair {
         refuse!(invalid("only the holder renews its lease"));
     }
@@ -470,7 +473,7 @@ mod tests {
         }
     }
 
-    /// Each refusal the properties do not reach writes nothing.
+    /// Each refusal branch of the guard writes no event.
     #[test]
     fn refusals_write_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -641,6 +644,16 @@ mod tests {
                     Some(1),
                     None,
                     change("pid", json!(null), json!(true)),
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::CheckFinished,
+                    Some(1),
+                    None,
+                    change("status", json!("queued"), json!("done")),
                 ),
             ),
             (
