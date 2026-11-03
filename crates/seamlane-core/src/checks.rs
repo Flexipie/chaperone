@@ -443,17 +443,18 @@ fn review_view(conn: &Connection, job: i64) -> Result<Option<Value>, LedgerError
         findings.push(v);
     }
     let get = |k: &str| p.rest.get(k).cloned().unwrap_or(Value::Null);
+    let done = kind == "check.finished";
     Ok(Some(json!({
         "job_id": job,
         "source": review["source"],
         "status": review["status"],
         "phase": review["phase"],
-        "done": kind == "check.finished",
+        "done": done,
         "repo": review["repo"],
         "pr_ref": review["pr_ref"],
         "branch": review["branch"],
         "head_sha": p.head_sha,
-        "queue_ahead": 0,
+        "queue_ahead": done.then_some(0),
         "not_before": null,
         "score": get("score"),
         "verdict": get("verdict"),
