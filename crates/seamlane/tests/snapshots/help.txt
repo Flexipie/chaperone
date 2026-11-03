@@ -1,0 +1,7 @@
+Run many coding agents in lanes, with the process enforced in code
+
+Usage: seamlane
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version

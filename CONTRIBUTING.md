@@ -1,12 +1,10 @@
 # Contributing
 
-Draft, 2026-11-02. The bar and the evidence are in
+The bar and the evidence are in
 [docs/research/r14-engineering-standards.md](docs/research/r14-engineering-standards.md).
-This file is the short version a pull request has to meet. The first commit that
-adds `.github/workflows/ci.yml` drops the word "draft" from this heading.
-
-Nothing in this repo is product code yet. When that changes, these rules apply
-to the first PR, including the PR that adds the workspace.
+This file is the short version a pull request has to meet. These rules apply to
+every PR. The `coverage`, `budgets` and `regress` CI jobs land with the code
+they gate; until then the other five are the required checks.
 
 ## License
 
