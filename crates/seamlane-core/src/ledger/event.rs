@@ -60,13 +60,6 @@ kinds! {
 }
 
 impl EventKind {
-    pub fn is_spec(self) -> bool {
-        matches!(
-            self,
-            EventKind::SpecCreated | EventKind::SpecRevised | EventKind::SpecApproved
-        )
-    }
-
     /// Kinds that carry a lease: `lease_secs` in, `lease_expires_at` set by
     /// the write from `at`.
     pub fn leases(self) -> bool {

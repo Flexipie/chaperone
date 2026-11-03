@@ -31,15 +31,6 @@ pub(super) const LANE_COLUMNS: &[&str] = &[
     "viewer_hint",
 ];
 
-const STATE_TABLES: &[&str] = &[
-    "specs",
-    "spec_versions",
-    "lanes",
-    "gate_results",
-    "findings",
-    "messages",
-];
-
 pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
     use EventKind::*;
     let p = &e.payload;
@@ -191,9 +182,10 @@ impl Ledger {
             .prepare("SELECT id, lease_expires_at, last_heartbeat_at FROM lanes")?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<_, _>>()?;
-        for table in STATE_TABLES {
-            tx.execute(&format!("DELETE FROM {table}"), [])?;
-        }
+        tx.execute_batch(
+            "DELETE FROM specs; DELETE FROM spec_versions; DELETE FROM lanes;
+             DELETE FROM gate_results; DELETE FROM findings; DELETE FROM messages;",
+        )?;
         {
             let mut stmt =
                 tx.prepare(&format!("SELECT {EVENT_COLUMNS} FROM events ORDER BY id"))?;

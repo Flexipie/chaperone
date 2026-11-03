@@ -4,15 +4,17 @@
 //! runs inside it. A refusal returns before the commit, and dropping the
 //! transaction rolls back whatever it touched.
 
+use std::collections::BTreeSet;
+
 use rusqlite::types::ValueRef;
-use rusqlite::{OptionalExtension, Row, Transaction, TransactionBehavior};
+use rusqlite::{OptionalExtension, Params, Row, Transaction, TransactionBehavior};
 use serde_json::Value;
 
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
 use super::{Ledger, LedgerError, check_schema, fold};
 
-pub const MIN_LEASE_SECS: i64 = 30;
-pub const MAX_LEASE_SECS: i64 = 86_400;
+const MIN_LEASE_SECS: i64 = 30;
+const MAX_LEASE_SECS: i64 = 86_400;
 const DEFAULT_LEASE_SECS: i64 = 900;
 const STATUSES: &[&str] = &[
     "queued",
@@ -116,20 +118,8 @@ impl Ledger {
 /// Extends the lease by the lane's own `lease_secs`. Exact holder pair, not
 /// a live lease: a holder back from a stall renews instead of re-claiming.
 fn heartbeat(tx: &Transaction, actor: &Actor, at: &str, lane_id: i64) -> Checked<String> {
-    let lane: Option<(Option<String>, Option<String>, Option<i64>)> = tx
-        .query_row(
-            "SELECT agent, session, lease_secs FROM lanes WHERE id = ?1",
-            [lane_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()?;
-    let Some((agent, session, secs)) = lane else {
-        refuse!(Refusal::NotFound {
-            entity: "lane",
-            id: lane_id
-        });
-    };
-    if session.is_none() || (&agent, &session) != (&actor.agent, &actor.session) {
+    let ((_, _, secs, _), same_pair) = check!(holder(tx, actor, lane_id));
+    if !same_pair {
         refuse!(Refusal::InvalidInput(format!(
             "lane {lane_id} is not held by this agent and session"
         )));
@@ -166,7 +156,7 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             if event.spec_id.is_some() || p.version.is_some_and(|v| v != 1) {
                 refuse!(invalid("spec.created assigns the spec id and version 1"));
             }
-            if exists(tx, "SELECT 1 FROM specs WHERE external_key = ?1", key)? {
+            if exists(tx, "SELECT 1 FROM specs WHERE external_key = ?1", [key])? {
                 refuse!(Refusal::Conflict(format!("spec {key} exists")));
             }
             event.spec_id = Some(next_id(tx, "specs")?);
@@ -174,14 +164,11 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
         SpecRevised | SpecApproved => {
             let id = check!(need_id(event.spec_id, "spec"));
             let head = check!(spec_head(tx, id));
-            let want = if event.kind == SpecRevised {
-                head + 1
-            } else {
-                head
-            };
-            if event.kind == SpecRevised && p.body.is_none() {
+            let revised = event.kind == SpecRevised;
+            if revised && p.body.is_none() {
                 refuse!(invalid("spec.revised needs a body"));
             }
+            let want = head + i64::from(revised);
             if p.version != Some(want) {
                 refuse!(invalid(&format!("{} needs version {want}", event.kind)));
             }
@@ -194,19 +181,16 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             }
             if let Some(spec) = event.spec_id {
                 check!(spec_head(tx, spec));
-                if let Some(lane_key) = &p.lane_key {
-                    let taken = tx
-                        .query_row(
-                            "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2",
-                            rusqlite::params![spec, lane_key],
-                            |_| Ok(()),
-                        )
-                        .optional()?;
-                    if taken.is_some() {
-                        refuse!(Refusal::Conflict(format!(
-                            "lane {lane_key} exists on spec {spec}"
-                        )));
-                    }
+                if let Some(lane_key) = &p.lane_key
+                    && exists(
+                        tx,
+                        "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2",
+                        rusqlite::params![spec, lane_key],
+                    )?
+                {
+                    refuse!(Refusal::Conflict(format!(
+                        "lane {lane_key} exists on spec {spec}"
+                    )));
                 }
             }
             event.lane_id = Some(next_id(tx, "lanes")?);
@@ -224,21 +208,7 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
 
 fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> {
     use EventKind::*;
-    let holder: Option<(Option<String>, Option<String>, Option<String>)> = tx
-        .query_row(
-            "SELECT agent, session, lease_expires_at FROM lanes WHERE id = ?1",
-            [lane_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()?;
-    let Some((agent, session, until)) = holder else {
-        refuse!(Refusal::NotFound {
-            entity: "lane",
-            id: lane_id
-        });
-    };
-    let actor = &event.actor;
-    let same_pair = session.is_some() && (&agent, &session) == (&actor.agent, &actor.session);
+    let ((agent, session, _, until), same_pair) = check!(holder(tx, &event.actor, lane_id));
     let live = until.as_deref().is_some_and(|u| u > event.at.as_str());
     let p = &mut event.payload;
     // Checks and the ready override come from other sessions, and a
@@ -317,9 +287,7 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             if !matches!(p.outcome.as_deref(), Some("ran" | "skipped")) {
                 refuse!(invalid("check.finished outcome is ran or skipped"));
             }
-            let mut keys: Vec<_> = p.findings.iter().map(|f| &f.finding_key).collect();
-            keys.sort();
-            keys.dedup();
+            let keys: BTreeSet<_> = p.findings.iter().map(|f| &f.finding_key).collect();
             if keys.len() != p.findings.len() {
                 refuse!(invalid("finding keys repeat"));
             }
@@ -333,15 +301,12 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             if !matches!(p.status.as_deref(), Some("fixed" | "answered")) {
                 refuse!(invalid("finding.updated status is fixed or answered"));
             }
-            let found = tx
-                .query_row(
-                    "SELECT 1 FROM findings
-                     WHERE lane_id = ?1 AND check_event_id = ?2 AND finding_key = ?3",
-                    rusqlite::params![lane_id, check, key],
-                    |_| Ok(()),
-                )
-                .optional()?;
-            if found.is_none() {
+            if !exists(
+                tx,
+                "SELECT 1 FROM findings
+                 WHERE lane_id = ?1 AND check_event_id = ?2 AND finding_key = ?3",
+                rusqlite::params![lane_id, check, key],
+            )? {
                 refuse!(Refusal::NotFound {
                     entity: "finding",
                     id: check
@@ -370,8 +335,30 @@ fn spec_head(tx: &Transaction, id: i64) -> Checked<i64> {
     Ok(head.ok_or(Refusal::NotFound { entity: "spec", id }))
 }
 
-fn exists(tx: &Transaction, sql: &str, arg: &str) -> Result<bool, LedgerError> {
-    Ok(tx.query_row(sql, [arg], |_| Ok(())).optional()?.is_some())
+fn exists(tx: &Transaction, sql: &str, args: impl Params) -> Result<bool, LedgerError> {
+    Ok(tx.query_row(sql, args, |_| Ok(())).optional()?.is_some())
+}
+
+type Holder = (Option<String>, Option<String>, Option<i64>, Option<String>);
+
+/// The lane's agent, session, lease_secs and lease_expires_at, and whether
+/// `actor` is exactly that holder pair.
+fn holder(tx: &Transaction, actor: &Actor, lane_id: i64) -> Checked<(Holder, bool)> {
+    let lane: Option<Holder> = tx
+        .query_row(
+            "SELECT agent, session, lease_secs, lease_expires_at FROM lanes WHERE id = ?1",
+            [lane_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let Some(h) = lane else {
+        refuse!(Refusal::NotFound {
+            entity: "lane",
+            id: lane_id
+        });
+    };
+    let same_pair = h.1.is_some() && (&h.0, &h.1) == (&actor.agent, &actor.session);
+    Ok(Ok((h, same_pair)))
 }
 
 /// Plain ids, assigned under the write lock.

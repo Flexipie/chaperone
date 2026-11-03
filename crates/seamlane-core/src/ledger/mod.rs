@@ -19,7 +19,6 @@ use rusqlite::{Connection, OpenFlags};
 pub use error::LedgerError;
 pub use event::{Actor, Applied, Change, Event, EventKind, Finding, Mutation, Payload, Refusal};
 use migrate::user_version;
-pub use write::{MAX_LEASE_SECS, MIN_LEASE_SECS};
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
 
