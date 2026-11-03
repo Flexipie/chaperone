@@ -317,9 +317,7 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             check!(lane_guard(tx, event, id));
             // A handoff's id is its event's, so `work handoffs` and the
             // stored payload agree whoever wrote it.
-            if matches!(event.kind, LaneHandedOff | PhaseEntered)
-                && event.payload.rest.contains_key("handoff")
-            {
+            if event.payload.rest.contains_key("handoff") {
                 let id = next_id(tx, "events")?;
                 event.payload.rest.insert("handoff_id".into(), id.into());
             }
