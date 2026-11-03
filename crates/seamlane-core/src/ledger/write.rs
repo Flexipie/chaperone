@@ -526,8 +526,9 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // The independence rule (R10): a session that has held the lane
             // never reports its session checks, so a lane cannot stamp its
             // own handoff. Reviews are daisy's worker's (events.md).
-            if let Some(session) = event.actor.session.as_deref()
-                && SESSION_CHECKS.contains(&p.check.as_deref().unwrap_or_default())
+            // Actor::check has made sure there is a session.
+            let session = event.actor.session.as_deref().unwrap_or_default();
+            if SESSION_CHECKS.contains(&p.check.as_deref().unwrap_or_default())
                 && has_held(tx, lane_id, session)?
             {
                 refuse!(invalid(&format!(
@@ -1320,6 +1321,34 @@ mod tests {
                 AT,
                 None,
                 ev(EventKind::FindingUpdated, Some(1), None, Payload::default()),
+            ),
+            // The host runs only handoff, and a phase.entered needs a `to`.
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::PhaseEntered,
+                    Some(1),
+                    None,
+                    Payload {
+                        transition: Some("to_ready".into()),
+                        to: Some("ready".into()),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::PhaseEntered,
+                    Some(1),
+                    None,
+                    Payload {
+                        transition: Some("handoff".into()),
+                        ..Payload::default()
+                    },
+                ),
             ),
             (
                 AT,
