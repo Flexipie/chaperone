@@ -230,15 +230,7 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
     // takeover is the way past a live lease, so those kinds skip the holder
     // rule. A claim keeps it: over an expired lease its `changed.from` pins
     // the holder it replaces.
-    let holder_rule = !matches!(
-        event.kind,
-        LaneTakenOver
-            | LaneReadyOverridden
-            | CheckRequested
-            | CheckFinished
-            | FindingUpdated
-            | GateDenied
-    );
+    let holder_rule = !(event.kind.keeps_updated_at() || event.kind == LaneTakenOver);
     // Their exemption must not reach the row: these kinds change no column.
     if event.kind.keeps_updated_at() && !p.changed.is_empty() {
         refuse!(invalid(&format!("{} changes no lane column", event.kind)));
@@ -320,6 +312,17 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
         {
             check!(spec_head(tx, spec));
         }
+    }
+    // A half-cleared holder would be a new holder no lease named.
+    if !event.kind.leases()
+        && (p.changed.contains_key("agent") || p.changed.contains_key("session"))
+        && (!after(tx, lane_id, p, "agent")?.is_null()
+            || !after(tx, lane_id, p, "session")?.is_null())
+    {
+        refuse!(invalid(&format!(
+            "{} clears agent and session together",
+            event.kind
+        )));
     }
     // The (spec_id, lane_key) pair is unique; refuse here, not as a SQLite error.
     if p.changed.contains_key("spec_id") || p.changed.contains_key("lane_key") {
@@ -954,12 +957,25 @@ mod tests {
         let cases = cases
             .into_iter()
             .map(|(at, key, m)| (&me, at, key, m))
-            .chain([(
-                &no_session,
-                AT,
-                None,
-                ev(EventKind::LaneClaimed, Some(1), None, lease),
-            )]);
+            .chain([
+                (
+                    &no_session,
+                    AT,
+                    None,
+                    ev(EventKind::LaneClaimed, Some(1), None, lease),
+                ),
+                (
+                    &other,
+                    AT,
+                    None,
+                    ev(
+                        EventKind::LaneUpdated,
+                        Some(2),
+                        None,
+                        change("agent", json!("b"), json!(null)),
+                    ),
+                ),
+            ]);
         for (i, (who, at, key, m)) in cases.enumerate() {
             let applied = ledger.apply(who, key, at, m).unwrap();
             assert!(

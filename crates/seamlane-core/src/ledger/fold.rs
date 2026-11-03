@@ -83,7 +83,10 @@ fn fold_lane(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
             params![e.lane_id, sql_value(&change.to)],
         )?)?;
     }
-    if e.kind.leases() {
+    // A cleared holder takes its lease with it, so no read sees a live
+    // lease on an unheld lane.
+    let released = p.changed.get("session").is_some_and(|c| c.to.is_null());
+    if e.kind.leases() || released {
         one(conn.execute(
             "UPDATE lanes SET lease_secs = ?2, lease_expires_at = ?3 WHERE id = ?1",
             params![e.lane_id, p.lease_secs, p.lease_expires_at],

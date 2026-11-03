@@ -77,6 +77,10 @@ enum Op {
         lane: u8,
         who: u8,
     },
+    Release {
+        lane: u8,
+        who: u8,
+    },
     Update {
         lane: u8,
         who: u8,
@@ -129,6 +133,7 @@ fn op() -> impl Strategy<Value = Op> {
                 takeover
             }),
         (0u8..5, who.clone()).prop_map(|(lane, who)| Op::Renew { lane, who }),
+        (0u8..5, who.clone()).prop_map(|(lane, who)| Op::Release { lane, who }),
         (0u8..5, who.clone(), 0..STATUSES.len(), any::<bool>()).prop_map(
             |(lane, who, status, stale)| Op::Update {
                 lane,
@@ -354,6 +359,30 @@ impl World {
                     },
                 ),
             ),
+            Op::Release { lane, who } => {
+                let id = self.lane(lane);
+                let changed = self.change(
+                    id,
+                    &[
+                        ("status", json!("queued")),
+                        ("agent", Value::Null),
+                        ("session", Value::Null),
+                    ],
+                    false,
+                );
+                (
+                    actor(who),
+                    event(
+                        EventKind::LaneReleased,
+                        Some(id),
+                        None,
+                        Payload {
+                            changed,
+                            ..Payload::default()
+                        },
+                    ),
+                )
+            }
             Op::Update {
                 lane,
                 who,
