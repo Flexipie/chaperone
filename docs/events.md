@@ -38,8 +38,8 @@ These rules keep every write small, single and fail-closed.
   `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied>`,
   so a retry with no new facts replays the same denial instead of appending again. A
   replayed denial still exits 1 with `gate_denied`.
-- **Only lane commands bump `updated_at`.** `gate.denied`, `check.*`, `finding.updated`
-  and `lane.ready_overridden` do not touch the lane row's `updated_at`, so a subagent
+- **Lane commands other than `work ready` bump `updated_at`.** `gate.denied`, `check.*`,
+  `finding.updated` and `lane.ready_overridden` do not touch the lane row's `updated_at`, so a subagent
   recording a check never makes the lane's next `--expected-updated-at` stale.
 - **Replays.** A retry with the same key returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
@@ -145,7 +145,7 @@ a handoff, the handoff's event carries `changed.pr` from null, and the fact
 | `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
 | `local_review` | daisy_worker | `job`, `round`, `score`, `verdict`, `findings[]` of `finding_key`, `severity` (`blocker`, `convention`, `risk`, `nit`, `question`), `path`, `line`, `title`, `body`, `verified` |
 | `pr_review` | daisy_worker | Same as `local_review`, without `round`, plus `pr`. |
-| `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. No score or findings. It sets no `review.local_head` and adds no round. |
+| `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. No score or findings. It sets no `review.local_head`, adds no round, and projects `daisy_review.state` as `failed`, which no gate accepts. |
 
 Finding bodies are untrusted text. They are stored, and they never satisfy a gate. R10's
 richer fields (smoke cases with evidence hashes, kept-test items with bars, verdict
@@ -155,7 +155,7 @@ reasons) are reserved for a `--file` input after M1.
 
 | Table | M1 rule |
 | --- | --- |
-| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the latest handoff's `ready` field, or the `work ready` override, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `spec_id`, `lane_key` and the pipeline columns are nullable until set. `events.idempotency_key` is nullable. |
+| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the latest handoff's `ready` field, or the `work ready` override, which wins over every handoff until `--clear`, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `id` is the lane id, `idempotency_key` comes from `lane.created`, `lease_state` is computed at read time, and `linear_outbox` and `repo_id` are always null. `phase` is null until the first `phase.entered`, then its `to`; M1's `handoff` has no `from` constraint. `head_event_id` is the id of the lane's latest event of any kind. `spec_id`, `lane_key` and the pipeline columns are nullable until set. `events.idempotency_key` is nullable. |
 | `gate_results` | One row per `(lane_id, check, head_sha)`. `status` is `ran` or `skipped`. The latest `check.finished` on that key wins. |
 | `findings` | One row per `(check_event_id, finding_key)`. `status` is `open`, `fixed` or `answered`. |
 

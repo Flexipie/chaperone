@@ -121,7 +121,8 @@ Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `do
 `cancelled` item is `invalid_input`.
 
 `check record` is new (#16, next to `reviews record`). The recorder passes its own
-`--session`. The write is refused when that session equals the lane's. `--head` is 7 to
+`--session`. The write is refused when that session is any session that has held the
+lane (events.md, producer). `--head` is 7 to
 40 hex digits. `--reason` is required with `skipped` and must be one the check allows
 (events.md). `--decision` is required for `merge_verdict` and refused for every other
 check.
@@ -130,8 +131,10 @@ check.
 daisy. A job that is not done (`data.done` false, status `queued` or `running`) appends
 `check.requested`. A done job with status `reviewed` or `posted` appends `check.finished`
 `ran` with `producer {kind: daisy_worker, job}`. A done job with status `failed` or
-`cancelled` appends `check.finished` `skipped` with `reason` that status. It settles
-`daisy_review.state` as `finished` and adds no local round. `reviews get --wait` does not
+`cancelled` appends `check.finished` `skipped` with `reason` that status. It projects
+`daisy_review.state` as `failed`, which `daisy_review_settled` rejects (a review that
+never ran is a blocker, not a skip, R10), and adds no local round. The lane re-runs the
+review or hands off `needs you`. `reviews get --wait` does not
 block on a job that is only requested, so lanes keep `daisy-cli reviews get --wait` for
 waiting. `reviews get` and `jobs get`
 answer from what was recorded, in daisy's shape.
