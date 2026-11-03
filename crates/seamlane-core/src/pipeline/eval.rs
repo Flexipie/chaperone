@@ -114,14 +114,14 @@ impl Eval<'_> {
                 (Fact::Absent, _) => return None,
                 _ => false,
             },
+            // Absent wins over false in `all`, so `not(all(..))` never passes
+            // on a missing fact, whatever the member order.
             Pred::All(of) => {
-                for g in of {
-                    if self.gate(g)? {
-                        continue;
-                    }
-                    return Some(false);
+                let checks: Vec<_> = of.iter().map(|g| self.gate(g)).collect();
+                if checks.contains(&None) {
+                    return None;
                 }
-                true
+                !checks.contains(&Some(false))
             }
             Pred::Any(of) => {
                 let checks: Vec<_> = of.iter().map(|g| self.gate(g)).collect();

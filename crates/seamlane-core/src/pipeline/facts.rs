@@ -36,11 +36,13 @@ impl From<&str> for Fact {
 pub struct FactBundle(BTreeMap<String, Fact>);
 
 impl FactBundle {
+    /// Sets one fact, replacing any value the path had.
     pub fn set(&mut self, path: &str, fact: impl Into<Fact>) -> &mut Self {
         self.0.insert(path.into(), fact.into());
         self
     }
 
+    /// The fact at `path`, [`Fact::Absent`] when it has none.
     pub fn get(&self, path: &str) -> &Fact {
         self.0.get(path).unwrap_or(&Fact::Absent)
     }

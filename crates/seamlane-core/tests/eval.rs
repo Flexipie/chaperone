@@ -284,6 +284,14 @@ fn not_over_an_absent_fact_denies() {
     ));
     assert_eq!(run(&p, &xy(Some(2), None)), denied("a", &["x", "y"]));
     assert_eq!(run(&p, &xy(Some(2), Some(2))), Ok(()));
+    // not(all(..)) with a missing member denies in either order.
+    let p = doc(&format!(
+        "[[gate]]\nid = \"a\"\nfn = \"not\"\nargs = {{ of = \"both\" }}\n\n\
+         [[gate]]\nid = \"both\"\nfn = \"all\"\nargs = {{ of = [\"x1\", \"y1\"] }}\n{LEAVES}"
+    ));
+    assert_eq!(run(&p, &xy(Some(2), None)), denied("a", &["x", "y"]));
+    assert_eq!(run(&p, &xy(None, Some(2))), denied("a", &["x", "y"]));
+    assert_eq!(run(&p, &xy(Some(2), Some(2))), Ok(()));
 }
 
 #[test]

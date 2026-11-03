@@ -49,7 +49,9 @@ pub struct Gate {
 
 /// A host predicate with its arguments resolved: limits are numbers here.
 /// Fields are fact paths. An absent fact denies, and so does `not` over a
-/// gate that read an absent fact.
+/// gate that read an absent fact. Two read absence on purpose: `present`
+/// is false on it (so `not(present)` holds), and `event_before` holds when
+/// the later event is absent.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pred {
     Present {
