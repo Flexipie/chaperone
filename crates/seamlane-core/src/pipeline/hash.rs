@@ -4,18 +4,11 @@
 //! transitions sorted, `requires` and `of` order kept. `published`, `cohort`
 //! and comments are not part of it.
 
-use std::fmt::Write;
-
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub(super) fn semantic_hash(doc: &Value) -> String {
-    let out = canonical_string(doc);
-    let mut hex = String::with_capacity(64);
-    for byte in Sha256::digest(out.as_bytes()) {
-        write!(hex, "{byte:02x}").unwrap();
-    }
-    hex
+    format!("{:x}", Sha256::digest(canonical_string(doc)))
 }
 
 pub(super) fn canonical_string(value: &Value) -> String {

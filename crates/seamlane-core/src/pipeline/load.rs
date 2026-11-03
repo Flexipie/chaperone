@@ -111,12 +111,8 @@ fn hash_input(
     transitions: &[Transition],
 ) -> serde_json::Value {
     gates.sort_by(|a, b| a.id.cmp(&b.id));
-    let mut rows: Vec<(String, serde_json::Value)> = transitions
-        .iter()
-        .map(|t| (t.id.clone(), json!(t)))
-        .collect();
-    rows.sort_by_key(|(id, row)| (id.clone(), canonical_string(row)));
-    let rows: Vec<_> = rows.into_iter().map(|(_, row)| row).collect();
+    let mut rows: Vec<&Transition> = transitions.iter().collect();
+    rows.sort_by_cached_key(|t| (&t.id, canonical_string(&json!(t))));
     json!({ "limits": limits, "gates": gates, "transitions": rows })
 }
 
