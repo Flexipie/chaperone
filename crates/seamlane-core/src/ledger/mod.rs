@@ -17,7 +17,9 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags};
 
 pub use error::LedgerError;
-pub use event::{Actor, Applied, Change, Event, EventKind, Finding, Mutation, Payload, Refusal};
+pub use event::{
+    Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
+};
 use migrate::user_version;
 
 pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];

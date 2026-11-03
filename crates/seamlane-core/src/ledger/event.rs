@@ -113,6 +113,15 @@ pub struct Finding {
     pub rest: Map<String, Value>,
 }
 
+/// `findings` on `check.finished`: a count from a session check
+/// (`plan_check`, `quality_gate`), a list from a review.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Findings {
+    Count(u64),
+    List(Vec<Finding>),
+}
+
 /// The fields the fold reads, typed. Which ones a kind needs is checked by
 /// the write before it appends.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -141,8 +150,8 @@ pub struct Payload {
     pub head_sha: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub findings: Vec<Finding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub findings: Option<Findings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_event_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,6 +160,16 @@ pub struct Payload {
     pub status: Option<String>,
     #[serde(flatten)]
     pub rest: Map<String, Value>,
+}
+
+impl Payload {
+    /// The finding rows a check folds: the list form only.
+    pub(super) fn finding_list(&self) -> &[Finding] {
+        match &self.findings {
+            Some(Findings::List(list)) => list,
+            _ => &[],
+        }
+    }
 }
 
 // Built once per write and moved into it, never stored in bulk.

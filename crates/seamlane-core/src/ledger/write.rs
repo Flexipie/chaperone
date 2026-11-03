@@ -116,8 +116,12 @@ impl Ledger {
 
 /// Extends the lease by the lane's own `lease_secs`. Exact holder pair, not
 /// a live lease: a holder back from a stall renews instead of re-claiming.
+/// Another pair's lease, live or not, is held.
 fn heartbeat(tx: &Transaction, actor: &Actor, at: &str, lane_id: i64) -> Checked<String> {
-    let ((_, _, secs, _), same_pair) = check!(holder(tx, actor, lane_id));
+    let ((agent, session, secs, until), same_pair) = check!(holder(tx, actor, lane_id));
+    if session.is_some() && !same_pair {
+        refuse!(lease_held(agent, session, until));
+    }
     let Some(secs) = secs.filter(|_| same_pair) else {
         refuse!(Refusal::InvalidInput(format!(
             "lane {lane_id} is not held by this agent and session"
@@ -148,6 +152,9 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
         ));
     }
     match event.kind {
+        SpecCreated | SpecRevised | SpecApproved if event.lane_id.is_some() => {
+            refuse!(invalid("spec events name no lane"));
+        }
         SpecCreated => {
             let (Some(key), Some(_), Some(_)) = (&p.parent_key, &p.title, &p.body) else {
                 refuse!(invalid("spec.created needs parent_key, title and body"));
@@ -227,20 +234,18 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
     if event.kind.keeps_updated_at() && !p.changed.is_empty() {
         refuse!(invalid(&format!("{} changes no lane column", event.kind)));
     }
+    // A renewal names the lease it extends, so another pair's is held even
+    // once it has expired.
+    if session.is_some() && !same_pair && (holder_rule && live || event.kind == LaneRenewed) {
+        refuse!(lease_held(agent, session, until));
+    }
     if event.kind == LaneRenewed && !same_pair {
         refuse!(invalid("only the holder renews its lease"));
     }
-    if holder_rule && session.is_some() && live && !same_pair {
-        refuse!(Refusal::LeaseHeld {
-            by: format!(
-                "{}/{}",
-                agent.unwrap_or_default(),
-                session.unwrap_or_default()
-            ),
-            until: until.unwrap_or_default(),
-        });
-    }
     if event.kind.leases() {
+        if event.actor.session.is_none() {
+            refuse!(invalid(&format!("{} needs an agent session", event.kind)));
+        }
         let secs = p.lease_secs.unwrap_or(0);
         if !(MIN_LEASE_SECS..=MAX_LEASE_SECS).contains(&secs) {
             refuse!(invalid(&format!(
@@ -270,15 +275,34 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 "{field} must be text, an integer or null"
             )));
         }
-        let current = tx.query_row(
-            &format!("SELECT {field} FROM lanes WHERE id = ?1"),
-            [lane_id],
-            |r| Ok(to_json(r.get_ref(0)?)),
-        )?;
+        let current = lane_value(tx, lane_id, field)?;
         if current != change.from {
             refuse!(Refusal::Conflict(format!(
                 "{field} is {current}, not {}",
                 change.from
+            )));
+        }
+        if field == "spec_id" && !change.to.is_null() {
+            let Some(spec) = change.to.as_i64() else {
+                refuse!(invalid("spec_id must be an integer or null"));
+            };
+            check!(spec_head(tx, spec));
+        }
+    }
+    // The (spec_id, lane_key) pair is unique; refuse here, not as a SQLite error.
+    if p.changed.contains_key("spec_id") || p.changed.contains_key("lane_key") {
+        let to = |field: &str| match p.changed.get(field) {
+            Some(change) => Ok(change.to.clone()),
+            None => lane_value(tx, lane_id, field),
+        };
+        let (spec, key) = (to("spec_id")?, to("lane_key")?);
+        if exists(
+            tx,
+            "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2 AND id != ?3",
+            rusqlite::params![fold::sql_value(&spec), fold::sql_value(&key), lane_id],
+        )? {
+            refuse!(Refusal::Conflict(format!(
+                "lane {key} exists on spec {spec}"
             )));
         }
     }
@@ -290,8 +314,9 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             if !matches!(p.outcome.as_deref(), Some("ran" | "skipped")) {
                 refuse!(invalid("check.finished outcome is ran or skipped"));
             }
-            let keys: BTreeSet<_> = p.findings.iter().map(|f| &f.finding_key).collect();
-            if keys.len() != p.findings.len() {
+            let findings = p.finding_list();
+            let keys: BTreeSet<_> = findings.iter().map(|f| &f.finding_key).collect();
+            if keys.len() != findings.len() {
                 refuse!(invalid("finding keys repeat"));
             }
         }
@@ -362,6 +387,26 @@ fn holder(tx: &Transaction, actor: &Actor, lane_id: i64) -> Checked<(Holder, boo
     };
     let same_pair = h.1.is_some() && (&h.0, &h.1) == (&actor.agent, &actor.session);
     Ok(Ok((h, same_pair)))
+}
+
+/// A held lease, `conflict` with `by` and `until` in the CLI contract.
+fn lease_held(agent: Option<String>, session: Option<String>, until: Option<String>) -> Refusal {
+    Refusal::LeaseHeld {
+        by: format!(
+            "{}/{}",
+            agent.unwrap_or_default(),
+            session.unwrap_or_default()
+        ),
+        until: until.unwrap_or_default(),
+    }
+}
+
+fn lane_value(tx: &Transaction, lane_id: i64, field: &str) -> Result<Value, LedgerError> {
+    Ok(tx.query_row(
+        &format!("SELECT {field} FROM lanes WHERE id = ?1"),
+        [lane_id],
+        |r| Ok(to_json(r.get_ref(0)?)),
+    )?)
 }
 
 /// Plain ids, assigned under the write lock.
@@ -437,7 +482,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ledger::{Change, Finding};
+    use crate::ledger::{Change, Finding, Findings};
 
     const AT: &str = "2026-11-03T00:00:00.000Z";
 
@@ -488,12 +533,45 @@ mod tests {
             body: Some("b".into()),
             ..Payload::default()
         };
-        for m in [
-            ev(EventKind::SpecCreated, None, None, spec.clone()),
-            ev(EventKind::LaneCreated, None, Some(1), Payload::default()),
+        let other = Actor {
+            agent: Some("b".into()),
+            session: Some("t".into()),
+        };
+        let no_session = Actor {
+            session: None,
+            ..me.clone()
+        };
+        let lease = Payload {
+            lease_secs: Some(60),
+            ..Payload::default()
+        };
+        // Lane 2 is on spec 1 as L, held by the other pair.
+        let mut held = change("session", json!(null), json!("t"));
+        held.changed
+            .extend(change("agent", json!(null), json!("b")).changed);
+        held.lease_secs = Some(60);
+        for (who, m) in [
+            (&me, ev(EventKind::SpecCreated, None, None, spec.clone())),
+            (
+                &me,
+                ev(EventKind::LaneCreated, None, Some(1), Payload::default()),
+            ),
+            (
+                &me,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    Some(1),
+                    Payload {
+                        lane_key: Some("L".into()),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            (&other, ev(EventKind::LaneClaimed, Some(2), None, held)),
         ] {
             assert!(matches!(
-                ledger.apply(&me, None, AT, m).unwrap(),
+                ledger.apply(who, None, AT, m).unwrap(),
                 Applied::Committed(_)
             ));
         }
@@ -509,6 +587,7 @@ mod tests {
             (AT, Some("k"), Mutation::Heartbeat { lane_id: 1 }),
             (AT, None, Mutation::Heartbeat { lane_id: 9 }),
             (AT, None, Mutation::Heartbeat { lane_id: 1 }),
+            (AT, None, Mutation::Heartbeat { lane_id: 2 }),
             (
                 AT,
                 None,
@@ -533,6 +612,19 @@ mod tests {
                 ),
             ),
             (AT, None, ev(EventKind::SpecCreated, None, None, spec)),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::SpecApproved,
+                    Some(1),
+                    Some(1),
+                    Payload {
+                        version: Some(1),
+                        ..Payload::default()
+                    },
+                ),
+            ),
             (
                 AT,
                 None,
@@ -606,6 +698,11 @@ mod tests {
             (
                 AT,
                 None,
+                ev(EventKind::LaneRenewed, Some(2), None, lease.clone()),
+            ),
+            (
+                AT,
+                None,
                 ev(
                     EventKind::LaneUpdated,
                     Some(1),
@@ -650,6 +747,36 @@ mod tests {
                 AT,
                 None,
                 ev(
+                    EventKind::LaneUpdated,
+                    Some(1),
+                    None,
+                    change("spec_id", json!(1), json!("x")),
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneUpdated,
+                    Some(1),
+                    None,
+                    change("spec_id", json!(1), json!(9)),
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneUpdated,
+                    Some(1),
+                    None,
+                    change("lane_key", json!(null), json!("L")),
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
                     EventKind::CheckFinished,
                     Some(1),
                     None,
@@ -687,7 +814,7 @@ mod tests {
                         check: Some("smoke".into()),
                         head_sha: Some("abc1234".into()),
                         outcome: Some("ran".into()),
-                        findings: vec![finding("f"), finding("f")],
+                        findings: Some(Findings::List(vec![finding("f"), finding("f")])),
                         ..Payload::default()
                     },
                 ),
@@ -733,13 +860,22 @@ mod tests {
                 .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
                 .unwrap()
         };
-        for (i, (at, key, m)) in cases.into_iter().enumerate() {
-            let applied = ledger.apply(&me, key, at, m).unwrap();
+        let cases = cases
+            .into_iter()
+            .map(|(at, key, m)| (&me, at, key, m))
+            .chain([(
+                &no_session,
+                AT,
+                None,
+                ev(EventKind::LaneClaimed, Some(1), None, lease),
+            )]);
+        for (i, (who, at, key, m)) in cases.enumerate() {
+            let applied = ledger.apply(who, key, at, m).unwrap();
             assert!(
                 matches!(applied, Applied::Refused(_)),
                 "case {i}: {applied:?}"
             );
-            assert_eq!(events(&ledger), 2, "case {i}");
+            assert_eq!(events(&ledger), 4, "case {i}");
         }
     }
 }

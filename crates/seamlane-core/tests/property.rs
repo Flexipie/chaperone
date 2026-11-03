@@ -9,7 +9,7 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, RngSeed};
 use rusqlite::{Connection, OpenFlags};
 use seamlane_core::ledger::{
-    Actor, Applied, Change, EventKind, Finding, Ledger, Mutation, Payload, Refusal,
+    Actor, Applied, Change, EventKind, Finding, Findings, Ledger, Mutation, Payload, Refusal,
 };
 use serde_json::{Value, json};
 
@@ -24,9 +24,10 @@ const STATUSES: &[&str] = &[
 ];
 
 fn seed() -> u64 {
-    let sha = std::env::var("SEAMLANE_SEED")
-        .or_else(|_| std::env::var("GITHUB_SHA"))
-        .ok()
+    let given = std::env::var("SEAMLANE_SEED").ok();
+    let sha = given
+        .clone()
+        .or_else(|| std::env::var("GITHUB_SHA").ok())
         .or_else(|| {
             let out = std::process::Command::new("git")
                 .args(["rev-parse", "HEAD"])
@@ -35,7 +36,10 @@ fn seed() -> u64 {
             Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
         })
         .unwrap_or_default();
-    let seed = u64::from_str_radix(sha.get(..16).unwrap_or("0"), 16).unwrap_or(0);
+    let seed = u64::from_str_radix(sha.get(..16).unwrap_or(&sha), 16).unwrap_or_else(|_| {
+        assert!(given.is_none(), "SEAMLANE_SEED={sha} is not hex");
+        0
+    });
     eprintln!("property seed {seed:016x} (rerun: SEAMLANE_SEED={seed:016x})");
     seed
 }
@@ -89,6 +93,7 @@ enum Op {
         ran: bool,
         sha: u8,
         findings: u8,
+        review: bool,
     },
     FindingUpdate {
         lane: u8,
@@ -133,15 +138,22 @@ fn op() -> impl Strategy<Value = Op> {
             }
         ),
         (0u8..5, who.clone()).prop_map(|(lane, who)| Op::Heartbeat { lane, who }),
-        (0u8..5, who.clone(), any::<bool>(), 0u8..2, 0u8..3).prop_map(
-            |(lane, who, ran, sha, findings)| Op::Check {
+        (
+            0u8..5,
+            who.clone(),
+            any::<bool>(),
+            0u8..2,
+            0u8..3,
+            any::<bool>()
+        )
+            .prop_map(|(lane, who, ran, sha, findings, review)| Op::Check {
                 lane,
                 who,
                 ran,
                 sha,
-                findings
-            }
-        ),
+                findings,
+                review
+            }),
         (0u8..5, who.clone()).prop_map(|(lane, who)| Op::FindingUpdate { lane, who }),
         (0u8..5, who).prop_map(|(lane, who)| Op::Ready { lane, who }),
         prop_oneof![Just(5), Just(120), Just(1000)].prop_map(|secs| Op::Advance { secs }),
@@ -375,30 +387,40 @@ impl World {
                 ran,
                 sha,
                 findings,
-            } => (
-                actor(who + 10),
-                event(
-                    EventKind::CheckFinished,
-                    Some(self.lane(lane)),
-                    None,
-                    Payload {
-                        check: Some("plan_check".into()),
-                        outcome: Some(if ran { "ran" } else { "skipped" }.into()),
-                        head_sha: Some(format!("abc123{sha}")),
-                        findings: (0..findings)
-                            .map(|n| Finding {
-                                finding_key: format!("f{n}"),
-                                severity: "risk".into(),
-                                title: "t".into(),
-                                body: "b".into(),
-                                path: None,
-                                rest: Default::default(),
-                            })
-                            .collect(),
-                        ..Payload::default()
-                    },
-                ),
-            ),
+                review,
+            } => {
+                // A review lists its findings; a session check counts them.
+                let (check, findings) = if review {
+                    let list = (0..findings)
+                        .map(|n| Finding {
+                            finding_key: format!("f{n}"),
+                            severity: "risk".into(),
+                            title: "t".into(),
+                            body: "b".into(),
+                            path: None,
+                            rest: Default::default(),
+                        })
+                        .collect();
+                    ("local_review", Findings::List(list))
+                } else {
+                    ("plan_check", Findings::Count(findings.into()))
+                };
+                (
+                    actor(who + 10),
+                    event(
+                        EventKind::CheckFinished,
+                        Some(self.lane(lane)),
+                        None,
+                        Payload {
+                            check: Some(check.into()),
+                            outcome: Some(if ran { "ran" } else { "skipped" }.into()),
+                            head_sha: Some(format!("abc123{sha}")),
+                            findings: Some(findings),
+                            ..Payload::default()
+                        },
+                    ),
+                )
+            }
             Op::FindingUpdate { lane, who } => {
                 let id = self.lane(lane);
                 let (check, key): (i64, String) = self
@@ -599,7 +621,7 @@ proptest! {
         }
         let before = dump(&w.db);
         let other = w.apply(&Op::Heartbeat { lane: 0, who: b }, None).unwrap();
-        prop_assert!(matches!(other, Applied::Refused(_)));
+        prop_assert!(matches!(other, Applied::Refused(Refusal::LeaseHeld { .. })), "{:?}", other);
         prop_assert_eq!(&before, &dump(&w.db));
     }
 }

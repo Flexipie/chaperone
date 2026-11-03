@@ -74,16 +74,9 @@ fn fold_lane(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
         if !LANE_COLUMNS.contains(&field.as_str()) {
             return Err(std::io::Error::other(format!("event {} sets {field}", e.id)).into());
         }
-        let to = match &change.to {
-            Value::String(s) => rusqlite::types::Value::Text(s.clone()),
-            v => v.as_i64().map_or(
-                rusqlite::types::Value::Null,
-                rusqlite::types::Value::Integer,
-            ),
-        };
         one(conn.execute(
             &format!("UPDATE lanes SET {field} = ?2 WHERE id = ?1"),
-            params![e.lane_id, to],
+            params![e.lane_id, sql_value(&change.to)],
         )?)?;
     }
     if e.kind.leases() {
@@ -113,7 +106,7 @@ fn fold_lane(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
                     e.at
                 ],
             )?;
-            for f in &p.findings {
+            for f in p.finding_list() {
                 conn.execute(
                     "INSERT INTO findings (lane_id, check_event_id, finding_key, severity,
                        status, head_sha, path, title, body, event_id, updated_at)
@@ -147,6 +140,17 @@ fn fold_lane(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
         _ => {}
     }
     Ok(())
+}
+
+/// A `changed.to` as the lane row stores it: text, an integer or null.
+pub(super) fn sql_value(v: &Value) -> rusqlite::types::Value {
+    match v {
+        Value::String(s) => rusqlite::types::Value::Text(s.clone()),
+        v => v.as_i64().map_or(
+            rusqlite::types::Value::Null,
+            rusqlite::types::Value::Integer,
+        ),
+    }
 }
 
 fn spec_version(conn: &Connection, e: &Event, version: i64) -> Result<(), LedgerError> {
