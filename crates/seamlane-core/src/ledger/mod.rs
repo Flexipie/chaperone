@@ -53,7 +53,11 @@ impl Ledger {
         migrations: &[&str],
     ) -> Result<Self, LedgerError> {
         let supported = migrations.len() as i64;
-        let dir = path.parent().unwrap_or(Path::new(""));
+        // A bare file name has the parent "", which cannot be opened to sync.
+        let dir = match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir,
+            _ => Path::new("."),
+        };
         std::fs::create_dir_all(dir)?;
         // Serialises create, backup and migrate across processes. Switching
         // to WAL does not wait out busy_timeout, and two backups of one
@@ -71,13 +75,15 @@ impl Ledger {
             Some((found, _)) if found > supported => {
                 return Err(LedgerError::SchemaMismatch { found, supported });
             }
-            Some((0, true)) => return Err(LedgerError::NotALedger(path.into())),
+            Some((found, has_schema)) if found < 0 || (found == 0 && has_schema) => {
+                return Err(LedgerError::NotALedger(path.into()));
+            }
             Some((found, _)) => found,
         };
         let conn = Connection::open(path)?;
         apply_pragmas(&conn)?;
         if found > 0 && found < supported {
-            migrate::backup(&conn, path, found)?;
+            migrate::backup(&conn, dir, path, found)?;
         }
         migrate::migrate(&conn, migrations)?;
         drop(lock);
@@ -229,16 +235,23 @@ mod tests {
             }
         ));
         assert!(err.to_string().contains("seamlane migrate"), "{err}");
-        // Not a ledger: some other SQLite file at v0 is never migrated.
-        let before = std::fs::read(&path).unwrap();
-        assert!(matches!(
-            Ledger::open_and_migrate(&path),
-            Err(LedgerError::NotALedger(_))
-        ));
-        assert!(
-            before == std::fs::read(&path).unwrap(),
-            "foreign file changed"
-        );
+        // Not a ledger: another SQLite file at v0, or at a negative
+        // user_version, is never migrated.
+        for version in [0, -1] {
+            Connection::open(&path)
+                .unwrap()
+                .pragma_update(None, "user_version", version)
+                .unwrap();
+            let before = std::fs::read(&path).unwrap();
+            assert!(matches!(
+                Ledger::open_and_migrate(&path),
+                Err(LedgerError::NotALedger(_))
+            ));
+            assert!(
+                before == std::fs::read(&path).unwrap(),
+                "v{version} changed"
+            );
+        }
         assert!(!has_table(&read_only(&path), "events"));
     }
 

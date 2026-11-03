@@ -38,8 +38,13 @@ pub(crate) fn migrate(conn: &Connection, migrations: &[&str]) -> Result<(), Ledg
 /// file with the final name is always a whole snapshot. A failed backup stops
 /// the upgrade. VACUUM cannot run inside a transaction, so the caller holds
 /// the migrate lock instead.
-pub(super) fn backup(conn: &Connection, path: &Path, version: i64) -> Result<(), LedgerError> {
-    let dir = path.parent().unwrap_or(Path::new("")).join("backups");
+pub(super) fn backup(
+    conn: &Connection,
+    ledger_dir: &Path,
+    path: &Path,
+    version: i64,
+) -> Result<(), LedgerError> {
+    let dir = ledger_dir.join("backups");
     std::fs::create_dir_all(&dir)?;
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let mut options = OpenOptions::new();
@@ -64,16 +69,13 @@ pub(super) fn backup(conn: &Connection, path: &Path, version: i64) -> Result<(),
         let target = pending
             .to_str()
             .ok_or_else(|| std::io::Error::other("backup path is not UTF-8"))?;
-        if let Err(e) = conn.execute("VACUUM main INTO ?1", [target]) {
-            let _ = std::fs::remove_file(&pending);
-            return Err(e.into());
-        }
+        conn.execute("VACUUM main INTO ?1", [target])?;
         std::fs::File::open(&pending)?.sync_all()?;
         std::fs::rename(&pending, &done)?;
         // The rename and a new backups dir are durable before the migration
         // commits, so a power cut cannot leave an upgrade with no backup.
         std::fs::File::open(&dir)?.sync_all()?;
-        std::fs::File::open(dir.parent().unwrap_or(Path::new(".")))?.sync_all()?;
+        std::fs::File::open(ledger_dir)?.sync_all()?;
         return Ok(());
     }
     unreachable!("backup names exhausted")
