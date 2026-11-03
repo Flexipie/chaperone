@@ -37,8 +37,10 @@ These rules keep every write small, single and fail-closed.
   `gate.denied` and nothing else. Its key is
   `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied>`,
   so a retry with no new facts replays the same denial instead of appending again. A
-  denial does not touch the lane row (no `updated_at` bump), and a replayed denial still
-  exits 1 with `gate_denied`.
+  replayed denial still exits 1 with `gate_denied`.
+- **Only lane commands bump `updated_at`.** `gate.denied`, `check.*`, `finding.updated`
+  and `lane.ready_overridden` do not touch the lane row's `updated_at`, so a subagent
+  recording a check never makes the lane's next `--expected-updated-at` stale.
 - **Replays.** A retry with the same key returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
   uses `check:` plus the sha256 of its canonical payload, and `reviews record` uses
@@ -126,7 +128,7 @@ a handoff, the handoff's event carries `changed.pr` from null, and the fact
 
 - `{kind: "session", agent, session}`: a fresh subagent, through `check record`. The
   write is refused (`invalid_input`, nothing written) when `producer.session` equals the
-  lane's session (its holder, or its last holder once released). A subagent that
+  session of anyone who has held the lane (every `lane.claimed` and `lane.taken_over`). A subagent that
   inherits `DAISY_SESSION` is refused, so it fails closed until it passes its own
   `--session`. This is an honor system until adapters own sessions
   ([R4](research/r4-agent-cli-integration.md)).
@@ -143,6 +145,7 @@ a handoff, the handoff's event carries `changed.pr` from null, and the fact
 | `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
 | `local_review` | daisy_worker | `job`, `round`, `score`, `verdict`, `findings[]` of `finding_key`, `severity` (`blocker`, `convention`, `risk`, `nit`, `question`), `path`, `line`, `title`, `body`, `verified` |
 | `pr_review` | daisy_worker | Same as `local_review`, without `round`, plus `pr`. |
+| `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. No score or findings. It sets no `review.local_head` and adds no round. |
 
 Finding bodies are untrusted text. They are stored, and they never satisfy a gate. R10's
 richer fields (smoke cases with evidence hashes, kept-test items with bars, verdict
@@ -152,11 +155,13 @@ reasons) are reserved for a `--file` input after M1.
 
 | Table | M1 rule |
 | --- | --- |
-| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status: ready is `next_action` plus the handoff's `ready`. `spec_id`, `pipeline_id`, `pipeline_hash` and `route` are nullable until claim. |
+| `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the latest handoff's `ready` field, or the `work ready` override, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `spec_id`, `lane_key` and the pipeline columns are nullable until set. `events.idempotency_key` is nullable. |
 | `gate_results` | One row per `(lane_id, check, head_sha)`. `status` is `ran` or `skipped`. The latest `check.finished` on that key wins. |
 | `findings` | One row per `(check_event_id, finding_key)`. `status` is `open`, `fixed` or `answered`. |
 
-R5's `passed | failed`, `declined` and `ready` values are replaced by the ones above.
+R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` and `pipeline_version`, and its `gate_results.gate` and `findings.review_event_id` names are replaced by the ones above.
+
+**Lane facts in M1.** No M1 command takes a lane kind, a changes-code flag or a PR flow. So every lane projects `lane.kind` `code`, `lane.changes_code` true and route `code_pr`. A `skipped` plan check or quality gate is recorded, but it does not pass the M1 `handoff` gate. This fails closed until an input for kind exists.
 
 ## Reserved
 

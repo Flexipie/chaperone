@@ -115,6 +115,8 @@ Every write also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
 
+`work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`.
+
 Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `done` or
 `cancelled` item is `invalid_input`.
 
@@ -129,7 +131,9 @@ daisy. A job that is not done (`data.done` false, status `queued` or `running`) 
 `check.requested`. A done job with status `reviewed` or `posted` appends `check.finished`
 `ran` with `producer {kind: daisy_worker, job}`. A done job with status `failed` or
 `cancelled` appends `check.finished` `skipped` with `reason` that status. It settles
-`daisy_review.state` as `finished` and adds no local round. `reviews get` and `jobs get`
+`daisy_review.state` as `finished` and adds no local round. `reviews get --wait` does not
+block on a job that is only requested, so lanes keep `daisy-cli reviews get --wait` for
+waiting. `reviews get` and `jobs get`
 answer from what was recorded, in daisy's shape.
 
 ## Commands and transitions
@@ -153,9 +157,10 @@ Each command is one transaction that appends one event (events.md, write rules).
 (`handoff.commit`, or for `update --status done` the commit of the lane's latest
 handoff). Routes without a PR skip the PR gates as v17 says. Ready comes from a
 handoff's `ready` (or the owner's `work ready` override), so a handoff cannot mark a lane
-ready without passing this gate. A
-`needs you` handoff is not gated, so it always reaches the owner. A missing fact fails
-closed. The
+ready without passing this gate. There is no `next_action` fallback for ready (events.md,
+folded rows). A `needs you` handoff is not gated, so it always reaches the owner. A
+missing fact fails closed, and in M1 every lane projects route `code_pr` (events.md, lane
+facts). The
 denial exits 1 with `gate_denied`, names the failing gate id on stderr, and leaves the
 lane where it was.
 
