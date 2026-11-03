@@ -123,7 +123,11 @@ impl ErrorBody {
                     format!("{entity} {reference} not found"),
                     Some(json!({ "entity": entity, "reference": reference })),
                 ),
-                Refusal::Conflict(m) => body("conflict", m.clone(), None),
+                Refusal::Conflict { entity, message } => body(
+                    "conflict",
+                    message.clone(),
+                    Some(json!({ "entity": entity })),
+                ),
                 Refusal::LeaseHeld { by, until } => body(
                     "conflict",
                     format!("held by {by} until {until}; pass --takeover to take it"),

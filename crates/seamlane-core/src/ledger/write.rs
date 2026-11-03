@@ -214,7 +214,10 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
                 refuse!(invalid("spec.created assigns the spec id and version 1"));
             }
             if exists(tx, "SELECT 1 FROM specs WHERE external_key = ?1", [key])? {
-                refuse!(Refusal::Conflict(format!("spec {key} exists")));
+                refuse!(Refusal::Conflict {
+                    entity: "spec",
+                    message: format!("spec {key} exists"),
+                });
             }
             event.spec_id = Some(next_id(tx, "specs")?);
         }
@@ -258,9 +261,10 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
                         rusqlite::params![spec, lane_key],
                     )?
                 {
-                    refuse!(Refusal::Conflict(format!(
-                        "lane {lane_key} exists on spec {spec}"
-                    )));
+                    refuse!(Refusal::Conflict {
+                        entity: "work item",
+                        message: format!("lane {lane_key} exists on spec {spec}"),
+                    });
                 }
             }
             event.lane_id = Some(next_id(tx, "lanes")?);
@@ -354,10 +358,10 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
         }
         let current = lane_value(tx, lane_id, field)?;
         if current != change.from {
-            refuse!(Refusal::Conflict(format!(
-                "{field} is {current}, not {}",
-                change.from
-            )));
+            refuse!(Refusal::Conflict {
+                entity: "work item",
+                message: format!("{field} is {current}, not {}", change.from),
+            });
         }
         if field == "spec_id"
             && let Some(spec) = change.to.as_i64()
@@ -387,9 +391,10 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             "SELECT 1 FROM lanes WHERE spec_id = ?1 AND lane_key = ?2 AND id != ?3",
             rusqlite::params![fold::sql_value(&spec), fold::sql_value(&key), lane_id],
         )? {
-            refuse!(Refusal::Conflict(format!(
-                "lane {key} exists on spec {spec}"
-            )));
+            refuse!(Refusal::Conflict {
+                entity: "work item",
+                message: format!("lane {key} exists on spec {spec}"),
+            });
         }
     }
     match event.kind {
@@ -930,6 +935,32 @@ mod tests {
                     None,
                     None,
                     Payload {
+                        source: Some("jira".into()),
+                        ..lane()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
+                        pr_flow: Some("merge".into()),
+                        ..lane()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
                         lease_expires_at: Some(AT.into()),
                         ..Payload::default()
                     },
@@ -1201,6 +1232,36 @@ mod tests {
             );
             assert_eq!(events(&ledger), 4, "case {i}");
         }
+    }
+
+    /// A dry run is the real write, read inside its transaction, then
+    /// rolled back: the next real write gets the same lane id.
+    #[test]
+    fn dry_run_rolls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let me = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
+        let create = || ev(EventKind::LaneCreated, None, None, lane());
+        let count = |c: &Connection, table: &str| -> Result<i64, LedgerError> {
+            Ok(c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?)
+        };
+        let (applied, seen) = ledger
+            .apply_with(&me, Some("k"), AT, create(), true, |c, _| count(c, "lanes"))
+            .unwrap();
+        assert!(matches!(applied, Applied::Committed(_)), "{applied:?}");
+        assert_eq!(seen, Some(1));
+        for table in ["events", "lanes"] {
+            assert_eq!(count(ledger.conn(), table).unwrap(), 0, "{table}");
+        }
+        ledger.apply(&me, Some("k"), AT, create()).unwrap();
+        let id: i64 = ledger
+            .conn()
+            .query_row("SELECT id FROM lanes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(id, 1);
     }
 
     /// The accepting side of guard branches the property ops never take:

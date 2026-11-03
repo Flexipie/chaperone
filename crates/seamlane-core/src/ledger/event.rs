@@ -260,7 +260,10 @@ pub enum Refusal {
         reference: String,
     },
     /// A `changed.from` that is not the current value, or a key already taken.
-    Conflict(String),
+    Conflict {
+        entity: &'static str,
+        message: String,
+    },
     LeaseHeld {
         by: String,
         until: String,
