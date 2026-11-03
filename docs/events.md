@@ -93,9 +93,7 @@ The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the firs
 | `phase.entered` | A gated command passes (`work handoff` to `review` or `done`, `work update --status done`) | `transition`, `from`, `to`, `status`, `head_sha`, plus the command's fields: `changed`, and `handoff_id` and `handoff` for a handoff |
 | `gate.denied` | A gated command fails | `transition`, `gate` (the first failing gate id), `fact_paths` (what that gate read), `head_sha` |
 
-A passing gated handoff appends `phase.entered` *instead of* `lane.handed_off`. It is
-the command's one event. `work events` shows it with the command's action (`handoff` or
-`update`).
+`work events` shows `phase.entered` with the command's action (`handoff` or `update`).
 
 ### Checks
 
@@ -105,7 +103,7 @@ the command's one event. `work events` shows it with the command's action (`hand
 | `check.finished` | `check record`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
 | `finding.updated` | none in M1 (folded and tested through `Ledger::apply`, #16) | `check_event_id`, `finding_key`, `status` (`fixed` with `commit`, or `answered` with one line) |
 
-A requested check with no finish projects `running`, never absent.
+A requested review with no finish projects the fact `daisy_review.state` as `running`, never `absent`, and `reviews get` reports it running.
 
 ### PR
 

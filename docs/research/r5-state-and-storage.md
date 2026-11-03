@@ -1,6 +1,6 @@
 # R5: State model and storage
 
-> Superseded in part by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md) and [events.md](../events.md): daisy does not read the ledger (no `reader_contract`), event kinds and folded statuses (`ran | skipped`, `open | fixed | answered`, no `ready` status) are in events.md.
+> Superseded in part by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md) and [events.md](../events.md): daisy does not read the ledger (no `reader_contract`). Event kinds and folded statuses are in events.md "Folded rows".
 
 Status: draft, 2026-11-02. Storage decision for the ledger. Language and the pipeline format stay with R6 and R7. This feeds a decision record when those land.
 

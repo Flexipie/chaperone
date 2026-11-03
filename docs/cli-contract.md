@@ -17,7 +17,7 @@ are in [events.md](events.md).
 | `DAISY_CLI_READONLY=1` | Refuses every command that is not a read, `--dry-run` included (`read_only`). |
 | `--dry-run` | Validates and prints what would be written. Writes nothing. |
 
-The env names stay `DAISY_*` so lanes already running keep their identity.
+The env names stay `DAISY_*` because `spawn` and the skills already export them.
 
 ## Envelope
 
@@ -137,8 +137,10 @@ Each command is one transaction that appends one event (events.md, write rules).
 | `work handoff` with status `review` or `done` | `handoff` (gated) | `phase.entered`, or `gate.denied` |
 | `work update --status done` | `handoff` (gated) | `phase.entered`, or `gate.denied` |
 | `work handoff`, any other status or none | ungated | `lane.handed_off` |
+| `work update --status queued` from `done` or `cancelled` | ungated | `lane.reopened` |
+| `work update --status cancelled`, `work cancel` | ungated | `lane.cancelled` |
 | `work update`, any other change | ungated | `lane.updated`, or `pr.opened` when the PR goes from null to set |
-| `work claim`, `release`, `cancel`, `ready`, reopen | ungated | the matching `lane.*` kind |
+| `work claim`, `release`, `ready` | ungated | the matching `lane.*` kind |
 | `work heartbeat` | none | none |
 
 `handoff` is the M1 gated transition in `pipelines/v17.toml` (#12). It requires a
@@ -146,7 +148,7 @@ Each command is one transaction that appends one event (events.md, write rules).
 prefix of the handed-off sha (`handoff.commit`, or for `update --status done` the commit
 of the lane's latest handoff). A missing fact fails closed. The
 denial exits 1 with `gate_denied`, names the failing gate id on stderr, and leaves the
-lane where it was. Entering `blocked` keeps `resume_phase`.
+lane where it was.
 
 ## What lane-stats reads
 
