@@ -7,6 +7,7 @@ mod error;
 mod event;
 mod fold;
 mod migrate;
+pub(crate) mod projection;
 mod write;
 
 use std::ffi::OsString;
@@ -16,6 +17,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
 
+use crate::pipeline::FactBundle;
 pub use error::LedgerError;
 pub use event::{
     Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
@@ -115,6 +117,12 @@ impl Ledger {
             .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| {
                 r.get(0)
             })?)
+    }
+
+    /// The facts lane `lane_id`'s gates read, from its events. `head` is
+    /// the commit being handed off (`commit.sha`).
+    pub fn project(&self, lane_id: i64, head: Option<&str>) -> Result<FactBundle, LedgerError> {
+        projection::project(&self.conn, lane_id, head)
     }
 
     pub(crate) fn conn(&self) -> &Connection {

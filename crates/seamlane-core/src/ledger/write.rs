@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
 use super::{Ledger, LedgerError, check_schema, fold};
+use crate::pipeline::Route;
 
 pub(crate) const MIN_LEASE_SECS: i64 = 30;
 pub(crate) const MAX_LEASE_SECS: i64 = 86_400;
@@ -238,6 +239,15 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
     if !event.kind.leases() && (p.lease_secs.is_some() || p.lease_expires_at.is_some()) {
         refuse!(invalid(&format!("{} carries no lease", event.kind)));
     }
+    // The stamp is the write's to set, on lane.claimed only (lane_guard).
+    if event.kind != LaneClaimed
+        && (p.pipeline_id.is_some() || p.pipeline_hash.is_some() || p.route.is_some())
+    {
+        refuse!(invalid(&format!(
+            "{} carries no pipeline stamp",
+            event.kind
+        )));
+    }
     match event.kind {
         SpecCreated | SpecRevised | SpecApproved
             if event.lane_id.is_some() || !p.changed.is_empty() =>
@@ -372,6 +382,30 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             rusqlite::params![event.at, secs],
             |r| r.get(0),
         )?);
+        // Every lease kind runs on the stamp it has; the first claim stamps
+        // the newest pipeline and the route its kind and flow pick.
+        let (id, hash, kind, flow): (Option<String>, Option<String>, String, String) = tx
+            .query_row(
+                "SELECT pipeline_id, pipeline_hash, kind, pr_flow FROM lanes WHERE id = ?1",
+                [lane_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+        if let (Some(id), Some(hash)) = (&id, &hash)
+            && crate::pipeline::by_stamp(id, hash).is_none()
+        {
+            refuse!(Refusal::PipelineUnknown {
+                pipeline_id: id.clone(),
+                pipeline_hash: hash.clone(),
+            });
+        }
+        if event.kind == LaneClaimed && hash.is_none() {
+            let current = crate::pipeline::current();
+            p.pipeline_id = Some(current.id.clone());
+            p.pipeline_hash = Some(current.hash.clone());
+            p.route = Some(Route::for_lane(&kind, &flow).as_str().into());
+        } else {
+            (p.pipeline_id, p.pipeline_hash, p.route) = (None, None, None);
+        }
     }
     for (field, change) in &p.changed {
         if !fold::LANE_COLUMNS.contains(&field.as_str()) {

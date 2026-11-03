@@ -9,14 +9,11 @@ use super::event::{Event, EventKind};
 use super::write::{EVENT_COLUMNS, event_from_row};
 use super::{Ledger, LedgerError, check_schema};
 
-/// Lane columns an event may set through `changed`. The lease columns,
-/// `head_event_id` and `updated_at` are set by the fold itself.
+/// Lane columns an event may set through `changed`. The lease columns, the
+/// pipeline stamp, `head_event_id` and `updated_at` are set by the fold itself.
 pub(super) const LANE_COLUMNS: &[&str] = &[
     "spec_id",
     "lane_key",
-    "pipeline_id",
-    "pipeline_hash",
-    "route",
     "status",
     "next_action",
     "blocker",
@@ -121,6 +118,13 @@ fn fold_lane(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
                last_heartbeat_at = ?4
              WHERE id = ?1",
             params![e.lane_id, p.lease_secs, p.lease_expires_at, since],
+        )?)?;
+    }
+    // The write puts a stamp only on a lane's first claim.
+    if let Some(hash) = &p.pipeline_hash {
+        one(conn.execute(
+            "UPDATE lanes SET pipeline_id = ?2, pipeline_hash = ?3, route = ?4 WHERE id = ?1",
+            params![e.lane_id, p.pipeline_id, hash, p.route],
         )?)?;
     }
     one(conn.execute(

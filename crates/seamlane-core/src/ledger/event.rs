@@ -206,6 +206,13 @@ pub struct Payload {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_flow: Option<String>,
+    /// The stamp: set by the write on a lane's first `lane.claimed` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
@@ -267,6 +274,11 @@ pub enum Refusal {
     LeaseHeld {
         by: String,
         until: String,
+    },
+    /// The lane is stamped with a pipeline this binary cannot load.
+    PipelineUnknown {
+        pipeline_id: String,
+        pipeline_hash: String,
     },
 }
 
