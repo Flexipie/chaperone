@@ -53,6 +53,18 @@ These rules keep every write small, single and fail-closed.
   carries only the hash (`evidence_ref`). Spec bodies are capped at 256 KiB, handoff
   summaries at 4000 characters, and finding bodies at daisy's 600 characters. Over a
   cap is `invalid_input`.
+- **Redaction.** The write redacts before it appends, so the log never holds a
+  pre-redaction copy and a retry replays the redacted bytes. Strings under a prose key
+  (`title`, `body`, `summary`, `reason`, `note`, `command`, `what`, `shows`, `showed`,
+  `error`, `evidence`, `blocker`, `blockers`, `open_questions`, `next_action`, `goal`,
+  `merge_case`, `decisions`, `check_by_hand`, `why`, `proven`, `not_proven`, `verdict`,
+  `shape`, `message`, `question`, `answer`, `where`, at any depth) have R13's patterns
+  replaced with `[redacted:<kind>]` (`private_key`, `github_token`, `aws_key`,
+  `slack_token`, `bearer`, `api_key`, `assignment`), and the payload gets `redactions`,
+  the count. `changed.<column>.to` counts as `<column>`; `.from`, the value compared with
+  the row, is left as sent. A match in any other string is an identifier of the wrong
+  type, and a match in an object key is a bad key: both are `invalid_input`, naming the
+  key, not the value. `redactions` is the write's to set.
 - **Heartbeat writes no event.** It touches only `last_heartbeat_at` and
   `lease_expires_at` on the lane row. Those two columns are outside the fold:
   `rebuild()` copies their live values from the old row and folds everything else from

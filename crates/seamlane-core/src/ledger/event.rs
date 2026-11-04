@@ -222,6 +222,9 @@ pub struct Payload {
     pub gate: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact_paths: Option<Vec<String>>,
+    /// The write's: how many secrets it redacted from prose fields, when any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redactions: Option<u64>,
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }

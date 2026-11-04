@@ -315,7 +315,11 @@ impl World {
                     spec.map(|s| s as i64 + 1),
                     Payload {
                         lane_key: Some(format!("L{key}")),
-                        title: Some("t".into()),
+                        // Key 0 carries a token, so the log folds redacted payloads.
+                        title: Some(match key {
+                            0 => format!("t ghp_{}", "a".repeat(20)),
+                            _ => "t".into(),
+                        }),
                         source: Some("manual".into()),
                         kind: Some("code".into()),
                         pr_flow: Some("pr".into()),

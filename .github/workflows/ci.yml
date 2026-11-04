@@ -58,7 +58,7 @@ jobs:
     env:
       NIGHTLY: nightly-2026-10-20
       GATED: crates/seamlane-core/src/pipeline/eval.rs
-      LEDGER_GATED: crates/seamlane-core/src/ledger/write.rs crates/seamlane-core/src/ledger/fold.rs
+      LEDGER_GATED: crates/seamlane-core/src/ledger/write.rs crates/seamlane-core/src/ledger/fold.rs crates/seamlane-core/src/ledger/redact.rs
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
