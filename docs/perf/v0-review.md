@@ -184,5 +184,11 @@ binary size all sit well inside their budgets.
 
 ## Follow-up issues
 
-Filed with the PR: findings 1, 2, 3 with 4 (one schema issue for lookup indexes), 5, 6 and 7. The issue numbers are
-added here when they are filed.
+| Finding | Issue |
+| --- | --- |
+| 1, `work board` RSS and `work ready` | [#51](https://github.com/Flexipie/harness/issues/51) |
+| 2, busy handler under contention | [#52](https://github.com/Flexipie/harness/issues/52) |
+| 3 and 4, indexed slice-key and NOCASE lookups (schema) | [#53](https://github.com/Flexipie/harness/issues/53) |
+| 5, indexed job lookups (schema) | [#54](https://github.com/Flexipie/harness/issues/54) |
+| 6, `fullfsync` on macOS (owner decision) | [#55](https://github.com/Flexipie/harness/issues/55) |
+| 7, `budgets` and `regress` CI jobs | [#56](https://github.com/Flexipie/harness/issues/56) |
