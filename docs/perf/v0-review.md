@@ -6,7 +6,7 @@ switch onto Seamlane.
 
 **Short answer:** every R14 product budget that v0 can be measured against passes, most with a wide margin. One
 command misses M1 at scale (`work board` past about 150 open items). One read was cheap to fix and is fixed here
-(`spec get --key`, p50 9.8 ms to 6.5 ms on the realistic ledger). The rest become follow-up issues, listed at the end.
+(`spec get --key`, p50 9.8 ms to 6.7 ms on the realistic ledger). The rest become follow-up issues, listed at the end.
 
 ## Method
 
@@ -22,12 +22,13 @@ command misses M1 at scale (`work board` past about 150 open items). One read wa
 - Empty ledger: freshly migrated, holding only the items each command needs. Realistic ledger: seeded through the CLI
   with 300 specs of 10 slices each, 3,000 items, each created, claimed, heartbeated, handed off twice and checked once,
   plus 3 deep lanes with 300 check records each. Only the newest 5 specs stay open (50 items); the rest are cancelled,
-  as finished work leaves the board. 18,250 events, 8.9 MiB. The hot-command setup adds 216 open items.
+  as finished work leaves the board. 19,156 events, 9.3 MiB. The hot-command setup adds 216 open items, so the
+  realistic runs see 269 open.
 - E1 and E2 are timed in the process, around the loop only: `crates/seamlane-core/tests/budgets.rs` (new, ignored
   by default) and the existing `fifty_writers` in `tests/concurrency.rs`, both in release.
 - Safety: every run lives in a fresh temp dir. Every call passes `--db` there, and the child environment holds only
   `PATH`, `HOME` and `XDG_DATA_HOME` (pointing at the temp dir) and the two `DAISY_*` actor variables, so a missed
-  `--db` cannot reach a real ledger. The script checks that `~/Library/Application Support/seamlane` was not created or removed.
+  `--db` cannot reach a real ledger. The script checks that `~/Library/Application Support/seamlane` and its ledger files kept their modification times, also when a run aborts.
   No `daisy-cli` call.
 
 Reproduce:
@@ -45,12 +46,12 @@ Product column, reference machine. Before and after are the same unless both are
 
 | Id | Budget | Measured | |
 | --- | --- | --- | --- |
-| S1 | `--version` p50 ≤ 10 ms, p99 ≤ 25 ms | p50 3.1 ms, p99 4.0 ms | pass |
-| S2 | open WAL, `SELECT 1`, exit: p50 ≤ 15 ms, p99 ≤ 30 ms | `work list` on an empty ledger (a superset of S2: clap, the probe, the pragmas, the schema check and JSON output): p50 4.5 ms, p99 5.7 ms | pass |
+| S1 | `--version` p50 ≤ 10 ms, p99 ≤ 25 ms | p50 3.2 to 3.3 ms, p99 3.8 to 4.3 ms | pass |
+| S2 | open WAL, `SELECT 1`, exit: p50 ≤ 15 ms, p99 ≤ 30 ms | `work list` on an empty ledger (a superset of S2: clap, the probe, the pragmas, the schema check and JSON output): p50 4.4 to 4.5 ms, p99 5.6 to 6.2 ms | pass |
 | E1 | one writer ≥ 2,000 commits/s | 12,000 to 14,300 commits/s, mean 0.07 to 0.08 ms (8 warm runs; the first run after a rebuild did 5,040) | pass, see finding 6 |
 | E2 | 50 processes × 40 events ≤ 5 s | 0.89 s, correctness checks green | pass |
 | L1 | follower sees an event p50 ≤ 5 ms | not measurable: no follower or wake exists in v0 | n/a |
-| M1 | one-shot RSS ≤ 8 MiB | `--version` 2.4 MiB, `work list` 4.5 MiB empty and 6.7 MiB realistic, `work board` 11.4 MiB at 266 open items | **miss for `work board`**, finding 1 |
+| M1 | one-shot RSS ≤ 8 MiB | `--version` 2.4 MiB, `work list` 4.5 MiB empty and 6.7 MiB realistic, `work board` 11.7 MiB at 269 open items | **miss for `work board`**, finding 1 |
 | M2, M3 | supervisor RSS | no supervisor in v0 | n/a |
 | B1 | stripped binary ≤ 15 MiB, macOS links `libSystem` only | 3.70 MiB; links `libSystem` and `libiconv` | size passes; the link wording missed, see below |
 | I1 | instruction count vs base | the `regress` job does not exist yet | n/a, finding 7 |
@@ -62,24 +63,24 @@ holds. R14's B1 cell now says so, with this measurement, as R14 asks for a miss 
 
 ## Per-command latency
 
-Wall ms per spawn, p50 / p99. About 2 ms of each is the spawn floor (`/usr/bin/true`: 1.9 / 2.4).
+Wall ms per spawn, p50 / p99. About 2 ms of each is the spawn floor (`/usr/bin/true`: 1.9 to 2.0 / 2.5).
 
 | Command | Empty, before | Empty, after | Realistic, before | Realistic, after |
 | --- | --- | --- | --- | --- |
-| `work get` | 4.51 / 6.16 | 4.48 / 5.44 | 4.23 / 5.15 | 4.74 / 5.72 |
-| `work list` | 5.51 / 6.27 | 5.35 / 9.13 | 5.79 / 6.97 | 5.72 / 6.94 |
-| `work claim` | 5.31 / 6.16 | 5.42 / 6.18 | 5.42 / 6.37 | 5.24 / 6.47 |
-| `work heartbeat` | 4.92 / 5.79 | 4.52 / 5.55 | 4.32 / 5.43 | 5.02 / 5.95 |
-| `work handoff` | 4.83 / 7.61 | 4.89 / 5.83 | 4.65 / 5.55 | 5.32 / 6.30 |
-| `work handoff`, lane with 300+ events | | | 4.73 / 5.43 | 4.75 / 6.02 |
-| `spec get --key` | 4.29 / 7.18 | 4.26 / 5.12 | **9.80 / 10.85** | **6.51 / 7.46** |
-| `check record` | 4.41 / 8.15 | 4.90 / 6.27 | 4.84 / 5.83 | 5.01 / 6.17 |
-| `work board` (20 samples) | | | 9.10 p50 | 10.06 p50 |
+| `work get` | 4.20 / 5.01 | 4.58 / 8.96 | 4.13 / 5.09 | 4.11 / 6.78 |
+| `work list` | 5.35 / 6.86 | 5.19 / 6.01 | 5.93 / 6.80 | 6.16 / 11.74 |
+| `work claim` | 5.38 / 9.31 | 5.11 / 9.53 | 5.25 / 6.27 | 5.40 / 9.47 |
+| `work heartbeat` | 4.82 / 10.11 | 4.90 / 6.04 | 4.49 / 10.06 | 4.73 / 5.56 |
+| `work handoff` | 4.36 / 5.57 | 4.87 / 9.21 | 4.88 / 10.79 | 4.82 / 5.85 |
+| `work handoff`, lane with 300+ events | | | 4.93 / 6.40 | 4.47 / 5.33 |
+| `spec get --key` | 4.65 / 9.06 | 4.88 / 5.76 | **9.80 / 10.90** | **6.70 / 8.06** |
+| `check record` | 4.35 / 5.96 | 5.26 / 6.27 | 4.90 / 5.82 | 4.84 / 5.70 |
+| `work board` (20 samples) | | | 9.53 p50 | 9.19 p50 |
 
-Apart from `spec get --key`, before and after differ by run-to-run noise (about ±0.5 ms at p50; `work board`'s 1 ms is over 20 samples, and the change does not touch its path). A 3,000-item,
-18,000-event ledger costs the hot commands nothing measurable: every hot read is an index search (below), and
-`ledger open` is about 1 ms over `--version`. The handoff gate projects every event of the lane inside the write, and
-at 300 events per lane that is still lost in the noise.
+Apart from `spec get --key`, before and after differ by run-to-run noise: about ±0.5 ms at p50, and single p99 samples of 9 to 12 ms that land on either binary from run to run. A 3,000-item,
+19,000-event ledger costs the hot commands nothing measurable: every hot read is an index search (below), and
+`ledger open` is about 1 ms over `--version`. The handoff gate projects every event of the lane inside the write; on the
+3 deep lanes (300 real check events each, distinct heads, so none is replayed) a handoff is as fast as on a shallow one.
 
 ## Write throughput and lock wait
 
@@ -87,10 +88,10 @@ at 300 events per lane that is still lost in the noise.
   fsync-bound ceiling (13k to 19k rows/s) for a bare insert, so the write function, guard reads and fold add little.
 - E2, `fifty_writers` in release: 50 processes × 40 events in 0.89 s, about 2,250 commits/s with every process start
   included.
-- 50 CLI processes at once, 20 `work create` each (`measure.py`): 1.5 s wall, about 650 commits/s. Per call p50
-  43 to 46 ms, p99 166 to 179 ms, max 240 to 292 ms, against 4.4 to 5.1 ms for one writer alone. Most of that is
+- 50 CLI processes at once, 20 `work create` each (`measure.py`): 1.5 s wall, about 650 to 680 commits/s. Per
+  call p50 42 to 45 ms, p99 168 to 179 ms, max 245 to 263 ms, against 4.6 to 5.4 ms for one writer alone. Most of that is
   waiting for the lock: the work itself is under 0.1 ms a commit (E1). Finding 2 says why the tail is that long.
-- Write p99 on the realistic ledger stays near 6 ms. Single samples reached 10 to 14 ms in some runs; the likely
+- Write p99 on the realistic ledger is mostly near 6 ms, with single samples of 9 to 11 ms; the likely
   cause is the WAL autocheckpoint (every 1,000 pages, synced at `FULL`). It is well inside budget, so it was not
   chased.
 
@@ -169,16 +170,16 @@ Cost is measured on this machine; gain is expected, not yet measured, except whe
 
 | # | Finding | Measured cost | Expected gain | Action |
 | --- | --- | --- | --- | --- |
-| 0 | `spec get --key` read every spec's full row (two lane counts and an event read each) to find the slice, and scanned every lane once per sibling (`spec/slice.rs`) | p50 9.8 ms, p99 10.9 ms at 300 specs and 3,000 lanes, growing linearly with both | 3.3 ms p50 | **Fixed here**: `spec_for_key` reads only the head body; `work_for_key` asks for the lane linked to the spec through `lanes_slot` first and scans only when none is. Output byte-identical to before on linked, unlinked, newer-unlinked and different-case keys, and the old and new lane queries agree on 6,000 random cases (lane tables with null spec ids, other sources and case variants). Now 6.5 / 7.5 ms. |
-| 1 | `work board` holds every open item as structs, then as a `serde_json::Value` tree, then as one pretty string, about 27 KiB of RSS per open item. `work ready` builds the whole board to answer for one item (`crates/seamlane/src/work.rs:166`) | 11.4 MiB RSS and 9 to 10 ms at 266 open items (**M1 miss**); 89 MiB and 76 ms at 3,000 open | under 8 MiB at any realistic count; `ready` O(1) | Follow-up: serialize straight from the rows to stdout, and give `ready` a one-item read. |
+| 0 | `spec get --key` read every spec's full row (two lane counts and an event read each) to find the slice, and scanned every lane once per sibling (`spec/slice.rs`) | p50 9.8 ms, p99 10.9 ms at 300 specs and 3,000 lanes (key at spec 150 of 300), growing linearly with both | 3.1 ms p50 | **Fixed here**: `spec_for_key` reads only the head body; `work_for_key` asks for the lane linked to the spec through `lanes_slot` first and scans only when none is. Output byte-identical to before on linked, unlinked, newer-unlinked and different-case keys, and the old and new lane queries agree on 6,000 random cases (lane tables with null spec ids, other sources and case variants). Now 6.7 / 8.1 ms. |
+| 1 | `work board` holds every open item as structs, then as a `serde_json::Value` tree, then as one pretty string, about 27 KiB of RSS per open item. `work ready` builds the whole board to answer for one item (`crates/seamlane/src/work.rs:166`) | 11.7 MiB RSS and 9 to 10 ms at 269 open items (**M1 miss**); 89 MiB and 76 ms at 3,000 open | under 8 MiB at any realistic count; `ready` O(1) | Follow-up: serialize straight from the rows to stdout, and give `ready` a one-item read. |
 | 2 | Under contention the write waits in SQLite's default busy handler, which sleeps in growing steps up to 100 ms, so a writer can sleep long after the lock is free | 50 CLI writers: per call p99 about 170 ms, max about 290 ms, for 0.07 ms of work | p99 to tens of ms, likely | Follow-up: measure a short fixed-sleep `busy_handler` (rusqlite has it, no new dependency) against the default, keeping the 5 s limit. |
-| 3 | `spec get --key` without `--spec` still parses every spec body, newest first, until one has the key | about 3 ms at 300 specs, linear | constant time | Follow-up: a slice-key lookup table (schema change, a one-way door, so not in this PR). |
+| 3 | `spec get --key` without `--spec` still parses every spec body, newest first, until one has the key | about 3 ms with the key at spec 150 of 300 newest-first, about twice that for the oldest spec or a missing key; linear | constant time | Follow-up: a slice-key lookup table (schema change, a one-way door, so not in this PR). |
 | 4 | `COLLATE NOCASE` lookups on `specs.external_key` and `lanes.source_id` (no NOCASE index) scan the table, as does the sibling fallback for unlinked slices | 0.25 ms per scan at 3,000 lanes, linear | constant time | Follow-up: NOCASE indexes or a stored normalized key (schema change). Dropping `NOCASE` would break the any-case match and the duplicate-spec refusal, so it is not an option. |
 | 5 | Job lookups filter `json_extract(payload_json, '$.job')` over every check event | 1.9 ms at 18,000 events, linear (about 10 ms at 100,000) | constant time | Follow-up: an expression index on the job id, or a `job_id` column (schema change). |
 | 6 | E1's 14,000 commits/s at `synchronous=FULL` is plain `fsync`. Bundled SQLite does not set `F_FULLFSYNC` on macOS (R6 notes Apple's own build does), so on power loss the last commits can be lost, though not corrupted | n/a (durability, not speed) | a decision | Follow-up for the owner: measure `PRAGMA fullfsync` against E1 and decide. `synchronous=FULL` is a locked decision; this does not reopen it, it asks what FULL should mean on macOS. |
 | 7 | R14's `budgets` and `regress` CI jobs do not exist yet, so nothing stops a regression in these numbers | n/a | budgets enforced on every PR | Follow-up: grow `tests/budgets.rs` (this PR adds E1) into the `budgets` job, plus the gungraun `regress` bench. |
 
-Not findings: startup (S1 3.1 ms, 2 ms of it spawn), the open path (about 1 ms over `--version`; the read-only probe
+Not findings: startup (S1 3.2 to 3.3 ms, 2 ms of it spawn), the open path (about 1 ms over `--version`; the read-only probe
 connection is deliberate, it keeps a refused newer or foreign file byte-identical), the fold, write throughput and
 binary size all sit well inside their budgets.
 
