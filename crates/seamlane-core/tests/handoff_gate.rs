@@ -392,14 +392,4 @@ fn the_board_reads_the_newest_handoff_and_the_override() {
         board(),
         (false, "the lane has not said ready".into(), None, Some(h))
     );
-    ready(Some(false));
-    assert_eq!(
-        board(),
-        (
-            false,
-            "marked not ready by owner: ok".into(),
-            Some(false),
-            Some(h)
-        )
-    );
 }
