@@ -20,7 +20,7 @@ use crate::ledger::{
 use crate::pipeline::Phase;
 
 const ENTITY: &str = "work item";
-/// The M1 gated transition (pipelines/v17.toml).
+/// The M1 gated transition (pipelines/v17.1.toml).
 const HANDOFF: &str = "handoff";
 const DEFAULT_LEASE_SECS: i64 = 900;
 /// Daisy's `tool` on handoff and event rows.
@@ -1438,15 +1438,15 @@ mod tests {
                 )
                 .unwrap()
         };
-        let v17 = crate::pipeline::current();
-        let want = |route: &str| (v17.id.clone(), v17.hash.clone(), route.to_string());
+        let newest = crate::pipeline::current();
+        let want = |route: &str| (newest.id.clone(), newest.hash.clone(), route.to_string());
 
         let item = claim(&a, false).unwrap();
         assert_eq!(
             (item.pipeline_id, item.pipeline_hash, item.route),
             (
-                Some(v17.id.clone()),
-                Some(v17.hash.clone()),
+                Some(newest.id.clone()),
+                Some(newest.hash.clone()),
                 Some("investigation".into())
             )
         );
@@ -1513,7 +1513,7 @@ mod tests {
         let events = || kinds(&ledger).len();
         let before = events();
         let unknown = Err(Refusal::PipelineUnknown {
-            pipeline_id: "v17".into(),
+            pipeline_id: "v17.1".into(),
             pipeline_hash: "v18hash".into(),
         });
         assert_eq!(claim(&a, false).map(|_| ()), unknown, "renew");

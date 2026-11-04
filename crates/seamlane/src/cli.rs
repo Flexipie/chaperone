@@ -152,7 +152,7 @@ pub enum WorkCmd {
         /// What the lane delivers; picks the route at the first claim
         #[arg(long, value_parser = PossibleValuesParser::new(KINDS), default_value = "code")]
         kind: String,
-        /// How it lands: through a PR, or direct
+        /// How it lands: through a PR, direct, or none (no PR at all)
         #[arg(long, value_parser = PossibleValuesParser::new(PR_FLOWS), default_value = "pr")]
         pr_flow: String,
         /// Run the real write and roll it back; meta.dry_run is true

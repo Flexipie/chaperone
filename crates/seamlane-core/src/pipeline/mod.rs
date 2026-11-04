@@ -71,11 +71,14 @@ pub enum Pred {
         field: String,
         value: i64,
     },
+    /// `sha_prefix_eq`: `left` is a prefix of `right`. `sha_same_commit`
+    /// (`both_ways`): the shorter of the two is a prefix of the longer.
     ShaPrefixEq {
         left: String,
         right: String,
         min_len: i64,
         max_len: i64,
+        both_ways: bool,
     },
     OneOf {
         field: String,
@@ -160,12 +163,13 @@ impl Pipeline {
 /// The documents this binary can load, newest last. A claim stamps the
 /// newest; a lane stamped with anything else is `pipeline_unknown`.
 static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
-    [include_str!("../../../../pipelines/v17.toml")]
-        .iter()
-        .map(|src| {
-            Pipeline::load(src).expect("embedded pipelines load (v17_loads_with_pinned_hash)")
-        })
-        .collect()
+    [
+        include_str!("../../../../pipelines/v17.toml"),
+        include_str!("../../../../pipelines/v17.1.toml"),
+    ]
+    .iter()
+    .map(|src| Pipeline::load(src).expect("embedded pipelines load (*_loads_with_pinned_hash)"))
+    .collect()
 });
 
 /// The pipeline a new claim stamps.
@@ -181,11 +185,12 @@ pub fn by_stamp(id: &str, hash: &str) -> Option<&'static Pipeline> {
 
 impl Route {
     /// The route a lane takes, chosen once at its first claim (events.md,
-    /// lane facts in M1): an investigation, else direct on a direct flow,
-    /// else a PR.
+    /// lane facts in M1): an investigation, else no PR on a `none` flow,
+    /// else direct on a direct flow, else a PR.
     pub fn for_lane(kind: &str, pr_flow: &str) -> Route {
         match (kind, pr_flow) {
             ("investigation", _) => Route::Investigation,
+            (_, "none") => Route::NoPr,
             (_, "direct") => Route::Direct,
             _ => Route::CodePr,
         }
@@ -209,6 +214,8 @@ mod tests {
 
     const V17: &str = include_str!("../../../../pipelines/v17.toml");
     const V17_HASH: &str = "1a8a599ca26abaf2ab5b1dc9aaa301c019237d45fa3293f4326da0b47b6ea2c5";
+    const V17_1: &str = include_str!("../../../../pipelines/v17.1.toml");
+    const V17_1_HASH: &str = "d99d9de3d9fe7e59aa046cabdb80a6d34670d5a1dfcab1873a248ba245e32fd5";
 
     const MINI: &str = r#"
 schema = 1
@@ -251,6 +258,7 @@ requires = ["a"]
                 right: "commit.sha".into(),
                 min_len: 7,
                 max_len: 40,
+                both_ways: false,
             }
         );
         assert_eq!(
@@ -268,9 +276,31 @@ requires = ["a"]
     }
 
     #[test]
+    fn v17_1_loads_with_pinned_hash() {
+        let p = Pipeline::load(V17_1).unwrap();
+        assert_eq!((p.id.as_str(), p.hash.as_str()), ("v17.1", V17_1_HASH));
+        assert!(matches!(
+            p.gates["verdict_on_head"].pred,
+            Pred::ShaPrefixEq {
+                both_ways: true,
+                ..
+            }
+        ));
+        let done: Vec<_> = p
+            .transitions
+            .iter()
+            .filter(|t| t.id == "handoff" && t.to == Phase::Done)
+            .collect();
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].routes.len(), 4);
+    }
+
+    #[test]
     fn by_stamp_needs_id_and_hash() {
         assert!(by_stamp("v17", V17_HASH).is_some());
+        assert!(by_stamp("v17.1", V17_1_HASH).is_some());
         assert!(by_stamp("v18", V17_HASH).is_none());
+        assert_eq!(current().id, "v17.1");
     }
 
     #[test]
@@ -281,8 +311,11 @@ requires = ["a"]
             ("measure", "pr", Route::CodePr),
             ("code", "direct", Route::Direct),
             ("docs", "direct", Route::Direct),
+            ("code", "none", Route::NoPr),
+            ("measure", "none", Route::NoPr),
             ("investigation", "pr", Route::Investigation),
             ("investigation", "direct", Route::Investigation),
+            ("investigation", "none", Route::Investigation),
         ] {
             assert_eq!(Route::for_lane(kind, flow), route, "{kind} {flow}");
             assert_eq!(json!(route), json!(route.as_str()));

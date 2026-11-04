@@ -30,6 +30,12 @@ struct Lane {
 impl Lane {
     /// Lane 1, a code PR lane claimed by the lane session s1.
     fn new() -> Lane {
+        Lane::with("code", "pr", None)
+    }
+
+    /// Lane 1 of `kind` on `pr_flow`, claimed by s1. With `stamp`, the claim
+    /// is then restamped with that (id, hash), as an older binary left it.
+    fn with(kind: &str, pr_flow: &str, stamp: Option<(&str, &str)>) -> Lane {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.db");
         let ledger = Ledger::open_and_migrate(&path).unwrap();
@@ -42,8 +48,8 @@ impl Lane {
         };
         let create = CreateInput {
             title: "t".into(),
-            kind: "code".into(),
-            pr_flow: "pr".into(),
+            kind: kind.into(),
+            pr_flow: pr_flow.into(),
             ..CreateInput::default()
         };
         let me = &lane.lane;
@@ -56,7 +62,55 @@ impl Lane {
             .work_claim(me, 1, &claim, Some(T0), false)
             .unwrap()
             .unwrap();
+        if let Some((id, hash)) = stamp {
+            lane.db
+                .execute(
+                    "UPDATE lanes SET pipeline_id = ?1, pipeline_hash = ?2 WHERE id = 1",
+                    [id, hash],
+                )
+                .unwrap();
+        }
         lane
+    }
+
+    /// The plan check and quality gate skipped with an allowed reason.
+    fn skips(&self) {
+        for (check, reason) in [("plan_check", "docs"), ("quality_gate", "no_code")] {
+            let m = Mutation::Event {
+                kind: EventKind::CheckFinished,
+                lane_id: Some(1),
+                spec_id: None,
+                payload: Payload {
+                    check: Some(check.into()),
+                    outcome: Some("skipped".into()),
+                    head_sha: Some("abc1234".into()),
+                    rest: json!({ "reason": reason }).as_object().unwrap().clone(),
+                    ..Payload::default()
+                },
+            };
+            let applied = self.ledger.apply(&self.checker, None, T1, m).unwrap();
+            assert!(matches!(applied, Applied::Committed(_)), "{applied:?}");
+        }
+    }
+
+    /// A done handoff with no commit.
+    fn done_no_commit(&self) -> Result<i64, Refusal> {
+        let input = HandoffInput {
+            summary: "s".into(),
+            status: Some("done".into()),
+            ..HandoffInput::default()
+        };
+        let h = self
+            .ledger
+            .work_handoff(&self.lane, 1, &input, Some(T2), false)
+            .unwrap();
+        h.map(|h| h.id)
+    }
+
+    fn route(&self) -> String {
+        self.db
+            .query_row("SELECT route FROM lanes WHERE id = 1", [], |r| r.get(0))
+            .unwrap()
     }
 
     fn check(&self, who: &Actor, check: &str, rest: serde_json::Value) -> Applied {
@@ -182,7 +236,15 @@ fn verdict_on_head_denies_another_commit_and_passes_its_own() {
     let before = lane.row();
     assert_eq!(
         lane.handoff("fff9999aaa", "done", None),
-        denied("verdict_on_head", &["verdict.sha", "commit.sha"])
+        denied(
+            "done_verdict",
+            &[
+                "lane.changes_code",
+                "verdict.decision",
+                "verdict.sha",
+                "commit.sha"
+            ]
+        )
     );
     assert_eq!((lane.count("gate.denied"), lane.row()), (1, before));
 
@@ -391,5 +453,91 @@ fn the_board_reads_the_newest_handoff_and_the_override() {
     assert_eq!(
         board(),
         (false, "the lane has not said ready".into(), None, Some(h))
+    );
+}
+
+/// v17.1: a lane that changes no code hands off done on its skips, with no
+/// verdict and no commit, on a PR route and with no PR at all.
+#[test]
+fn a_no_code_lane_is_done_without_a_verdict_or_commit() {
+    for (kind, flow, route) in [
+        ("docs", "pr", "code_pr"),
+        ("measure", "none", "no_pr"),
+        ("investigation", "pr", "investigation"),
+    ] {
+        let lane = Lane::with(kind, flow, None);
+        assert_eq!(lane.route(), route);
+        lane.skips();
+        lane.done_no_commit().unwrap();
+        assert_eq!(lane.row().0, "done", "{kind} {flow}");
+    }
+}
+
+/// A code lane still needs a YES verdict on its sha on every route, a lane
+/// with no PR included.
+#[test]
+fn a_code_lane_needs_its_verdict_on_every_route() {
+    for flow in ["pr", "direct", "none"] {
+        let lane = Lane::with("code", flow, None);
+        for check in ["plan_check", "quality_gate"] {
+            lane.check(&lane.checker, check, json!({}));
+        }
+        let before = lane.row();
+        assert!(
+            matches!(lane.done_no_commit(), Err(Refusal::GateDenied { gate, .. }) if gate == "done_verdict"),
+            "{flow}"
+        );
+        assert_eq!(lane.row(), before);
+        lane.check(&lane.checker, "merge_verdict", json!({"decision": "yes"}));
+        lane.handoff("abc1234def", "done", None).unwrap();
+        assert_eq!(lane.row().0, "done", "{flow}");
+    }
+}
+
+/// A short and a full sha of one commit match whichever side is short.
+#[test]
+fn verdict_and_commit_match_short_or_full_both_ways() {
+    let full = "abc1234def567890abc1234def567890abc12345";
+    let lane = Lane::new();
+    lane.stamps(); // verdict on abc1234
+    lane.handoff(full, "done", None).unwrap();
+
+    let lane = Lane::new();
+    for check in ["plan_check", "quality_gate"] {
+        lane.check(&lane.checker, check, json!({}));
+    }
+    let m = Mutation::Event {
+        kind: EventKind::CheckFinished,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: Payload {
+            check: Some("merge_verdict".into()),
+            outcome: Some("ran".into()),
+            head_sha: Some(full.into()),
+            rest: json!({"decision": "yes"}).as_object().unwrap().clone(),
+            ..Payload::default()
+        },
+    };
+    lane.ledger.apply(&lane.checker, None, T1, m).unwrap();
+    assert!(matches!(
+        lane.handoff("abc1235", "done", None),
+        Err(Refusal::GateDenied { .. })
+    ));
+    lane.handoff("abc1234", "done", None).unwrap();
+}
+
+/// A lane stamped v17 keeps v17: no verdict still denies a docs lane's done.
+#[test]
+fn a_v17_lane_keeps_the_v17_rule() {
+    let v17 = seamlane_core::pipeline::by_stamp(
+        "v17",
+        "1a8a599ca26abaf2ab5b1dc9aaa301c019237d45fa3293f4326da0b47b6ea2c5",
+    )
+    .unwrap();
+    let lane = Lane::with("docs", "pr", Some(("v17", &v17.hash)));
+    lane.skips();
+    assert_eq!(
+        lane.done_no_commit(),
+        denied("verdict_is_yes", &["verdict.decision"])
     );
 }

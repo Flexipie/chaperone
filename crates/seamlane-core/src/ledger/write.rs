@@ -38,7 +38,7 @@ pub const SESSION_CHECKS: &[&str] = &[
 
 pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
 pub const KINDS: &[&str] = &["code", "docs", "measure", "investigation"];
-pub const PR_FLOWS: &[&str] = &["pr", "direct"];
+pub const PR_FLOWS: &[&str] = &["pr", "direct", "none"];
 /// A spec body is a document a person reads; this is far above any real one.
 pub const SPEC_BODY_MAX_BYTES: usize = 256 * 1024;
 
