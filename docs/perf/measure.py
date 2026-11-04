@@ -200,7 +200,10 @@ PLANS = {
     "work list": "SELECT id FROM lanes WHERE status NOT IN ('done', 'cancelled') "
                  "ORDER BY updated_at DESC, id DESC LIMIT 50",
     "spec by key (NOCASE)": "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE",
-    "slice lane by source_id (NOCASE)":
+    "slice lane, linked to the spec":
+        "SELECT id, status, pr_ref FROM lanes WHERE spec_id = ?2 AND source IN ('linear', "
+        "'issue', 'github') AND source_id = ?1 COLLATE NOCASE ORDER BY id DESC LIMIT 1",
+    "slice lane by source_id (NOCASE), before / fallback":
         "SELECT id, status, pr_ref FROM lanes WHERE source IN ('linear', 'issue', 'github') "
         "AND source_id = ?1 COLLATE NOCASE ORDER BY (spec_id IS ?2) DESC, id DESC LIMIT 1",
     "has_held": "SELECT 1 FROM events WHERE lane_id = ?1 AND kind IN "
