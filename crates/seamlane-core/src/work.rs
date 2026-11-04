@@ -26,9 +26,9 @@ const DEFAULT_LEASE_SECS: i64 = 900;
 /// Daisy's `tool` on handoff and event rows.
 const TOOL: &str = "seamlane";
 
-/// The events on lane `?1` that carry a handoff (events.md, folded rows):
-/// what `work handoffs` lists and where "the latest handoff" is read.
-const HANDOFFS: &str = "lane_id = ?1 AND kind IN ('lane.handed_off', 'phase.entered')
+/// The events that carry a handoff (events.md, folded rows): what `work
+/// handoffs` lists and where "the latest handoff" is read.
+const IS_HANDOFF: &str = "kind IN ('lane.handed_off', 'phase.entered')
       AND json_extract(payload_json, '$.handoff') IS NOT NULL";
 
 /// Daisy's `WorkItem` fields, plus Seamlane's kind, pr_flow, phase and
@@ -125,6 +125,34 @@ impl WorkItem {
             route: r.get(31)?,
         })
     }
+}
+
+/// The newest `work ready` on an item while it still overrides (a cleared
+/// one is `ready: null` and reads as none). Daisy's `ReadyOverride`.
+#[derive(Clone, Debug, Serialize)]
+pub struct ReadyOverride {
+    pub ready: bool,
+    pub reason: Option<String>,
+    pub by: Option<String>,
+    pub at: String,
+}
+
+/// One item on the board, in daisy's `BoardItem` field names.
+#[derive(Clone, Debug, Serialize)]
+pub struct BoardItem {
+    pub item: WorkItem,
+    pub handoff: Option<Handoff>,
+    pub ready_override: Option<ReadyOverride>,
+    pub ready: bool,
+    pub ready_reason: String,
+}
+
+/// Daisy's `work board`: `specs` stays empty until items are grouped by
+/// spec, so every open item is under `other`.
+#[derive(Clone, Debug, Serialize)]
+pub struct Board {
+    pub specs: Vec<Value>,
+    pub other: Vec<BoardItem>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -613,24 +641,62 @@ impl Ledger {
         let mut stmt = self.conn().prepare(&format!(
             "SELECT id, lane_id, actor_agent, actor_session,
                     json_extract(payload_json, '$.handoff'), at
-             FROM events WHERE {HANDOFFS} ORDER BY id"
+             FROM events WHERE lane_id = ?1 AND {IS_HANDOFF} ORDER BY id"
         ))?;
         let mut rows = stmt.query([id])?;
         let mut out = Vec::new();
         while let Some(r) = rows.next()? {
-            let raw: String = r.get(4)?;
-            out.push(Handoff {
-                id: r.get(0)?,
-                work_id: r.get(1)?,
-                job_id: None,
-                agent: r.get(2)?,
-                session: r.get(3)?,
-                tool: TOOL.into(),
-                handoff: serde_json::from_str(&raw).map_err(std::io::Error::other)?,
-                created_at: r.get(5)?,
-            });
+            out.push(handoff_at(r, 0)?);
         }
         Ok(out)
+    }
+
+    /// Daisy's board: every open item with its newest handoff, its override
+    /// and the ready rule's answer. One statement, so one snapshot.
+    pub fn work_board(&self, now: &str) -> Result<Board, LedgerError> {
+        let mut stmt = self.conn().prepare(&format!(
+            "SELECT l.*, h.id, h.lane_id, h.actor_agent, h.actor_session,
+                    json_extract(h.payload_json, '$.handoff'), h.at,
+                    json_extract(o.payload_json, '$.ready'),
+                    json_extract(o.payload_json, '$.reason'), o.actor_agent, o.at
+             FROM ({SELECT} WHERE status NOT IN ('done', 'cancelled')) AS l
+             LEFT JOIN events h ON h.id = (SELECT id FROM events
+               WHERE lane_id = l.id AND {IS_HANDOFF} ORDER BY id DESC LIMIT 1)
+             LEFT JOIN events o ON o.id = (SELECT id FROM events
+               WHERE lane_id = l.id AND kind = 'lane.ready_overridden' ORDER BY id DESC LIMIT 1)
+             ORDER BY l.lane_key IS NULL, l.lane_key, l.lane_pos IS NULL, l.lane_pos, l.id"
+        ))?;
+        let mut rows = stmt.query([now])?;
+        let mut other = Vec::new();
+        while let Some(r) = rows.next()? {
+            let item = WorkItem::from_row(r)?;
+            let handoff = match r.get::<_, Option<i64>>(32)? {
+                Some(_) => Some(handoff_at(r, 32)?),
+                None => None,
+            };
+            let ready_override = match r.get::<_, Option<bool>>(38)? {
+                Some(ready) => Some(ReadyOverride {
+                    ready,
+                    reason: r.get(39)?,
+                    by: r.get(40)?,
+                    at: r.get(41)?,
+                }),
+                None => None,
+            };
+            let (ready, ready_reason) =
+                ready_rule(&item, handoff.as_ref(), ready_override.as_ref());
+            other.push(BoardItem {
+                item,
+                handoff,
+                ready_override,
+                ready,
+                ready_reason,
+            });
+        }
+        Ok(Board {
+            specs: Vec::new(),
+            other,
+        })
     }
 
     /// The item's lane actions, oldest first, with daisy's action words.
@@ -773,6 +839,51 @@ impl Ledger {
     }
 }
 
+/// A handoff event read from columns `base..base + 6` (id, lane, agent,
+/// session, handoff JSON, at).
+fn handoff_at(r: &Row, base: usize) -> Result<Handoff, LedgerError> {
+    let raw: String = r.get(base + 4)?;
+    Ok(Handoff {
+        id: r.get(base)?,
+        work_id: r.get(base + 1)?,
+        job_id: None,
+        agent: r.get(base + 2)?,
+        session: r.get(base + 3)?,
+        tool: TOOL.into(),
+        handoff: serde_json::from_str(&raw).map_err(std::io::Error::other)?,
+        created_at: r.get(base + 5)?,
+    })
+}
+
+/// Daisy's ready rule, as far as the ledger knows it: the owner's override
+/// wins; else the item is in `review` and its newest handoff says ready (a
+/// ready handoff only exists past the `handoff` gate). Daisy also wants a
+/// review on the PR head and no open thread from a person; the ledger sees
+/// neither, so callers check them (cli-contract.md).
+fn ready_rule(
+    item: &WorkItem,
+    handoff: Option<&Handoff>,
+    over: Option<&ReadyOverride>,
+) -> (bool, String) {
+    if let Some(o) = over {
+        let by = o.by.as_deref().unwrap_or("someone");
+        let why = o
+            .reason
+            .as_deref()
+            .map(|r| format!(": {r}"))
+            .unwrap_or_default();
+        let verdict = if o.ready { "ready" } else { "not ready" };
+        return (o.ready, format!("marked {verdict} by {by}{why}"));
+    }
+    if item.status != "review" {
+        return (false, format!("status is {}, not review", item.status));
+    }
+    if handoff.and_then(|h| h.handoff.ready) != Some(true) {
+        return (false, "the lane has not said ready".into());
+    }
+    (true, "the lane says ready".into())
+}
+
 fn get_row(conn: &Connection, id: i64, now: &str) -> Result<Option<WorkItem>, LedgerError> {
     Ok(conn
         .query_row(
@@ -813,7 +924,7 @@ fn latest_commit(conn: &Connection, id: i64) -> Result<Option<String>, LedgerErr
         .query_row(
             &format!(
                 "SELECT json_extract(payload_json, '$.handoff.commit') FROM events
-                 WHERE {HANDOFFS} ORDER BY id DESC LIMIT 1"
+                 WHERE lane_id = ?1 AND {IS_HANDOFF} ORDER BY id DESC LIMIT 1"
             ),
             [id],
             |r| r.get(0),

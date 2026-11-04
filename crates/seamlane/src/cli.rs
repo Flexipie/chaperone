@@ -77,7 +77,8 @@ impl Cmd {
                 WorkCmd::Get { .. }
                 | WorkCmd::List { .. }
                 | WorkCmd::Handoffs { .. }
-                | WorkCmd::Events { .. },
+                | WorkCmd::Events { .. }
+                | WorkCmd::Board,
             ) => None,
             Cmd::Spec(SpecCmd::Create { .. }) => Some("spec create"),
             Cmd::Spec(SpecCmd::Update { .. }) => Some("spec update"),
@@ -295,6 +296,10 @@ pub enum WorkCmd {
     },
     /// One item with its lease state
     Get { id: i64 },
+    /// Every open item with its newest handoff and whether it is ready: the
+    /// owner's override, else status review and a ready handoff. Every item
+    /// is under `other`; specs are not grouped yet
+    Board,
     /// List items, newest activity first; done and cancelled hidden
     /// unless --all
     List {

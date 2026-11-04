@@ -158,13 +158,21 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
             let ready = (!clear).then_some(yes);
             let dry_run = dry(dry_run);
             ledger.work_ready(&actor.resolve(), id, ready, reason, None, dry_run)??;
-            // Daisy's answer for an item off the board; there is no board yet.
             if dry_run {
                 return one(json!({ "id": id, "ready_override": ready }));
             }
-            one(json!({ "id": id, "ready_override": ready, "on_board": false }))
+            // Daisy's answer: what the board now says, or for an item off
+            // it (done or cancelled) the override echoed.
+            let board = ledger.work_board(&ledger.now()?)?;
+            match board.other.iter().find(|b| b.item.id == id) {
+                Some(b) => {
+                    one(json!({ "id": id, "ready": b.ready, "ready_reason": b.ready_reason }))
+                }
+                None => one(json!({ "id": id, "ready_override": ready, "on_board": false })),
+            }
         }
         WorkCmd::Get { id } => one(ledger.work_get(id, &ledger.now()?)??),
+        WorkCmd::Board => one(ledger.work_board(&ledger.now()?)?),
         WorkCmd::List {
             status,
             agent,
