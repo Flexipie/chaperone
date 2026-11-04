@@ -176,11 +176,21 @@ fn hit(s: &str, i: usize) -> Option<(usize, usize, &'static str)> {
         if !label.contains("PRIVATE KEY") || label.contains('\n') {
             return None;
         }
+        // The base64 lines, then the matching END line. A key cut off
+        // before its END line is still a key, but only its lines go: prose
+        // that names the header keeps the text after it.
+        let body = i + "-----BEGIN -----".len() + label.len();
+        let body = body
+            + run(b, body, |c| {
+                c.is_ascii_alphanumeric() || b"+/=\r\n".contains(&c)
+            });
         let end_line = format!("-----END {label}-----");
-        // A key cut off before its END line is still a key.
-        let end = rest
-            .find(&end_line)
-            .map_or(s.len(), |at| i + at + end_line.len());
+        let end = body
+            + if s[body..].starts_with(&end_line) {
+                end_line.len()
+            } else {
+                0
+            };
         return Some((i, end, "private_key"));
     }
     for &(prefix, min, takes, kind) in TOKENS {
@@ -232,8 +242,15 @@ fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
                 let ty = run(&b[..b.len().min(t + 64)], t, |c| {
                     !c.is_ascii_whitespace() && c != b'='
                 });
-                let eq = t + ty + run(b, t + ty, |c| c == b' ');
-                if b.get(eq) == Some(&b'=') && b.get(eq + 1) != Some(&b'=') {
+                let gap = run(b, t + ty, |c| c == b' ');
+                let eq = t + ty + gap;
+                // `NAME: T = value`: a type, not a quoted value, then a
+                // spaced `=`. `NAME: abc=` is a value with an `=` in it.
+                if gap > 0
+                    && !matches!(b.get(t), Some(b'"' | b'\''))
+                    && b.get(eq) == Some(&b'=')
+                    && b.get(eq + 1) != Some(&b'=')
+                {
                     at = eq + 1;
                 }
             }
@@ -245,9 +262,9 @@ fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
     let rest = &s[start..];
     // Already redacted, a reference to a secret (`${{ secrets.X }}`), or
     // another pattern that starts here and redacts more than the first word
-    // (`Bearer` always, so a redacted bearer stays as it is). Checked before
+    // (`Bearer ` always, so a redacted bearer stays as it is). Checked before
     // the value is read, so a long line stays linear.
-    if [REDACTED, "${", "Bearer"]
+    if [REDACTED, "${", "Bearer "]
         .iter()
         .any(|p| rest.starts_with(p))
         || hit(s, start).is_some()
@@ -298,8 +315,32 @@ mod tests {
         let cases = [
             (format!("key {pem} done"), "key [redacted:private_key] done"),
             (
-                "-----BEGIN PRIVATE KEY-----\nMIIE cut off".into(),
+                "-----BEGIN PRIVATE KEY-----\nMIIEvQ\nab+/=".into(),
                 "[redacted:private_key]",
+            ),
+            (
+                "see `-----BEGIN PRIVATE KEY-----` in parser.rs".into(),
+                "see `[redacted:private_key]` in parser.rs",
+            ),
+            (
+                "JWT_SECRET: Zm9vYmFyMA=".into(),
+                "JWT_SECRET: [redacted:assignment]",
+            ),
+            (
+                r#"{"API_KEY":"hunter2","url":"https://x?a=b"}"#.into(),
+                r#"{"API_KEY":"[redacted:assignment]","url":"https://x?a=b"}"#,
+            ),
+            (
+                r#"{"API_KEY": "a = b"}"#.into(),
+                r#"{"API_KEY": "[redacted:assignment]"}"#,
+            ),
+            (
+                "DB_PASSWORD:hunter2=x SESSION_SECRET: s3cr3t=value".into(),
+                "DB_PASSWORD:[redacted:assignment] SESSION_SECRET: [redacted:assignment]",
+            ),
+            (
+                "PASSWORD=Bearerish123".into(),
+                "PASSWORD=[redacted:assignment]",
             ),
             (format!("ghp_{t20}."), "[redacted:github_token]."),
             (format!("x gho_{t20}"), "x [redacted:github_token]"),
@@ -345,7 +386,6 @@ mod tests {
                 "ACCESS_TOKEN: Bearer [redacted:bearer]",
             ),
             ("API_KEY := v".into(), "API_KEY := [redacted:assignment]"),
-            ("API_KEY: = v".into(), "API_KEY: = [redacted:assignment]"),
             (
                 "API_KEY: x == y".into(),
                 "API_KEY: [redacted:assignment] == y",
