@@ -88,7 +88,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent`, `--session` and `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record` and `reviews record` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -161,7 +161,10 @@ Findings come from the stored payload, and each one's `outcome` is its row's `fi
 
 `reviews record` refuses (`invalid_input`, nothing written): a view whose `job_id` is not
 `--job`, a view with no `done` or `status`, a done job with a status other than
-`reviewed`, `posted`, `failed` or `cancelled`, a job recorded on another lane, a finding with
+`reviewed`, `posted`, `failed` or `cancelled`, a job recorded on another lane, a job whose
+`repo` is not the lane's `repo_slug` (case ignored) or, for a local job, whose `branch` is not
+the lane's `branch`, or, for a PR job, whose `pr_ref` is not the lane's `pr_ref` (case ignored),
+each checked only where the lane has it, a finding with
 no id, severity or title, and findings whose ids repeat. Daisy
 is found at `/Applications/daisy.app/Contents/MacOS/daisy-cli`
 ([R15](research/r15-migration.md)), or at `SEAMLANE_DAISY_CLI`, and given 30 s. Its exit

@@ -2,7 +2,7 @@
 //! whatever it says, never becomes a verdict.
 
 use seamlane_core::ledger::Actor;
-use seamlane_core::ledger::Ledger;
+use seamlane_core::ledger::{Ledger, Refusal};
 use seamlane_core::pipeline::Fact;
 use seamlane_core::work::{ClaimInput, CreateInput};
 use serde_json::{Value, json};
@@ -56,5 +56,54 @@ fn review_text_never_a_verdict() {
     let f = ledger.project(1, Some("abc1234")).unwrap();
     for path in ["verdict.decision", "verdict.sha"] {
         assert_eq!(f.get(path), &Fact::Absent, "{path}");
+    }
+}
+
+#[test]
+fn review_from_another_lane_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+    let lane = pair("lane", "s1");
+    let create = CreateInput {
+        title: "t".into(),
+        repo: Some("O/R".into()),
+        kind: "code".into(),
+        pr_flow: "pr".into(),
+        ..CreateInput::default()
+    };
+    ledger
+        .work_create(&lane, &create, None, false)
+        .unwrap()
+        .unwrap();
+    let claim = ClaimInput {
+        branch: Some("b".into()),
+        ..ClaimInput::default()
+    };
+    ledger
+        .work_claim(&lane, 1, &claim, None, false)
+        .unwrap()
+        .unwrap();
+    let with = |job: i64, k: &str, v: Value| {
+        let mut v2 = view(job, true, "reviewed");
+        v2[k] = v;
+        v2
+    };
+    for (job, bad) in [
+        (8, with(8, "repo", json!("x/y"))),
+        (9, with(9, "branch", json!("c"))),
+    ] {
+        let r = ledger.review_record(&lane, 1, job, &bad).unwrap();
+        assert!(matches!(r, Err(Refusal::InvalidInput(_))), "{r:?}");
+        assert!(matches!(
+            ledger.review_get(job).unwrap(),
+            Err(Refusal::NotFound { .. })
+        ));
+    }
+    // Repo ignores case; a PR job has no branch and the lane no pr_ref yet.
+    let mut pr = with(10, "source", json!("pr"));
+    pr["branch"] = Value::Null;
+    pr["pr_ref"] = json!("o/r#5");
+    for (job, good) in [(7, view(7, true, "reviewed")), (10, pr)] {
+        ledger.review_record(&lane, 1, job, &good).unwrap().unwrap();
     }
 }
