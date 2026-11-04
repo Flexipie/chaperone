@@ -27,7 +27,7 @@ command misses M1 at scale (`work board` past about 150 open items). One read wa
   by default) and the existing `fifty_writers` in `tests/concurrency.rs`, both in release.
 - Safety: every run lives in a fresh temp dir. Every call passes `--db` there, and the child environment holds only
   `PATH`, `HOME` and `XDG_DATA_HOME` (pointing at the temp dir) and the two `DAISY_*` actor variables, so a missed
-  `--db` cannot reach a real ledger. The script checks that `~/Library/Application Support/seamlane` did not change.
+  `--db` cannot reach a real ledger. The script checks that `~/Library/Application Support/seamlane` was not created or removed.
   No `daisy-cli` call.
 
 Reproduce:
@@ -47,7 +47,7 @@ Product column, reference machine. Before and after are the same unless both are
 | --- | --- | --- | --- |
 | S1 | `--version` p50 ≤ 10 ms, p99 ≤ 25 ms | p50 3.1 ms, p99 4.0 ms | pass |
 | S2 | open WAL, `SELECT 1`, exit: p50 ≤ 15 ms, p99 ≤ 30 ms | `work list` on an empty ledger (a superset of S2: clap, the probe, the pragmas, the schema check and JSON output): p50 4.5 ms, p99 5.7 ms | pass |
-| E1 | one writer ≥ 2,000 commits/s | 13,200 to 14,300 commits/s, mean 0.07 ms (3 runs) | pass, see finding 6 |
+| E1 | one writer ≥ 2,000 commits/s | 12,000 to 14,300 commits/s, mean 0.07 to 0.08 ms (8 warm runs; the first run after a rebuild did 5,040) | pass, see finding 6 |
 | E2 | 50 processes × 40 events ≤ 5 s | 0.89 s, correctness checks green | pass |
 | L1 | follower sees an event p50 ≤ 5 ms | not measurable: no follower or wake exists in v0 | n/a |
 | M1 | one-shot RSS ≤ 8 MiB | `--version` 2.4 MiB, `work list` 4.5 MiB empty and 6.7 MiB realistic, `work board` 11.4 MiB at 266 open items | **miss for `work board`**, finding 1 |
@@ -76,14 +76,14 @@ Wall ms per spawn, p50 / p99. About 2 ms of each is the spawn floor (`/usr/bin/t
 | `check record` | 4.41 / 8.15 | 4.90 / 6.27 | 4.84 / 5.83 | 5.01 / 6.17 |
 | `work board` (20 samples) | | | 9.10 p50 | 10.06 p50 |
 
-Apart from `spec get --key`, before and after differ by run-to-run noise (about ±0.5 ms at p50). A 3,000-item,
+Apart from `spec get --key`, before and after differ by run-to-run noise (about ±0.5 ms at p50; `work board`'s 1 ms is over 20 samples, and the change does not touch its path). A 3,000-item,
 18,000-event ledger costs the hot commands nothing measurable: every hot read is an index search (below), and
 `ledger open` is about 1 ms over `--version`. The handoff gate projects every event of the lane inside the write, and
 at 300 events per lane that is still lost in the noise.
 
 ## Write throughput and lock wait
 
-- E1, in the process: 13,200 to 14,300 commits/s at `synchronous=FULL`, about 7x the budget. R6 measured the same
+- E1, in the process: 12,000 to 14,300 commits/s at `synchronous=FULL`, about 7x the budget. R6 measured the same
   fsync-bound ceiling (13k to 19k rows/s) for a bare insert, so the write function, guard reads and fold add little.
 - E2, `fifty_writers` in release: 50 processes × 40 events in 0.89 s, about 2,250 commits/s with every process start
   included.

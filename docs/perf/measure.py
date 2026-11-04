@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Measures a seamlane release binary the R14 way, for docs/perf/v0-review.md.
 
-    python3 docs/perf/measure.py target/release/seamlane [--items 3000]
+    python3 -I docs/perf/measure.py <before-binary> <after-binary> [--items 3000]
+
+The first binary seeds the shared snapshot.
 
 Everything runs in a fresh temp dir: every call passes --db there, and HOME
 and XDG_DATA_HOME point there too, so a missed --db can never reach a real
@@ -213,7 +215,8 @@ PLANS = {
                 "('lane.claimed', 'lane.taken_over') AND actor_session = ?2",
     "idempotency by_key": "SELECT id FROM events WHERE idempotency_key = ?1",
     "jobs (JOB_EVENTS)": "SELECT id FROM events WHERE kind IN ('check.requested', "
-                         "'check.finished') ORDER BY id DESC LIMIT 1",
+                         "'check.finished') AND json_extract(payload_json, '$.job') = ?1 "
+                         "ORDER BY kind = 'check.finished' DESC, id DESC LIMIT 1",
     "latest handoff": "SELECT id FROM events WHERE lane_id = ?1 AND kind IN "
                       "('lane.handed_off', 'phase.entered') ORDER BY id DESC LIMIT 1",
     "next_id": "SELECT coalesce(max(id), 0) + 1 FROM lanes",

@@ -5,7 +5,7 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use common::{AT, actor, committed, create_lane};
 use seamlane_core::ledger::{Change, EventKind, Mutation, Payload};
@@ -48,6 +48,10 @@ fn e1_one_writer() {
         committed(ledger.apply(&who, None, AT, update).unwrap());
     }
     let elapsed = start.elapsed();
+    assert!(
+        elapsed <= Duration::from_secs(10),
+        "E1 CI ceiling: {elapsed:?}"
+    );
     eprintln!(
         "E1: {COMMITS} commits in {elapsed:?}, {:.0} commits/s, mean {:.3} ms",
         COMMITS as f64 / elapsed.as_secs_f64(),
