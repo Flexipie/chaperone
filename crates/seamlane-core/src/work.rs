@@ -652,8 +652,7 @@ impl Ledger {
     }
 
     /// Daisy's board: every open item with its newest handoff, its override
-    /// and the ready rule's answer. One statement, so one snapshot. Nothing
-    /// is grouped by spec yet; every item is under `other`.
+    /// and the ready rule's answer. One statement, so one snapshot.
     pub fn work_board(&self, now: &str) -> Result<Board, LedgerError> {
         let mut stmt = self.conn().prepare(&format!(
             "SELECT l.*, h.id, h.lane_id, h.actor_agent, h.actor_session,
@@ -675,7 +674,6 @@ impl Ledger {
                 Some(_) => Some(handoff_at(r, 32)?),
                 None => None,
             };
-            // A cleared override is `ready: null`.
             let ready_override = match r.get::<_, Option<bool>>(38)? {
                 Some(ready) => Some(ReadyOverride {
                     ready,

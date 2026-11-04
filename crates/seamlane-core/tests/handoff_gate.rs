@@ -335,7 +335,6 @@ fn the_board_reads_the_newest_handoff_and_the_override() {
     let owner = pair("owner", "s3");
     let board = || {
         let b = lane.ledger.work_board(T2).unwrap();
-        assert!(b.specs.is_empty());
         let [e] = &b.other[..] else {
             panic!("one open item: {b:?}")
         };
