@@ -266,11 +266,41 @@ impl Ledger {
             None,
             false,
             |conn, _| {
-                if !lane_exists(conn, work)? {
+                let lane: Option<[Option<String>; 3]> = conn
+                    .query_row(
+                        "SELECT repo_slug, branch, pr_ref FROM lanes WHERE id = ?1",
+                        [work],
+                        |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?]),
+                    )
+                    .optional()?;
+                let Some([repo, branch, pr_ref]) = lane else {
                     return Ok(Err(Refusal::NotFound {
                         entity: ENTITY,
                         id: work,
                     }));
+                };
+                // A local job carries the branch, a PR job the pr_ref (its
+                // branch is null). Owner/repo ignores case on GitHub; branches
+                // do not.
+                let second = if check == "local_review" {
+                    ("branch", branch)
+                } else {
+                    ("pr_ref", pr_ref)
+                };
+                for (field, ours) in [("repo", repo), second] {
+                    let Some(ours) = ours else { continue };
+                    let theirs = s(field).unwrap_or("");
+                    let same = if field == "branch" {
+                        theirs == ours
+                    } else {
+                        theirs.eq_ignore_ascii_case(&ours)
+                    };
+                    if !same {
+                        return invalid(format!(
+                            "job {job} has {field} {}, work item {work} has {ours}",
+                            view[field]
+                        ));
+                    }
                 }
                 let other: Option<i64> = conn
                     .query_row(
