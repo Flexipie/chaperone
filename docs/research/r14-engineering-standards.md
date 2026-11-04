@@ -78,7 +78,7 @@ R6 on this machine, 2026-11-02, release, thin LTO: warm ping p50 **3.9 ms**, ope
 | M1 | One-shot CLI RSS | ≤ **8 MiB** | ≤ **32 MiB** |
 | M2 | Supervisor RSS, zero lanes | ≤ **16 MiB** | ≤ **48 MiB** |
 | M3 | Supervisor RSS per idle lane, children excluded | ≤ **256 KiB** (50 lanes ≤ **12.5 MiB** above M2) | ≤ **1 MiB** per lane |
-| B1 | Stripped release binary | ≤ **15 MiB**. On macOS the file links `libSystem` only. SQLite is inside. | Same check, on the release workflow |
+| B1 | Stripped release binary | ≤ **15 MiB**. On macOS the file links system libraries only: `libSystem`, and `libiconv`, which the `libc` crate links on Apple targets (v0: 3.7 MiB, [perf review](../perf/v0-review.md)). SQLite is inside. | Same check, on the release workflow |
 | I1 | Instruction count vs the base branch | CI only | ≤ **+10%** on three benches: semantic hash of `pipelines/v17.toml`, `to_ready` on the R7 fixture, 100 append-and-fold calls on a memory VFS with `synchronous=OFF` |
 
 L1 is the budget that forces a wake. A 50 ms poll fails the product p50. The 300 s orchestrate poll fails it by a wide margin. M3 is the budget that matches R8: the supervisor keeps no scrollback and no transcript. A 1 MiB buffer per lane fails at 50 lanes on the product number (50 × 256 KiB). Agent CLI RSS is outside these budgets. R6 already measured that the agent, not the harness, dominates per-lane memory.

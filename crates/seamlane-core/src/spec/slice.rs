@@ -4,8 +4,8 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
+use super::Spec;
 use super::parse::{self, Decision, SpecSection};
-use super::{SELECT, Spec};
 use crate::ledger::{Checked, Ledger, LedgerError, Refusal};
 
 /// Another slice of the same spec, with its work item when it has one.
@@ -74,14 +74,21 @@ impl Ledger {
 
 /// The newest-changed spec whose newest version has a section for `key`.
 fn spec_for_key(conn: &Connection, key: &str) -> Result<Option<i64>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("{SELECT} ORDER BY s.updated_at DESC, s.id DESC"))?;
-    for s in stmt.query_map(rusqlite::params![None::<i64>, None::<i64>], Spec::from_row)? {
-        let s = s?;
-        if parse::parse_spec_sections(&s.body)
+    // Only the id and head body: the full spec row costs two lane counts and
+    // an event read per spec, and every spec is read before the sort.
+    let mut stmt = conn.prepare(
+        "SELECT s.id, v.body FROM specs s
+           JOIN spec_versions v ON v.spec_id = s.id AND v.version = s.head_version
+         ORDER BY s.updated_at DESC, s.id DESC",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let body: String = r.get(1)?;
+        if parse::parse_spec_sections(&body)
             .iter()
             .any(|sec| sec.has_key(key))
         {
-            return Ok(Some(s.id));
+            return Ok(Some(r.get(0)?));
         }
     }
     Ok(None)
@@ -138,13 +145,23 @@ fn work_for_key(
     spec_id: i64,
     key: &str,
 ) -> Result<Option<(i64, String, Option<String>)>, LedgerError> {
-    Ok(conn
-        .query_row(
-            "SELECT id, status, pr_ref FROM lanes
-              WHERE source IN ('linear', 'issue', 'github') AND source_id = ?1 COLLATE NOCASE
-              ORDER BY (spec_id IS ?2) DESC, id DESC LIMIT 1",
-            rusqlite::params![key, spec_id],
+    // The linked lookup uses lanes_slot; the fallback scans every lane, so it
+    // runs only for a slice no item of this spec carries.
+    let find = |linked: &str, args: &[&dyn rusqlite::ToSql]| {
+        conn.query_row(
+            &format!(
+                "SELECT id, status, pr_ref FROM lanes
+                  WHERE {linked} source IN ('linear', 'issue', 'github')
+                    AND source_id = ?1 COLLATE NOCASE
+                  ORDER BY id DESC LIMIT 1"
+            ),
+            args,
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
-        .optional()?)
+        .optional()
+    };
+    Ok(match find("spec_id = ?2 AND", &[&key, &spec_id])? {
+        Some(work) => Some(work),
+        None => find("", &[&key])?,
+    })
 }
