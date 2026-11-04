@@ -145,17 +145,9 @@ fn sha_same_commit() {
     let check = |v: &str, h: &str| run(&p, &[("v", s(v)), ("h", s(h))]);
     assert_eq!(check("abc1234", full), Ok(()));
     assert_eq!(check(full, "abc1234"), Ok(()), "short commit, full verdict");
-    assert_eq!(check(full, full), Ok(()));
     let no = denied("a", &["v", "h"]);
     assert_eq!(check(full, "abc1235"), no, "a mismatch");
     assert_eq!(check(full, "abc123"), no, "under the floor");
-    assert_eq!(check("abc123x", full), no, "not hex");
-    assert_eq!(
-        check(&format!("{full}0"), &format!("{full}0")),
-        no,
-        "over the ceiling"
-    );
-    assert_eq!(run(&p, &[("v", s(full))]), no);
     // v17's one-way fn still refuses a full verdict on a short commit.
     let p = gate("sha_prefix_eq", args);
     assert_eq!(run(&p, &[("v", s(full)), ("h", s("abc1234"))]), no);

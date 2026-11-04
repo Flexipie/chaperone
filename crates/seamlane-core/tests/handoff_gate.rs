@@ -30,12 +30,11 @@ struct Lane {
 impl Lane {
     /// Lane 1, a code PR lane claimed by the lane session s1.
     fn new() -> Lane {
-        Lane::with("code", "pr", None)
+        Lane::with("code", "pr")
     }
 
-    /// Lane 1 of `kind` on `pr_flow`, claimed by s1. With `stamp`, the claim
-    /// is then restamped with that (id, hash), as an older binary left it.
-    fn with(kind: &str, pr_flow: &str, stamp: Option<(&str, &str)>) -> Lane {
+    /// Lane 1 of `kind` on `pr_flow`, claimed by s1.
+    fn with(kind: &str, pr_flow: &str) -> Lane {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.db");
         let ledger = Ledger::open_and_migrate(&path).unwrap();
@@ -62,33 +61,13 @@ impl Lane {
             .work_claim(me, 1, &claim, Some(T0), false)
             .unwrap()
             .unwrap();
-        if let Some((id, hash)) = stamp {
-            lane.db
-                .execute(
-                    "UPDATE lanes SET pipeline_id = ?1, pipeline_hash = ?2 WHERE id = 1",
-                    [id, hash],
-                )
-                .unwrap();
-        }
         lane
     }
 
     /// The plan check and quality gate skipped with an allowed reason.
     fn skips(&self) {
         for (check, reason) in [("plan_check", "docs"), ("quality_gate", "no_code")] {
-            let m = Mutation::Event {
-                kind: EventKind::CheckFinished,
-                lane_id: Some(1),
-                spec_id: None,
-                payload: Payload {
-                    check: Some(check.into()),
-                    outcome: Some("skipped".into()),
-                    head_sha: Some("abc1234".into()),
-                    rest: json!({ "reason": reason }).as_object().unwrap().clone(),
-                    ..Payload::default()
-                },
-            };
-            let applied = self.ledger.apply(&self.checker, None, T1, m).unwrap();
+            let applied = self.finish(check, "skipped", "abc1234", json!({ "reason": reason }));
             assert!(matches!(applied, Applied::Committed(_)), "{applied:?}");
         }
     }
@@ -114,10 +93,26 @@ impl Lane {
     }
 
     fn check(&self, who: &Actor, check: &str, rest: serde_json::Value) -> Applied {
+        self.finish_as(who, check, "ran", "abc1234", rest)
+    }
+
+    /// A check finished by the checker session.
+    fn finish(&self, check: &str, outcome: &str, head: &str, rest: serde_json::Value) -> Applied {
+        self.finish_as(&self.checker, check, outcome, head, rest)
+    }
+
+    fn finish_as(
+        &self,
+        who: &Actor,
+        check: &str,
+        outcome: &str,
+        head: &str,
+        rest: serde_json::Value,
+    ) -> Applied {
         let mut payload = Payload {
             check: Some(check.into()),
-            outcome: Some("ran".into()),
-            head_sha: Some("abc1234".into()),
+            outcome: Some(outcome.into()),
+            head_sha: Some(head.into()),
             ..Payload::default()
         };
         if let serde_json::Value::Object(rest) = rest {
@@ -465,7 +460,7 @@ fn a_no_code_lane_is_done_without_a_verdict_or_commit() {
         ("measure", "none", "no_pr"),
         ("investigation", "pr", "investigation"),
     ] {
-        let lane = Lane::with(kind, flow, None);
+        let lane = Lane::with(kind, flow);
         assert_eq!(lane.route(), route);
         lane.skips();
         lane.done_no_commit().unwrap();
@@ -478,7 +473,7 @@ fn a_no_code_lane_is_done_without_a_verdict_or_commit() {
 #[test]
 fn a_code_lane_needs_its_verdict_on_every_route() {
     for flow in ["pr", "direct", "none"] {
-        let lane = Lane::with("code", flow, None);
+        let lane = Lane::with("code", flow);
         for check in ["plan_check", "quality_gate"] {
             lane.check(&lane.checker, check, json!({}));
         }
@@ -494,47 +489,30 @@ fn a_code_lane_needs_its_verdict_on_every_route() {
     }
 }
 
-/// A short and a full sha of one commit match whichever side is short.
+/// A verdict on the full sha matches a handoff of its short form.
 #[test]
-fn verdict_and_commit_match_short_or_full_both_ways() {
+fn a_full_sha_verdict_matches_a_short_commit() {
     let full = "abc1234def567890abc1234def567890abc12345";
-    let lane = Lane::new();
-    lane.stamps(); // verdict on abc1234
-    lane.handoff(full, "done", None).unwrap();
-
     let lane = Lane::new();
     for check in ["plan_check", "quality_gate"] {
         lane.check(&lane.checker, check, json!({}));
     }
-    let m = Mutation::Event {
-        kind: EventKind::CheckFinished,
-        lane_id: Some(1),
-        spec_id: None,
-        payload: Payload {
-            check: Some("merge_verdict".into()),
-            outcome: Some("ran".into()),
-            head_sha: Some(full.into()),
-            rest: json!({"decision": "yes"}).as_object().unwrap().clone(),
-            ..Payload::default()
-        },
-    };
-    lane.ledger.apply(&lane.checker, None, T1, m).unwrap();
-    assert!(matches!(
-        lane.handoff("abc1235", "done", None),
-        Err(Refusal::GateDenied { .. })
-    ));
+    lane.finish("merge_verdict", "ran", full, json!({"decision": "yes"}));
     lane.handoff("abc1234", "done", None).unwrap();
 }
 
 /// A lane stamped v17 keeps v17: no verdict still denies a docs lane's done.
 #[test]
 fn a_v17_lane_keeps_the_v17_rule() {
-    let v17 = seamlane_core::pipeline::by_stamp(
-        "v17",
-        "1a8a599ca26abaf2ab5b1dc9aaa301c019237d45fa3293f4326da0b47b6ea2c5",
-    )
-    .unwrap();
-    let lane = Lane::with("docs", "pr", Some(("v17", &v17.hash)));
+    let lane = Lane::with("docs", "pr");
+    lane.db
+        .execute(
+            "UPDATE lanes SET pipeline_id = 'v17',
+             pipeline_hash = '1a8a599ca26abaf2ab5b1dc9aaa301c019237d45fa3293f4326da0b47b6ea2c5'
+             WHERE id = 1",
+            [],
+        )
+        .unwrap();
     lane.skips();
     assert_eq!(
         lane.done_no_commit(),

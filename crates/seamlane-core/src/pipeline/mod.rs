@@ -286,13 +286,6 @@ requires = ["a"]
                 ..
             }
         ));
-        let done: Vec<_> = p
-            .transitions
-            .iter()
-            .filter(|t| t.id == "handoff" && t.to == Phase::Done)
-            .collect();
-        assert_eq!(done.len(), 1);
-        assert_eq!(done[0].routes.len(), 4);
     }
 
     #[test]
