@@ -368,7 +368,7 @@ from = "ready"
 to = "done"
 requires = ["human_merge_yes", "verdict_on_head"]
 
-# --- no_pr: measure or docs, nothing that runs ----------------------------
+# --- no_pr: lanes with no PR (--pr-flow none); a code lane still needs its verdict ---
 
 [[transition]]
 id = "no_pr_done"
