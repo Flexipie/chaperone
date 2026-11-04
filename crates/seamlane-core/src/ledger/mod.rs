@@ -8,6 +8,7 @@ mod event;
 mod fold;
 mod migrate;
 pub(crate) mod projection;
+mod redact;
 mod write;
 
 use std::ffi::OsString;

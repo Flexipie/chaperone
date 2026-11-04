@@ -596,7 +596,9 @@ impl Ledger {
                 agent: e.actor.agent,
                 session: e.actor.session,
                 tool: TOOL.into(),
-                handoff: input.clone(),
+                // The stored copy, redacted (R13), not the input.
+                handoff: serde_json::from_value(e.payload.rest["handoff"].clone())
+                    .map_err(std::io::Error::other)?,
                 created_at: e.at,
             })),
             Applied::Refused(r) => Ok(Err(r)),

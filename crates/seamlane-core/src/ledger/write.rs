@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension, Params, Row, Transaction, Transact
 use serde_json::Value;
 
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
-use super::{Ledger, LedgerError, check_schema, fold};
+use super::{Ledger, LedgerError, check_schema, fold, redact};
 use crate::engine;
 use crate::pipeline::{REQUIRED_TRANSITIONS, Route};
 
@@ -270,6 +270,16 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             "payload does not survive a round trip; a rest key repeats a typed field"
         ));
     }
+    if p.redactions.is_some() {
+        refuse!(invalid("redactions is set by the write"));
+    }
+    // Before the insert, so the log never holds a pre-redaction copy and a
+    // retry replays the redacted bytes.
+    let redactions = check!(redact::payload(&mut event.payload));
+    if redactions > 0 {
+        event.payload.redactions = Some(redactions);
+    }
+    let p = &event.payload;
     if !event.kind.leases() && p.lease_secs.is_some() {
         refuse!(invalid(&format!("{} carries no lease", event.kind)));
     }
@@ -1422,6 +1432,32 @@ mod tests {
                     },
                 ),
             ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
+                        redactions: Some(1),
+                        ..lane()
+                    },
+                ),
+            ),
+            (
+                AT,
+                None,
+                ev(
+                    EventKind::LaneCreated,
+                    None,
+                    None,
+                    Payload {
+                        lane_key: Some(format!("ghp_{}", "a".repeat(36))),
+                        ..lane()
+                    },
+                ),
+            ),
         ];
         let events = |l: &Ledger| -> i64 {
             l.conn()
@@ -1481,6 +1517,69 @@ mod tests {
             );
             assert_eq!(events(&ledger), 4, "case {i}");
         }
+    }
+
+    /// Prose is redacted before the insert: the retry replays the bytes the
+    /// first write stored, and neither the log nor the row holds the secret.
+    #[test]
+    fn prose_is_redacted_and_replayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let me = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
+        let token = format!("ghp_{}", "a".repeat(36));
+        let mut p = Payload {
+            title: Some(format!("leaked {token}")),
+            ..lane()
+        };
+        p.rest
+            .insert("brief".into(), json!({"decisions": ["API_KEY=hunter2"]}));
+        let applied = [p.clone(), p].map(|p| {
+            ledger
+                .apply(
+                    &me,
+                    Some("k"),
+                    AT,
+                    ev(EventKind::LaneCreated, None, None, p),
+                )
+                .unwrap()
+        });
+        let mut want = Payload {
+            title: Some("leaked [redacted:github_token]".into()),
+            redactions: Some(2),
+            ..lane()
+        };
+        want.rest.insert(
+            "brief".into(),
+            json!({"decisions": ["API_KEY=[redacted:assignment]"]}),
+        );
+        let event = Event {
+            id: 1,
+            kind: EventKind::LaneCreated,
+            lane_id: Some(1),
+            spec_id: None,
+            actor: me,
+            idempotency_key: Some("k".into()),
+            payload: want,
+            at: AT.into(),
+        };
+        assert_eq!(
+            applied,
+            [Applied::Committed(event.clone()), Applied::Replayed(event)]
+        );
+        let stored: String = ledger
+            .conn()
+            .query_row(
+                "SELECT group_concat(payload_json) || (SELECT title FROM lanes) FROM events",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(stored.contains("[redacted:github_token]"), "{stored}");
+        assert!(!stored.contains(&token), "{stored}");
+        assert!(!stored.contains("hunter2"), "{stored}");
     }
 
     /// A dry run is the real write, read inside its transaction, then
