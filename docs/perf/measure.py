@@ -203,7 +203,10 @@ PLANS = {
     "slice lane, linked to the spec":
         "SELECT id, status, pr_ref FROM lanes WHERE spec_id = ?2 AND source IN ('linear', "
         "'issue', 'github') AND source_id = ?1 COLLATE NOCASE ORDER BY id DESC LIMIT 1",
-    "slice lane by source_id (NOCASE), before / fallback":
+    "slice lane, fallback when none is linked":
+        "SELECT id, status, pr_ref FROM lanes WHERE source IN ('linear', 'issue', 'github') "
+        "AND source_id = ?1 COLLATE NOCASE ORDER BY id DESC LIMIT 1",
+    "slice lane by source_id (NOCASE), before":
         "SELECT id, status, pr_ref FROM lanes WHERE source IN ('linear', 'issue', 'github') "
         "AND source_id = ?1 COLLATE NOCASE ORDER BY (spec_id IS ?2) DESC, id DESC LIMIT 1",
     "has_held": "SELECT 1 FROM events WHERE lane_id = ?1 AND kind IN "

@@ -109,6 +109,7 @@ what the schema allows, not a capture from the binary).
 | spec by key (`COLLATE NOCASE`) | **scan** `specs` | the BINARY unique index cannot serve NOCASE; 300 rows |
 | slice sibling by `source_id` (`COLLATE NOCASE`), before | **scan** `lanes`, 0.25 ms at 3,000 lanes, once per sibling | fixed for linked siblings |
 | slice sibling linked to the spec, after | `lanes_slot (spec_id=?)`, 0.026 ms | new |
+| slice sibling, fallback when none is linked | **scan** `lanes` | runs only for a slice no item of the spec carries |
 | job lookup by `$.job` (`reviews get`, `jobs get`, `check record` on a job) | **scan** `events` with `json_extract`, 1.9 ms at 18,000 events | finding 5 |
 
 Unused indexes: none worth dropping. `lanes_holder (agent, session)` is used by `work list --mine`; `messages_to` has
@@ -168,7 +169,7 @@ Cost is measured on this machine; gain is expected, not yet measured, except whe
 
 | # | Finding | Measured cost | Expected gain | Action |
 | --- | --- | --- | --- | --- |
-| 0 | `spec get --key` read every spec's full row (two lane counts and an event read each) to find the slice, and scanned every lane once per sibling (`spec/slice.rs`) | p50 9.8 ms, p99 10.9 ms at 300 specs and 3,000 lanes, growing linearly with both | 3.3 ms p50 | **Fixed here**: `spec_for_key` reads only the head body; `work_for_key` asks for the lane linked to the spec through `lanes_slot` first and scans only when none is. Output byte-identical to before on linked, unlinked, newer-unlinked and different-case keys. Now 6.5 / 7.5 ms. |
+| 0 | `spec get --key` read every spec's full row (two lane counts and an event read each) to find the slice, and scanned every lane once per sibling (`spec/slice.rs`) | p50 9.8 ms, p99 10.9 ms at 300 specs and 3,000 lanes, growing linearly with both | 3.3 ms p50 | **Fixed here**: `spec_for_key` reads only the head body; `work_for_key` asks for the lane linked to the spec through `lanes_slot` first and scans only when none is. Output byte-identical to before on linked, unlinked, newer-unlinked and different-case keys, and the old and new lane queries agree on 6,000 random cases (lane tables with null spec ids, other sources and case variants). Now 6.5 / 7.5 ms. |
 | 1 | `work board` holds every open item as structs, then as a `serde_json::Value` tree, then as one pretty string, about 27 KiB of RSS per open item. `work ready` builds the whole board to answer for one item (`crates/seamlane/src/work.rs:166`) | 11.4 MiB RSS and 9 to 10 ms at 266 open items (**M1 miss**); 89 MiB and 76 ms at 3,000 open | under 8 MiB at any realistic count; `ready` O(1) | Follow-up: serialize straight from the rows to stdout, and give `ready` a one-item read. |
 | 2 | Under contention the write waits in SQLite's default busy handler, which sleeps in growing steps up to 100 ms, so a writer can sleep long after the lock is free | 50 CLI writers: per call p99 about 170 ms, max about 290 ms, for 0.07 ms of work | p99 to tens of ms, likely | Follow-up: measure a short fixed-sleep `busy_handler` (rusqlite has it, no new dependency) against the default, keeping the 5 s limit. |
 | 3 | `spec get --key` without `--spec` still parses every spec body, newest first, until one has the key | about 3 ms at 300 specs, linear | constant time | Follow-up: a slice-key lookup table (schema change, a one-way door, so not in this PR). |
