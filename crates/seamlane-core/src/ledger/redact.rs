@@ -143,9 +143,12 @@ fn key(k: &str) -> Result<(), Refusal> {
 fn redact(s: &str) -> (String, Vec<&'static str>) {
     let mut out = String::with_capacity(s.len());
     let mut kinds = Vec::new();
+    // Where each `-----END ` starts, found once so a key's END line is a
+    // lookup and many BEGIN headers stay linear.
+    let ends: Vec<usize> = s.match_indices("-----END ").map(|(at, _)| at).collect();
     let (mut i, mut copied) = (0, 0);
     while i < s.len() {
-        match hit(s, i) {
+        match hit(s, &ends, i) {
             // Matches start and end on ASCII bytes, so the slices are on
             // char boundaries.
             Some((start, end, kind)) => {
@@ -164,7 +167,7 @@ fn redact(s: &str) -> (String, Vec<&'static str>) {
 }
 
 /// The byte range to replace for a match found at `i`, and its kind.
-fn hit(s: &str, i: usize) -> Option<(usize, usize, &'static str)> {
+fn hit(s: &str, ends: &[usize], i: usize) -> Option<(usize, usize, &'static str)> {
     // Every pattern starts on an ASCII byte.
     if !s.is_char_boundary(i) {
         return None;
@@ -176,21 +179,23 @@ fn hit(s: &str, i: usize) -> Option<(usize, usize, &'static str)> {
         if !label.contains("PRIVATE KEY") || label.contains('\n') {
             return None;
         }
-        // The base64 lines, then the matching END line. A key cut off
-        // before its END line is still a key, but only its lines go: prose
-        // that names the header keeps the text after it.
-        let body = i + "-----BEGIN -----".len() + label.len();
-        let body = body
-            + run(b, body, |c| {
-                c.is_ascii_alphanumeric() || b"+/=\r\n".contains(&c)
-            });
+        // Through the matching END line, whatever the key is wrapped in
+        // (indented YAML, `\n` escapes, one flattened line, PGP armor
+        // headers). With no END line next, a key cut off is still a key,
+        // but only its base64 lines go: prose that names the header keeps
+        // the text after it.
+        let header = i + "-----BEGIN -----".len() + label.len();
         let end_line = format!("-----END {label}-----");
-        let end = body
-            + if s[body..].starts_with(&end_line) {
-                end_line.len()
-            } else {
-                0
-            };
+        let next_end = ends.get(ends.partition_point(|&e| e < header));
+        let end = match next_end {
+            Some(&e) if s[e..].starts_with(&end_line) => e + end_line.len(),
+            _ => {
+                header
+                    + run(b, header, |c| {
+                        c.is_ascii_alphanumeric() || b"+/=\r\n".contains(&c)
+                    })
+            }
+        };
         return Some((i, end, "private_key"));
     }
     for &(prefix, min, takes, kind) in TOKENS {
@@ -200,7 +205,7 @@ fn hit(s: &str, i: usize) -> Option<(usize, usize, &'static str)> {
         }
     }
     if rest.starts_with("Bearer") {
-        let start = i + 6 + run(b, i + 6, |c| c == b' ' || c == b'\t');
+        let start = i + 6 + run(b, i + 6, blank);
         if start == i + 6 {
             return None;
         }
@@ -208,7 +213,7 @@ fn hit(s: &str, i: usize) -> Option<(usize, usize, &'static str)> {
         return (n >= 20).then_some((start, start + n, "bearer"));
     }
     if matches!(b.get(i), Some(b'=' | b':')) {
-        return assignment(s, i);
+        return assignment(s, ends, i);
     }
     None
 }
@@ -216,14 +221,18 @@ fn hit(s: &str, i: usize) -> Option<(usize, usize, &'static str)> {
 /// `NAME_TOKEN=value`, `"API_KEY": "value"`, `API_KEY := value`,
 /// `API_KEY: &str = "value"`: the value side, when the name ends in one of
 /// [`SECRET_NAMES`] and `b[sep]` is `=` or `:`.
-fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
+fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'static str)> {
     let b = s.as_bytes();
     let mut j = sep;
-    while j > 0 && b[j - 1] == b' ' {
+    while j > 0 && blank(b[j - 1]) {
         j -= 1;
     }
-    if j > 0 && matches!(b[j - 1], b'"' | b'\'') {
-        j -= 1;
+    // `env["API_KEY"] =`, `"API_KEY":`, and `\"API_KEY\":` inside a logged
+    // JSON string.
+    for close in [b']', b'"', b'\\'] {
+        if j > 0 && (b[j - 1] == close || close == b'"' && b[j - 1] == b'\'') {
+            j -= 1;
+        }
     }
     let name_start = (0..j).rev().take_while(|&k| word(b[k])).last()?;
     let name = &s[name_start..j];
@@ -238,11 +247,11 @@ fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
             _ => {
                 // A type annotation: the value is after its `=`. Types are
                 // short, so the look is capped and a long line stays linear.
-                let t = at + run(b, at, |c| c == b' ');
+                let t = at + run(b, at, blank);
                 let ty = run(&b[..b.len().min(t + 64)], t, |c| {
                     !c.is_ascii_whitespace() && c != b'='
                 });
-                let gap = run(b, t + ty, |c| c == b' ');
+                let gap = run(b, t + ty, blank);
                 let eq = t + ty + gap;
                 // `NAME: T = value`: a type, not a quoted value, then a
                 // spaced `=`. `NAME: abc=` is a value with an `=` in it.
@@ -256,7 +265,7 @@ fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
             }
         }
     }
-    let mut start = at + run(b, at, |c| c == b' ');
+    let mut start = at + run(b, at, blank);
     let quote = b.get(start).copied().filter(|&c| c == b'"' || c == b'\'');
     start += usize::from(quote.is_some());
     let rest = &s[start..];
@@ -267,7 +276,7 @@ fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
     if [REDACTED, "${", "Bearer "]
         .iter()
         .any(|p| rest.starts_with(p))
-        || hit(s, start).is_some()
+        || hit(s, ends, start).is_some()
     {
         return None;
     }
@@ -281,6 +290,10 @@ fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
 fn run(b: &[u8], from: usize, takes: impl Fn(u8) -> bool) -> usize {
     b.get(from..)
         .map_or(0, |t| t.iter().take_while(|&&c| takes(c)).count())
+}
+
+fn blank(c: u8) -> bool {
+    c == b' ' || c == b'\t'
 }
 
 fn word(c: u8) -> bool {
@@ -337,6 +350,42 @@ mod tests {
             (
                 "DB_PASSWORD:hunter2=x SESSION_SECRET: s3cr3t=value".into(),
                 "DB_PASSWORD:[redacted:assignment] SESSION_SECRET: [redacted:assignment]",
+            ),
+            (
+                "tls.key: |\n  -----BEGIN RSA PRIVATE KEY-----\n  MIIE\n  -----END RSA PRIVATE KEY-----\nnext: 1".into(),
+                "tls.key: |\n  [redacted:private_key]\nnext: 1",
+            ),
+            (
+                r#"{"private_key":"-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n","x":1}"#.into(),
+                r#"{"private_key":"[redacted:private_key]\n","x":1}"#,
+            ),
+            (
+                "-----BEGIN PRIVATE KEY----- MIIE ab -----END PRIVATE KEY----- after".into(),
+                "[redacted:private_key] after",
+            ),
+            (
+                "-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: 1\n\nlQ\n-----END PGP PRIVATE KEY BLOCK-----".into(),
+                "[redacted:private_key]",
+            ),
+            (
+                "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----".into(),
+                "[redacted:private_key]-----END RSA PRIVATE KEY-----",
+            ),
+            (
+                r#"log {\"API_KEY\": \"hunter2\"}"#.into(),
+                r#"log {\"API_KEY\": [redacted:assignment]"#,
+            ),
+            (
+                r#"os.environ["API_TOKEN"] = "abc123""#.into(),
+                r#"os.environ["API_TOKEN"] = "[redacted:assignment]""#,
+            ),
+            (
+                "ENV['API_KEY'] = x".into(),
+                "ENV['API_KEY'] = [redacted:assignment]",
+            ),
+            (
+                "MY_TOKEN\t=\tabc KEY_SECRET:\tv".into(),
+                "MY_TOKEN\t=\t[redacted:assignment] KEY_SECRET:\t[redacted:assignment]",
             ),
             (
                 "PASSWORD=Bearerish123".into(),
