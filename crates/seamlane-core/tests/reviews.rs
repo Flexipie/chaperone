@@ -28,40 +28,8 @@ fn view(job: i64, done: bool, status: &str) -> Value {
     })
 }
 
-#[test]
-fn review_text_never_a_verdict() {
-    let dir = tempfile::tempdir().unwrap();
-    let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
-    let lane = pair("lane", "s1");
-    let create = CreateInput {
-        title: "t".into(),
-        kind: "code".into(),
-        pr_flow: "pr".into(),
-        ..CreateInput::default()
-    };
-    ledger
-        .work_create(&lane, &create, None, false)
-        .unwrap()
-        .unwrap();
-    let claim = ClaimInput::default();
-    ledger
-        .work_claim(&lane, 1, &claim, None, false)
-        .unwrap()
-        .unwrap();
-    // The lane's own session records it: reviews are daisy's worker's.
-    ledger
-        .review_record(&lane, 1, 7, &view(7, true, "reviewed"))
-        .unwrap()
-        .unwrap();
-    let f = ledger.project(1, Some("abc1234")).unwrap();
-    for path in ["verdict.decision", "verdict.sha"] {
-        assert_eq!(f.get(path), &Fact::Absent, "{path}");
-    }
-}
-
-#[test]
-fn review_from_another_lane_refused() {
-    let dir = tempfile::tempdir().unwrap();
+/// Lane 1, repo `O/R` on branch `b`, claimed by `lane`/`s1`.
+fn lane(dir: &tempfile::TempDir) -> (Ledger, Actor) {
     let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
     let lane = pair("lane", "s1");
     let create = CreateInput {
@@ -83,6 +51,28 @@ fn review_from_another_lane_refused() {
         .work_claim(&lane, 1, &claim, None, false)
         .unwrap()
         .unwrap();
+    (ledger, lane)
+}
+
+#[test]
+fn review_text_never_a_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ledger, lane) = lane(&dir);
+    // The lane's own session records it: reviews are daisy's worker's.
+    ledger
+        .review_record(&lane, 1, 7, &view(7, true, "reviewed"))
+        .unwrap()
+        .unwrap();
+    let f = ledger.project(1, Some("abc1234")).unwrap();
+    for path in ["verdict.decision", "verdict.sha"] {
+        assert_eq!(f.get(path), &Fact::Absent, "{path}");
+    }
+}
+
+#[test]
+fn review_from_another_lane_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ledger, lane) = lane(&dir);
     let with = |job: i64, k: &str, v: Value| {
         let mut v2 = view(job, true, "reviewed");
         v2[k] = v;

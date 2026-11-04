@@ -282,18 +282,18 @@ impl Ledger {
                 // A local job carries the branch, a PR job the pr_ref (its
                 // branch is null). Owner/repo ignores case on GitHub; branches
                 // do not.
-                let (field, ours, case) = if check == "local_review" {
-                    ("branch", branch, false)
+                let second = if check == "local_review" {
+                    ("branch", branch)
                 } else {
-                    ("pr_ref", pr_ref, true)
+                    ("pr_ref", pr_ref)
                 };
-                for (field, ours, case) in [("repo", repo, true), (field, ours, case)] {
+                for (field, ours) in [("repo", repo), second] {
                     let Some(ours) = ours else { continue };
                     let theirs = s(field).unwrap_or("");
-                    let same = if case {
-                        theirs.eq_ignore_ascii_case(&ours)
-                    } else {
+                    let same = if field == "branch" {
                         theirs == ours
+                    } else {
+                        theirs.eq_ignore_ascii_case(&ours)
                     };
                     if !same {
                         return invalid(format!(
