@@ -167,6 +167,8 @@ def hot(b, label, spec_key):
 def max_rss(b, *args):
     out = subprocess.run(["/usr/bin/time", "-l", *b.argv(args)], capture_output=True,
                          text=True, env=b.env)
+    if out.returncode != 0:
+        raise SystemExit(f"{args} exited {out.returncode}: {out.stderr[:400]}")
     m = re.search(r"(\d+)\s+maximum resident set size", out.stderr)
     return int(m.group(1)) / 2**20
 
@@ -243,9 +245,11 @@ def deepen(b):
     deep = b.create(DEEP_LANES, title="deep lane")
     for lane in deep:
         b.run("work", "claim", str(lane))
-        for _ in range(DEEP_EVENTS):
+        # A new head each time: the same check on the same head is replayed,
+        # not written.
+        for n in range(DEEP_EVENTS):
             b.run("check", "record", "--work", str(lane), "--check", "smoke",
-                  "--head", HEAD, "--outcome", "ran", session="checker")
+                  "--head", f"{n:07x}", "--outcome", "ran", session="checker")
     return deep
 
 
@@ -291,13 +295,19 @@ def measure(binary, snapshot, items, deep):
         shutil.rmtree(root)
 
 
+def stamp(path):
+    """Modification times of the real ledger's directory and files, or None."""
+    files = [path] + [os.path.join(path, f) for f in ("ledger.db", "ledger.db-wal")]
+    return [os.stat(f).st_mtime_ns if os.path.exists(f) else None for f in files]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("binaries", nargs="+", help="the first one seeds the shared snapshot")
     ap.add_argument("--items", type=int, default=3000)
     a = ap.parse_args()
     real = os.path.expanduser("~/Library/Application Support/seamlane")
-    real_before = os.path.exists(real)
+    real_before = stamp(real)
     print(f"python sqlite {sqlite3.sqlite_version} (query plans only)")
     seed_root = tempfile.mkdtemp(prefix="seamlane-seed-")
     try:
@@ -308,14 +318,15 @@ def main():
         deep = deepen(s)
         con = sqlite3.connect(s.db)
         con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        counts["events with deep lanes"] = con.execute("SELECT count(*) FROM events").fetchone()[0]
         con.close()
-        print(f"\nSeeded {counts} plus {DEEP_LANES} lanes x {DEEP_EVENTS} checks "
+        print(f"\nSeeded {counts} ({DEEP_LANES} deep lanes x {DEEP_EVENTS} checks) "
               f"through the CLI in {secs:.0f} s, ledger {os.path.getsize(s.db) / 2**20:.1f} MiB")
         for binary in a.binaries:
             measure(binary, s.db, a.items, deep)
     finally:
         shutil.rmtree(seed_root)
-    assert os.path.exists(real) == real_before, f"{real} changed during the run"
+        assert stamp(real) == real_before, f"{real} changed during the run"
 
 
 if __name__ == "__main__":
