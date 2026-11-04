@@ -72,13 +72,30 @@ const REDACTED: &str = "[redacted:";
 pub(super) fn payload(p: &mut Payload) -> Checked<u64> {
     let mut v = serde_json::to_value(&*p).map_err(std::io::Error::other)?;
     let mut count = 0;
-    if let Err(r) = walk(&mut v, "", &mut count) {
+    if let Err(r) = root(&mut v, &mut count) {
         return Ok(Err(r));
     }
     if count > 0 {
         *p = serde_json::from_value(v).map_err(std::io::Error::other)?;
     }
     Ok(Ok(count))
+}
+
+/// The payload object. `changed.<column>.from` is a compare value, checked
+/// against the row, so it is left as sent; `.to` is new text for its column.
+fn root(v: &mut Value, count: &mut u64) -> Result<(), Refusal> {
+    for (k, x) in v.as_object_mut().into_iter().flatten() {
+        key(k)?;
+        if k == "changed" {
+            for (column, change) in x.as_object_mut().into_iter().flatten() {
+                key(column)?;
+                walk(&mut change["to"], column, count)?;
+            }
+        } else {
+            walk(x, k, count)?;
+        }
+    }
+    Ok(())
 }
 
 fn walk(v: &mut Value, name: &str, count: &mut u64) -> Result<(), Refusal> {
@@ -100,21 +117,25 @@ fn walk(v: &mut Value, name: &str, count: &mut u64) -> Result<(), Refusal> {
                 walk(x, name, count)?;
             }
         }
-        // `from` is a compare value, checked against the row, so it is
-        // left as sent; `to` is new text for its column.
-        Value::Object(o) if name == "changed" => {
-            for (column, change) in o {
-                walk(&mut change["to"], column, count)?;
-            }
-        }
         Value::Object(o) => {
             for (k, x) in o {
+                key(k)?;
                 walk(x, k, count)?;
             }
         }
         _ => {}
     }
     Ok(())
+}
+
+/// A key is a name, never prose.
+fn key(k: &str) -> Result<(), Refusal> {
+    match redact(k).1.first() {
+        Some(kind) => Err(Refusal::InvalidInput(format!(
+            "a payload key looks like a {kind}; a key is refused, not redacted"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// `s` with every match replaced by `[redacted:<kind>]`, and the kind of
@@ -152,7 +173,7 @@ fn hit(s: &str, i: usize) -> Option<(usize, usize, &'static str)> {
     let rest = &s[i..];
     if let Some(label) = rest.strip_prefix("-----BEGIN ") {
         let label = &label[..label.find("-----")?];
-        if !label.ends_with("PRIVATE KEY") || label.contains('\n') {
+        if !label.contains("PRIVATE KEY") || label.contains('\n') {
             return None;
         }
         let end_line = format!("-----END {label}-----");
@@ -169,19 +190,22 @@ fn hit(s: &str, i: usize) -> Option<(usize, usize, &'static str)> {
         }
     }
     if rest.starts_with("Bearer") {
-        let start = i + 6;
-        let start = start + run(b, start, |c| c == b' ' || c == b'\t');
+        let start = i + 6 + run(b, i + 6, |c| c == b' ' || c == b'\t');
+        if start == i + 6 {
+            return None;
+        }
         let n = run(b, start, bearer);
-        return (start > i + 6 && n >= 20).then_some((start, start + n, "bearer"));
+        return (n >= 20).then_some((start, start + n, "bearer"));
     }
-    if matches!(b[i], b'=' | b':') {
+    if matches!(b.get(i), Some(b'=' | b':')) {
         return assignment(s, i);
     }
     None
 }
 
-/// `NAME_TOKEN=value`, `"API_KEY": "value"`: the value side, when the name
-/// ends in one of [`SECRET_NAMES`] and `b[sep]` is `=` or `:`.
+/// `NAME_TOKEN=value`, `"API_KEY": "value"`, `API_KEY := value`,
+/// `API_KEY: &str = "value"`: the value side, when the name ends in one of
+/// [`SECRET_NAMES`] and `b[sep]` is `=` or `:`.
 fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
     let b = s.as_bytes();
     let mut j = sep;
@@ -196,19 +220,45 @@ fn assignment(s: &str, sep: usize) -> Option<(usize, usize, &'static str)> {
     if !SECRET_NAMES.iter().any(|n| name.ends_with(n)) {
         return None;
     }
-    let mut start = sep + 1;
-    if b[sep] == b':' && b.get(start) == Some(&b':') {
+    let mut at = sep + 1;
+    if b[sep] == b':' {
+        match b.get(at) {
+            Some(b':') => return None,
+            Some(b'=') => at += 1,
+            _ => {
+                // A type annotation: the value is after its `=`. Types are
+                // short, so the look is capped and a long line stays linear.
+                let t = at + run(b, at, |c| c == b' ');
+                let ty = run(&b[..b.len().min(t + 64)], t, |c| {
+                    !c.is_ascii_whitespace() && c != b'='
+                });
+                let eq = t + ty + run(b, t + ty, |c| c == b' ');
+                if b.get(eq) == Some(&b'=') && b.get(eq + 1) != Some(&b'=') {
+                    at = eq + 1;
+                }
+            }
+        }
+    }
+    let mut start = at + run(b, at, |c| c == b' ');
+    let quote = b.get(start).copied().filter(|&c| c == b'"' || c == b'\'');
+    start += usize::from(quote.is_some());
+    let rest = &s[start..];
+    // Already redacted, a reference to a secret (`${{ secrets.X }}`), or
+    // another pattern that starts here and redacts more than the first word
+    // (`Bearer` always, so a redacted bearer stays as it is). Checked before
+    // the value is read, so a long line stays linear.
+    if [REDACTED, "${", "Bearer"]
+        .iter()
+        .any(|p| rest.starts_with(p))
+        || hit(s, start).is_some()
+    {
         return None;
     }
-    start += run(b, start, |c| c == b' ');
-    let end = match b.get(start) {
-        Some(&q @ (b'"' | b'\'')) => {
-            start += 1;
-            start + run(b, start, |c| c != q)
-        }
-        _ => start + run(b, start, |c| !c.is_ascii_whitespace()),
+    let n = match quote {
+        Some(q) => run(b, start, |c| c != q),
+        None => run(b, start, |c| !c.is_ascii_whitespace()),
     };
-    (end > start && !s[start..].starts_with(REDACTED)).then_some((start, end, "assignment"))
+    (n > 0).then_some((start, start + n, "assignment"))
 }
 
 fn run(b: &[u8], from: usize, takes: impl Fn(u8) -> bool) -> usize {
@@ -282,6 +332,29 @@ mod tests {
                 r#"{"API_KEY": "[redacted:assignment]"}"#,
             ),
             (
+                "-----BEGIN PGP PRIVATE KEY BLOCK-----\nx\n-----END PGP PRIVATE KEY BLOCK-----"
+                    .into(),
+                "[redacted:private_key]",
+            ),
+            (
+                "JWT_SECRET=-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----".into(),
+                "JWT_SECRET=[redacted:private_key]",
+            ),
+            (
+                format!("ACCESS_TOKEN: Bearer {t20}"),
+                "ACCESS_TOKEN: Bearer [redacted:bearer]",
+            ),
+            ("API_KEY := v".into(), "API_KEY := [redacted:assignment]"),
+            ("API_KEY: = v".into(), "API_KEY: = [redacted:assignment]"),
+            (
+                "API_KEY: x == y".into(),
+                "API_KEY: [redacted:assignment] == y",
+            ),
+            (
+                r#"const API_KEY: &str = "v";"#.into(),
+                r#"const API_KEY: &str = "[redacted:assignment]";"#,
+            ),
+            (
                 "SECRET:v APIKEY=w".into(),
                 "SECRET:[redacted:assignment] APIKEY=[redacted:assignment]",
             ),
@@ -316,6 +389,8 @@ mod tests {
             "API_KEY=",
             "= : leading separators",
             "é TOKEN=",
+            "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+            "TOKEN=",
         ] {
             assert_eq!(redact(text), (text.to_string(), vec![]), "{text}");
         }
@@ -357,6 +432,24 @@ mod tests {
         assert_eq!(from, json!(format!("old {token}")));
         assert!(!serde_json::to_string(&p).unwrap().contains(&token));
 
+        // Only the top-level `changed` leaves `from` alone.
+        let mut nested = Payload::default();
+        nested
+            .rest
+            .insert("x".into(), json!({"changed": {"a": {"from": token}}}));
+        let mut keyed = Payload::default();
+        keyed.rest.insert(token.clone(), json!(1));
+        let column = Payload {
+            changed: [(
+                token.clone(),
+                Change {
+                    from: json!(null),
+                    to: json!(null),
+                },
+            )]
+            .into(),
+            ..Payload::default()
+        };
         let branch = Payload {
             changed: [(
                 "branch".to_string(),
@@ -384,10 +477,13 @@ mod tests {
                 },
             ),
             ("branch", branch),
+            ("from", nested),
+            ("a payload key", keyed),
+            ("a payload key", column),
         ] {
             let refused = format!("{:?}", payload(&mut p).unwrap());
             assert!(
-                refused.starts_with(&format!("Err(InvalidInput(\"{key} holds")),
+                refused.starts_with(&format!("Err(InvalidInput(\"{key} ")),
                 "{refused}"
             );
             assert!(refused.contains("github_token"), "{refused}");
