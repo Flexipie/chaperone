@@ -222,12 +222,15 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
     while j > 0 && blank(b[j - 1]) {
         j -= 1;
     }
-    // `env["API_KEY"] =`, `"API_KEY":`, and `\"API_KEY\":` inside a logged
-    // JSON string.
-    for close in [b']', b'"', b'\\'] {
+    // `env["API_KEY"] =`, `"API_KEY":`, and `\"API_KEY\":` (or `\\\"`, JSON
+    // logged inside JSON) inside a logged string.
+    for close in [b']', b'"'] {
         if j > 0 && (b[j - 1] == close || close == b'"' && b[j - 1] == b'\'') {
             j -= 1;
         }
+    }
+    while j > 0 && b[j - 1] == b'\\' {
+        j -= 1;
     }
     let name_start = (0..j).rev().take_while(|&k| word(b[k])).last()?;
     let name = &s[name_start..j];
@@ -298,20 +301,18 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
     (n > 0).then_some((start, start + n, "assignment"))
 }
 
-fn run(b: &[u8], from: usize, mut takes: impl FnMut(u8) -> bool) -> usize {
+fn run(b: &[u8], from: usize, takes: impl Fn(u8) -> bool) -> usize {
     b.get(from..)
         .map_or(0, |t| t.iter().take_while(|&&c| takes(c)).count())
 }
 
-/// The base64 lines of a key cut off before its END line: base64, line
-/// breaks (`\n` escapes too), and indentation right after a break.
+/// The base64 of a key cut off before its END line: base64, line breaks
+/// (`\n` escapes too) and blanks, so a body on the header's line, indented
+/// lines and trailing spaces all go. Fail closed: a word of prose right
+/// after a bare header goes with them.
 fn key_lines(b: &[u8], from: usize) -> usize {
-    let (mut indent, mut prev) = (false, 0);
     run(b, from, |c| {
-        let ok = c.is_ascii_alphanumeric() || b"+/=\r\n\\".contains(&c) || indent && blank(c);
-        indent = c == b'\n' || prev == b'\\' && c == b'n' || indent && blank(c);
-        prev = c;
-        ok
+        c.is_ascii_alphanumeric() || blank(c) || b"+/=\r\n\\".contains(&c)
     })
 }
 
@@ -449,6 +450,18 @@ mod tests {
             (
                 r#"{\"DB_PASSWORD\": \"ab\\\"cdefgh\"} {"API_KEY": "ab\"cdefgh"} next"#.into(),
                 r#"{\"DB_PASSWORD\": \"[redacted:assignment]\"} {"API_KEY": "[redacted:assignment]"} next"#,
+            ),
+            (
+                r#"\\\"API_KEY\\\": \\\"secretVAL\\\" {\\\"DB_PASSWORD\\\":\\\"secretVAL\\\"}"#.into(),
+                r#"\\\"API_KEY\\\": [redacted:assignment] {\\\"DB_PASSWORD\\\":[redacted:assignment]"#,
+            ),
+            (
+                "-----BEGIN RSA PRIVATE KEY----- MIIEpAIBAAKCAQEA0abc def/ghi+jk".into(),
+                "[redacted:private_key]",
+            ),
+            (
+                "-----BEGIN PRIVATE KEY-----\nMIIE  \nabcd  \n".into(),
+                "[redacted:private_key]",
             ),
             (
                 "PASSWORD=Bearerish123".into(),
