@@ -284,12 +284,15 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
     {
         return None;
     }
+    // Up to the closing quote (`\"` when escaped). A quote with a backslash
+    // before it is the value's own; `start - 1` is the opening quote.
     let n = match quote {
-        // Up to the escaped closing quote; other backslashes are the value's.
         Some(q) if escaped => (start..b.len())
-            .take_while(|&k| !(b[k] == b'\\' && b.get(k + 1) == Some(&q)))
+            .take_while(|&k| !(b[k] == b'\\' && b[k - 1] != b'\\' && b.get(k + 1) == Some(&q)))
             .count(),
-        Some(q) => run(b, start, |c| c != q),
+        Some(q) => (start..b.len())
+            .take_while(|&k| !(b[k] == q && b[k - 1] != b'\\'))
+            .count(),
         None => run(b, start, |c| !c.is_ascii_whitespace()),
     };
     (n > 0).then_some((start, start + n, "assignment"))
@@ -442,6 +445,10 @@ mod tests {
             (
                 r#"{"k":"-----BEGIN PRIVATE KEY-----\n  MIIEow\/\n  abcd"#.into(),
                 r#"{"k":"[redacted:private_key]"#,
+            ),
+            (
+                r#"{\"DB_PASSWORD\": \"ab\\\"cdefgh\"} {"API_KEY": "ab\"cdefgh"} next"#.into(),
+                r#"{\"DB_PASSWORD\": \"[redacted:assignment]\"} {"API_KEY": "[redacted:assignment]"} next"#,
             ),
             (
                 "PASSWORD=Bearerish123".into(),
