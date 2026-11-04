@@ -263,10 +263,10 @@ mod tests {
         assert_eq!(f.get("lane.changes_code"), &Fact::Bool(true));
         assert_eq!(f.get("commit.sha"), &Fact::Absent);
         lane.claim();
-        let v17 = crate::pipeline::current();
+        let newest = crate::pipeline::current();
         let f = lane.ledger.project(1, Some("abc1234def")).unwrap();
-        assert_eq!(f.get("pipeline.id"), &s(&v17.id));
-        assert_eq!(f.get("pipeline.hash"), &s(&v17.hash));
+        assert_eq!(f.get("pipeline.id"), &s(&newest.id));
+        assert_eq!(f.get("pipeline.hash"), &s(&newest.hash));
         assert_eq!(f.get("commit.sha"), &s("abc1234def"));
         assert_eq!(
             Lane::new("docs").facts().get("lane.changes_code"),

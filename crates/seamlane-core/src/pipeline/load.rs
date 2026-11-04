@@ -180,7 +180,7 @@ fn parse_pred(g: &RawGate, limits: &BTreeMap<String, i64>) -> Result<Pred, Pipel
             field: a.str("field")?,
             value: a.int()?,
         },
-        "sha_prefix_eq" => {
+        "sha_prefix_eq" | "sha_same_commit" => {
             let (left, right) = (a.str("left")?, a.str("right")?);
             let (min_len, max_len) = (a.limit("min_limit")?, a.limit("max_limit")?);
             // A floor under 1 lets an empty sha match any head.
@@ -194,6 +194,7 @@ fn parse_pred(g: &RawGate, limits: &BTreeMap<String, i64>) -> Result<Pred, Pipel
                 right,
                 min_len,
                 max_len,
+                both_ways: g.func == "sha_same_commit",
             }
         }
         "one_of" => Pred::OneOf {

@@ -103,8 +103,14 @@ impl Eval<'_> {
                 right,
                 min_len,
                 max_len,
+                both_ways,
             } => match (self.val(left)?, self.val(right)?) {
-                (Fact::Str(short), Fact::Str(head)) => {
+                (Fact::Str(left), Fact::Str(right)) => {
+                    let (short, head) = if *both_ways && left.len() > right.len() {
+                        (right, left)
+                    } else {
+                        (left, right)
+                    };
                     (*min_len..=*max_len).contains(&(short.len() as i64))
                         && short.bytes().all(|b| b.is_ascii_hexdigit())
                         && head.starts_with(short.as_str())

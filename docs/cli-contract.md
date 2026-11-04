@@ -92,7 +92,7 @@ Every write except `migrate` also takes `--agent`, `--session` and `--dry-run`. 
 
 | Command | Argv | Kind |
 | --- | --- | --- |
-| `work create` | `--title <t> [--source] [--source-id] [--repo] [--next-action] [--idempotency-key] [--spec] [--lane] [--lane-pos] [--kind code\|docs\|measure\|investigation] [--pr-flow pr\|direct]` | write |
+| `work create` | `--title <t> [--source] [--source-id] [--repo] [--next-action] [--idempotency-key] [--spec] [--lane] [--lane-pos] [--kind code\|docs\|measure\|investigation] [--pr-flow pr\|direct\|none]` | write |
 | `work get` | `<id>` | read |
 | `work list` | `[--status] [--agent] [--mine] [--all] [--session] [--mine-agent] [--limit] [--cursor]` | read, paged |
 | `work claim` | `<id> [--worktree] [--branch] [--base-sha] [--lease-secs] [--takeover]` | write |
@@ -190,12 +190,18 @@ Each command is one transaction that appends one event (events.md, write rules).
 A gated command on a lane with no stamp (never claimed) is denied with gate `stamp_ok` and fact path `lane.pipeline_hash`. It is never ungated and never falls back to the latest pipeline. A gated command whose route has no matching transition is denied the same way, never passed.
 
 `handoff` is the M1 gated transition. Its requires list is per route in
-`pipelines/v17.toml` (#12): on `code_pr`, a `plan_check`, a `quality_gate`, and a
-`merge_verdict` with decision `yes` whose sha is a prefix of the handed-off sha
+`pipelines/v17.1.toml` (#34; lanes stamped `v17` keep `pipelines/v17.toml`, #12). A
+handoff with `ready: true` on `code_pr` or `direct` needs a `plan_check`, a
+`quality_gate`, and a `merge_verdict` with decision `yes` on the handed-off sha
 (`handoff.commit`, or for `update --status done` the commit of the lane's latest
-handoff). `direct` has the same list as `code_pr` (none of the three is a PR gate). On
-`investigation`, a handoff to `done` or `update --status done` needs the same three checks (plan check and quality gate may skip with an allowed reason), and a handoff with `ready: true` is always denied: an investigation hands
-off `needs you`, never ready (R7). `phase.entered.to` is `done` for a handoff to `done`
+handoff). The two shas match when the shorter, at least 7 hex characters, is a prefix of
+the longer, whichever side it is on (v17: the verdict's sha must be the prefix). A
+handoff to `done` or `update --status done`, on every route, needs the plan check and
+quality gate (a lane that changes no code may skip them with an allowed reason), and on
+a `code` lane the same YES verdict on the handed-off sha; a `docs`, `measure` or
+`investigation` lane needs no verdict and no `commit`. A `code` lane without that verdict
+is denied as `done_verdict`. A handoff with `ready: true` on `investigation` or `no_pr` is always
+denied: an investigation hands off `needs you`, never ready (R7). `phase.entered.to` is `done` for a handoff to `done`
 or `update --status done`, else `ready`, and `phase.entered.status` is the status the
 command asked for, not R7's mapping from `to`. Ready comes from a
 handoff's `ready` (or the owner's `work ready` override), so a handoff cannot mark a lane
