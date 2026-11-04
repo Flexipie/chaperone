@@ -326,3 +326,81 @@ fn a_taken_denial_key_is_refused() {
     assert!(matches!(r, Err(Refusal::InvalidInput(_))), "{r:?}");
     assert_eq!(lane.count("gate.denied"), 0);
 }
+
+/// The board's ready: the owner's override, else status review and a ready
+/// handoff. A later needs-you handoff or a move off review unsays it.
+#[test]
+fn the_board_reads_the_newest_handoff_and_the_override() {
+    let lane = Lane::new();
+    let owner = pair("owner", "s3");
+    let board = || {
+        let b = lane.ledger.work_board(T2).unwrap();
+        assert!(b.specs.is_empty());
+        let [e] = &b.other[..] else {
+            panic!("one open item: {b:?}")
+        };
+        let o = e.ready_override.as_ref().map(|o| o.ready);
+        (
+            e.ready,
+            e.ready_reason.clone(),
+            o,
+            e.handoff.as_ref().map(|h| h.id),
+        )
+    };
+    let ready = |r: Option<bool>| {
+        lane.ledger
+            .work_ready(&owner, 1, r, Some("ok".into()), Some(T2), false)
+            .unwrap()
+            .unwrap();
+    };
+    assert_eq!(
+        board(),
+        (false, "status is claimed, not review".into(), None, None)
+    );
+    lane.stamps();
+    let h = lane.handoff("abc1234def", "review", Some(true)).unwrap();
+    assert_eq!(board(), (true, "the lane says ready".into(), None, Some(h)));
+    let h = lane.handoff("abc1234def", "active", None).unwrap();
+    assert_eq!(
+        board(),
+        (false, "status is active, not review".into(), None, Some(h))
+    );
+    ready(Some(true));
+    assert_eq!(
+        board(),
+        (
+            true,
+            "marked ready by owner: ok".into(),
+            Some(true),
+            Some(h)
+        )
+    );
+    ready(None);
+    assert_eq!(
+        board(),
+        (false, "status is active, not review".into(), None, Some(h))
+    );
+    // In review again, the newest handoff is the needs-you one.
+    let update = UpdateInput {
+        status: Some("review".into()),
+        ..UpdateInput::default()
+    };
+    lane.ledger
+        .work_update(&lane.lane, 1, &update, None, Some(T2), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        board(),
+        (false, "the lane has not said ready".into(), None, Some(h))
+    );
+    ready(Some(false));
+    assert_eq!(
+        board(),
+        (
+            false,
+            "marked not ready by owner: ok".into(),
+            Some(false),
+            Some(h)
+        )
+    );
+}

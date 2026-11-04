@@ -104,6 +104,7 @@ Every write except `migrate` also takes `--agent`, `--session` and `--dry-run`. 
 | `work handoffs` | `<id>` | read |
 | `work events` | `<id>` | read |
 | `work ready` | `<id> [--yes] [--no] [--clear] [--reason]` | write |
+| `work board` | | read |
 | `spec create` | `--parent <key> --file <path\|-> [--title]` | write |
 | `spec get` | `[<spec>] [--key <slice key>] [--version <n>]` | read |
 | `spec list` | | read |
@@ -122,7 +123,9 @@ Every write except `migrate` also takes `--agent`, `--session` and `--dry-run`. 
 
 `work handoff` reads the JSON from `<file>`, or from stdin when the file is omitted or `-`. A handoff with `ready: true` or to `done` runs the `handoff` gate (commands and transitions below). The write itself refuses a `lane.handed_off` that says ready and any event but `phase.entered` that moves a lane to `done`, so no path skips the gate.
 
-`work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`.
+`work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`. It answers daisy's way: `{id, ready, ready_reason}` from the board, or `{id, ready_override, on_board: false}` for a done or cancelled item.
+
+`work board` is daisy's board shape, `{specs, other}`, one read statement. Every open item (not `done` or `cancelled`) is under `other`, ordered by `lane_key`, `lane_pos`, `id`; `specs` stays empty until items are grouped by spec. Each entry is `{item, handoff, ready_override, ready, ready_reason}`: `item` is `work get`'s, `handoff` the newest `work handoffs` row or null, and `ready_override` the newest `work ready` as `{ready, reason, by, at}`, null when there is none or it was cleared. The ready rule is daisy's first steps: the override wins (`marked ready by <agent>: <reason>`); else an item not in `review` is not ready (`status is <s>, not review`); else it is ready only when its newest handoff says ready (`the lane says ready`, else `the lane has not said ready`). A ready handoff exists only past the `handoff` gate, so a later `needs you` handoff unsays it. Daisy's further steps, a finished review on the PR head and no open thread from a person, need the PR and are the caller's to check; the board does not notice commits pushed after the gated handoff. Daisy's other board fields (`pr_head`, `pr_state`, `pr_review`, `local_review`, `linear_outbox`, `threads`, `threads_checked`, `needs_you`) are not emitted.
 
 Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `done` or
 `cancelled` item is `invalid_input`.
@@ -216,7 +219,7 @@ These fields keep their daisy names and meaning:
 
 ## Not in M1
 
-- `work board` and `reviews stats`: deferred to a follow-up before the skill switch.
+- `reviews stats`: deferred to a follow-up before the skill switch.
 - `reviews local`, `reviews pr`, `reviews run`, `reviews wait`: lanes keep calling
   `daisy-cli` for these. The worker stays in daisy.
 - `jobs list`, `jobs events`, `capabilities`, `doctor`, `schema`.

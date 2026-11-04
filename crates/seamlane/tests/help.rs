@@ -43,6 +43,7 @@ fn help_matches_snapshots() {
             include_str!("snapshots/work-events.txt"),
         ),
         (&["work", "ready"], include_str!("snapshots/work-ready.txt")),
+        (&["work", "board"], include_str!("snapshots/work-board.txt")),
         (&["spec"], include_str!("snapshots/spec.txt")),
         (
             &["spec", "create"],
