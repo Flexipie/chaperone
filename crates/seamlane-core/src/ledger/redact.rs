@@ -189,12 +189,7 @@ fn hit(s: &str, ends: &[usize], i: usize) -> Option<(usize, usize, &'static str)
         let next_end = ends.get(ends.partition_point(|&e| e < header));
         let end = match next_end {
             Some(&e) if s[e..].starts_with(&end_line) => e + end_line.len(),
-            _ => {
-                header
-                    + run(b, header, |c| {
-                        c.is_ascii_alphanumeric() || b"+/=\r\n".contains(&c)
-                    })
-            }
+            _ => header + key_lines(b, header),
         };
         return Some((i, end, "private_key"));
     }
@@ -256,7 +251,7 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
                 // `NAME: T = value`: a type, not a quoted value, then a
                 // spaced `=`. `NAME: abc=` is a value with an `=` in it.
                 if gap > 0
-                    && !matches!(b.get(t), Some(b'"' | b'\''))
+                    && !matches!(b.get(t), Some(b'"' | b'\'' | b'\\'))
                     && b.get(eq) == Some(&b'=')
                     && b.get(eq + 1) != Some(&b'=')
                 {
@@ -266,8 +261,15 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
         }
     }
     let mut start = at + run(b, at, blank);
-    let quote = b.get(start).copied().filter(|&c| c == b'"' || c == b'\'');
-    start += usize::from(quote.is_some());
+    // `\"value\"` inside a logged JSON string: the quote is escaped, and the
+    // value ends at the next backslash.
+    let escaped = b.get(start) == Some(&b'\\');
+    let quote = b
+        .get(start + usize::from(escaped))
+        .copied()
+        .filter(|&c| c == b'"' || c == b'\'');
+    let escaped = escaped && quote.is_some();
+    start += usize::from(escaped) + usize::from(quote.is_some());
     let rest = &s[start..];
     // Already redacted, a reference to a secret (`${{ secrets.X }}`), or
     // another pattern that starts here and redacts more than the first word
@@ -281,15 +283,27 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
         return None;
     }
     let n = match quote {
+        Some(_) if escaped => run(b, start, |c| c != b'\\'),
         Some(q) => run(b, start, |c| c != q),
         None => run(b, start, |c| !c.is_ascii_whitespace()),
     };
     (n > 0).then_some((start, start + n, "assignment"))
 }
 
-fn run(b: &[u8], from: usize, takes: impl Fn(u8) -> bool) -> usize {
+fn run(b: &[u8], from: usize, mut takes: impl FnMut(u8) -> bool) -> usize {
     b.get(from..)
         .map_or(0, |t| t.iter().take_while(|&&c| takes(c)).count())
+}
+
+/// The base64 lines of a key cut off before its END line: base64, line
+/// breaks (`\n` escapes too), and indentation right after a break.
+fn key_lines(b: &[u8], from: usize) -> usize {
+    let mut indent = false;
+    run(b, from, |c| {
+        let ok = c.is_ascii_alphanumeric() || b"+/=\r\n\\".contains(&c) || indent && blank(c);
+        indent = c == b'\n' || indent && blank(c);
+        ok
+    })
 }
 
 fn blank(c: u8) -> bool {
@@ -373,7 +387,7 @@ mod tests {
             ),
             (
                 r#"log {\"API_KEY\": \"hunter2\"}"#.into(),
-                r#"log {\"API_KEY\": [redacted:assignment]"#,
+                r#"log {\"API_KEY\": \"[redacted:assignment]\"}"#,
             ),
             (
                 r#"os.environ["API_TOKEN"] = "abc123""#.into(),
@@ -386,6 +400,30 @@ mod tests {
             (
                 "MY_TOKEN\t=\tabc KEY_SECRET:\tv".into(),
                 "MY_TOKEN\t=\t[redacted:assignment] KEY_SECRET:\t[redacted:assignment]",
+            ),
+            (
+                r#"log {\"ACCESS_TOKEN\": \"Bearer abcdefghijklmnopqrstuvwxyz0123\"}"#.into(),
+                r#"log {\"ACCESS_TOKEN\": \"Bearer [redacted:bearer]\"}"#,
+            ),
+            (
+                r#"log {\"JWT_SECRET\": \"-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n\"}"#.into(),
+                r#"log {\"JWT_SECRET\": \"[redacted:private_key]\n\"}"#,
+            ),
+            (
+                r#"\"DB_PASSWORD\": \"correct horse\", \"API_KEY\": \"a = b\""#.into(),
+                r#"\"DB_PASSWORD\": \"[redacted:assignment]\", \"API_KEY\": \"[redacted:assignment]\""#,
+            ),
+            (
+                r#"{\"API_KEY\":\"hunter2\",\"url\":\"https://x\"}"#.into(),
+                r#"{\"API_KEY\":\"[redacted:assignment]\",\"url\":\"https://x\"}"#,
+            ),
+            (
+                r#"{"private_key":"-----BEGIN PRIVATE KEY-----\nMIIEvQ\nabcd"#.into(),
+                r#"{"private_key":"[redacted:private_key]"#,
+            ),
+            (
+                "tls.key: |\n  -----BEGIN RSA PRIVATE KEY-----\n  MIIEow\n  abcd".into(),
+                "tls.key: |\n  [redacted:private_key]",
             ),
             (
                 "PASSWORD=Bearerish123".into(),
