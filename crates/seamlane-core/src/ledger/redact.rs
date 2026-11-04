@@ -248,10 +248,12 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
                 });
                 let gap = run(b, t + ty, blank);
                 let eq = t + ty + gap;
-                // `NAME: T = value`: a type, not a quoted value, then a
-                // spaced `=`. `NAME: abc=` is a value with an `=` in it.
+                // `NAME: T = value`: a type, not a quoted (or `\"`-quoted)
+                // value, then a spaced `=`. `NAME: abc=` is a value with an
+                // `=` in it.
+                let q = t + usize::from(b.get(t) == Some(&b'\\'));
                 if gap > 0
-                    && !matches!(b.get(t), Some(b'"' | b'\'' | b'\\'))
+                    && !matches!(b.get(q), Some(b'"' | b'\''))
                     && b.get(eq) == Some(&b'=')
                     && b.get(eq + 1) != Some(&b'=')
                 {
@@ -283,7 +285,10 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
         return None;
     }
     let n = match quote {
-        Some(_) if escaped => run(b, start, |c| c != b'\\'),
+        // Up to the escaped closing quote; other backslashes are the value's.
+        Some(q) if escaped => (start..b.len())
+            .take_while(|&k| !(b[k] == b'\\' && b.get(k + 1) == Some(&q)))
+            .count(),
         Some(q) => run(b, start, |c| c != q),
         None => run(b, start, |c| !c.is_ascii_whitespace()),
     };
@@ -298,10 +303,11 @@ fn run(b: &[u8], from: usize, mut takes: impl FnMut(u8) -> bool) -> usize {
 /// The base64 lines of a key cut off before its END line: base64, line
 /// breaks (`\n` escapes too), and indentation right after a break.
 fn key_lines(b: &[u8], from: usize) -> usize {
-    let mut indent = false;
+    let (mut indent, mut prev) = (false, 0);
     run(b, from, |c| {
         let ok = c.is_ascii_alphanumeric() || b"+/=\r\n\\".contains(&c) || indent && blank(c);
-        indent = c == b'\n' || indent && blank(c);
+        indent = c == b'\n' || prev == b'\\' && c == b'n' || indent && blank(c);
+        prev = c;
         ok
     })
 }
@@ -424,6 +430,18 @@ mod tests {
             (
                 "tls.key: |\n  -----BEGIN RSA PRIVATE KEY-----\n  MIIEow\n  abcd".into(),
                 "tls.key: |\n  [redacted:private_key]",
+            ),
+            (
+                r#"\"DB_PASSWORD\": \"p@ss\\w0rd!x\", \"AWS_SECRET\": \"wJalrXUtnFEMI\/K7MDENG\/bPxRfiCY\""#.into(),
+                r#"\"DB_PASSWORD\": \"[redacted:assignment]\", \"AWS_SECRET\": \"[redacted:assignment]\""#,
+            ),
+            (
+                r"API_KEY: \abc = def".into(),
+                r"API_KEY: \abc = [redacted:assignment]",
+            ),
+            (
+                r#"{"k":"-----BEGIN PRIVATE KEY-----\n  MIIEow\/\n  abcd"#.into(),
+                r#"{"k":"[redacted:private_key]"#,
             ),
             (
                 "PASSWORD=Bearerish123".into(),
