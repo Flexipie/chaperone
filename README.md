@@ -8,8 +8,8 @@ Public name **Chaperone** ([ADR 0005](docs/decisions/0005-chaperone-name.md)).
 **herdr** stays where you start and talk to agents; **Chaperone** is the background ledger,
 gates, and lane coordination.
 
-The Rust workspace and CI are in place (`crates/seamlane-core`, `crates/seamlane`,
-`crates/seamlane-fake`, still named before the rename); the ledger and gates are being built in milestone 1. To build
+The Rust workspace and CI are in place (`crates/chaperone-core`, `crates/chaperone-cli`,
+`crates/chaperone-fake`); the ledger and gates are being built in milestone 1. To build
 and test, see [CONTRIBUTING.md](CONTRIBUTING.md) "Setup".
 
 Planning artifacts:

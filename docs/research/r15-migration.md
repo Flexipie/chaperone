@@ -1,6 +1,6 @@
 # R15: Migration from today's setup
 
-> Superseded in part by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md): the router, marker, id floor, merged reads and daisy reading ledger views are out. Seamlane replaces daisy.
+> Superseded in part by [ADR 0003](../decisions/0003-chaperone-replaces-daisy.md): the router, marker, id floor, merged reads and daisy reading ledger views are out. Chaperone replaces daisy.
 
 Status: draft, 2026-11-02. The milestone 1 plan. It sequences [R5](r5-state-and-storage.md), [R7](r7-process-engine.md), [R8](r8-process-terminal-runtime.md), and [R10](r10-verification-review-layer.md) so a lane that is already claimed keeps its process, its work-item id, and its herdr pane.
 
@@ -10,17 +10,17 @@ What moves from daisy (`work`, `spec`, `review`), from dotfiles (skills, `ship-h
 
 ## Recommendation
 
-**One owner per id. New creates go to the Seamlane ledger. A live id stays in daisy until that lane is `done` or `cancelled`. The binary path the skills call does not change, and it never writes both databases.**
+**One owner per id. New creates go to the Chaperone ledger. A live id stays in daisy until that lane is `done` or `cancelled`. The binary path the skills call does not change, and it never writes both databases.**
 
 Milestone 1 is phases 0 through 6. Phase 6 is the ship. Phase 7 backfills finished history and is not required for that ship. Herdr stays the parent of every agent. The review worker stays in the daisy app. Skills, `ship-handoff`, `lane-stats`, and `pipeline-profile` stay in dotfiles and keep today's argv.
 
-[VISION.md](../VISION.md) milestone 1 is the work and spec ledger out of daisy, with enforced lane states, and the CLI contract left intact. [R5](r5-state-and-storage.md) already forbids a second writer of the ledger file during the overlap, and forbids daisy from migrating that file. [R8](r8-process-terminal-runtime.md) leaves `spawn` in place until `seamlane supervise` can create a worktree, wait on setup, and attach from a herdr pane. That swap is the runtime milestone, not this one. The ledger schema still has room for pid, exit, the CLI session id, the port block, and a viewer hint, so the later swap does not rewrite history.
+[VISION.md](../VISION.md) milestone 1 is the work and spec ledger out of daisy, with enforced lane states, and the CLI contract left intact. [R5](r5-state-and-storage.md) already forbids a second writer of the ledger file during the overlap, and forbids daisy from migrating that file. [R8](r8-process-terminal-runtime.md) leaves `spawn` in place until `chaperone supervise` can create a worktree, wait on setup, and attach from a herdr pane. That swap is the runtime milestone, not this one. The ledger schema still has room for pid, exit, the CLI session id, the port block, and a viewer hint, so the later swap does not rewrite history.
 
 ## Ownership
 
 A work-item id and a spec key have one store for their whole life.
 
-- Lookup for a write is exact. `work get`, `work update`, `work claim`, `work handoff`, and `spec update` on an id that exists in `daisy.db` run today's daisy code. The same commands on an id that exists only in the ledger exec `seamlane`. Neither side opens the other file for write.
+- Lookup for a write is exact. `work get`, `work update`, `work claim`, `work handoff`, and `spec update` on an id that exists in `daisy.db` run today's daisy code. The same commands on an id that exists only in the ledger exec `chaperone`. Neither side opens the other file for write.
 - `work create` and `spec create`, after the cutover marker, still look up the natural key in daisy first (`source` + `source_id` for a work item, the parent key for a spec). A hit returns the daisy row and does not insert a ledger row. A miss inserts in the ledger. A spawn retry after the marker flips cannot fork a lane that was created a minute earlier.
 - Copying a claimed row across is out of the plan. So is restamping a daisy lane with a pipeline hash, and so is asking its pane to re-claim.
 - Integer ids would collide if both files start at 1. At the moment the marker flips, the ledger's next work id and next job id are `max(daisy id) + 1000000`. Spec keys are already external strings (`CORE-123`, a GitHub parent). A key lives in one store.
@@ -79,11 +79,11 @@ Tests in this phase: rebuild the tables from the log, the R5 kill cases against 
 
 ### 2. Router, marker off
 
-`daisy-cli` at the absolute path above dispatches. Daisy-owned ids run today's code. Harness-owned ids exec `seamlane` and return its stdout, stderr, and exit code unchanged. The marker is absent, so every create still goes to daisy. There are no harness ids yet.
+`daisy-cli` at the absolute path above dispatches. Daisy-owned ids run today's code. Harness-owned ids exec `chaperone` and return its stdout, stderr, and exit code unchanged. The marker is absent, so every create still goes to daisy. There are no harness ids yet.
 
 Replacing that binary does not kill a pane. Agents spawn the CLI per call. The daisy path for an existing id has to match the fixture from phase 0, including exit 4 and exit 5.
 
-`seamlane` is the harness binary ([ADR 0001](../decisions/0001-name-license-oss-posture.md)). Skills do not learn that name in this milestone.
+`chaperone` is the harness binary ([ADR 0005](../decisions/0005-chaperone-name.md)). Skills do not learn that name in this milestone.
 
 ### 3. New work and spec rows
 
@@ -91,7 +91,7 @@ Flip the marker. The next `work create` or `spec create` whose natural key is ab
 
 Harness `work` and `spec` commands do not consult `app.lock` and do not exit 5. Daisy-owned ids still do, where they do today (reviews that need the worker). Claim, renew, `expected-updated-at`, and the idempotent create match the daisy rules, including the lease ceiling `spawn` already sends (86400).
 
-`ship-handoff record` still shells to `work handoff`. For a daisy id that is today's command. For a ledger id it is `seamlane`, and phase 4 is what makes that command refuse.
+`ship-handoff record` still shells to `work handoff`. For a daisy id that is today's command. For a ledger id it is `chaperone`, and phase 4 is what makes that command refuse.
 
 ### 4. Gates on lanes claimed in the ledger
 
@@ -155,7 +155,7 @@ Daisy keeps notes, inbox, the Linear, GitHub, and Slack mirrors, `context task`,
 
 ## What this leaves open
 
-- The router is a change in the daisy repo (`daisy-cli` execs `seamlane`). This plan assumes that binary may grow a dispatch. A new path would mean a skill edit, which waits until no pane is mid-flight.
+- The router is a change in the daisy repo (`daisy-cli` execs `chaperone`). This plan assumes that binary may grow a dispatch. A new path would mean a skill edit, which waits until no pane is mid-flight.
 - The id gap is `max + 1000000` at flip time. A daisy create after the flip, which the lookup rule still allows for keys that already exist, does not allocate from the ledger range. A daisy id past the gap would collide. The router refuses a create that would land in the reserved range, on either side.
 - `work list` across two files is not one snapshot. Two pages can disagree if a row commits between them. Acceptable for the board. A gate decision reads one store, inside one transaction.
 - `/orchestrate` still exits when `doctor` exits 5. Editing that skill is a later change, done while no orchestrator pane is running.
@@ -175,7 +175,7 @@ Read 2026-11-02.
 - [r8-process-terminal-runtime.md](r8-process-terminal-runtime.md) (`spawn` remains the parent; schema for pid, exit, session id, port block, viewer hint).
 - [r10-verification-review-layer.md](r10-verification-review-layer.md) (worker stays, prose parser off the live path, closed app is `running`).
 - [r2-own-evidence.md](r2-own-evidence.md) (the 25-lane score, the `done:` hole). [r11-observability-cost-metrics.md](r11-observability-cost-metrics.md) (importer may synthesize, queries do not parse prose).
-- [ADR 0001](../decisions/0001-name-license-oss-posture.md): the binary name `seamlane`.
+- [ADR 0005](../decisions/0005-chaperone-name.md): the binary name `chaperone`.
 - daisy CLI capabilities, 2026-11-02: contract version 1, CLI 0.2.0, schema 40, exit codes 0 through 5. Commands exercised by the skills and the dotfiles scripts, listed above.
 - `daisy-core` `db.rs`: `open_existing` refuses to migrate, `APP_LOCK_FILE` is how `doctor` and `reviews` know the app is up.
 - `~/dotfiles/bin/ship-handoff`, `pipeline-profile`, `lane-stats`, `lanes-watch`, `lane-brief`. `~/.local/bin/spawn`. Skills under `~/.claude/skills` for `dispatch`, `issue`, `ship`, `merge`, `orchestrate`, `lanes`.
@@ -183,7 +183,7 @@ Read 2026-11-02.
 ## Choices this plan makes
 
 1. Live ids stay in daisy. The cutover is a create-time fork, with a daisy lookup first so retries do not duplicate.
-2. The compatibility shim is the existing `daisy-cli` path. It execs `seamlane` and does not write the ledger itself.
+2. The compatibility shim is the existing `daisy-cli` path. It execs `chaperone` and does not write the ledger itself.
 3. Gates apply to lanes claimed after the marker flips. In-flight lanes keep today's `ship-handoff` behavior.
 4. Skills, `ship-handoff`, `lane-stats`, `pipeline-profile`, `spawn`, `lanes-watch`, and `lane-brief` stay in dotfiles for this milestone.
 5. Herdr stays the parent. The review worker stays in the daisy app.

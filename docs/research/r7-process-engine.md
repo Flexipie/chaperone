@@ -1,6 +1,6 @@
 # R7: Process engine
 
-> Amended by [events.md](../events.md) and [cli-contract.md](../cli-contract.md): the M1 `handoff` transition, the `tests` skip reason, and M1's lane facts (`work create --kind` and `--pr-flow`). Daisy does not read the ledger ([ADR 0003](../decisions/0003-seamlane-replaces-daisy.md)).
+> Amended by [events.md](../events.md) and [cli-contract.md](../cli-contract.md): the M1 `handoff` transition, the `tests` skip reason, and M1's lane facts (`work create --kind` and `--pr-flow`). Daisy does not read the ledger ([ADR 0003](../decisions/0003-chaperone-replaces-daisy.md)).
 
 Status: draft, 2026-11-02. Specifies the pipeline format. The executable gate test waits on a language (R6); the fixture at the end is that test.
 

@@ -1,0 +1,16 @@
+List items, newest activity first; done and cancelled hidden unless --all
+
+Usage: chaperone work list [OPTIONS]
+
+Options:
+      --db <DB>                  Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --status <STATUS>          
+      --agent <AGENT>            Only items held by this agent (any session)
+      --format <FORMAT>          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --mine                     Only items held by my (agent, session) pair
+      --all                      Include done and cancelled
+      --limit <LIMIT>            Page size, 1..=500 [default: 50]
+      --cursor <CURSOR>          Resume from a previous page's next_cursor
+      --session <SESSION>        Session for --mine (default: $DAISY_SESSION)
+      --mine-agent <MINE_AGENT>  Agent for --mine (default: $DAISY_AGENT)
+  -h, --help                     Print help

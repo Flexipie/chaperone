@@ -156,6 +156,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "chaperone-cli"
+version = "0.1.0"
+dependencies = [
+ "chaperone-core",
+ "clap",
+ "dirs",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "chaperone-core"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "chaperone-fake"
+version = "0.1.0"
+
+[[package]]
 name = "clap"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -605,36 +635,6 @@ dependencies = [
  "tempfile",
  "wait-timeout",
 ]
-
-[[package]]
-name = "seamlane"
-version = "0.1.0"
-dependencies = [
- "clap",
- "dirs",
- "rusqlite",
- "seamlane-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "seamlane-core"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "seamlane-fake"
-version = "0.1.0"
 
 [[package]]
 name = "serde"

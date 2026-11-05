@@ -1,12 +1,12 @@
 # R12: Interfaces and attention
 
-> Amended by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md): daisy does not read the ledger, so the "Daisy client" row below is out.
+> Amended by [ADR 0003](../decisions/0003-chaperone-replaces-daisy.md): daisy does not read the ledger, so the "Daisy client" row below is out.
 
 Status: recommendation, 2026-11-02. The screens, the "needs you" rules, and the first interface. Evidence for a decision record. Builds on [VISION.md](../VISION.md) bet 5, [r1-landscape.md](r1-landscape.md) bet 5, and [r2-own-evidence.md](r2-own-evidence.md).
 
 ## Pick
 
-**The first interface is a CLI query, `seamlane attention`.** It prints four queues from the ledger: needs you, ready, stuck, expensive. A later TUI, a later local web view, and daisy all render that same JSON. None of them classifies a lane on its own.
+**The first interface is a CLI query, `chaperone attention`.** It prints four queues from the ledger: needs you, ready, stuck, expensive. A later TUI, a later local web view, and daisy all render that same JSON. None of them classifies a lane on its own.
 
 Notifications are not a fifth interface. One subscriber reads the same rows and may call `herdr notification show`. The agent process does not notify.
 
@@ -119,7 +119,7 @@ Delivery stays local. herdr is the notifier while herdr is the viewer ([r8-proce
 
 The CLI is the screen. `--json` prints the same object the later clients render. Sort is needs you, ready, stuck (recovery spent first), expensive by peak descending. Working, queued, and done are one count line unless `--all`.
 
-### Board: `seamlane attention`
+### Board: `chaperone attention`
 
 ```
 needs you  1
@@ -135,7 +135,7 @@ working 4   queued 2   done today 3
 
 A row that is ready and expensive does not appear twice. The peak is on the ready line, and the expensive count still includes it.
 
-### One lane: `seamlane attention show CORE-4370`
+### One lane: `chaperone attention show CORE-4370`
 
 ```
 CORE-4370   needs you   question.size
@@ -151,14 +151,14 @@ Evidence
   verdict: none. This lane is not ready.
 
 Answer
-  seamlane attention answer CORE-4370 --decision "<one line>"
+  chaperone attention answer CORE-4370 --decision "<one line>"
 ```
 
 The answer command appends the decision and leaves `needs_you`. It does not paste into the PTY. Until milestone 2's subscription, it prints the one line a person can pass to the lane. The transcript stays in the agent's terminal. This screen is the question, the few evidence fields the projection already stores, and the command that closes it.
 
 `show` on a ready lane prints the merge case, the smoke line, the scores, the verdict sha, and `human.merge_yes` as the next command. It does not print a diff.
 
-### What waited: `seamlane attention log`
+### What waited: `chaperone attention log`
 
 ```
 13:10  CORE-4264   peak 442k          silent
@@ -173,12 +173,12 @@ This is how a quiet afternoon is explained. Rows here are the events that did no
 
 | | First | What it is here | Why it waits |
 | --- | --- | --- | --- |
-| **CLI** | Yes | `seamlane attention` and `show`. Read-only except `answer`. | It is the query. Warm start of a Rust CLI is already 3.9 ms ([r6-language-and-runtime.md](r6-language-and-runtime.md)). `lanes` is the glance I run now. Skills and `/orchestrate` already speak CLI. |
-| **TUI** | No | The same four sections in a pane, milestone 7. A client of the ledger, beside `seamlane attach`. | herdr is already the terminal, with a sidebar lane badge. R8 leaves the needs-you screen at milestone 7. A second full-screen UI before the query exists copies `lanes`. The TUI does not embed the agent session. Attach stays the conversation. |
+| **CLI** | Yes | `chaperone attention` and `show`. Read-only except `answer`. | It is the query. Warm start of a Rust CLI is already 3.9 ms ([r6-language-and-runtime.md](r6-language-and-runtime.md)). `lanes` is the glance I run now. Skills and `/orchestrate` already speak CLI. |
+| **TUI** | No | The same four sections in a pane, milestone 7. A client of the ledger, beside `chaperone attach`. | herdr is already the terminal, with a sidebar lane badge. R8 leaves the needs-you screen at milestone 7. A second full-screen UI before the query exists copies `lanes`. The TUI does not embed the agent session. Attach stays the conversation. |
 | **Local web** | No | The same JSON, on the supervisor's local socket, milestone 7. No account, no remote. | R1: a fleet dashboard that pulls you in when an agent stops is the served half of bet 5, and "ready" there means the agent stopped. Superset, Conductor, and Vibe Kanban already occupy that surface. A page also wants a listener, which bet 7 is trying not to multiply. |
 | **Daisy client** | No | Daisy opens the ledger read-only ([r5-state-and-storage.md](r5-state-and-storage.md)) and may render these four queues later. | The ledger is leaving daisy. Daisy closed is exit 5, and today's `lanes` stops when that happens. The Work page ready rule is one of the ways a lane looked ready before the head was reviewed. The personal hub (notes, inbox, mirrors) stays a non-goal. |
 
-The TUI and the web are views. If their buckets ever differ from `seamlane attention --json`, the view is wrong.
+The TUI and the web are views. If their buckets ever differ from `chaperone attention --json`, the view is wrong.
 
 ## What I can check
 

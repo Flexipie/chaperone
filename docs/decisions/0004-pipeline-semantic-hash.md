@@ -2,7 +2,7 @@
 
 Status: accepted, 2026-11-03  
 Amends: [R7](../research/r7-process-engine.md) "Pin, diff, rollback, side by side" step 4  
-Code: `crates/seamlane-core/src/pipeline/hash.rs`, pinned by the v17 hash test
+Code: `crates/chaperone-core/src/pipeline/hash.rs`, pinned by the v17 hash test
 
 ## Context
 
