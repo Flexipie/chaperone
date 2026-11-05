@@ -1,4 +1,4 @@
-# Seamlane roadmap
+# Chaperone roadmap
 
 Status: **locked**, 2026-11-03. This is the single source for product decisions, architecture,
 phases, and success bars. Research evidence lives in [research/](research/) (R1â€“R15).
@@ -8,7 +8,7 @@ phases, and success bars. Research evidence lives in [research/](research/) (R1â
 
 | Decision | Choice |
 | --- | --- |
-| Product name | **Seamlane** (`seamlane` binary, crate, npm) |
+| Product name | **Chaperone** ([ADR 0005](decisions/0005-chaperone-name.md)): packages `chaperone-cli`, `chaperone-ui`, repo `chaperone`. Code still says `seamlane` until the rename pass |
 | License | **MIT OR Apache-2.0** |
 | Open source | **Public from first code commit**; `0.x` until contract/schema settle; **1.0** = milestone 8 quality bar |
 | Language | **Rust**, reuse **daisy-core** where it fits |

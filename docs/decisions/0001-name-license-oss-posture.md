@@ -1,6 +1,6 @@
 # ADR 0001: Product name, license, and open-source posture
 
-Status: accepted, 2026-11-02  
+Status: accepted, 2026-11-02; name items 1 to 3 superseded by [ADR 0005](0005-chaperone-name.md) (Chaperone)  
 Decides: [RESEARCH.md](../RESEARCH.md) R3  
 Evidence: [r3-name-and-license.md](../research/r3-name-and-license.md)
 
