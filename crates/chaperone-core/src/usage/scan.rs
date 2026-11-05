@@ -147,7 +147,7 @@ fn claude_file(path: &Path, source: &'static str, base: Value, scan: &mut Scan) 
             "input_total": input_total,
             "output_total": output,
             "model": msg.model,
-            "raw": u,
+            "raw": u.map(counts),
         });
         push(scan, &base, &mut session, id, source, fields);
     }
@@ -231,7 +231,7 @@ fn codex_file(path: &Path, worktree: &str, scan: &mut Scan) -> io::Result<()> {
             "input_total": n("input_tokens"),
             "output_total": n("output_tokens"),
             "model": model,
-            "raw": u,
+            "raw": counts(u),
         });
         push(scan, &base, &mut session, rid, "parent", fields);
     }
@@ -269,6 +269,22 @@ fn push(
         source,
         fields: f,
     });
+}
+
+/// R13's allowlist for `raw`: the usage object's counts, and objects of
+/// counts (Claude's `cache_creation`, `server_tool_use`). Strings are
+/// dropped, so no text rides along.
+fn counts(u: &Value) -> Value {
+    match u {
+        Value::Object(m) => Value::Object(
+            m.iter()
+                .filter(|(_, v)| v.is_number() || v.is_object())
+                .map(|(k, v)| (k.clone(), counts(v)))
+                .collect(),
+        ),
+        v if v.is_number() => v.clone(),
+        _ => Value::Null,
+    }
 }
 
 /// `cwd` is the worktree or a folder under it.

@@ -152,7 +152,7 @@ a handoff, the handoff's event carries `changed.pr_ref` from null, and the fact
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `usage.reported` | `usage report` | One provider message, in [R11](research/r11-observability-cost-metrics.md)'s fields: `message_id`, `source` (`parent` or `subagent`), `model`, `uncached_input`, `cache_read`, `cache_write`, `output`, `reasoning`, `input_includes_cache`, `output_includes_reasoning`, `input_total`, `output_total`, `cost_usd`, `raw` (the CLI's usage object). Plus `origin` (`transcript` in M1; the R4 adapters write the same kind later), `cli` (`claude` or `codex`), `session_id`, and for a subagent `agent_id`, `agent_type` and `description` |
+| `usage.reported` | `usage report` | One provider message, in [R11](research/r11-observability-cost-metrics.md)'s fields: `message_id`, `source` (`parent` or `subagent`), `model`, `uncached_input`, `cache_read`, `cache_write`, `output`, `reasoning`, `input_includes_cache`, `output_includes_reasoning`, `input_total`, `output_total`, `cost_usd`, `raw` (the CLI's usage object, counts only: R13's allowlist, strings dropped). Plus `origin` (`transcript` in M1; the R4 adapters write the same kind later), `cli` (`claude` or `codex`), `session_id`, and for a subagent `agent_id`, `agent_type` and `description` |
 
 The key is `usage:<lane_id>:<message_id>`, so a message is recorded once per lane, and a report
 that finds nothing new writes nothing. The write refuses a `usage.reported` without a

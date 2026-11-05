@@ -38,7 +38,8 @@ pub(crate) fn project(
     }
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT {EVENT_COLUMNS} FROM events WHERE lane_id = ?1 ORDER BY id"
+        "SELECT {EVENT_COLUMNS} FROM events
+         WHERE lane_id = ?1 AND kind != 'usage.reported' ORDER BY id"
     ))?;
     let mut rows = stmt.query([lane_id])?;
     let (mut smoke, mut kept, mut rounds) = (false, false, 0);
