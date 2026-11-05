@@ -79,6 +79,12 @@ fn help_matches_snapshots() {
         ),
         (&["jobs"], include_str!("snapshots/jobs.txt")),
         (&["jobs", "get"], include_str!("snapshots/jobs-get.txt")),
+        (&["usage"], include_str!("snapshots/usage.txt")),
+        (
+            &["usage", "report"],
+            include_str!("snapshots/usage-report.txt"),
+        ),
+        (&["usage", "get"], include_str!("snapshots/usage-get.txt")),
         (&["migrate"], include_str!("snapshots/migrate.txt")),
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_chaperone"))

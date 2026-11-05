@@ -393,7 +393,11 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             check!(lane_guard(tx, event, id));
             // Usage is deduped on the lane and the provider's message id.
             if event.kind == UsageReported
-                && !event.payload.rest.get("message_id").is_some_and(|v| v.is_string())
+                && !event
+                    .payload
+                    .rest
+                    .get("message_id")
+                    .is_some_and(|v| v.is_string())
             {
                 refuse!(invalid("usage.reported needs a message_id"));
             }

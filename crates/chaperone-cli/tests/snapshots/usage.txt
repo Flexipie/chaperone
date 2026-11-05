@@ -1,0 +1,13 @@
+Token usage per provider message, read from a lane's transcripts
+
+Usage: chaperone usage [OPTIONS] <COMMAND>
+
+Commands:
+  report  Read the transcripts that started in the work item's worktree and record one usage event per message it does not have yet. Counts and ids only. Reporting again writes nothing new
+  get     The work item's usage: totals per source (parent, subagent) and one row per transcript. known is false when nothing was recorded
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

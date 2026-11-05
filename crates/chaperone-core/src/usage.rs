@@ -170,9 +170,15 @@ impl Ledger {
         let rows = |group: &[&str], extra: &[(&str, String)]| {
             let mut cols = vec![
                 ("messages".to_string(), "count(*)".to_string()),
-                ("peak_input_total".into(), format!("max({})", f("input_total"))),
+                (
+                    "peak_input_total".into(),
+                    format!("max({})", f("input_total")),
+                ),
             ];
-            cols.extend(SUMS.iter().map(|k| (k.to_string(), format!("sum({})", f(k)))));
+            cols.extend(
+                SUMS.iter()
+                    .map(|k| (k.to_string(), format!("sum({})", f(k)))),
+            );
             cols.extend(group.iter().map(|k| (k.to_string(), f(k))));
             cols.extend(extra.iter().map(|(k, e)| (k.to_string(), e.clone())));
             let select: Vec<&str> = cols.iter().map(|(_, e)| e.as_str()).collect();

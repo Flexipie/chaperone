@@ -1,0 +1,13 @@
+Read the transcripts that started in the work item's worktree and record one usage event per message it does not have yet. Counts and ids only. Reporting again writes nothing new
+
+Usage: chaperone usage report [OPTIONS] --work <WORK>
+
+Options:
+      --db <DB>                  Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --work <WORK>              
+      --claude-dir <CLAUDE_DIR>  Claude Code's config dir (default: $CLAUDE_CONFIG_DIR, else ~/.claude, when it exists)
+      --format <FORMAT>          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --codex-dir <CODEX_DIR>    Codex's home (default: $CODEX_HOME, else ~/.codex, when it exists)
+      --agent <AGENT>            Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>        Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help                     Print help
