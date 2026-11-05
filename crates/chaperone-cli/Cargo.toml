@@ -12,10 +12,10 @@ name = "chaperone"
 path = "src/main.rs"
 
 [dependencies]
+chaperone-core = { path = "../chaperone-core" }
 clap.workspace = true
 dirs.workspace = true
 rusqlite.workspace = true
-chaperone-core = { path = "../chaperone-core" }
 serde.workspace = true
 serde_json.workspace = true
 

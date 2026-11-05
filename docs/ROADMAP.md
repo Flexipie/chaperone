@@ -8,7 +8,7 @@ phases, and success bars. Research evidence lives in [research/](research/) (R1â
 
 | Decision | Choice |
 | --- | --- |
-| Product name | **Chaperone** ([ADR 0005](decisions/0005-chaperone-name.md)): packages `chaperone-cli`, `chaperone-ui`, repo `chaperone`. Code still says `chaperone` until the rename pass |
+| Product name | **Chaperone** ([ADR 0005](decisions/0005-chaperone-name.md)): packages `chaperone-cli`, `chaperone-ui`, repo `chaperone` |
 | License | **MIT OR Apache-2.0** |
 | Open source | **Public from first code commit**; `0.x` until contract/schema settle; **1.0** = milestone 8 quality bar |
 | Language | **Rust**, reuse **daisy-core** where it fits |

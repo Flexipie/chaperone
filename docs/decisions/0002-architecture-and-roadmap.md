@@ -6,7 +6,7 @@ Canonical plan: [ROADMAP.md](../ROADMAP.md)
 
 ## Context
 
-Research R1–R15 is complete. The owner accepted Chaperone (renamed Chaperone by ADR 0005), the proposed technical stack,
+Research R1–R15 is complete. The owner accepted Seamlane (renamed Chaperone by ADR 0005), the proposed technical stack,
 milestone 1 metrics, default phase order, and the split: **herdr for interactive work**,
 **Chaperone for ledger, gates, and lane coordination**.
 
