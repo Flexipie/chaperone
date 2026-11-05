@@ -219,7 +219,7 @@ lane where it was.
 
 `usage report` is new (#59). It reads the transcripts that started in the lane's
 `worktree_path` and appends one `usage.reported` per provider message the lane does not
-have (events.md, Usage). `/ship` runs it after each handoff, and anyone may run it on demand.
+have (events.md, Usage). `/ship` is to run it after each handoff once lanes run on Chaperone, and anyone may run it on demand.
 It skips the holder rule, as `check record` does. `--claude-dir` defaults to
 `$CLAUDE_CONFIG_DIR`, else `~/.claude` when it exists. `--codex-dir` defaults to `$CODEX_HOME`,
 else `~/.codex` when it exists. A folder from a flag or a variable is used as given. It

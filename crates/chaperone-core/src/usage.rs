@@ -14,6 +14,7 @@ use serde_json::{Map, Value, json};
 
 pub use scan::Session;
 
+use crate::checks::lane_exists;
 use crate::ledger::{Actor, Applied, Checked, EventKind, Ledger, Mutation, Payload, Refusal};
 
 const ENTITY: &str = "work item";
@@ -116,13 +117,7 @@ impl Ledger {
                 Some(&key),
                 None,
                 false,
-                |conn, _| {
-                    if !crate::ledger::exists(conn, "SELECT 1 FROM lanes WHERE id = ?1", [work])? {
-                        return Ok(Err(Refusal::NotFound {
-                            entity: ENTITY,
-                            id: work,
-                        }));
-                    }
+                |_, _| {
                     Ok(Ok(Mutation::Event {
                         kind: EventKind::UsageReported,
                         lane_id: Some(work),
@@ -149,7 +144,7 @@ impl Ledger {
     /// stays null.
     pub fn usage_get(&self, work: i64) -> Checked<Value> {
         let conn = self.conn();
-        if !crate::ledger::exists(conn, "SELECT 1 FROM lanes WHERE id = ?1", [work])? {
+        if !lane_exists(conn, work)? {
             return Ok(Err(Refusal::NotFound {
                 entity: ENTITY,
                 id: work,
