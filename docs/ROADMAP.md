@@ -230,7 +230,7 @@ Lanes in flight finish in daisy; new lanes move when the skills switch to `chape
 
 ## Next actions (implementation)
 
-1. Scaffold **Rust workspace** per R14 (`chaperone`, `chaperone-core`, …) (#3).
+1. Scaffold **Rust workspace** per R14 (`chaperone-cli`, `chaperone-core`, …) (#3).
 2. Ledger file, write function and its tests (#4 to #6).
 3. `chaperone work` and `spec` in daisy's shape (#7 to #11).
 4. Pipeline, evaluator, projection, engine refusals and check events through M1 exit criteria (#12 to #16).

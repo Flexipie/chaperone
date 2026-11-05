@@ -108,7 +108,7 @@ LICENSE-MIT                first commit that contains code (ADR 0001)
 LICENSE-APACHE
 CONTRIBUTING.md
 crates/chaperone-core/      ledger, engine, migrations. No clap, no PTY, no home directory.
-crates/chaperone-cli/           the `chaperone` binary. CLI, supervise, in-tree adapters.
+crates/chaperone-cli/       the `chaperone` binary. CLI, supervise, in-tree adapters.
 crates/chaperone-fake/      scripted agent. publish = false. Not installed by `cargo install`.
 pipelines/                 v17.toml and later ids. Loaded from disk.
 docs/                      vision, research, decisions, events.md, the CLI contract
