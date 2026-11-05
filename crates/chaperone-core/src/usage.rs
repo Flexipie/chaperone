@@ -64,15 +64,16 @@ impl Ledger {
                 id: work,
             }));
         };
-        let Some(worktree) = worktree.map(|w| w.trim_end_matches('/').to_string()) else {
+        let Some(stored) = worktree else {
             return invalid(format!(
                 "work item {work} has no worktree_path, so no transcript can be matched to it"
             ));
         };
         // `/` or a relative path would match every transcript or none.
+        let worktree = stored.trim_end_matches('/').to_string();
         if !worktree.starts_with('/') {
             return invalid(format!(
-                "work item {work} has worktree_path {worktree:?}; usage needs an absolute folder below /"
+                "work item {work} has worktree_path {stored:?}; usage needs an absolute folder below /"
             ));
         }
         if roots.claude.is_none() && roots.codex.is_none() {
@@ -210,6 +211,9 @@ impl Ledger {
         )?;
         let mut totals = Map::new();
         for mut row in rows(&NAMES[..1], &[])? {
+            // Claude's uncached_input leaves the cache out and Codex's holds
+            // it, so the sum across CLIs means nothing; rows keep it per CLI.
+            row.remove("uncached_input");
             let source = row.remove("source");
             let source = source.as_ref().and_then(Value::as_str).unwrap_or_default();
             totals.insert(source.into(), row.into());

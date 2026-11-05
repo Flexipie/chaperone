@@ -234,8 +234,9 @@ unknown}`, with ids and counts only.
 `usage get` prints `{work_id, known, totals, sources}`. `totals` is keyed by `source`
 (`parent`, `subagent`), and `sources` has one row per transcript (`source`, `cli`, `session_id`,
 `agent_id`, `agent_type`, `description`, `models`). Both carry `messages`, `peak_input_total`
-and the sums of `uncached_input`, `cache_read`, `cache_write`, `output`, `reasoning`,
-`input_total` and `output_total`. A sum skips the messages where that field is null, and is
+and the sums of `cache_read`, `cache_write`, `output`, `reasoning`, `input_total` and
+`output_total`. Only the transcript rows carry `uncached_input`, since its meaning differs
+by CLI (Codex's includes the cache). A sum skips the messages where that field is null, and is
 null when every message has it null. `known` is false when the lane has no usage event.
 
 Where these numbers differ from `lane-stats`:
