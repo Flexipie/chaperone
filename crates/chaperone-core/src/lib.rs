@@ -6,4 +6,5 @@ mod engine;
 pub mod ledger;
 pub mod pipeline;
 pub mod spec;
+pub mod usage;
 pub mod work;

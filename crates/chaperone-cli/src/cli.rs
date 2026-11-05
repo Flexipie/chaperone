@@ -51,6 +51,8 @@ pub enum Cmd {
     Reviews(ReviewsCmd),
     #[command(subcommand)]
     Jobs(JobsCmd),
+    #[command(subcommand)]
+    Usage(UsageCmd),
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
@@ -85,6 +87,8 @@ impl Cmd {
             Cmd::Spec(SpecCmd::Approve { .. }) => Some("spec approve"),
             Cmd::Spec(SpecCmd::Decide { .. }) => Some("spec decide"),
             Cmd::Spec(SpecCmd::Get { .. } | SpecCmd::List) => None,
+            Cmd::Usage(UsageCmd::Report { .. }) => Some("usage report"),
+            Cmd::Usage(UsageCmd::Get { .. }) => None,
         }
     }
 }
@@ -494,5 +498,30 @@ pub enum ReviewsCmd {
 pub enum JobsCmd {
     /// A recorded review job in daisy's job shape; what only daisy knows
     /// (cost, tokens, job dir) is null
+    Get { id: i64 },
+}
+
+/// Token usage per provider message, read from a lane's transcripts
+#[derive(Subcommand, Debug)]
+pub enum UsageCmd {
+    /// Read the transcripts that started in the work item's worktree and
+    /// record one usage event per message it does not have yet. Counts and
+    /// ids only. Reporting again writes nothing new
+    Report {
+        #[arg(long)]
+        work: i64,
+        /// Claude Code's config dir (default: $CLAUDE_CONFIG_DIR, else
+        /// ~/.claude, when it exists)
+        #[arg(long)]
+        claude_dir: Option<PathBuf>,
+        /// Codex's home (default: $CODEX_HOME, else ~/.codex, when it
+        /// exists)
+        #[arg(long)]
+        codex_dir: Option<PathBuf>,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// The work item's usage: totals per source (parent, subagent) and one
+    /// row per transcript. known is false when nothing was recorded
     Get { id: i64 },
 }

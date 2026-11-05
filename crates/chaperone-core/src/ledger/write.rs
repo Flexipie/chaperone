@@ -391,6 +391,12 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             }
             let id = check!(need_id(event.lane_id, "lane"));
             check!(lane_guard(tx, event, id));
+            // Usage is deduped on the lane and the provider's message id.
+            if event.kind == UsageReported
+                && !event.payload.rest.get("message_id").is_some_and(|v| v.is_string())
+            {
+                refuse!(invalid("usage.reported needs a message_id"));
+            }
             // A handoff's id is its event's, so `work handoffs` and the
             // stored payload agree whoever wrote it.
             if event.payload.rest.contains_key("handoff") {
