@@ -7,7 +7,7 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use chaperone_core::ledger::{Ledger, Refusal};
+use chaperone_core::ledger::{Applied, EventKind, Ledger, Mutation, Payload, Refusal};
 use chaperone_core::usage::Roots;
 use chaperone_core::work::{ClaimInput, CreateInput};
 use common::{actor, count, read_only};
@@ -256,6 +256,17 @@ fn refusals_write_nothing() {
     assert!(matches!(
         ledger.usage_report(&a, 99, &roots).unwrap(),
         Err(Refusal::NotFound { .. })
+    ));
+    // The write itself refuses a usage event it could not dedupe.
+    let bare = Mutation::Event {
+        kind: EventKind::UsageReported,
+        lane_id: Some(id),
+        spec_id: None,
+        payload: Payload::default(),
+    };
+    assert!(matches!(
+        ledger.apply(&a, None, common::AT, bare).unwrap(),
+        Applied::Refused(Refusal::InvalidInput(m)) if m.contains("message_id")
     ));
     assert_eq!(count(&read_only(&path), USAGE), 0);
 }
