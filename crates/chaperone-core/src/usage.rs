@@ -69,6 +69,12 @@ impl Ledger {
                 "work item {work} has no worktree_path, so no transcript can be matched to it"
             ));
         };
+        // `/` or a relative path would match every transcript or none.
+        if !worktree.starts_with('/') {
+            return invalid(format!(
+                "work item {work} has worktree_path {worktree:?}; usage needs an absolute folder below /"
+            ));
+        }
         if roots.claude.is_none() && roots.codex.is_none() {
             return invalid(
                 "no transcript folder to read; pass --claude-dir or --codex-dir".into(),

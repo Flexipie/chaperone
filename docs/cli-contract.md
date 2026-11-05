@@ -223,9 +223,11 @@ have (events.md, Usage). `/ship` is to run it after each handoff once lanes run 
 It skips the holder rule, as `check record` does. `--claude-dir` defaults to
 `$CLAUDE_CONFIG_DIR`, else `~/.claude` when it exists. `--codex-dir` defaults to `$CODEX_HOME`,
 else `~/.codex` when it exists. A folder from a flag or a variable is used as given. It
-refuses (`invalid_input`, nothing written) a lane with no `worktree_path`, a folder that does
-not exist, and a run with no folder at all. A matched transcript it cannot read is `internal`,
-and the report writes nothing. It prints `{work_id, written, existing, pending, sessions}`.
+refuses (`invalid_input`, nothing written) a lane with no `worktree_path` or one that is not an
+absolute folder below `/` (which would match every transcript or none), a folder that does
+not exist, and a run with no folder at all. Entries in `projects` that are not folders are
+skipped. A file or folder it cannot read is `internal`, naming the path, and the report
+writes nothing. It prints `{work_id, written, existing, pending, sessions}`.
 `sessions` lists each matched transcript as `{cli, session_id, agent_id, messages, pending,
 unknown}`, with ids and counts only.
 
@@ -241,12 +243,17 @@ Where these numbers differ from `lane-stats`:
 - `lane-stats`' `context_tokens` is the sum of `input_total`, but it counts a missing key as 0.
   Here a message with a missing key has a null `input_total`, which the sum skips.
 - A message still streaming at the end of a transcript is counted by `lane-stats` and is
-  pending here until it stops.
+  pending here until it stops or the transcript has been idle for 10 minutes.
+- `lane-stats` counts a message id once per transcript. Here it counts once per lane, so a
+  resumed or forked session that copies earlier messages adds them once, and a lane total
+  can be lower than `lane-stats`. Which transcript row a copied message lands on follows
+  the scan order.
 - `lane-stats` splits a session evenly between stack lanes that share a worktree. Here each
   lane that matches a session records its messages.
 - `lane-stats` also matches old daisy items by branch name when they have no worktree path.
   Here a lane without `worktree_path` is refused.
-- `lane-stats` reads Claude only. Codex rollouts are counted here.
+- `lane-stats` reads Claude only. Codex rollouts are counted here, with Codex subagents
+  under `subagent`.
 
 ## What lane-stats reads
 

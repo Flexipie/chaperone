@@ -95,6 +95,19 @@ fn homes(root: &Path) -> Roots {
                 "output_tokens": 10, "reasoning_output_tokens": 4, "total_tokens": 110}}}),
         ],
     );
+    // A Codex subagent: its own rollout, naming the parent thread.
+    write_lines(
+        &day.join("rollout-3.jsonl"),
+        &[
+            json!({"type": "session_meta", "payload": {"id": "c3", "cwd": WT,
+                "parent_thread_id": "c1", "agent_nickname": "Hume",
+                "source": {"subagent": {"thread_spawn": {"agent_role": "explorer"}}}}}),
+            json!({"type": "token_usage_record", "payload": {"response_id": "resp_3", "usage": {
+                "input_tokens": 20, "cached_input_tokens": 0, "output_tokens": 2}}}),
+        ],
+    );
+    // A stray file next to the project folders is not a project.
+    fs::write(claude.join("projects").join(".DS_Store"), b"").unwrap();
     write_lines(
         &day.join("rollout-2.jsonl"),
         &[json!({"type": "session_meta", "payload": {"id": "c2", "cwd": WT}})],
@@ -142,8 +155,9 @@ fn report_writes_final_messages_once() {
         .usage_report(&actor("2"), id, &roots)
         .unwrap()
         .unwrap();
-    // msg_a, msg_b, msg_c, the subagent's msg_s1 and Codex's resp_1.
-    assert_eq!((first.written, first.existing, first.pending), (5, 0, 1));
+    // msg_a, msg_b, msg_c, the subagent's msg_s1, Codex's resp_1 and its
+    // subagent's resp_3.
+    assert_eq!((first.written, first.existing, first.pending), (6, 0, 1));
     let unknown: Vec<_> = first.sessions.iter().filter(|s| s.unknown).collect();
     assert_eq!(unknown.len(), 1);
     assert_eq!(unknown[0].session_id, "c2");
@@ -152,9 +166,9 @@ fn report_writes_final_messages_once() {
         .usage_report(&actor("2"), id, &roots)
         .unwrap()
         .unwrap();
-    assert_eq!((again.written, again.existing), (0, 5));
+    assert_eq!((again.written, again.existing), (0, 6));
     let db = read_only(&path);
-    assert_eq!(count(&db, USAGE), 5);
+    assert_eq!(count(&db, USAGE), 6);
     // No message text reaches the log.
     assert_eq!(
         count(
@@ -176,8 +190,8 @@ fn report_writes_final_messages_once() {
         .usage_report(&actor("2"), id, &roots)
         .unwrap()
         .unwrap();
-    assert_eq!((later.written, later.existing, later.pending), (1, 5, 0));
-    assert_eq!(count(&db, USAGE), 6);
+    assert_eq!((later.written, later.existing, later.pending), (1, 6, 0));
+    assert_eq!(count(&db, USAGE), 7);
     // A report is not lane work: work events shows none of it.
     assert_eq!(ledger.work_events(id).unwrap().len(), lane_events);
     common::assert_consistent(&path);
@@ -204,13 +218,20 @@ fn get_sums_per_source_and_transcript() {
     assert_eq!(parent["peak_input_total"], 223);
     assert_eq!(parent["reasoning"], 4);
     let sub = &got["totals"]["subagent"];
+    // Claude's msg_s1 and the Codex subagent's resp_3.
     assert_eq!(
         (sub["messages"].clone(), sub["input_total"].clone()),
-        (json!(1), json!(56))
+        (json!(2), json!(56 + 20))
     );
 
     let sources = got["sources"].as_array().unwrap();
-    assert_eq!(sources.len(), 3);
+    assert_eq!(sources.len(), 4);
+    let spawned = sources.iter().find(|s| s["agent_id"] == "c3").unwrap();
+    assert_eq!(
+        (spawned["session_id"].clone(), spawned["agent_type"].clone()),
+        (json!("c1"), json!("explorer"))
+    );
+    assert_eq!(spawned["description"], "Hume");
     let agent = sources.iter().find(|s| s["agent_id"] == "x1").unwrap();
     assert_eq!(agent["agent_type"], "reviewer");
     assert_eq!(
@@ -223,7 +244,10 @@ fn get_sums_per_source_and_transcript() {
     let claude = claude.unwrap();
     assert_eq!(claude["cache_write"], 30);
     assert_eq!(claude["models"], "claude-x");
-    let codex = sources.iter().find(|s| s["cli"] == "codex").unwrap();
+    let codex = sources
+        .iter()
+        .find(|s| s["cli"] == "codex" && s["source"] == "parent")
+        .unwrap();
     assert_eq!(
         (codex["cache_read"].clone(), codex["models"].clone()),
         (json!(60), json!("gpt-x"))
@@ -240,6 +264,15 @@ fn refusals_write_nothing() {
         ledger.usage_report(&a, bare, &roots).unwrap(),
         Err(Refusal::InvalidInput(m)) if m.contains("no worktree_path")
     ));
+    // `/` (trimmed to nothing) or a relative path would match every
+    // transcript or none.
+    for wt in ["/", "wt"] {
+        let odd = lane(&ledger, Some(wt));
+        assert!(matches!(
+            ledger.usage_report(&a, odd, &roots).unwrap(),
+            Err(Refusal::InvalidInput(m)) if m.contains("absolute folder")
+        ));
+    }
     let id = lane(&ledger, Some(WT));
     let typo = Roots {
         claude: Some(dir.path().join("nope")),
@@ -269,4 +302,24 @@ fn refusals_write_nothing() {
         Applied::Refused(Refusal::InvalidInput(m)) if m.contains("message_id")
     ));
     assert_eq!(count(&read_only(&path), USAGE), 0);
+}
+
+#[test]
+fn an_idle_transcript_counts_its_last_message() {
+    let (dir, _path, ledger) = common::ledger();
+    let roots = homes(dir.path());
+    let id = lane(&ledger, Some(WT));
+    // msg_d never stopped (an interrupt), and nothing has written for an hour.
+    let s1 = dir.path().join("claude/projects/-work-lane/s1.jsonl");
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    fs::File::options()
+        .write(true)
+        .open(&s1)
+        .and_then(|f| f.set_modified(hour_ago))
+        .unwrap();
+    let got = ledger
+        .usage_report(&actor("2"), id, &roots)
+        .unwrap()
+        .unwrap();
+    assert_eq!((got.written, got.pending), (7, 0));
 }

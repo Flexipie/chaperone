@@ -47,6 +47,9 @@ pub(crate) fn claude(config: &Path, worktree: &str, scan: &mut Scan) -> io::Resu
     };
     for project in projects {
         let project = project?.path();
+        if !project.is_dir() {
+            continue;
+        }
         let Some(files) = dir(&project)? else {
             continue;
         };
@@ -85,10 +88,15 @@ pub(crate) fn claude(config: &Path, worktree: &str, scan: &mut Scan) -> io::Resu
     Ok(())
 }
 
+/// How long a transcript goes unwritten before its last message counts
+/// without a stop.
+const IDLE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 /// One Claude transcript. A response is written as one line per content
 /// block, and the earlier lines can carry partial usage, so the last line
 /// of each message id counts (lane-stats). A message is final once a line
-/// of it has a `stop_reason` or a later message has begun.
+/// of it has a `stop_reason`, a later message has begun, or the file has
+/// been idle for [`IDLE`].
 fn claude_file(path: &Path, source: &'static str, base: Value, scan: &mut Scan) -> io::Result<()> {
     #[derive(Default)]
     struct Msg {
@@ -118,10 +126,15 @@ fn claude_file(path: &Path, source: &'static str, base: Value, scan: &mut Scan) 
         msg.stopped |= m.get("stop_reason").is_some_and(|s| !s.is_null());
         true
     })?;
+    // A transcript idle past IDLE is done, so its last message stays as it
+    // is (an interrupt or a killed subagent never writes a stop).
+    let idle = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().is_ok_and(|e| e > IDLE));
     let mut session = session("claude", &base);
     for (i, id) in order.iter().enumerate() {
         let msg = &msgs[id];
-        if !msg.stopped && i + 1 == order.len() {
+        if !msg.stopped && !idle && i + 1 == order.len() {
             session.pending += 1;
             continue;
         }
@@ -185,14 +198,32 @@ fn codex_file(path: &Path, worktree: &str, scan: &mut Scan) -> io::Result<()> {
     let meta = first(path, b"\"session_meta\"", |d| {
         (str_at(d, "type")? == "session_meta").then(|| {
             let p = d.get("payload")?;
-            under(str_at(p, "cwd")?, worktree).then(|| str_at(p, "id").map(String::from))?
+            under(str_at(p, "cwd")?, worktree).then(|| p.clone())
         })
     })?
     .flatten();
-    let Some(id) = meta else {
+    let Some(p) = meta else {
         return Ok(());
     };
-    let base = json!({"cli": "codex", "session_id": id});
+    let Some(id) = str_at(&p, "id") else {
+        return Ok(());
+    };
+    // A subagent's rollout names its parent thread; it is grouped under it,
+    // as Claude's subagents are under their session.
+    let spawned = p.get("source").and_then(|s| s.get("subagent"));
+    let (source, base) = match spawned {
+        Some(sub) => (
+            "subagent",
+            json!({
+                "cli": "codex",
+                "session_id": str_at(&p, "parent_thread_id").unwrap_or(id),
+                "agent_id": id,
+                "agent_type": sub.pointer("/thread_spawn/agent_role"),
+                "description": p.get("agent_nickname"),
+            }),
+        ),
+        None => ("parent", json!({"cli": "codex", "session_id": id})),
+    };
     let mut model = Value::Null;
     let mut order: Vec<String> = Vec::new();
     let mut records: HashMap<String, (Value, Value)> = HashMap::new();
@@ -233,7 +264,7 @@ fn codex_file(path: &Path, worktree: &str, scan: &mut Scan) -> io::Result<()> {
             "model": model,
             "raw": counts(u),
         });
-        push(scan, &base, &mut session, rid, "parent", fields);
+        push(scan, &base, &mut session, rid, source, fields);
     }
     scan.sessions.push(session);
     Ok(())
@@ -302,8 +333,13 @@ fn dir(d: &Path) -> io::Result<Option<std::fs::ReadDir>> {
     match std::fs::read_dir(d) {
         Ok(r) => Ok(Some(r)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
+        Err(e) => Err(named(d, e)),
     }
+}
+
+/// `e` with the path it is about, so a failed report says which file.
+fn named(path: &Path, e: io::Error) -> io::Error {
+    io::Error::new(e.kind(), format!("{}: {e}", path.display()))
 }
 
 /// The name of a `<prefix><name>.jsonl` file.
@@ -347,13 +383,16 @@ fn lines(path: &Path, mut each: impl FnMut(&[u8]) -> bool) -> io::Result<()> {
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
+        Err(e) => return Err(named(path, e)),
     };
     let mut reader = BufReader::new(file);
     let mut buf = Vec::new();
     loop {
         buf.clear();
-        if reader.read_until(b'\n', &mut buf)? == 0 || buf.last() != Some(&b'\n') {
+        let read = reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| named(path, e))?;
+        if read == 0 || buf.last() != Some(&b'\n') {
             return Ok(());
         }
         if !each(&buf) {

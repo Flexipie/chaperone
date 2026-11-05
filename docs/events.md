@@ -165,8 +165,9 @@ events (`usage get`), never a stored counter. Message text never enters the payl
   `<session>/subagents/agent-<id>.jsonl` with `agent_type` and `description` from the sibling
   `.meta.json`. A response is one line per content block, and earlier lines can carry partial
   usage, so the last line of a message id counts. A message is recorded once a line of it
-  has a `stop_reason` or a later message has begun. Until then it is pending, and the next
-  report records it. `input_includes_cache` is false and `input_total` is
+  has a `stop_reason`, a later message has begun, or the transcript has not been written for
+  10 minutes (an interrupt or a killed subagent never writes a stop). Until then it is
+  pending, and the next report records it. `input_includes_cache` is false and `input_total` is
   `uncached_input + cache_read + cache_write` (null if any is null). `output_includes_reasoning`
   is true, because Anthropic counts thinking inside `output_tokens`.
 - **Codex.** The rollouts under `<codex home>/sessions/**/rollout-*.jsonl` whose `session_meta`
@@ -175,7 +176,10 @@ events (`usage get`), never a stored counter. Message text never enters the payl
   the cached count. In local records `total_tokens` is input plus output, and input is never
   below cached. So `input_includes_cache` is true, `uncached_input` and `input_total` are
   `input_tokens`, and `cache_read` is `cached_input_tokens`. A rollout with no
-  `token_usage_record` (older Codex) is reported as `unknown` and writes nothing.
+  `token_usage_record` (older Codex) is reported as `unknown` and writes nothing. A rollout
+  whose `session_meta.source` has `subagent` is a subagent: `session_id` is its
+  `parent_thread_id`, `agent_id` its own id, `agent_type` the spawn's `agent_role` and
+  `description` its `agent_nickname`.
 - **Cursor** and other CLIs are not read. Their lanes have no usage events, so `usage get`
   says `known: false`, never a guessed zero.
 
