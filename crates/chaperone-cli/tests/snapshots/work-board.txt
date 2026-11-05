@@ -1,0 +1,8 @@
+Every open item with its newest handoff and whether it is ready: the owner's override, else status review and a ready handoff. Every item is under `other`; specs are not grouped yet
+
+Usage: chaperone work board [OPTIONS]
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

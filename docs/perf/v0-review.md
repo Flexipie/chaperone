@@ -2,7 +2,7 @@
 
 Issue [#36](https://github.com/Flexipie/harness/issues/36). Where v0 (milestone 1) is slow or heavy, measured
 against the budgets in [R14](../research/r14-engineering-standards.md#performance-budgets), before the harness lanes
-switch onto Seamlane.
+switch onto Chaperone.
 
 **Short answer:** every R14 product budget that v0 can be measured against passes, most with a wide margin. One
 command misses M1 at scale (`work board` past about 150 open items). One read was cheap to fix and is fixed here
@@ -16,7 +16,7 @@ command misses M1 at scale (`work board` past about 150 open items). One read wa
   invocation of [`measure.py`](measure.py) against copies of one seeded snapshot, so they read the same data.
 - Startup and per-command latency: R14's method, 8 unmeasured spawns then 100 samples, wall time around the spawn
   from Python. Every sample must exit 0, so a refusal is never timed as a success. `/usr/bin/true` on the same harness
-  is the floor (about 2 ms of the numbers below is spawn cost, not Seamlane).
+  is the floor (about 2 ms of the numbers below is spawn cost, not Chaperone).
 - Each write sample is a real write: claims take a fresh queued item each, handoffs and check records go to items
   claimed before the loop, check records come from a second session (a holder cannot record its own checks).
 - Empty ledger: freshly migrated, holding only the items each command needs. Realistic ledger: seeded through the CLI
@@ -24,20 +24,22 @@ command misses M1 at scale (`work board` past about 150 open items). One read wa
   plus 3 deep lanes with 300 check records each. Only the newest 5 specs stay open (50 items); the rest are cancelled,
   as finished work leaves the board. 19,156 events, 9.3 MiB. The hot-command setup adds 216 open items, so the
   realistic runs see 269 open.
-- E1 and E2 are timed in the process, around the loop only: `crates/seamlane-core/tests/budgets.rs` (new, ignored
+- E1 and E2 are timed in the process, around the loop only: `crates/chaperone-core/tests/budgets.rs` (new, ignored
   by default) and the existing `fifty_writers` in `tests/concurrency.rs`, both in release.
 - Safety: every run lives in a fresh temp dir. Every call passes `--db` there, and the child environment holds only
   `PATH`, `HOME` and `XDG_DATA_HOME` (pointing at the temp dir) and the two `DAISY_*` actor variables, so a missed
-  `--db` cannot reach a real ledger. The script checks that `~/Library/Application Support/seamlane` and its ledger files kept their modification times, also when a run aborts.
+  `--db` cannot reach a real ledger. The script checks that `~/Library/Application Support/chaperone` and its ledger files kept their modification times, also when a run aborts.
   No `daisy-cli` call.
 
 Reproduce:
 
+The first binary builds the shared ledger, so both must carry application_id "CHAP" ([ADR 0005](../decisions/0005-chaperone-name.md)): a binary from before the rename writes "SEAM", which `chaperone` refuses. Build the before-binary from a commit after the rename.
+
 ```sh
 cargo build --release --locked
-python3 -I docs/perf/measure.py <before-binary> target/release/seamlane --items 3000
-cargo test --release --locked -p seamlane-core --test budgets -- --ignored --nocapture
-cargo test --release --locked -p seamlane-core --test concurrency fifty_writers -- --nocapture
+python3 -I docs/perf/measure.py <before-binary> target/release/chaperone --items 3000
+cargo test --release --locked -p chaperone-core --test budgets -- --ignored --nocapture
+cargo test --release --locked -p chaperone-core --test concurrency fifty_writers -- --nocapture
 ```
 
 ## Against R14
@@ -118,7 +120,7 @@ no reader yet, because messages have no command in v0.
 
 ## How much each write folds
 
-The fold is incremental (`crates/seamlane-core/src/ledger/fold.rs:46`). An event is one `INSERT` into `events` plus,
+The fold is incremental (`crates/chaperone-core/src/ledger/fold.rs:46`). An event is one `INSERT` into `events` plus,
 for a lane event: one `UPDATE lanes` per changed column, one for the lease when the kind leases, one for the pipeline
 stamp at the first claim, one for the phase, and one for `head_event_id`/`updated_at`; a `check.finished` upserts one
 `gate_results` row and inserts its findings. A claim is about 6 statements. Nothing rebuilds: `Ledger::rebuild`
@@ -136,11 +138,11 @@ the product.
 | --- | --- |
 | SQLite (C, bundled) | 50% |
 | generic Rust (monomorphised, not attributable to one crate) | 14% |
-| `seamlane_core` | 9% |
+| `chaperone_core` | 9% |
 | `core`, `std`, `alloc` | 10% |
 | `clap_builder` | 5% |
 | `gimli` (std's backtrace symbolizer) | 3.5% |
-| `seamlane` (the CLI) | 2.6% |
+| `chaperone` (the CLI) | 2.6% |
 | `serde_json`, `toml`, `serde`, `rusqlite`, `sha2` | 5% together |
 
 R6's 2.1 MiB probe had no clap, serde or toml. Nothing here is close to the budget, so no size work is proposed.
@@ -171,7 +173,7 @@ Cost is measured on this machine; gain is expected, not yet measured, except whe
 | # | Finding | Measured cost | Expected gain | Action |
 | --- | --- | --- | --- | --- |
 | 0 | `spec get --key` read every spec's full row (two lane counts and an event read each) to find the slice, and scanned every lane once per sibling (`spec/slice.rs`) | p50 9.8 ms, p99 10.9 ms at 300 specs and 3,000 lanes (key at spec 150 of 300), growing linearly with both | 3.1 ms p50 | **Fixed here**: `spec_for_key` reads only the head body; `work_for_key` asks for the lane linked to the spec through `lanes_slot` first and scans only when none is. Output byte-identical to before on linked, unlinked, newer-unlinked and different-case keys, and the old and new lane queries agree on 6,000 random cases (lane tables with null spec ids, other sources and case variants). Now 6.7 / 8.1 ms. |
-| 1 | `work board` holds every open item as structs, then as a `serde_json::Value` tree, then as one pretty string, about 27 KiB of RSS per open item. `work ready` builds the whole board to answer for one item (`crates/seamlane/src/work.rs:166`) | 11.7 MiB RSS and 9 to 10 ms at 269 open items (**M1 miss**); 89 MiB and 76 ms at 3,000 open | under 8 MiB at any realistic count; `ready` O(1) | Follow-up: serialize straight from the rows to stdout, and give `ready` a one-item read. |
+| 1 | `work board` holds every open item as structs, then as a `serde_json::Value` tree, then as one pretty string, about 27 KiB of RSS per open item. `work ready` builds the whole board to answer for one item (`crates/chaperone-cli/src/work.rs:166`) | 11.7 MiB RSS and 9 to 10 ms at 269 open items (**M1 miss**); 89 MiB and 76 ms at 3,000 open | under 8 MiB at any realistic count; `ready` O(1) | Follow-up: serialize straight from the rows to stdout, and give `ready` a one-item read. |
 | 2 | Under contention the write waits in SQLite's default busy handler, which sleeps in growing steps up to 100 ms, so a writer can sleep long after the lock is free | 50 CLI writers: per call p99 about 170 ms, max about 290 ms, for 0.07 ms of work | p99 to tens of ms, likely | Follow-up: measure a short fixed-sleep `busy_handler` (rusqlite has it, no new dependency) against the default, keeping the 5 s limit. |
 | 3 | `spec get --key` without `--spec` still parses every spec body, newest first, until one has the key | about 3 ms with the key at spec 150 of 300 newest-first, about twice that for the oldest spec or a missing key; linear | constant time | Follow-up: a slice-key lookup table (schema change, a one-way door, so not in this PR). |
 | 4 | `COLLATE NOCASE` lookups on `specs.external_key` and `lanes.source_id` (no NOCASE index) scan the table, as does the sibling fallback for unlinked slices | 0.25 ms per scan at 3,000 lanes, linear | constant time | Follow-up: NOCASE indexes or a stored normalized key (schema change). Dropping `NOCASE` would break the any-case match and the duplicate-spec refusal, so it is not an option. |

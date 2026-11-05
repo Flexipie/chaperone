@@ -1,0 +1,24 @@
+Leased work records. Claim an item before working on it, heartbeat while you hold it, hand it off when you stop
+
+Usage: chaperone work [OPTIONS] <COMMAND>
+
+Commands:
+  create     Create a work item (queued). Idempotent when --idempotency-key is passed: a repeat returns the existing item and writes nothing
+  claim      Take (or renew, or take over) the lease on an item. Needs an agent and a session
+  heartbeat  Extend your lease by its own length. Writes no event
+  update     Change status or fields. --expected-updated-at is the item's current updated_at; a stale one is refused as a conflict (exit 4)
+  release    Give the item up: clears the holder; claimed goes back to queued
+  cancel     Cancel an item (a status, not a delete)
+  handoff    Record a structured handoff (JSON: summary, status, changed_files, verification, smoke, blockers, open_questions, next_action, commit, pull_request, brief). Its status moves the item; a terminal status clears the holder. A ready or done handoff runs the handoff gate
+  handoffs   Every handoff on an item, oldest first
+  events     The item's ledger, oldest first
+  ready      Override whether the item is ready: --yes, --no, or --clear to go back to its handoffs. Refused from any session that has held it
+  get        One item with its lease state
+  board      Every open item with its newest handoff and whether it is ready: the owner's override, else status review and a ready handoff. Every item is under `other`; specs are not grouped yet
+  list       List items, newest activity first; done and cancelled hidden unless --all
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

@@ -1,6 +1,6 @@
 # R14: Engineering standards
 
-> Amended by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md): the `reader_contract` axis and daisy reading SQL views are dropped. [CONTRIBUTING.md](../../CONTRIBUTING.md) "Versions" has the four axes.
+> Amended by [ADR 0003](../decisions/0003-chaperone-replaces-daisy.md): the `reader_contract` axis and daisy reading SQL views are dropped. [CONTRIBUTING.md](../../CONTRIBUTING.md) "Versions" has the four axes.
 
 Status: recommendation, 2026-11-02. The bar the first code PR meets. The contributor-facing copy is [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
@@ -70,7 +70,7 @@ R6 on this machine, 2026-11-02, release, thin LTO: warm ping p50 **3.9 ms**, ope
 
 | Id | What | Product (reference machine) | CI ceiling (GitHub-hosted) |
 | --- | --- | --- | --- |
-| S1 | `seamlane --version`, warm | p50 ≤ **10 ms**, p99 ≤ **25 ms** | p50 ≤ **100 ms** |
+| S1 | `chaperone --version`, warm | p50 ≤ **10 ms**, p99 ≤ **25 ms** | p50 ≤ **100 ms** |
 | S2 | Open the WAL file, `SELECT 1`, exit | p50 ≤ **15 ms**, p99 ≤ **30 ms** | p50 ≤ **150 ms** |
 | E1 | One writer, `synchronous=FULL`, `BEGIN IMMEDIATE`, one event + fold, 256-byte payload | ≥ **2,000 commits/s** (mean ≤ **0.5 ms**) | 1,000 commits finish in ≤ **10 s** |
 | E2 | 50 processes, 40 events, same shape | ≤ **5 s**, and the correctness checks in the concurrency row | ≤ **15 s**, same correctness |
@@ -107,20 +107,20 @@ CHANGELOG.md               first release creates it; every release updates it
 LICENSE-MIT                first commit that contains code (ADR 0001)
 LICENSE-APACHE
 CONTRIBUTING.md
-crates/seamlane-core/      ledger, engine, migrations. No clap, no PTY, no home directory.
-crates/seamlane/           the `seamlane` binary. CLI, supervise, in-tree adapters.
-crates/seamlane-fake/      scripted agent. publish = false. Not installed by `cargo install`.
+crates/chaperone-core/      ledger, engine, migrations. No clap, no PTY, no home directory.
+crates/chaperone-cli/       the `chaperone` binary. CLI, supervise, in-tree adapters.
+crates/chaperone-fake/      scripted agent. publish = false. Not installed by `cargo install`.
 pipelines/                 v17.toml and later ids. Loaded from disk.
 docs/                      vision, research, decisions, events.md, the CLI contract
 .github/workflows/ci.yml
 .config/nextest.toml
 ```
 
-`seamlane-core` is the library jj splits out so the UI is not inside the engine ([jj architecture](https://docs.jj-vcs.dev/latest/technical/architecture/): library crate does not talk to the terminal). Daisy reads SQL views, not this crate ([R5](r5-state-and-storage.md)), so the crate is `publish = false` until a later decision says otherwise. [ADR 0001](../decisions/0001-name-license-oss-posture.md) already forbids an empty crates.io placeholder.
+`chaperone-core` is the library jj splits out so the UI is not inside the engine ([jj architecture](https://docs.jj-vcs.dev/latest/technical/architecture/): library crate does not talk to the terminal). Daisy reads SQL views, not this crate ([R5](r5-state-and-storage.md)), so the crate is `publish = false` until a later decision says otherwise. [ADR 0001](../decisions/0001-name-license-oss-posture.md) already forbids an empty crates.io placeholder.
 
 `pipelines/` stays data. R7's reason for TOML is that two versions load in one process and a diff names the gate. Compiling the document into the binary would make the version the version of the binary.
 
-The fake is a workspace binary so `cargo install --path crates/seamlane` does not ship it. Lane tests spawn it the way a lane spawns Claude: `seamlane` takes the agent argv. That flag is the R4 spawn contract, and the fake is one argv. There is no test-only backdoor beside it.
+The fake is a workspace binary so `cargo install --path crates/chaperone-cli` does not ship it. Lane tests spawn it the way a lane spawns Claude: `chaperone` takes the agent argv. That flag is the R4 spawn contract, and the fake is one argv. There is no test-only backdoor beside it.
 
 No `xtask` crate until a second custom command exists. The perf checks are a `cargo test --release --test budgets` binary and a gungraun bench.
 
@@ -128,7 +128,7 @@ Toolchain pin: **Rust 1.95**, the compiler R6 measured, in `rust-toolchain.toml`
 
 ## Fake agent
 
-`seamlane-fake --script PATH` reads a script and speaks the R4 lifecycle on stdout: one JSON object per line, `session.started`, `turn.finished`, `session.exited`, plus the optional `usage.reported` when the script includes it. A script step may name an MCP tool call (`lane.read`, `lane.message`, `evidence.attach`). The process has no network and does not read the clock. Timestamps in the events are the timestamps in the script.
+`chaperone-fake --script PATH` reads a script and speaks the R4 lifecycle on stdout: one JSON object per line, `session.started`, `turn.finished`, `session.exited`, plus the optional `usage.reported` when the script includes it. A script step may name an MCP tool call (`lane.read`, `lane.message`, `evidence.attach`). The process has no network and does not read the clock. Timestamps in the events are the timestamps in the script.
 
 R8: a test lane forks this process and skips the attach socket. The PTY smoke is a later unix-only test, outside the 3-minute job. The engine fixture for `verdict_on_head` stays in-process and does not start the fake. R7 already said that refusal needs no CLI.
 
@@ -158,7 +158,7 @@ Required on every pull request. `fail-fast` is off so a fmt failure does not hid
 | `clippy` | `ubuntu-latest` | `cargo clippy --workspace --all-targets -- -D warnings` | Yes |
 | `test` | `ubuntu-latest`, `macos-latest` | `cargo nextest run --workspace` | Yes. Timeout 10 min. Expected under 3 min. |
 | `coverage` | `ubuntu-latest` | llvm-cov, fail on a missed branch in `write` and `eval` | Yes |
-| `doc` | `ubuntu-latest` | `RUSTDOCFLAGS="-D warnings" cargo doc -p seamlane-core --no-deps` | Yes |
+| `doc` | `ubuntu-latest` | `RUSTDOCFLAGS="-D warnings" cargo doc -p chaperone-core --no-deps` | Yes |
 | `deny` | `ubuntu-latest` | `cargo deny check` | Yes |
 | `budgets` | `ubuntu-latest`, `macos-latest` | release build, the CI column of the budget table | Yes. Timeout 20 min. |
 | `regress` | `ubuntu-latest` | gungraun, I1, ≤ +10% instructions vs the base branch | Yes |
@@ -199,8 +199,8 @@ Public interfaces are documented in the same PR that adds them ([VISION](../VISI
 
 - `pipelines/*.toml` is the pipeline. The engine loads that file. A second copy compiled into the binary fails the "two ids, one process" unit test.
 - `docs/events.md` lists every event kind. A unit test parses the kind column and compares it to the enum.
-- `cargo doc -D warnings` covers public items in `seamlane-core`.
-- CLI help is the CLI doc. One test runs `seamlane --help` and compares it to a committed snapshot, so a flag change is visible in review.
+- `cargo doc -D warnings` covers public items in `chaperone-core`.
+- CLI help is the CLI doc. One test runs `chaperone --help` and compares it to a committed snapshot, so a flag change is visible in review.
 
 Decision records stay in `docs/decisions/`. Research notes stay the evidence. This note is the evidence for the bar. An ADR can cite it when the bar is accepted. The first code PR can follow `CONTRIBUTING.md` without waiting on that ADR.
 

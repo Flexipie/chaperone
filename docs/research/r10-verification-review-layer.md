@@ -1,6 +1,6 @@
 # R10: Verification and review layer
 
-> Amended by [ADR 0003](../decisions/0003-seamlane-replaces-daisy.md): daisy does not read the ledger, so it does not claim `check.requested` from it. Seamlane records daisy jobs with `reviews record` ([cli-contract.md](../cli-contract.md)).
+> Amended by [ADR 0003](../decisions/0003-chaperone-replaces-daisy.md): daisy does not read the ledger, so it does not claim `check.requested` from it. Chaperone records daisy jobs with `reviews record` ([cli-contract.md](../cli-contract.md)).
 
 Status: draft, 2026-11-02. Producers, evidence, and the reviewer home for the v17 gates in [r7-process-engine.md](r7-process-engine.md). The engine still does not call a model.
 

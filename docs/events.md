@@ -9,7 +9,7 @@ This file is the source the `EventKind` enum is checked against (the drift test,
 The CLI that writes these events is [cli-contract.md](cli-contract.md). Evidence:
 [R5](research/r5-state-and-storage.md) (log and fold), [R7](research/r7-process-engine.md)
 (engine), [R10](research/r10-verification-review-layer.md) (checks).
-[ADR 0003](decisions/0003-seamlane-replaces-daisy.md) is why daisy reads none of this.
+[ADR 0003](decisions/0003-chaperone-replaces-daisy.md) is why daisy reads none of this.
 
 ## Envelope
 
@@ -21,7 +21,7 @@ One row in `events`. The log is the truth. Every other table is a fold of it. Th
 | `kind` | text | One of the M1 kinds below. A reserved kind is refused. |
 | `lane_id` | integer, nullable | Null for spec events. |
 | `spec_id` | integer, nullable | Null for a lane created without `--spec`. |
-| `actor` | `{agent, session, tool}` | From `--agent` / `--session` (or `DAISY_AGENT` / `DAISY_SESSION`). `tool` is always `seamlane`. |
+| `actor` | `{agent, session, tool}` | From `--agent` / `--session` (or `DAISY_AGENT` / `DAISY_SESSION`). `tool` is always `chaperone`. |
 | `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (by key and kind, never the payload). A key already used by another kind is `invalid_input`. |
 | `at` | RFC 3339 UTC, ms | Passed in, or for a CLI command read once the write lock is held, so an event is not timed before one that committed while it waited (as long as the wall clock does not step back). |
 | `payload` | JSON object | Typed per kind, below. |
@@ -220,7 +220,7 @@ Named so nothing else takes the name. The write refuses these kinds in M1.
 | Kind | From | Why not M1 |
 | --- | --- | --- |
 | `session.started`, `turn.finished`, `session.exited`, `tool.started`, `tool.finished`, `usage.reported`, `permission.denied` | [R4](research/r4-agent-cli-integration.md) v0 lifecycle | No adapter in M1. Tokens still come from transcripts. |
-| `agent.stalled`, `agent.blocked`, `agent.killed` | [R8](research/r8-process-terminal-runtime.md) | Needs `seamlane supervise`. |
+| `agent.stalled`, `agent.blocked`, `agent.killed` | [R8](research/r8-process-terminal-runtime.md) | Needs `chaperone supervise`. |
 | `reservation.written`, `intent.granted`, `intent.denied`, `path.released`, `seam.published`, `seam.acked`, `seam.rejected`, `message.sent`, `stack.rebased`, `stack.layer_opened` | [R9](research/r9-coordination-between-lanes.md) | Coordination is Phase 3. |
 | `evidence.recorded`, `escape.judged`, `price.published`, `pr.merged`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |
 | `question.opened` | [R12](research/r12-interfaces-and-attention.md) | Attention is later. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`, `question.overlap`) are payload values, not kinds. |

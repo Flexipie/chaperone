@@ -1,10 +1,10 @@
 # CLI contract
 
 2026-11-03. Flags follow the binary `0.y.z` axis and the payloads follow the shared
-contract number ([CONTRIBUTING.md](../CONTRIBUTING.md) "Versions"). The `seamlane` binary keeps the argv, the `{ok, data, meta}`
+contract number ([CONTRIBUTING.md](../CONTRIBUTING.md) "Versions"). The `chaperone` binary keeps the argv, the `{ok, data, meta}`
 envelope and the exit codes of `daisy-cli` 0.2.0 (contract 1), so a skill moves from
-daisy to Seamlane by changing the binary path. That switch happens after the first demo
-([ADR 0003](decisions/0003-seamlane-replaces-daisy.md)). The events each command writes
+daisy to Chaperone by changing the binary path. That switch happens after the first demo
+([ADR 0003](decisions/0003-chaperone-replaces-daisy.md)). The events each command writes
 are in [events.md](events.md).
 
 ## Global flags and actor
@@ -25,7 +25,7 @@ The env names stay `DAISY_*` because `spawn` and the skills already export them.
 - **Success:** one `{ok: true, data, meta}` on stdout.
 - **Failure:** one `{ok: false, error: {code, message, retryable, details}, meta}` on stderr.
 - **`meta`:** `{cli_version, schema_version, source_freshness}`. `schema_version` is the
-  ledger's `PRAGMA user_version`. `source_freshness` is always `null`, because Seamlane
+  ledger's `PRAGMA user_version`. `source_freshness` is always `null`, because Chaperone
   has no mirrors.
 
 `text` output and `--help` are for people and are not part of the contract. `--help`
@@ -38,7 +38,7 @@ output has snapshot tests.
 | 0 | `ok` | |
 | 1 | `error` | Every error code without its own exit. |
 | 2 | `usage` | Bad argv. |
-| 3 | `schema_mismatch` | The ledger's `user_version` is not this binary's, or its `application_id` is not Seamlane's, or it is not SQLite at all. The file is left untouched. |
+| 3 | `schema_mismatch` | The ledger's `user_version` is not this binary's, or its `application_id` is not Chaperone's, or it is not SQLite at all. The file is left untouched. |
 | 4 | `conflict` | A CAS miss, a held lease, or a stale `--expected-version`. |
 | 5 | `runtime_unavailable` | Only passed through from `daisy-cli reviews get`. |
 
@@ -52,7 +52,7 @@ Daisy's ten codes, plus two from the engine.
 | `invalid_input` | 1 | | Validation, caps, and the check session rule. Writes nothing. |
 | `busy` | 1 | | `retryable: true`. `SQLITE_BUSY` after the 5 s busy timeout. |
 | `conflict` | 4 | `entity` (or `by`, `until` for a held lease) | Pass `--takeover` for a lease. |
-| `schema_mismatch` | 3 | `found`, `supported`, `hint` | Newer file: refused, upgrade the binary. Older or missing file: `hint` says run `seamlane migrate`. Foreign file (wrong `application_id`): refused. |
+| `schema_mismatch` | 3 | `found`, `supported`, `hint` | Newer file: refused, upgrade the binary. Older or missing file: `hint` says run `chaperone migrate`. Foreign file (wrong `application_id`): refused. |
 | `usage` | 2 | `kind`, `help` | |
 | `db` | 1 | | |
 | `internal` | 1 | | |
@@ -117,9 +117,9 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `jobs get` | `<job id>` | read |
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 
-`work create --kind` and `--pr-flow` are Seamlane's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
+`work create --kind` and `--pr-flow` are Chaperone's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
 
-`seamlane migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing or empty file. It refuses a non-empty file whose `application_id` is not Seamlane's, a file that is not SQLite, and a version-0 file that already has tables, so it never applies 0001 over someone else's database. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
+`chaperone migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing or empty file. It refuses a non-empty file whose `application_id` is not Chaperone's, a file that is not SQLite, and a version-0 file that already has tables, so it never applies 0001 over someone else's database. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
 
 `work handoff` reads the JSON from `<file>`, or from stdin when the file is omitted or `-`. A handoff with `ready: true` or to `done` runs the `handoff` gate (commands and transitions below). The write itself refuses a `lane.handed_off` that says ready and any event but `phase.entered` that moves a lane to `done`, so no path skips the gate.
 
@@ -138,7 +138,7 @@ lane (events.md, producer). `--head` is 7 to
 check. `--findings <n>` is required for a `plan_check` or `quality_gate` that ran and
 refused elsewhere. It prints `{event_id, work_id, kind, replayed, at, payload}`.
 
-`reviews record` reads `daisy-cli reviews get <job>`. That is Seamlane's only call into
+`reviews record` reads `daisy-cli reviews get <job>`. That is Chaperone's only call into
 daisy. A job that is not done (`data.done` false, status `queued` or `running`) appends
 `check.requested`. A done job with status `reviewed` or `posted` appends `check.finished`
 `ran` with `producer {kind: daisy_worker, job}`. A done job with status `failed` or
@@ -154,7 +154,7 @@ answer from what was recorded, in daisy's shape (the job's `check.finished`, els
 `intent_note`, `verdict_reason`, `error`, `report_path`, `worktree_path`) is not stored and
 reads as null, and so does what only daisy knows in `jobs get` (cost, tokens, `job_dir`,
 `round`). In `jobs get`, `work_id` is the lane the job is recorded on, `started_at` is when
-Seamlane first recorded the job, and `finished_at` is when it recorded the finish (null
+Chaperone first recorded the job, and `finished_at` is when it recorded the finish (null
 before), not daisy's times.
 Findings come from the stored payload, and each one's `outcome` is its row's `fixed` or
 `answered`, else null. `reviews record` prints the `reviews get` answer.
@@ -167,11 +167,11 @@ A job's repo, branch or PR is not the lane's when its `repo` is not the lane's `
 `branch` is not the lane's `branch`, or a PR job's `pr_ref` is not the lane's `pr_ref`. Each is
 checked only where the lane has it; `repo` and `pr_ref` ignore case. Daisy
 is found at `/Applications/daisy.app/Contents/MacOS/daisy-cli`
-([R15](research/r15-migration.md)), or at `SEAMLANE_DAISY_CLI`, and given 30 s. Its exit
+([R15](research/r15-migration.md)), or at `CHAPERONE_DAISY_CLI`, and given 30 s. Its exit
 5 (`runtime_unavailable`) and its `not_found` pass through. Any other failure, a timeout or output that is not daisy's envelope
 is `internal`, with what daisy said in `details`, so daisy's exit codes never take
-Seamlane's meanings.
-`SEAMLANE_DAISY_CLI` is trusted like `--session` (an honor system until adapters): whoever
+Chaperone's meanings.
+`CHAPERONE_DAISY_CLI` is trusted like `--session` (an honor system until adapters): whoever
 runs `reviews record` can point it at any program.
 
 ## Commands and transitions

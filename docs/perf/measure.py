@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measures a seamlane release binary the R14 way, for docs/perf/v0-review.md.
+"""Measures a chaperone release binary the R14 way, for docs/perf/v0-review.md.
 
     python3 -I docs/perf/measure.py <before-binary> <after-binary> [--items 3000]
 
@@ -254,7 +254,7 @@ def deepen(b):
 
 
 def measure(binary, snapshot, items, deep):
-    root = tempfile.mkdtemp(prefix="seamlane-perf-")
+    root = tempfile.mkdtemp(prefix="chaperone-perf-")
     try:
         b = Bench(binary, root)
         print(f"\n## {b.bin}\n\nbinary {os.path.getsize(b.bin) / 2**20:.2f} MiB")
@@ -306,10 +306,10 @@ def main():
     ap.add_argument("binaries", nargs="+", help="the first one seeds the shared snapshot")
     ap.add_argument("--items", type=int, default=3000)
     a = ap.parse_args()
-    real = os.path.expanduser("~/Library/Application Support/seamlane")
+    real = os.path.expanduser("~/Library/Application Support/chaperone")
     real_before = stamp(real)
     print(f"python sqlite {sqlite3.sqlite_version} (query plans only)")
-    seed_root = tempfile.mkdtemp(prefix="seamlane-seed-")
+    seed_root = tempfile.mkdtemp(prefix="chaperone-seed-")
     try:
         # One seeded snapshot, checkpointed, so every binary reads the same data.
         s = Bench(a.binaries[0], seed_root)

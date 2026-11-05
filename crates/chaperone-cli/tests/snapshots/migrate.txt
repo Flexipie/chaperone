@@ -1,0 +1,8 @@
+Create the ledger, or migrate it to this binary's version after a backup. Refuses a file that is not a Chaperone ledger
+
+Usage: chaperone migrate [OPTIONS]
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

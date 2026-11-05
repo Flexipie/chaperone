@@ -4,9 +4,9 @@ Status: recommendation, 2026-11-02. Decides who owns the agent process. Evidence
 
 ## Recommendation
 
-**The harness supervisor is the parent of the agent.** One subcommand of the same binary (`seamlane supervise`) creates the git worktree, assigns the lane a port block, opens the PTY, and execs the agent CLI. It watches that child. It is the only component that restarts it.
+**The harness supervisor is the parent of the agent.** One subcommand of the same binary (`chaperone supervise`) creates the git worktree, assigns the lane a port block, opens the PTY, and execs the agent CLI. It watches that child. It is the only component that restarts it.
 
-herdr, tmux, and zellij are viewers. A person who wants a terminal runs `seamlane attach <lane>` in a pane. Closing the viewer disconnects the keyboard. The child keeps running, because the supervisor holds the PTY master.
+herdr, tmux, and zellij are viewers. A person who wants a terminal runs `chaperone attach <lane>` in a pane. Closing the viewer disconnects the keyboard. The child keeps running, because the supervisor holds the PTY master.
 
 | | Who |
 | --- | --- |
@@ -56,7 +56,7 @@ herdr is the right place to type on this machine, and the wrong parent for a lan
 
 It already does the hard UI work: PTY, scrollback, splits, a socket, agent hooks for Claude and Codex, `agent attach`. [VISION.md](../VISION.md) leaves the conversation in the agent's own terminal and schedules "owning the terminal and worktree runtime (or integrating deeply with herdr)" as milestone 6, after the ledger and the gates. Deep integration that keeps herdr as the parent keeps three owners: herdr for the process, daisy (then the harness) for the lease, `/orchestrate` for "is it dead". A lane stalls when any one of them is the wrong one. The 300 second poll and the screen read are the waiting pattern bet 6 is trying to leave. herdr's own detector, in the v0.6.8 tree, matches the bottom of the pane against per-CLI patterns and then lets hooks override. That is a sidebar light. A gate needs `wait` and `session.exited`.
 
-The end state on a machine that already runs herdr: the pane's command is `seamlane attach <lane>`. herdr keeps the keyboard. The harness keeps the child. No Cargo dependency on herdr. The socket protocol we speak is our own.
+The end state on a machine that already runs herdr: the pane's command is `chaperone attach <lane>`. herdr keeps the keyboard. The harness keeps the child. No Cargo dependency on herdr. The socket protocol we speak is our own.
 
 ### tmux and zellij as viewers, on the same terms
 
@@ -97,7 +97,7 @@ Default terminal mode is a PTY, because the lanes people open today are interact
 
 Two lanes in one repo both start the app's default server. `spawn` does not pass a port, and herdr 0.9.5's agent CLI does not allocate one. The collision is accidental, and the fix is assignment.
 
-The supervisor keeps a range on the repo profile (starting suggestion: base 20000, width 10, range through 29999). `lane start` takes the next free block inside one `BEGIN IMMEDIATE`, the same transaction style as [R5](r5-state-and-storage.md), after checking that the first port of the block accepts a bind on `127.0.0.1`. The lane row stores `port_base` and `port_count`. The child environment gets `SEAMLANE_PORT` and `SEAMLANE_PORT_LAST`. Setup scripts and the lane brief read those. Releasing the block is part of the lane finishing or being cancelled.
+The supervisor keeps a range on the repo profile (starting suggestion: base 20000, width 10, range through 29999). `lane start` takes the next free block inside one `BEGIN IMMEDIATE`, the same transaction style as [R5](r5-state-and-storage.md), after checking that the first port of the block accepts a bind on `127.0.0.1`. The lane row stores `port_base` and `port_count`. The child environment gets `CHAPERONE_PORT` and `CHAPERONE_PORT_LAST`. Setup scripts and the lane brief read those. Releasing the block is part of the lane finishing or being cancelled.
 
 That stops two honest lanes from both grabbing 3000. A process can still bind something else. Enforcing the block is a sandbox feature, and it is Linux-only in any practical way:
 

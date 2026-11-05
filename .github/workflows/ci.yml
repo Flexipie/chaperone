@@ -57,8 +57,8 @@ jobs:
     timeout-minutes: 15
     env:
       NIGHTLY: nightly-2026-10-20
-      GATED: crates/seamlane-core/src/pipeline/eval.rs
-      LEDGER_GATED: crates/seamlane-core/src/ledger/write.rs crates/seamlane-core/src/ledger/fold.rs crates/seamlane-core/src/ledger/redact.rs
+      GATED: crates/chaperone-core/src/pipeline/eval.rs
+      LEDGER_GATED: crates/chaperone-core/src/ledger/write.rs crates/chaperone-core/src/ledger/fold.rs crates/chaperone-core/src/ledger/redact.rs
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
@@ -68,7 +68,7 @@ jobs:
           tool: cargo-llvm-cov,nextest
       # Crash and concurrency tests gate nothing here, and instrumentation
       # eats the 50 writers' headroom under busy_timeout.
-      - run: cargo +"$NIGHTLY" llvm-cov nextest -p seamlane-core --locked --branch --json --output-path cov.json -E 'not (binary(crash) | binary(concurrency))'
+      - run: cargo +"$NIGHTLY" llvm-cov nextest -p chaperone-core --locked --branch --json --output-path cov.json -E 'not (binary(crash) | binary(concurrency))'
       - name: no missed branch or region in a gated file
         run: |
           for f in $GATED; do
@@ -84,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc -p seamlane-core --no-deps --locked
+      - run: cargo doc -p chaperone-core --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
 

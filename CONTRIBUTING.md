@@ -7,7 +7,7 @@ every PR.
 
 ## License
 
-Seamlane is dual-licensed under MIT and Apache-2.0 (`MIT OR Apache-2.0`).
+Chaperone is dual-licensed under MIT and Apache-2.0 (`MIT OR Apache-2.0`).
 By contributing, you agree that your contribution is available under both
 licenses. The texts are in `LICENSE-MIT` and `LICENSE-APACHE`. See
 [ADR 0001](docs/decisions/0001-name-license-oss-posture.md).
@@ -37,7 +37,7 @@ builds only.
 | The write function or the predicate evaluator | Branch coverage of that module stays at 100%. The rebuild property still passes. |
 | A ledger write path | The crash tests (`SIGKILL` before commit, `SIGKILL` in the commit loop) and the 50-process concurrency test, against that write function. |
 | A gate or a pipeline document | A unit pass and a unit fail for the predicate. A validation or CAS refusal writes nothing; a gate denial appends one `gate.denied` and leaves the lane where it was. |
-| Spawn, supervise, or the agent argv | A script under the fake agent (`crates/seamlane-fake`) that exits cleanly, and the kill test that records `session.exited` once and does not respawn. |
+| Spawn, supervise, or the agent argv | A script under the fake agent (`crates/chaperone-fake`) that exits cleanly, and the kill test that records `session.exited` once and does not respawn. |
 | An event kind | `docs/events.md` and the enum updated together. The drift test passes. |
 | A CLI flag | The `--help` snapshot updated in the same commit. |
 | A performance budget | The table in the R14 note updated, with the measurement in the PR. |
@@ -74,7 +74,7 @@ Required on every pull request. A red job is a failed PR. `coverage`,
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `test` | `cargo nextest run --workspace` on Ubuntu and macOS (`test (linux)`, `test (macos)`). Timeout 10 min. |
 | `coverage` | llvm-cov. A missed branch or region in `eval`, ledger `write` or `fold` fails the job. In `write` and `fold` a region that is only a `?` is exempt: most propagate a SQLite error no test reaches without fault injection, and the rest propagate a refusal whose own check is gated. |
-| `doc` | `cargo doc -p seamlane-core --no-deps` with warnings denied. |
+| `doc` | `cargo doc -p chaperone-core --no-deps` with warnings denied. |
 | `deny` | `cargo deny check` (licenses, advisories, bans, sources). |
 | `budgets` | Release build. Coarse ceilings: `--version` p50 ≤ 100 ms, open-and-exit p50 ≤ 150 ms, 1,000 full-sync commits ≤ 10 s, follower p99 ≤ 50 ms, one-shot RSS ≤ 32 MiB. Timeout 20 min. |
 | `regress` | Linux instruction counts, ≤ +10% against the base branch, on the pipeline hash, `to_ready`, and 100 in-memory appends. |

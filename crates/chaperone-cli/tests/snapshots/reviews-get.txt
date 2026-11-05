@@ -1,0 +1,13 @@
+A recorded review job in daisy's shape. Daisy's free text (summary, impact, report path) is null; read it from daisy
+
+Usage: chaperone reviews get [OPTIONS] <JOB>
+
+Arguments:
+  <JOB>  
+
+Options:
+      --db <DB>                      Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --wait                         Accepted for daisy's argv; a recorded job answers at once
+      --format <FORMAT>              Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --timeout-secs <TIMEOUT_SECS>  Accepted for daisy's argv; unused
+  -h, --help                         Print help
