@@ -2,6 +2,8 @@
 
 > Superseded in part by [ADR 0003](../decisions/0003-chaperone-replaces-daisy.md) and [events.md](../events.md): daisy does not read the ledger (no `reader_contract`). Event kinds, lane columns, nullability and folded statuses are in events.md "Folded rows".
 
+> Amended by [ADR 0006](../decisions/0006-plain-fsync-on-macos.md): on macOS `FULL` uses plain `fsync`, not `F_FULLFSYNC`, so a returned commit survives a killed process but is not promised to survive a power loss or an OS crash, and checkpoint corruption is an accepted risk.
+
 Status: draft, 2026-11-02. Storage decision for the ledger. Language and the pipeline format stay with R6 and R7. This feeds a decision record when those land.
 
 ## Recommendation
