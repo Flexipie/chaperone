@@ -3,7 +3,10 @@
 //! exit-code table and the two renderers.
 
 use std::cell::RefCell;
-use std::io::{BufWriter, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chaperone_core::cursor::Page;
 use chaperone_core::ledger::{Ledger, LedgerError, Refusal, SCHEMA_VERSION};
@@ -290,13 +293,13 @@ fn jsonl_end(meta: &Meta, page: PageMeta) -> String {
     serde_json::to_string(&json!({ "ok": true, "meta": meta })).unwrap_or_default() + "\n"
 }
 
-/// `work board` written to stdout as its rows are read, so the CLI never
-/// holds the whole board (R14 M1), in the bytes `render_ok` gives: its
-/// sorted keys. Items and meta go through a `Value`; `Envelope` and `Data`
-/// declare their fields in sorted order, so a new field goes in its sorted
-/// place. A ledger error before the first 8 KiB leaves stdout empty; after
-/// it, stdout holds a partial document and the exit code says so. A closed
-/// stdout is ignored, as `finish` ignores it.
+/// `work board` written as its rows are read, so the CLI never holds the
+/// whole board (R14 M1), in the bytes `render_ok` gives: its sorted keys.
+/// Items and meta go through a `Value`; `Envelope` and `Data` declare their
+/// fields in sorted order, so a new field goes in its sorted place. The rows
+/// go to an unlinked temp file and reach stdout only after the read ends, so
+/// a slow reader never holds the WAL snapshot and a ledger error leaves
+/// stdout empty. A closed stdout is ignored, as `finish` ignores it.
 pub fn write_board(
     ledger: &Ledger,
     now: &str,
@@ -345,7 +348,8 @@ pub fn write_board(
         },
         specs: [],
     };
-    let mut out = BufWriter::new(std::io::stdout().lock());
+    let mut out =
+        BufWriter::new(spool().map_err(|e| CliError::Internal(format!("temp file: {e}")))?);
     let written = match format {
         Format::Json => {
             let env = Envelope {
@@ -366,19 +370,33 @@ pub fn write_board(
         }),
     };
     if let Some(e) = failed.into_inner() {
-        let _ = out.into_parts();
         return Err(e.into());
     }
-    match written {
-        Err(e) if !e.is_io() => {
-            let _ = out.into_parts();
-            Err(CliError::Internal(e.to_string()))
-        }
-        _ => {
-            let _ = out.flush();
-            Ok(Outcome::Written)
-        }
-    }
+    let mut file = written
+        .map_err(std::io::Error::from)
+        .and_then(|()| out.into_inner().map_err(|e| e.into_error()))
+        .and_then(|mut f| f.seek(SeekFrom::Start(0)).map(|_| f))
+        .map_err(|e| CliError::Internal(format!("temp file: {e}")))?;
+    let _ = std::io::copy(&mut file, &mut std::io::stdout().lock());
+    Ok(Outcome::Written)
+}
+
+/// A temp file only this process can open: owner-only, and unlinked once
+/// open, so it is gone when the process exits however it exits.
+fn spool() -> std::io::Result<File> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("chaperone-{}-{nanos}", std::process::id()));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    std::fs::remove_file(&path)?;
+    Ok(file)
 }
 
 pub fn render_err(err: &CliError, meta: &Meta) -> String {
