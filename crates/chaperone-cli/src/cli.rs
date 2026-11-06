@@ -75,6 +75,7 @@ impl Cmd {
             Cmd::Work(WorkCmd::Cancel { .. }) => Some("work cancel"),
             Cmd::Work(WorkCmd::Handoff { .. }) => Some("work handoff"),
             Cmd::Work(WorkCmd::Ready { .. }) => Some("work ready"),
+            Cmd::Work(WorkCmd::Merged { .. }) => Some("work merged"),
             Cmd::Work(
                 WorkCmd::Get { .. }
                 | WorkCmd::List { .. }
@@ -275,6 +276,28 @@ pub enum WorkCmd {
     Handoffs { id: i64 },
     /// The item's ledger, oldest first
     Events { id: i64 },
+    /// Record that one of the item's PRs merged (for /merge). The
+    /// same PR again replays and writes nothing
+    Merged {
+        id: i64,
+        /// owner/repo#N, a PR the item has held
+        #[arg(long)]
+        pr: String,
+        /// The merge commit on the base
+        #[arg(long)]
+        merge_sha: String,
+        /// The PR head that was merged
+        #[arg(long)]
+        head: String,
+        /// When the forge merged it, RFC 3339 UTC with milliseconds
+        #[arg(long)]
+        merged_at: String,
+        /// git patch-id of the merged diff
+        #[arg(long)]
+        patch_id: Option<String>,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
     /// Override whether the item is ready: --yes, --no, or --clear to go
     /// back to its handoffs. Refused from any session that has held it
     #[command(group = clap::ArgGroup::new("verdict").required(true).args(["yes", "no", "clear"]))]

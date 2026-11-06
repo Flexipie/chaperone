@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::ledger::{
     Actor, Applied, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation, Payload,
-    Refusal, exists,
+    Refusal, canonical_at, exists,
 };
 use crate::pipeline::canonical_string;
 
@@ -43,6 +43,17 @@ pub struct CheckInput {
     pub findings: Option<u64>,
 }
 
+/// `work merged`'s input: what the forge says about the merge.
+#[derive(Clone, Debug, Default)]
+pub struct MergedInput {
+    pub work: i64,
+    pub pr: String,
+    pub merge_sha: String,
+    pub head: String,
+    pub merged_at: String,
+    pub patch_id: Option<String>,
+}
+
 /// What `check record` wrote, or the event a retry replayed.
 #[derive(Clone, Debug, Serialize)]
 pub struct Recorded {
@@ -68,11 +79,7 @@ impl Ledger {
             return invalid(format!("check {} is not a session check", input.check));
         };
         let head = &input.head;
-        if !(7..=40).contains(&head.len())
-            || !head
-                .bytes()
-                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
-        {
+        if !sha_ok(head) {
             return invalid(format!(
                 "--head must be 7 to 40 lowercase hex digits, got {head}"
             ));
@@ -141,19 +148,97 @@ impl Ledger {
             },
             |_, _, _| Ok(()),
         )?;
-        let replayed = matches!(applied, Applied::Replayed(_));
-        Ok(match applied {
-            Applied::Committed(e) | Applied::Replayed(e) => Ok(Recorded {
-                event_id: e.id,
-                work_id: input.work,
-                kind: e.kind.as_str(),
-                replayed,
-                at: e.at,
-                payload: e.payload,
-            }),
-            Applied::Refused(r) => Err(r),
-            Applied::Heartbeat { .. } => unreachable!("check_record writes an event"),
-        })
+        Ok(recorded(applied, input.work))
+    }
+
+    /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
+    /// `merge_sha` from head `head` at `merged_at` (the forge's time). Keyed
+    /// `merged:<lane>:<pr>`, so a retry replays. Refused for a PR the lane
+    /// never held and for one already merged on another lane.
+    pub fn work_merged(&self, actor: &Actor, input: &MergedInput) -> Checked<Recorded> {
+        let pr = input.pr.trim();
+        if !crate::work::pr_ref_ok(pr) {
+            return invalid(format!("--pr must be owner/repo#N, got {pr}"));
+        }
+        for (flag, sha) in [("--merge-sha", &input.merge_sha), ("--head", &input.head)] {
+            if !sha_ok(sha) {
+                return invalid(format!(
+                    "{flag} must be 7 to 40 lowercase hex digits, got {sha}"
+                ));
+            }
+        }
+        if let Some(p) = &input.patch_id
+            && !sha_ok(p)
+        {
+            return invalid(format!(
+                "--patch-id must be 7 to 40 lowercase hex digits, got {p}"
+            ));
+        }
+        let work = input.work;
+        let mut payload = Payload {
+            head_sha: Some(input.head.clone()),
+            ..Payload::default()
+        };
+        for (k, v) in [
+            ("pr", Some(pr)),
+            ("merge_sha", Some(input.merge_sha.as_str())),
+            ("merged_at", Some(input.merged_at.as_str())),
+            ("patch_id", input.patch_id.as_deref()),
+        ] {
+            payload.rest.insert(k.into(), json!(v));
+        }
+        let key = format!("merged:{work}:{}", pr.to_lowercase());
+        let (applied, _) = self.apply_planned(
+            actor,
+            Some(&key),
+            None,
+            false,
+            |conn, _| {
+                if !lane_exists(conn, work)? {
+                    return Ok(Err(Refusal::NotFound {
+                        entity: ENTITY,
+                        id: work,
+                    }));
+                }
+                if !canonical_at(conn, &input.merged_at)? {
+                    return invalid(format!(
+                        "--merged-at must be RFC 3339 UTC with milliseconds, got {}",
+                        input.merged_at
+                    ));
+                }
+                // Stored as the lane held it, so a reader matching merges to
+                // the lane's PRs by plain equality finds it.
+                let held: Option<String> = conn
+                    .query_row(
+                        "SELECT iif(kind = 'pr.opened', json_extract(payload_json, '$.pr'),
+                                json_extract(payload_json, '$.changed.pr_ref.to'))
+                         FROM events WHERE lane_id = ?1 AND (
+                           kind = 'pr.opened' AND lower(json_extract(payload_json, '$.pr')) = ?2
+                           OR lower(json_extract(payload_json, '$.changed.pr_ref.to')) = ?2)
+                         LIMIT 1",
+                        params![work, pr.to_lowercase()],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let Some(held) = held else {
+                    return invalid(format!("work item {work} has never held PR {pr}"));
+                };
+                let mut payload = payload;
+                payload.rest.insert("pr".into(), json!(held));
+                let elsewhere = exists(
+                    conn,
+                    "SELECT 1 FROM events WHERE kind = 'pr.merged' AND lane_id != ?1
+                       AND lower(json_extract(payload_json, '$.pr')) = ?2",
+                    params![work, pr.to_lowercase()],
+                )?;
+                if elsewhere {
+                    return invalid(format!("PR {pr} is already merged on another work item"));
+                }
+                Ok(Ok(check_event(EventKind::PrMerged, work, payload)))
+            },
+            |_, _, _| Ok(()),
+        )?;
+        Ok(recorded(applied, work))
     }
 
     /// Records daisy job `job` on lane `work` from `view`, the `data` of
@@ -424,6 +509,32 @@ fn newest_other(
         }
     }
     Ok(None)
+}
+
+/// What a one-event record command answers: the event it wrote or the one
+/// a retry replayed, else the refusal.
+fn recorded(applied: Applied, work_id: i64) -> Result<Recorded, Refusal> {
+    let replayed = matches!(applied, Applied::Replayed(_));
+    match applied {
+        Applied::Committed(e) | Applied::Replayed(e) => Ok(Recorded {
+            event_id: e.id,
+            work_id,
+            kind: e.kind.as_str(),
+            replayed,
+            at: e.at,
+            payload: e.payload,
+        }),
+        Applied::Refused(r) => Err(r),
+        Applied::Heartbeat { .. } => unreachable!("a record command writes an event"),
+    }
+}
+
+/// A commit: 7 to 40 lowercase hex digits.
+fn sha_ok(sha: &str) -> bool {
+    (7..=40).contains(&sha.len())
+        && sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
 }
 
 pub(crate) fn lane_exists(conn: &Connection, id: i64) -> Result<bool, LedgerError> {

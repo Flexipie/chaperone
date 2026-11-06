@@ -3,6 +3,7 @@
 
 use std::io::{IsTerminal, Read};
 
+use chaperone_core::checks::MergedInput;
 use chaperone_core::cursor::Page;
 use chaperone_core::ledger::{Ledger, Refusal};
 use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter};
@@ -144,6 +145,25 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
             one(ledger.work_handoff(&actor.resolve(), id, &input, None, dry(dry_run))??)
         }
         WorkCmd::Handoffs { id } => items(ledger.work_handoffs(id)?),
+        WorkCmd::Merged {
+            id,
+            pr,
+            merge_sha,
+            head,
+            merged_at,
+            patch_id,
+            actor,
+        } => {
+            let input = MergedInput {
+                work: id,
+                pr,
+                merge_sha,
+                head,
+                merged_at,
+                patch_id,
+            };
+            one(ledger.work_merged(&actor.resolve(), &input)??)
+        }
         WorkCmd::Events { id } => items(ledger.work_events(id)?),
         WorkCmd::Ready {
             id,
