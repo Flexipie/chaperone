@@ -66,6 +66,8 @@ fn each_held_pr_merges_once() {
         .unwrap()
         .unwrap();
     assert!(!first.replayed);
+    // Stored as the lane held it, whatever case /merge typed.
+    assert_eq!(first.payload.rest["pr"], "o/r#1");
     assert_eq!(first.payload.rest["merged_at"], "2026-11-05T10:00:00.000Z");
     assert_eq!(first.payload.head_sha.as_deref(), Some("1234567"));
     let again = ledger

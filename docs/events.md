@@ -150,13 +150,14 @@ a handoff, the handoff's event carries `changed.pr_ref` from null, and the fact
 `pr.opened_at` is the `at` of whichever event first set the PR.
 
 `pr.merged` names one PR the lane has held (a `pr.opened` or any `changed.pr_ref.to` on its
-events), so a lane with several PRs records each merge. It changes no column but
+events), spelled as the lane held it, so a lane with several PRs records each merge. It changes no column but
 `head_event_id`, is not a lane action in `work events`, and no gate reads it. The ready and
 handoff numbers are read from the log, never stored on it. Commits after the handoff are
 `git rev-list --count <handoff commit>..<head_sha>`, and ready to merge is `merged_at` minus
-the handoff's `at`, where the handoff is R11's first real one among the lane's handoffs with
-a lower event id (one whose `next_action` does not start with `reviewing`), or the newest
-`lane.ready_overridden` with `ready: true` before the merge, when the owner made it ready.
+the handoff's `at`. The handoff is R11's first real one (its `next_action` does not start
+with `reviewing`) among the lane's handoffs after its previous `pr.merged` and before this
+one, so a lane's second PR is measured from its own handoff. When the owner made it ready,
+it is the newest `lane.ready_overridden` with `ready: true` in that window.
 
 
 ### Usage

@@ -206,16 +206,25 @@ impl Ledger {
                         input.merged_at
                     ));
                 }
-                let held = exists(
-                    conn,
-                    "SELECT 1 FROM events WHERE lane_id = ?1 AND (
-                       kind = 'pr.opened' AND lower(json_extract(payload_json, '$.pr')) = ?2
-                       OR lower(json_extract(payload_json, '$.changed.pr_ref.to')) = ?2)",
-                    params![work, pr.to_lowercase()],
-                )?;
-                if !held {
+                // Stored as the lane held it, so a reader matching merges to
+                // the lane's PRs by plain equality finds it.
+                let held: Option<String> = conn
+                    .query_row(
+                        "SELECT iif(kind = 'pr.opened', json_extract(payload_json, '$.pr'),
+                                json_extract(payload_json, '$.changed.pr_ref.to'))
+                         FROM events WHERE lane_id = ?1 AND (
+                           kind = 'pr.opened' AND lower(json_extract(payload_json, '$.pr')) = ?2
+                           OR lower(json_extract(payload_json, '$.changed.pr_ref.to')) = ?2)
+                         LIMIT 1",
+                        params![work, pr.to_lowercase()],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let Some(held) = held else {
                     return invalid(format!("work item {work} has never held PR {pr}"));
-                }
+                };
+                let mut payload = payload;
+                payload.rest.insert("pr".into(), json!(held));
                 let elsewhere = exists(
                     conn,
                     "SELECT 1 FROM events WHERE kind = 'pr.merged' AND lane_id != ?1
