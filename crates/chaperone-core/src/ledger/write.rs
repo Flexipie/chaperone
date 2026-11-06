@@ -384,11 +384,11 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
                     "dossier.noted names no lane or spec and changes no column"
                 ));
             }
-            if !["key", "note"]
-                .iter()
-                .all(|k| p.rest.get(*k).is_some_and(|v| v.is_string()))
+            let lower = |v: &Value| v.as_str().is_some_and(|k| k == k.to_lowercase());
+            if !p.rest.get("key").is_some_and(lower)
+                || !p.rest.get("note").is_some_and(Value::is_string)
             {
-                refuse!(invalid("dossier.noted needs key and note"));
+                refuse!(invalid("dossier.noted needs a lowercased key and a note"));
             }
         }
         _ => {

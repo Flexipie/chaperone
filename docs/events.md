@@ -19,7 +19,7 @@ One row in `events`. The log is the truth. Every other table is a fold of it. Th
 | --- | --- | --- |
 | `id` | integer | Log order. Assigned by the write, never reused. |
 | `kind` | text | One of the M1 kinds below. A reserved kind is refused. |
-| `lane_id` | integer, nullable | Null for spec events. |
+| `lane_id` | integer, nullable | Null for spec events and `dossier.noted`. |
 | `spec_id` | integer, nullable | Null for a lane created without `--spec`. |
 | `actor` | `{agent, session, tool}` | From `--agent` / `--session` (or `DAISY_AGENT` / `DAISY_SESSION`). `tool` is always `chaperone`. |
 | `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (by key and kind, never the payload). A key already used by another kind is `invalid_input`. |
@@ -181,6 +181,22 @@ events with `by: owner`. R12's planned `chaperone attention answer` writes this 
 with `type: answered`. `question.opened` stays reserved for R12's question lifecycle; an
 `asked` carries the question's reason id.
 
+### Dossier
+
+| Kind | Command | Payload |
+| --- | --- | --- |
+| `dossier.noted` | `dossier note` | `key` (`normalize_key`'s form, lowercased), `note` (at most 600 characters as sent, redacted at write), `links` (at most 5 `{kind, ref}`: `issue`, `pr`, `adr`, `doc` or `commit` with an identifier of that kind, at most 300 characters, never redacted; left out when none), `supersedes` (the event id of an earlier note on the same key; left out when none) |
+
+An agent-only note on an issue key ([ADR 0007](decisions/0007-issue-dossier.md)). `lane_id` and
+`spec_id` are null, so it is no lane's event: it folds nothing, never changes a lane's
+`updated_at` and is never a gate anchor. The writer is the actor. The idempotency key is
+`dossier:` plus the sha256 of the key, the actor's agent and session, the payload as stored
+(redacted, with `redactions`, canonical) and the id of the key's newest note whose stored payload
+differs, so a retry replays, a restored note appends and another session's identical note
+appends. Notes are never edited: a correction supersedes. No fact reads `dossier.*`.
+`dossier get` finds a key's notes on the partial index `events_dossier` (migration 0004),
+`json_extract(payload_json, '$.key') WHERE kind = 'dossier.noted'`.
+
 ### Usage
 
 | Kind | Command | Payload |
@@ -300,7 +316,6 @@ Named so nothing else takes the name. The write refuses these kinds in M1.
 | `evidence.recorded`, `escape.judged`, `price.published`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |
 | `question.opened` | [R12](research/r12-interfaces-and-attention.md) | R12's question lifecycle is later; M1 records a question as `attention.recorded` with `type: asked`. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`, `question.overlap`) are payload values, not kinds. |
 | `human.merge_yes` | [R10](research/r10-verification-review-layer.md) | Needs a user-attributed adapter. M1's done is the `handoff` transition. |
-| `dossier.noted` | [ADR 0007](decisions/0007-issue-dossier.md) | Accepted; the code waits for #53's key indexes. |
 
 Reserved `check.finished` values. No M1 command produces them, so they are not
 accepted yet:

@@ -10,13 +10,14 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::checks::newest_other;
 use crate::ledger::{
     Actor, Applied, Checked, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal, exists,
     redact_payload,
 };
 use crate::pipeline::canonical_string;
 use crate::spec::parse::{Decision, parse_decisions, parse_spec_sections};
-use crate::spec::slice::spec_for_key;
+use crate::spec::slice::{KEY_LANES, section_for, spec_for_key};
 use crate::spec::{Spec, normalize_key, read as read_spec};
 use crate::work::{HandoffInput, IS_HANDOFF, SPEC_BY_KEY, pr_ref_ok};
 
@@ -32,20 +33,16 @@ const HANDOFF_DECISIONS: usize = 5;
 const SPEC_DECISIONS: usize = 20;
 const FILES: usize = 100;
 const NOTES: usize = 20;
-/// Daisy's `context task` budget, on the serialized answer. Bytes, so the
-/// 48,000 characters ADR 0007 names hold too.
+/// Daisy's `context task` budget, on the answer as the CLI prints it
+/// (the envelope, pretty). Bytes, so the 48,000 characters ADR 0007 names
+/// hold too.
 const ANSWER_BYTES: usize = 48_000;
+/// What the envelope's `meta` takes, which the ledger does not build.
+const META_BYTES: usize = 200;
 
-/// A key's notes, newest first. Matches the `events_dossier` index
-/// (migration 0004) term for term, or lookups scan every event.
-const NOTES_SQL: &str = "SELECT id, actor_agent, actor_session, payload_json, at FROM events
-    WHERE kind = 'dossier.noted' AND json_extract(payload_json, '$.key') = ?1
-    ORDER BY id DESC";
-
-const LANES_SQL: &str = "SELECT id, title, status, branch, pr_ref, agent, pipeline_id,
-      created_at, updated_at
-    FROM lanes WHERE source IN ('linear', 'issue', 'github') AND source_id = ?1 COLLATE NOCASE
-    ORDER BY id DESC";
+/// A key's notes. Matches the `events_dossier` index (migration 0004) term
+/// for term, or lookups scan every event.
+const NOTE_EVENTS: &str = "kind = 'dossier.noted' AND json_extract(payload_json, '$.key') = ?1";
 
 /// `dossier note`'s input. `links` are `<kind>:<ref>` as typed.
 #[derive(Clone, Debug, Default)]
@@ -259,7 +256,12 @@ impl Ledger {
         }
         // Read before the write lock: a note that commits in between can
         // only make a retry append, never lose a write.
-        let after = newest_other(self.conn(), &key, &stored)?;
+        let after = newest_other(
+            self.conn(),
+            &format!("SELECT id, payload_json FROM events WHERE {NOTE_EVENTS} ORDER BY id DESC"),
+            [&key],
+            &stored,
+        )?;
         let canonical = canonical_string(&json!({
             "key": key, "agent": actor.agent, "session": actor.session,
             "payload": stored, "after": after,
@@ -274,9 +276,8 @@ impl Ledger {
                 if let Some(id) = input.supersedes
                     && !exists(
                         conn,
-                        "SELECT 1 FROM events WHERE id = ?1 AND kind = 'dossier.noted'
-                           AND json_extract(payload_json, '$.key') = ?2",
-                        params![id, key],
+                        &format!("SELECT 1 FROM events WHERE {NOTE_EVENTS} AND id = ?2"),
+                        params![key, id],
                     )?
                 {
                     return invalid(format!("--supersedes {id} is not a note on {key}"));
@@ -336,24 +337,6 @@ impl Ledger {
     }
 }
 
-/// The newest note on `key` whose stored payload is not `payload`.
-fn newest_other(
-    conn: &Connection,
-    key: &str,
-    payload: &Payload,
-) -> Result<Option<i64>, LedgerError> {
-    let mut stmt = conn.prepare(NOTES_SQL)?;
-    let mut rows = stmt.query([key])?;
-    while let Some(r) = rows.next()? {
-        let stored: Payload =
-            serde_json::from_str(&r.get::<_, String>(3)?).map_err(std::io::Error::other)?;
-        if &stored != payload {
-            return Ok(Some(r.get(0)?));
-        }
-    }
-    Ok(None)
-}
-
 /// `s` cut at `max` characters, counting the cut in `omitted.strings`.
 fn cut(s: String, max: usize, omitted: &mut Omitted) -> String {
     if s.chars().count() <= max {
@@ -376,8 +359,8 @@ fn newest<T>(mut v: Vec<T>, max: usize, name: &'static str, omitted: &mut Omitte
     v
 }
 
-fn decision_lines(d: Vec<Decision>, omitted: &mut Omitted) -> Vec<String> {
-    newest(d, SPEC_DECISIONS, "decisions", omitted)
+fn decision_lines(d: Vec<Decision>, name: &'static str, omitted: &mut Omitted) -> Vec<String> {
+    newest(d, SPEC_DECISIONS, name, omitted)
         .into_iter()
         .map(|d| cut(d.text, TEXT_CHARS, omitted))
         .collect()
@@ -390,14 +373,8 @@ fn slice_section(conn: &Connection, key: &str) -> Result<SliceSection, LedgerErr
     };
     let mut in_spec = None;
     if let Some(s) = spec(spec_for_key(conn, key)?)?
-        && let Some(section) = parse_spec_sections(&s.body)
-            .into_iter()
-            .find(|x| x.has_key(key))
+        && let Some((section, decisions)) = section_for(&s.body, key)
     {
-        let decisions = parse_decisions(&s.body)
-            .into_iter()
-            .filter(|d| d.slice.is_none() || d.slice == section.n)
-            .collect();
         in_spec = Some(InSpec {
             spec_id: s.id,
             parent_key: s.linear_key,
@@ -405,7 +382,7 @@ fn slice_section(conn: &Connection, key: &str) -> Result<SliceSection, LedgerErr
             version: s.version,
             n: section.n,
             title: cut(section.title, TEXT_CHARS, &mut omitted),
-            decisions: decision_lines(decisions, &mut omitted),
+            decisions: decision_lines(decisions, "slice_decisions", &mut omitted),
         });
     }
     let parent = conn
@@ -414,7 +391,7 @@ fn slice_section(conn: &Connection, key: &str) -> Result<SliceSection, LedgerErr
     let parent_of = spec(parent)?.map(|s| ParentOf {
         spec_id: s.id,
         slices: parse_spec_sections(&s.body).len(),
-        decisions: decision_lines(parse_decisions(&s.body), &mut omitted),
+        decisions: decision_lines(parse_decisions(&s.body), "spec_decisions", &mut omitted),
         title: cut(s.title, TEXT_CHARS, &mut omitted),
         version: s.version,
     });
@@ -430,7 +407,10 @@ fn lanes_section(conn: &Connection, key: &str) -> Result<(Section<LaneRow>, bool
     let mut omitted = Omitted::new();
     let mut items = Vec::new();
     let mut found = false;
-    let mut stmt = conn.prepare(LANES_SQL)?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, title, status, branch, pr_ref, agent, pipeline_id, created_at, updated_at
+           FROM lanes WHERE {KEY_LANES} ORDER BY id DESC"
+    ))?;
     let mut rows = stmt.query([key])?;
     while let Some(r) = rows.next()? {
         found = true;
@@ -529,7 +509,10 @@ fn notes_section(conn: &Connection, key: &str) -> Result<(Section<NoteRow>, bool
     let mut items = Vec::new();
     let mut superseded = HashSet::new();
     let mut found = false;
-    let mut stmt = conn.prepare(NOTES_SQL)?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, actor_agent, actor_session, payload_json, at FROM events
+          WHERE {NOTE_EVENTS} ORDER BY id DESC"
+    ))?;
     let mut rows = stmt.query([key])?;
     // Newest first, and a note only supersedes an older one, so each
     // superseding note is read before the note it replaces.
@@ -565,9 +548,21 @@ fn notes_section(conn: &Connection, key: &str) -> Result<(Section<NoteRow>, bool
 }
 
 fn json_len(v: &impl Serialize) -> Result<usize, LedgerError> {
-    Ok(serde_json::to_string(v)
+    Ok(serde_json::to_string_pretty(v)
         .map_err(std::io::Error::other)?
         .len())
+}
+
+/// The answer as the CLI prints it, `meta` aside.
+#[derive(Serialize)]
+struct Printed<'a> {
+    ok: bool,
+    data: &'a Dossier,
+}
+
+/// The printed size of the answer, its envelope included.
+fn printed_len(d: &Dossier) -> Result<usize, LedgerError> {
+    Ok(json_len(&Printed { ok: true, data: d })? + META_BYTES)
 }
 
 /// Cuts the answer to `ANSWER_BYTES`. Ledger facts fill first, so the
@@ -575,12 +570,13 @@ fn json_len(v: &impl Serialize) -> Result<usize, LedgerError> {
 /// The slice is bounded by its own caps and never cut.
 fn fit(d: &mut Dossier) -> Result<(), LedgerError> {
     loop {
-        let mut size = json_len(d)?;
+        let mut size = printed_len(d)?;
         if size <= ANSWER_BYTES {
             return Ok(());
         }
-        // Estimates the size down item by item, then measures again: the
-        // omitted counts it adds take a few bytes.
+        // Estimates the size down item by item, then measures again: an
+        // item takes more indented in place, and the omitted counts it adds
+        // take a few bytes.
         while size > ANSWER_BYTES {
             let dropped = if let Some(x) = d.notes.items.pop() {
                 count(&mut d.notes.omitted, "notes", &x)?
@@ -600,12 +596,34 @@ fn fit(d: &mut Dossier) -> Result<(), LedgerError> {
     }
 }
 
-/// Counts a dropped item and returns its bytes with its comma.
+/// Counts a dropped item and returns its bytes with its comma and line.
 fn count(
     omitted: &mut Omitted,
     name: &'static str,
     item: &impl Serialize,
 ) -> Result<usize, LedgerError> {
     *omitted.entry(name).or_default() += 1;
-    Ok(json_len(item)? + 1)
+    Ok(json_len(item)? + 2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ledger::MIGRATIONS;
+
+    /// A v3 file migrates to v4, and the note lookup searches the index.
+    #[test]
+    fn note_lookup_uses_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.db");
+        drop(Ledger::open_and_migrate_with(&path, &MIGRATIONS[..3]).unwrap());
+        let ledger = Ledger::open_and_migrate(&path).unwrap();
+        assert_eq!(crate::ledger::SCHEMA_VERSION, 4);
+        let sql = format!("EXPLAIN QUERY PLAN SELECT id FROM events WHERE {NOTE_EVENTS}");
+        let plan: String = ledger
+            .conn()
+            .query_row(&sql, ["o/r#1"], |r| r.get(3))
+            .unwrap();
+        assert!(plan.contains("USING INDEX events_dossier"), "{plan}");
+    }
 }

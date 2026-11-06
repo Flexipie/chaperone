@@ -1,0 +1,16 @@
+Leave a note on a key: what you learned that the issue does not say. The same note again from the same session replays. Notes are never edited; --supersedes hides an older one from `dossier get`
+
+Usage: chaperone dossier note [OPTIONS] --note <NOTE> <KEY>
+
+Arguments:
+  <KEY>  The issue key: CORE-1234, PER-12 or owner/repo#12
+
+Options:
+      --db <DB>                  Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --note <NOTE>              At most 600 characters. Redacted at write
+      --format <FORMAT>          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --link <LINKS>             <kind>:<ref>, up to 5: issue:CORE-1, pr:owner/repo#12, adr:docs/decisions/0007-issue-dossier.md, doc:<path>, commit:<sha>
+      --supersedes <SUPERSEDES>  The event id of an earlier note on the same key that this one replaces
+      --agent <AGENT>            Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>        Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help                     Print help

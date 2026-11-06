@@ -616,7 +616,7 @@ pub enum DossierCmd {
         actor: ActorArgs,
     },
     /// The key's slice and spec decisions, lanes, handoffs, files and notes,
-    /// capped (48,000 characters at most); every cut is counted in its
+    /// capped (48,000 bytes at most as printed); every cut is counted in its
     /// section's `omitted`. not_found when the ledger has none of them
     Get {
         /// The issue key: CORE-1234, PER-12 or owner/repo#12

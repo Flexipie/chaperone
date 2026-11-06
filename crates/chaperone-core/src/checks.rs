@@ -155,7 +155,13 @@ impl Ledger {
         );
         // Read before the write lock: a result that commits in between can
         // only make a retry append a duplicate.
-        let latest = newest_other(self.conn(), input.work, &input.check, &payload)?;
+        let latest = newest_other(
+            self.conn(),
+            "SELECT id, payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = ?2 ORDER BY id DESC",
+            params![input.work, input.check],
+            &payload,
+        )?;
         let canonical =
             canonical_string(&json!({"work": input.work, "payload": payload, "after": latest}));
         let key = format!("check:{:x}", Sha256::digest(canonical));
@@ -622,21 +628,18 @@ impl Ledger {
     }
 }
 
-/// The newest result for `check` on the lane that says something other
-/// than `payload`. A retry finds the same one, so its key replays (unless
-/// another session recorded this check since); a flip
-/// back finds the result it flips from, so it appends.
-fn newest_other(
+/// The newest of `sql`'s events (`id, payload_json`, newest first) whose
+/// stored payload is not `payload`. A retry finds the same one, so its key
+/// replays (unless another session recorded the same since); a flip back
+/// (no, yes, no) finds the event it flips from, so it appends.
+pub(crate) fn newest_other(
     conn: &Connection,
-    lane: i64,
-    check: &str,
+    sql: &str,
+    args: impl rusqlite::Params,
     payload: &Payload,
 ) -> Result<Option<i64>, LedgerError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
-           AND json_extract(payload_json, '$.check') = ?2 ORDER BY id DESC",
-    )?;
-    let mut rows = stmt.query(params![lane, check])?;
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query(args)?;
     while let Some(r) = rows.next()? {
         let stored: Payload =
             serde_json::from_str(&r.get::<_, String>(1)?).map_err(std::io::Error::other)?;

@@ -82,24 +82,36 @@ pub(crate) fn spec_for_key(conn: &Connection, key: &str) -> Result<Option<i64>, 
 const SPEC_FOR_KEY: &str = "SELECT s.id FROM spec_keys k JOIN specs s ON s.id = k.spec_id
     WHERE k.key = ?1 ORDER BY s.updated_at DESC, s.id DESC LIMIT 1";
 
+/// The lanes on an issue key `?1`: a Linear, daisy issue or GitHub source
+/// whose id is the key, in any case (the `lanes_source` index).
+pub(crate) const KEY_LANES: &str =
+    "source IN ('linear', 'issue', 'github') AND source_id = ?1 COLLATE NOCASE";
+
 fn sibling_sql(linked: &str) -> String {
     format!(
-        "SELECT id, status, pr_ref FROM lanes
-          WHERE {linked} source IN ('linear', 'issue', 'github')
-            AND source_id = ?1 COLLATE NOCASE
+        "SELECT id, status, pr_ref FROM lanes WHERE {linked} {KEY_LANES}
           ORDER BY id DESC LIMIT 1"
     )
 }
 
-fn slice(conn: &Connection, spec: &Spec, key: &str) -> Result<Option<SliceView>, LedgerError> {
-    let sections = parse::parse_spec_sections(&spec.body);
-    let Some(section) = sections.iter().find(|s| s.has_key(key)).cloned() else {
-        return Ok(None);
-    };
-    let decisions = parse::parse_decisions(&spec.body)
+/// The section whose heading names `key`, with its decisions and the
+/// spec-wide ones, in order.
+pub(crate) fn section_for(body: &str, key: &str) -> Option<(SpecSection, Vec<Decision>)> {
+    let section = parse::parse_spec_sections(body)
+        .into_iter()
+        .find(|s| s.has_key(key))?;
+    let decisions = parse::parse_decisions(body)
         .into_iter()
         .filter(|d| d.slice.is_none() || d.slice == section.n)
         .collect();
+    Some((section, decisions))
+}
+
+fn slice(conn: &Connection, spec: &Spec, key: &str) -> Result<Option<SliceView>, LedgerError> {
+    let Some((section, decisions)) = section_for(&spec.body, key) else {
+        return Ok(None);
+    };
+    let sections = parse::parse_spec_sections(&spec.body);
     let mut siblings = Vec::new();
     for s in sections.iter().filter(|s| !s.has_key(key)) {
         let work = match &s.key {
@@ -253,11 +265,12 @@ mod tests {
         ledger.rebuild().unwrap();
         assert_eq!(keys(ledger.conn()), folded);
 
-        // A v2 file: migrating runs 0003 and its backfill.
+        // A v2 file: migrating runs 0003 and its backfill, then 0004.
         ledger
             .conn()
             .execute_batch(
-                "DROP INDEX specs_key; DROP INDEX lanes_source; DROP TABLE spec_keys;
+                "DROP INDEX events_dossier; DROP INDEX specs_key; DROP INDEX lanes_source;
+                 DROP TABLE spec_keys;
                  PRAGMA user_version = 2;",
             )
             .unwrap();
