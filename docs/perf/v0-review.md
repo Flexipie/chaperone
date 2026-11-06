@@ -28,7 +28,8 @@ command misses M1 at scale (`work board` past about 150 open items). One read wa
   by default) and the existing `fifty_writers` in `tests/concurrency.rs`, both in release.
 - Safety: every run lives in a fresh temp dir. Every call passes `--db` there, and the child environment holds only
   `PATH`, `HOME` and `XDG_DATA_HOME` (pointing at the temp dir) and the two `DAISY_*` actor variables, so a missed
-  `--db` cannot reach a real ledger. The script checks that `~/Library/Application Support/chaperone` and its ledger files kept their modification times, also when a run aborts.
+  `--db` cannot reach a real ledger. Before each temp dir is removed, also when a run aborts, the script fails if `Library/Application Support/chaperone`
+  appeared inside it, where a missed `--db` lands; other lanes writing the real ledger don't trip it.
   No `daisy-cli` call.
 
 Reproduce:
