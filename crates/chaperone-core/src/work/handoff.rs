@@ -85,6 +85,11 @@ pub struct LookAt {
     pub why: String,
 }
 
+/// A handoff's `commit`, or a dossier link's: 7 to 64 hex characters.
+pub(crate) fn commit_ok(c: &str) -> bool {
+    (7..=64).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 fn too_long(what: &str, s: &str, max: usize) -> Result<(), Refusal> {
     if s.chars().count() > max {
         return Err(Refusal::InvalidInput(format!(
@@ -138,7 +143,7 @@ impl HandoffInput {
             }
         }
         if let Some(c) = &self.commit
-            && (!(7..=64).contains(&c.len()) || !c.bytes().all(|b| b.is_ascii_hexdigit()))
+            && !commit_ok(c)
         {
             return invalid(format!("commit must be 7 to 64 hex characters, got '{c}'"));
         }

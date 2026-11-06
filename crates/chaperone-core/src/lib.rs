@@ -2,6 +2,7 @@
 
 pub mod checks;
 pub mod cursor;
+pub mod dossier;
 mod engine;
 pub mod ledger;
 pub mod pipeline;

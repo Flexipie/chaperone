@@ -59,6 +59,11 @@ class Bench:
             raise SystemExit(f"{args} exited {out.returncode}: {out.stderr[:400]}")
         return json.loads(out.stdout)["data"] if out.stdout.startswith("{") else out.stdout
 
+    def has(self, command):
+        """Whether this binary has the command (older ones lack newer ones)."""
+        return subprocess.run(self.argv([command, "--help"]), capture_output=True,
+                              env=self.env).returncode == 0
+
     def timed(self, make, session=None, warm=WARM, samples=SAMPLES):
         """make(i) -> (args, stdin). Wall ms of each sample after the warmup."""
         times = []
@@ -162,6 +167,16 @@ def hot(b, label, spec_key):
         ("spec get --key", lambda i: (["spec", "get", "--key", spec_key], None), None),
         ("check record", lambda i: ([*check, "--work", str(held[i])], None), "checker"),
     ]
+    if b.has("dossier"):
+        # The key's slice, lane and handoffs come from the seed; 20 notes on top.
+        for n in range(20):
+            b.run("dossier", "note", spec_key, "--note", f"bench note {n} " + "x" * 500,
+                  "--link", "adr:docs/decisions/0007-issue-dossier.md")
+        cmds += [
+            ("dossier get", lambda i: (["dossier", "get", spec_key], None), None),
+            ("dossier note",
+             lambda i: (["dossier", "note", spec_key, "--note", f"timed note {i}"], None), None),
+        ]
     rows = [row(name, b.timed(make, session=session)) for name, make, session in cmds]
     print(f"\n### Hot commands, {label} ledger (ms)\n")
     print("| Command | p50 | p99 | max |\n| --- | --- | --- | --- |")
@@ -239,6 +254,9 @@ PLANS = {
                          "ORDER BY kind = 'check.finished' DESC, id DESC LIMIT 1",
     "latest handoff": "SELECT id FROM events WHERE lane_id = ?1 AND kind IN "
                       "('lane.handed_off', 'phase.entered') ORDER BY id DESC LIMIT 1",
+    "dossier notes (events_dossier, v4)":
+        "SELECT id FROM events WHERE kind = 'dossier.noted' "
+        "AND json_extract(payload_json, '$.key') = ?1",
     "next_id": "SELECT coalesce(max(id), 0) + 1 FROM lanes",
 }
 

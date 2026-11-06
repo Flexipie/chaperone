@@ -88,6 +88,15 @@ fn help_matches_snapshots() {
             &["attention", "record"],
             include_str!("snapshots/attention-record.txt"),
         ),
+        (&["dossier"], include_str!("snapshots/dossier.txt")),
+        (
+            &["dossier", "note"],
+            include_str!("snapshots/dossier-note.txt"),
+        ),
+        (
+            &["dossier", "get"],
+            include_str!("snapshots/dossier-get.txt"),
+        ),
         (&["usage"], include_str!("snapshots/usage.txt")),
         (
             &["usage", "report"],

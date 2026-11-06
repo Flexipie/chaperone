@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension, Row, ToSql};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+pub(crate) use self::handoff::commit_ok;
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
 use crate::cursor::{self, Cursor, Page};
 use crate::engine;
@@ -29,7 +30,7 @@ const TOOL: &str = "chaperone";
 
 /// The events that carry a handoff (events.md, folded rows): what `work
 /// handoffs` lists and where "the latest handoff" is read.
-const IS_HANDOFF: &str = "kind IN ('lane.handed_off', 'phase.entered')
+pub(crate) const IS_HANDOFF: &str = "kind IN ('lane.handed_off', 'phase.entered')
       AND json_extract(payload_json, '$.handoff') IS NOT NULL";
 
 /// Daisy's `WorkItem` fields, plus Chaperone's kind, pr_flow, phase and
@@ -1015,7 +1016,9 @@ fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
         PhaseEntered if carries_handoff => "handoff",
         PhaseEntered => "update",
         SpecCreated | SpecRevised | SpecApproved | GateDenied | CheckRequested | CheckFinished
-        | FindingUpdated | UsageReported | PrMerged | AttentionRecorded => return None,
+        | FindingUpdated | UsageReported | PrMerged | AttentionRecorded | DossierNoted => {
+            return None;
+        }
     })
 }
 

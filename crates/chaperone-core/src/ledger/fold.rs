@@ -94,6 +94,8 @@ pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
                 ],
             )?;
         }
+        // A note is on a key, not a lane (ADR 0007): nothing to fold.
+        DossierNoted => {}
         _ => fold_lane(conn, e)?,
     }
     Ok(())

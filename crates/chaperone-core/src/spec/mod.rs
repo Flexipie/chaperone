@@ -272,7 +272,11 @@ impl Ledger {
     }
 }
 
-fn read(conn: &Connection, id: i64, version: Option<i64>) -> Result<Option<Spec>, LedgerError> {
+pub(crate) fn read(
+    conn: &Connection,
+    id: i64,
+    version: Option<i64>,
+) -> Result<Option<Spec>, LedgerError> {
     Ok(conn
         .query_row(
             &format!("{SELECT} WHERE s.id = ?1"),
