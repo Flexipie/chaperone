@@ -148,14 +148,6 @@ pub struct BoardItem {
     pub ready_reason: String,
 }
 
-/// Daisy's `work board`: `specs` stays empty until items are grouped by
-/// spec, so every open item is under `other`.
-#[derive(Clone, Debug, Serialize)]
-pub struct Board {
-    pub specs: Vec<Value>,
-    pub other: Vec<BoardItem>,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct CreateInput {
     pub title: String,
@@ -655,21 +647,9 @@ impl Ledger {
     }
 
     /// Daisy's board: every open item with its newest handoff, its override
-    /// and the ready rule's answer. One statement, so one snapshot.
-    pub fn work_board(&self, now: &str) -> Result<Board, LedgerError> {
-        let mut other = Vec::new();
-        let Ok(()) = self.work_board_each(now, |b| {
-            other.push(b);
-            Ok::<_, Infallible>(())
-        })?;
-        Ok(Board {
-            specs: Vec::new(),
-            other,
-        })
-    }
-
-    /// `work_board`'s items one at a time, in board order, so a caller can
-    /// write each out without holding the board. Stops at `f`'s first error.
+    /// and the ready rule's answer, one at a time in board order so a caller
+    /// can write each out without holding the board. One statement, so one
+    /// snapshot. Stops at `f`'s first error.
     pub fn work_board_each<E>(
         &self,
         now: &str,

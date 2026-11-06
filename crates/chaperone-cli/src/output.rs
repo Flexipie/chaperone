@@ -276,20 +276,24 @@ pub fn render_ok(outcome: &Outcome, meta: &Meta, format: Format) -> String {
                 out += &serde_json::to_string(line).unwrap_or_default();
                 out.push('\n');
             }
-            let meta = Meta {
-                page: Some(page),
-                ..meta.clone()
-            };
-            out += &serde_json::to_string(&json!({ "ok": true, "meta": meta })).unwrap_or_default();
-            out.push('\n');
-            out
+            out + &jsonl_end(meta, page)
         }
     }
 }
 
+/// The jsonl closing line: meta with its page.
+fn jsonl_end(meta: &Meta, page: PageMeta) -> String {
+    let meta = Meta {
+        page: Some(page),
+        ..meta.clone()
+    };
+    serde_json::to_string(&json!({ "ok": true, "meta": meta })).unwrap_or_default() + "\n"
+}
+
 /// `work board` written to stdout as its rows are read, so the board is
-/// never held whole (R14 M1), in the bytes `render_ok` gives: every map
-/// through a `Value`, so keys sort. A ledger error before the first 8 KiB
+/// never held whole (R14 M1), in the bytes `render_ok` gives: its sorted
+/// keys. Items and meta go through a `Value`; `Envelope` and `Data` declare
+/// their fields in sorted order, so a new field goes in its sorted place. A ledger error before the first 8 KiB
 /// leaves stdout empty; after it, stdout holds a partial document and the
 /// exit code says so. A closed stdout is ignored, as `finish` ignores it.
 pub fn write_board(
@@ -352,16 +356,12 @@ pub fn write_board(
                 .and_then(|()| out.write_all(b"\n").map_err(serde_json::Error::io))
         }
         Format::Jsonl => serde_json::to_writer(&mut out, &data).and_then(|()| {
-            let meta = Meta {
-                page: Some(PageMeta {
-                    count: 1,
-                    next_cursor: None,
-                    has_more: false,
-                }),
-                ..meta.clone()
+            let page = PageMeta {
+                count: 1,
+                next_cursor: None,
+                has_more: false,
             };
-            writeln!(out, "\n{}", json!({ "ok": true, "meta": meta }))
-                .map_err(serde_json::Error::io)
+            write!(out, "\n{}", jsonl_end(meta, page)).map_err(serde_json::Error::io)
         }),
     };
     if let Some(e) = failed.into_inner() {

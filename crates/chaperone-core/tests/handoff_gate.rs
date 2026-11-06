@@ -391,10 +391,7 @@ fn the_board_reads_the_newest_handoff_and_the_override() {
     let lane = Lane::new();
     let owner = pair("owner", "s3");
     let board = || {
-        let b = lane.ledger.work_board(T2).unwrap();
-        let [e] = &b.other[..] else {
-            panic!("one open item: {b:?}")
-        };
+        let e = lane.ledger.work_board_item(1, T2).unwrap().unwrap();
         let o = e.ready_override.as_ref().map(|o| o.ready);
         (
             e.ready,
