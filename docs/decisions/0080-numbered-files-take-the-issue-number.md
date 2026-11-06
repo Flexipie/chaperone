@@ -15,10 +15,11 @@ renumbered and fixed links. Any file numbered from a repo-wide counter has the s
 A new ADR or research note takes the number of the GitHub issue its lane works on, zero-padded to four digits for
 ADRs: `docs/decisions/0080-<slug>.md` is "ADR 0080", `docs/research/r80-<slug>.md` is "R80". GitHub hands out
 issue numbers from one counter per repo, so two lanes on different issues cannot pick the same one. One lane per issue
-writes its docs; a second ADR from that lane adds a letter: `0080b-<slug>.md`. Numbers have gaps, and order by number
+writes its docs: a lane that finds an open branch or PR on its issue already adding one takes the next free letter, as
+does a second ADR from one lane: `0080b-<slug>.md`. Numbers have gaps, and order by number
 is roughly order of filing, not of merge.
 
-ADRs 0001 to 0007 (0007 is #79's, numbered before this rule) and R1 to R15 keep their numbers. A lane with no issue,
+ADRs 0001 to 0007 (0007 is #69's, numbered before this rule) and R1 to R15 keep their numbers. A lane with no issue,
 or on an issue numbered 15 or lower (it would clash with those), opens an issue for the doc first and uses its
 number.
 
@@ -26,7 +27,13 @@ number.
 which is the file's position in `MIGRATIONS` (`crates/chaperone-core/src/ledger/mod.rs`). It has to stay dense and in
 merge order, so it cannot take an issue number. The collision is not silent there: two lanes that each add a
 migration both append to `MIGRATIONS`, and git reports a conflict on whichever merges second. That lane takes the next
-number when it rebases, renames its file to match, and reruns the migration tests.
+number when it rebases, renames its file to match, and reruns the migration tests. `pipelines/vN.toml` is excluded for
+the same reason: the version is not a slug-suffixed name, so two lanes writing one get an add/add conflict, and the
+`include_str!` list in `crates/chaperone-core/src/pipeline/mod.rs` conflicts too.
+
+**CI checks it.** The `doc-numbers` job in `.github/workflows/ci.yml` fails a PR that adds a file under
+`docs/decisions/` or `docs/research/` whose number is not the issue number in its branch name (`chaperone-80-...`). A
+lane that reads the directory and takes "next free" (0081, a live issue's number) fails there, not at merge.
 
 ## Alternatives considered
 

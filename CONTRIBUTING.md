@@ -112,7 +112,8 @@ An architectural choice that picks among real alternatives gets a file in
 
 A new ADR or research note takes the number of the issue it comes from, not the
 next free one: `docs/decisions/0080-<slug>.md`, `docs/research/r80-<slug>.md`.
-Migrations stay sequential; the second to merge renumbers
+CI checks it against the branch name. Migrations stay sequential: two lanes that
+add one conflict on `MIGRATIONS`, and the second to merge renumbers
 ([ADR 0080](docs/decisions/0080-numbered-files-take-the-issue-number.md)).
 
 ## Dependencies
