@@ -73,7 +73,9 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Jobs(cmd) => checks::jobs(&Ledger::open(&path)?, cmd),
         Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),
         Cmd::Attention(cmd) => checks::attention(&Ledger::open(&path)?, cmd),
-        Cmd::Overlap { repo } => overlap::run(&Ledger::open(&path)?, repo),
+        Cmd::Overlap { repo, uncommitted } => {
+            overlap::run(&Ledger::open(&path)?, repo, uncommitted, meta, cli.format)
+        }
     }
 }
 

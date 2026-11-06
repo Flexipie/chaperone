@@ -386,14 +386,17 @@ def live_lanes(binary):
         print(f"\n### {LIVE_LANES} open lanes with worktrees (ms)\n")
         print("| Command | p50 | p99 | max |\n| --- | --- | --- | --- |")
         if has:
-            print(row("overlap (git in 50 worktrees)",
+            print(row("overlap (commits in 50 worktrees)",
                       b.timed(lambda i: (["overlap"], None), warm=2, samples=20)))
+            print(row("overlap --uncommitted (also stats 50 worktrees)",
+                      b.timed(lambda i: (["overlap", "--uncommitted"], None), warm=2, samples=20)))
         print(row("work board", board))
         print(row("work ready (one board item)", ready))
         print(f"\nM1 max RSS: work board {max_rss(b, 'work', 'board'):.2f} MiB")
         if has:
-            shared = sum(f["shared"] for f in b.run("overlap")["files"])
-            print(f"overlap {max_rss(b, 'overlap'):.2f} MiB (largest of it and its git "
+            shared = sum(f["shared"] for f in b.run("overlap", "--uncommitted")["files"])
+            print(f"overlap {max_rss(b, 'overlap'):.2f} MiB, --uncommitted "
+                  f"{max_rss(b, 'overlap', '--uncommitted'):.2f} MiB (largest of it and its git "
                   f"children), {shared} shared files")
     finally:
         check_sandbox(root)

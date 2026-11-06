@@ -57,13 +57,17 @@ pub enum Cmd {
     #[command(subcommand)]
     Attention(AttentionCmd),
     /// Per file, the open lanes touching it: each lane's newest handoff
-    /// (changed_files), then git in its worktree (committed, uncommitted
-    /// and untracked changes since the merge-base with origin), all git
-    /// calls within 5 s. Shared files first. Call it before starting work
+    /// (changed_files), then the commits on its worktree's HEAD since the
+    /// merge-base with origin, all git calls within 5 s. Shared files
+    /// first. Call it before starting work
     Overlap {
         /// Only lanes in this repo (owner/repo, any case)
         #[arg(long)]
         repo: Option<String>,
+        /// Also each worktree's uncommitted and untracked files (stats
+        /// every tracked file: slower, more so in large repos)
+        #[arg(long)]
+        uncommitted: bool,
     },
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger

@@ -2,9 +2,9 @@
 //! read is the board's; git runs in each worktree only after it has ended
 //! (ADR 0007: a ledger read runs no git), within one deadline.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::convert::Infallible;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,11 +12,10 @@ use std::time::{Duration, Instant};
 
 use chaperone_core::ledger::Ledger;
 use serde::Serialize;
-use serde_json::json;
 
 use crate::child;
-use crate::output::{CliError, Outcome};
-use crate::work::one;
+use crate::cli::Format;
+use crate::output::{self, CliError, Meta, Outcome};
 
 /// For every git call of one run, together.
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -38,27 +37,49 @@ struct Lane {
     files: Vec<String>,
 }
 
+// Fields in sorted order: the bytes `render_ok` gives (output::write_one).
 #[derive(Serialize)]
 struct Evidence {
+    commit: Option<String>,
     id: i64,
     source: &'static str,
-    commit: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Row<'a> {
+    lanes: Vec<Evidence>,
+    path: String,
+    repo: &'a str,
+    shared: bool,
+}
+
+#[derive(Serialize)]
+struct Data<'a> {
+    files: Vec<Row<'a>>,
+    files_omitted: usize,
+    lanes: Vec<Tree>,
 }
 
 /// What git said for one lane: `ok`, `none` (no worktree recorded),
 /// `missing`, `no_base`, `timed_out`, `error`, or `no_repo` (not compared).
 #[derive(Serialize)]
 struct Tree {
-    id: i64,
-    repo: Option<String>,
-    worktree: &'static str,
+    cut: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    id: i64,
     paths: usize,
-    cut: usize,
+    repo: Option<String>,
+    worktree: &'static str,
 }
 
-pub fn run(ledger: &Ledger, repo: Option<String>) -> Result<Outcome, CliError> {
+pub fn run(
+    ledger: &Ledger,
+    repo: Option<String>,
+    uncommitted: bool,
+    meta: &Meta,
+    format: Format,
+) -> Result<Outcome, CliError> {
     let want = repo.map(|r| r.trim().to_lowercase());
     let mut lanes = Vec::new();
     let Ok(()) = ledger.work_board_each(&ledger.now()?, |b| {
@@ -80,7 +101,7 @@ pub fn run(ledger: &Ledger, repo: Option<String>) -> Result<Outcome, CliError> {
         Ok::<_, Infallible>(())
     })?;
 
-    let trees = worktrees(&lanes);
+    let trees = worktrees(&lanes, uncommitted);
     let mut files: BTreeMap<(&str, String), Vec<Evidence>> = BTreeMap::new();
     let mut report = Vec::new();
     for (lane, tree) in lanes.iter().zip(trees) {
@@ -139,14 +160,24 @@ pub fn run(ledger: &Ledger, repo: Option<String>) -> Result<Outcome, CliError> {
         .map(|((repo, path), lanes)| {
             let mut ids: Vec<_> = lanes.iter().map(|e| e.id).collect();
             ids.dedup();
-            json!({ "repo": repo, "path": path, "shared": ids.len() > 1, "lanes": lanes })
+            Row {
+                shared: ids.len() > 1,
+                lanes,
+                path,
+                repo,
+            }
         })
         .collect();
     // Stable, so each group keeps repo and path order.
-    rows.sort_by_key(|r| r["shared"] != true);
+    rows.sort_by_key(|r| !r.shared);
     let files_omitted = rows.len().saturating_sub(ROWS);
     rows.truncate(ROWS);
-    one(json!({ "files": rows, "files_omitted": files_omitted, "lanes": report }))
+    let data = Data {
+        files: rows,
+        files_omitted,
+        lanes: report,
+    };
+    output::write_one(&data, meta, format)
 }
 
 /// One row's evidence, kept in lane order with handoff before worktree,
@@ -193,8 +224,9 @@ enum Git {
 
 /// Every lane's worktree, in lane order, from at most [`WORKERS`] threads.
 /// A lane not started by the deadline is `timed_out`.
-fn worktrees(lanes: &[Lane]) -> Vec<Git> {
+fn worktrees(lanes: &[Lane], uncommitted: bool) -> Vec<Git> {
     let deadline = Instant::now() + DEADLINE;
+    let bin = git_bin(deadline);
     let next = AtomicUsize::new(0);
     let out: Mutex<Vec<Option<Git>>> = Mutex::new((0..lanes.len()).map(|_| None).collect());
     std::thread::scope(|s| {
@@ -203,7 +235,7 @@ fn worktrees(lanes: &[Lane]) -> Vec<Git> {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(lane) = lanes.get(i) else { break };
-                    let git = tree(lane, deadline);
+                    let git = tree(&bin, lane, deadline, uncommitted);
                     if let Ok(mut out) = out.lock() {
                         out[i] = Some(git);
                     }
@@ -218,7 +250,21 @@ fn worktrees(lanes: &[Lane]) -> Vec<Git> {
         .collect()
 }
 
-fn tree(lane: &Lane, deadline: Instant) -> Git {
+/// The git binary itself, from its exec path: macOS's `/usr/bin/git` is
+/// an xcrun shim that adds about 9 ms to every call. Else plain `git`.
+fn git_bin(deadline: Instant) -> PathBuf {
+    let found = git(Path::new("git"), Path::new("."), &["--exec-path"], deadline).ok();
+    found
+        .map(|(out, _)| Path::new(String::from_utf8_lossy(&out).trim()).join("git"))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| "git".into())
+}
+
+/// One git call: the paths HEAD's own commits touch since the merge-base
+/// with the first base found, newest commit (HEAD) first. It reads commits
+/// only. With `uncommitted`, a second call adds the worktree's uncommitted
+/// and untracked paths, which stats every tracked file.
+fn tree(bin: &Path, lane: &Lane, deadline: Instant, uncommitted: bool) -> Git {
     let (Some(_), Some(wt)) = (&lane.repo, &lane.worktree) else {
         return Git::Skip("none");
     };
@@ -226,40 +272,86 @@ fn tree(lane: &Lane, deadline: Instant) -> Git {
     if !wt.is_dir() {
         return Git::Skip("missing");
     }
-    let run = |args: &[&str]| git(wt, args, deadline);
+    let run = |args: &[&str]| git(bin, wt, args, deadline);
     let result = (|| {
-        let head = String::from_utf8_lossy(&run(&["rev-parse", "HEAD"])?.0)
-            .trim()
-            .to_string();
-        let mut base = None;
-        for r in BASES {
-            match run(&["merge-base", "HEAD", r]) {
-                Ok((out, _)) => {
-                    base = Some(String::from_utf8_lossy(&out).trim().to_string());
+        let mut committed = None;
+        for base in BASES.iter().copied().chain(lane.base_sha.as_deref()) {
+            let range = format!("{base}..HEAD");
+            let args = [
+                "log",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                "--format=%x01%H",
+                &range,
+                "--",
+            ];
+            match run(&args) {
+                Ok(out) => {
+                    committed = Some(out);
                     break;
                 }
                 Err(Failure::TimedOut) => return Err(Failure::TimedOut),
                 Err(_) => {}
             }
         }
-        let Some(base) = base.or_else(|| lane.base_sha.clone()) else {
+        let Some(committed) = committed else {
             return Ok(None);
         };
-        let (diff, diff_cut) = run(&["diff", "--name-only", "--no-renames", "-z", &base, "--"])?;
-        let (new, new_cut) = run(&["ls-files", "-o", "--exclude-standard", "-z"])?;
+        let mut outs = vec![(true, committed)];
+        if uncommitted {
+            let args = [
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--branch",
+                "--no-renames",
+                "--untracked-files=all",
+            ];
+            outs.push((false, run(&args)?));
+        }
+        let mut head = String::new();
         let mut paths = Vec::new();
+        let mut seen = HashSet::new();
         let mut cut = 0;
-        for (out, was_cut) in [(diff, diff_cut), (new, new_cut)] {
-            let mut names: Vec<&[u8]> = out.split(|b| *b == 0).filter(|n| !n.is_empty()).collect();
-            // The last name may be a stub when the output was cut.
-            if was_cut && names.pop().is_some() {
+        for (log, (out, was_cut)) in outs {
+            let mut entries: Vec<&[u8]> =
+                out.split(|b| *b == 0).filter(|n| !n.is_empty()).collect();
+            // The last entry may be a stub when the output was cut.
+            if was_cut && entries.pop().is_some() {
                 cut += 1;
             }
-            for n in names {
-                if paths.len() < PATHS {
-                    paths.push(String::from_utf8_lossy(n).into_owned());
-                } else {
-                    cut += 1;
+            for e in entries {
+                let e = String::from_utf8_lossy(e);
+                // In the log, a commit's paths follow its header's newline.
+                let e = if log { e.trim_start_matches('\n') } else { &e };
+                let oid = match log {
+                    true => e.strip_prefix('\u{1}'),
+                    false => e.strip_prefix("# branch.oid "),
+                };
+                if let Some(oid) = oid {
+                    if head.is_empty() {
+                        head = oid.to_string();
+                    }
+                    continue;
+                }
+                let path = match (log, e.as_bytes().first()) {
+                    (_, None) => None,
+                    (true, _) => Some(e),
+                    // porcelain v2: the path is the last field.
+                    (false, Some(b'1')) => e.splitn(9, ' ').nth(8),
+                    (false, Some(b'u')) => e.splitn(11, ' ').nth(10),
+                    (false, Some(b'?')) => e.get(2..),
+                    _ => None,
+                };
+                match path {
+                    Some(p) if seen.contains(p) => {}
+                    Some(p) if paths.len() < PATHS => {
+                        seen.insert(p.to_string());
+                        paths.push(p.to_string());
+                    }
+                    Some(_) => cut += 1,
+                    None => {}
                 }
             }
         }
@@ -280,9 +372,14 @@ enum Failure {
 
 /// One git call in `wt`, never taking the worktree's index lock (it
 /// belongs to the lane) and never prompting.
-fn git(wt: &Path, args: &[&str], deadline: Instant) -> Result<(Vec<u8>, bool), Failure> {
+fn git(
+    bin: &Path,
+    wt: &Path,
+    args: &[&str],
+    deadline: Instant,
+) -> Result<(Vec<u8>, bool), Failure> {
     let done = child::run(
-        Command::new("git")
+        Command::new(bin)
             .arg("-C")
             .arg(wt)
             .args(args)
