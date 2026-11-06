@@ -8,8 +8,12 @@ a newer binary migrates its copy, an older one refuses a newer file.
 
 Everything runs in a fresh temp dir: every call passes --db there, and HOME
 and XDG_DATA_HOME point there too, so a missed --db can never reach a real
-ledger. Startup method from R14: 8 unmeasured spawns, then 100 samples, wall
-time around the spawn. Prints markdown tables. Python stdlib only.
+ledger. Before a temp dir is removed, the run fails if the default ledger
+path appeared inside it, which is where a missed --db lands; writes by other
+processes to the real ledger don't count. A binary that built its path by hand
+instead of from HOME would get past this. Startup method from R14: 8
+unmeasured spawns, then 100 samples, wall time around the spawn. Prints
+markdown tables. Python stdlib only.
 """
 
 import argparse
@@ -215,6 +219,9 @@ PLANS = {
     "work list": "SELECT id FROM lanes WHERE status NOT IN ('done', 'cancelled') "
                  "ORDER BY updated_at DESC, id DESC LIMIT 50",
     "spec by key (NOCASE)": "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE",
+    "spec by slice key (spec_keys, v3)":
+        "SELECT s.id FROM spec_keys k JOIN specs s ON s.id = k.spec_id WHERE k.key = ?1 "
+        "ORDER BY s.updated_at DESC, s.id DESC LIMIT 1",
     "slice lane, linked to the spec":
         "SELECT id, status, pr_ref FROM lanes WHERE spec_id = ?2 AND source IN ('linear', "
         "'issue', 'github') AND source_id = ?1 COLLATE NOCASE ORDER BY id DESC LIMIT 1",
@@ -242,7 +249,10 @@ def plans(b):
     print("| Read | Plan |\n| --- | --- |")
     for name, sql in PLANS.items():
         n = sql.count("?")
-        detail = "; ".join(r[3] for r in con.execute(f"EXPLAIN QUERY PLAN {sql}", [None] * n))
+        try:
+            detail = "; ".join(r[3] for r in con.execute(f"EXPLAIN QUERY PLAN {sql}", [None] * n))
+        except sqlite3.OperationalError as e:  # a table an older schema lacks
+            detail = f"n/a ({e})"
         print(f"| {name} | {detail} |")
     # A missing job: a scan reads every event either way, an index search none.
     jobs = PLANS["jobs (JOB_EVENTS)"]
@@ -319,13 +329,14 @@ def measure(binary, snapshot, items, deep):
         plans(b)
         contention(b)
     finally:
+        check_sandbox(root)
         shutil.rmtree(root)
 
 
-def stamp(path):
-    """Modification times of the real ledger's directory and files, or None."""
-    files = [path] + [os.path.join(path, f) for f in ("ledger.db", "ledger.db-wal")]
-    return [os.stat(f).st_mtime_ns if os.path.exists(f) else None for f in files]
+def check_sandbox(root):
+    """A missed --db resolves the default ledger from HOME, so into root."""
+    stray = os.path.join(root, "Library", "Application Support", "chaperone")
+    assert not os.path.exists(stray), f"a call missed --db: {stray}"
 
 
 def main():
@@ -335,8 +346,6 @@ def main():
     ap.add_argument("--open-specs", type=int, default=5,
                     help="specs left open, 10 items each (100 with --items 1000 for 1,000 open)")
     a = ap.parse_args()
-    real = os.path.expanduser("~/Library/Application Support/chaperone")
-    real_before = stamp(real)
     print(f"python sqlite {sqlite3.sqlite_version} (query plans and the in-process job lookup)")
     seed_root = tempfile.mkdtemp(prefix="chaperone-seed-")
     try:
@@ -354,8 +363,8 @@ def main():
         for binary in a.binaries:
             measure(binary, s.db, a.items, deep)
     finally:
+        check_sandbox(seed_root)
         shutil.rmtree(seed_root)
-        assert stamp(real) == real_before, f"{real} changed during the run"
 
 
 if __name__ == "__main__":

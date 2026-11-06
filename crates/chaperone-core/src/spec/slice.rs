@@ -74,24 +74,21 @@ impl Ledger {
 
 /// The newest-changed spec whose newest version has a section for `key`.
 fn spec_for_key(conn: &Connection, key: &str) -> Result<Option<i64>, LedgerError> {
-    // Only the id and head body: the full spec row costs two lane counts and
-    // an event read per spec, and every spec is read before the sort.
-    let mut stmt = conn.prepare(
-        "SELECT s.id, v.body FROM specs s
-           JOIN spec_versions v ON v.spec_id = s.id AND v.version = s.head_version
-         ORDER BY s.updated_at DESC, s.id DESC",
-    )?;
-    let mut rows = stmt.query([])?;
-    while let Some(r) = rows.next()? {
-        let body: String = r.get(1)?;
-        if parse::parse_spec_sections(&body)
-            .iter()
-            .any(|sec| sec.has_key(key))
-        {
-            return Ok(Some(r.get(0)?));
-        }
-    }
-    Ok(None)
+    Ok(conn
+        .query_row(SPEC_FOR_KEY, [key.trim()], |r| r.get(0))
+        .optional()?)
+}
+
+const SPEC_FOR_KEY: &str = "SELECT s.id FROM spec_keys k JOIN specs s ON s.id = k.spec_id
+    WHERE k.key = ?1 ORDER BY s.updated_at DESC, s.id DESC LIMIT 1";
+
+fn sibling_sql(linked: &str) -> String {
+    format!(
+        "SELECT id, status, pr_ref FROM lanes
+          WHERE {linked} source IN ('linear', 'issue', 'github')
+            AND source_id = ?1 COLLATE NOCASE
+          ORDER BY id DESC LIMIT 1"
+    )
 }
 
 fn slice(conn: &Connection, spec: &Spec, key: &str) -> Result<Option<SliceView>, LedgerError> {
@@ -145,23 +142,127 @@ fn work_for_key(
     spec_id: i64,
     key: &str,
 ) -> Result<Option<(i64, String, Option<String>)>, LedgerError> {
-    // The linked lookup uses lanes_slot; the fallback scans every lane, so it
-    // runs only for a slice no item of this spec carries.
+    // Linked first, so this spec's item wins over a newer unlinked one.
     let find = |linked: &str, args: &[&dyn rusqlite::ToSql]| {
-        conn.query_row(
-            &format!(
-                "SELECT id, status, pr_ref FROM lanes
-                  WHERE {linked} source IN ('linear', 'issue', 'github')
-                    AND source_id = ?1 COLLATE NOCASE
-                  ORDER BY id DESC LIMIT 1"
-            ),
-            args,
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
+        conn.query_row(&sibling_sql(linked), args, |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
         .optional()
     };
     Ok(match find("spec_id = ?2 AND", &[&key, &spec_id])? {
         Some(work) => Some(work),
         None => find("", &[&key])?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ledger::{Actor, MIGRATIONS};
+    use crate::work::SPEC_BY_KEY;
+
+    fn plan(conn: &Connection, sql: &str) -> String {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let rows = stmt.query_map(["k"], |r| r.get::<_, String>(3)).unwrap();
+        rows.map(Result::unwrap).collect::<Vec<_>>().join("; ")
+    }
+
+    fn keys(conn: &Connection) -> Vec<(i64, String)> {
+        let mut stmt = conn
+            .prepare("SELECT spec_id, key FROM spec_keys ORDER BY spec_id, key")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn slice_spec(ledger: &Ledger, key: &str) -> Option<i64> {
+        ledger
+            .spec_slice(None, key, None)
+            .unwrap()
+            .ok()
+            .map(|v| v.spec_id)
+    }
+
+    #[test]
+    fn key_lookups_use_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let conn = ledger.conn();
+        for (sql, index) in [
+            (SPEC_FOR_KEY.to_string(), "spec_keys_key (key=?)"),
+            (SPEC_BY_KEY.to_string(), "specs_key (external_key=?)"),
+            (sibling_sql(""), "lanes_source (source_id=?)"),
+        ] {
+            let plan = plan(conn, &sql);
+            assert!(plan.contains(index), "{sql}: {plan}");
+            assert!(!plan.contains("SCAN"), "{sql}: {plan}");
+        }
+    }
+
+    /// The fold, the migration's backfill and a rebuild agree on the keys,
+    /// and `spec get --key` finds the newest-changed spec in any case.
+    #[test]
+    fn spec_keys_follow_the_head_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.db");
+        let ledger = Ledger::open_and_migrate(&path).unwrap();
+        let actor = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
+        let at = |n: u32| format!("2026-11-07T00:00:0{n}.000Z");
+        let body = |keys: &[&str]| {
+            keys.iter()
+                .enumerate()
+                .map(|(i, k)| format!("## slice {}: s  ({k})\ndone when: x\n", i + 1))
+                .collect::<String>()
+        };
+        let create = |parent: &str, b: String, n| {
+            ledger
+                .spec_create(&actor, parent, Some("t"), &b, &at(n), false)
+                .unwrap()
+                .unwrap()
+                .id
+        };
+        let a = create("CORE-1", body(&["CORE-2", "o/r#3", "O/R#3"]), 1);
+        let b = create("o/r#9", body(&["CORE-2"]), 2);
+        assert_eq!(slice_spec(&ledger, " core-2 "), Some(b));
+        assert_eq!(slice_spec(&ledger, "o/r#3"), Some(a));
+
+        // A revise replaces the keys and makes `a` the newest-changed.
+        ledger
+            .spec_update(
+                &actor,
+                "core-1",
+                &body(&["CORE-2", "CORE-4"]),
+                "r",
+                None,
+                &at(3),
+                false,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(slice_spec(&ledger, "CORE-2"), Some(a));
+        assert_eq!(slice_spec(&ledger, "CORE-4"), Some(a));
+        assert_eq!(slice_spec(&ledger, "O/R#3"), None);
+        let folded = keys(ledger.conn());
+        assert_eq!(folded.len(), 3, "{folded:?}");
+
+        ledger.rebuild().unwrap();
+        assert_eq!(keys(ledger.conn()), folded);
+
+        // A v2 file: migrating runs 0003 and its backfill.
+        ledger
+            .conn()
+            .execute_batch(
+                "DROP INDEX specs_key; DROP INDEX lanes_source; DROP TABLE spec_keys;
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+        drop(ledger);
+        let ledger = Ledger::open_and_migrate_with(&path, MIGRATIONS).unwrap();
+        assert_eq!(keys(ledger.conn()), folded);
+    }
 }

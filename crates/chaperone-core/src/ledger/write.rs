@@ -14,6 +14,7 @@ use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal}
 use super::{Ledger, LedgerError, check_schema, fold, redact};
 use crate::engine;
 use crate::pipeline::{REQUIRED_TRANSITIONS, Route};
+use crate::work::SPEC_BY_KEY;
 
 pub(crate) const MIN_LEASE_SECS: i64 = 30;
 pub(crate) const MAX_LEASE_SECS: i64 = 86_400;
@@ -307,13 +308,8 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             if event.spec_id.is_some() || p.version.is_some_and(|v| v != 1) {
                 refuse!(invalid("spec.created assigns the spec id and version 1"));
             }
-            let existing: Option<i64> = tx
-                .query_row(
-                    "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE",
-                    [key],
-                    |r| r.get(0),
-                )
-                .optional()?;
+            let existing: Option<i64> =
+                tx.query_row(SPEC_BY_KEY, [key], |r| r.get(0)).optional()?;
             if let Some(id) = existing {
                 refuse!(invalid(&format!(
                     "{key} already has spec {id}; change it with `spec update {id}`"
