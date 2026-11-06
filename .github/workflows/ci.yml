@@ -49,8 +49,9 @@ jobs:
 
   # R14's CI column, in release: S1, S2, M1 (chaperone-cli) and E1
   # (chaperone-core). L1 lands with the follower; E2 (fifty_writers) is not
-  # timed here yet. --include-ignored, so a
-  # budget test that loses its #[ignore] still runs here in release.
+  # timed here yet. --include-ignored, so a budget test that loses its
+  # #[ignore] still runs here in release. One -p per step: with several,
+  # cargo skips a package that has no budgets target instead of failing.
   budgets:
     name: budgets (${{ matrix.label }})
     strategy:
@@ -67,7 +68,8 @@ jobs:
       # M1 reads max RSS from GNU time on Linux.
       - if: runner.os == 'Linux'
         run: sudo apt-get install -y time
-      - run: cargo test --release --locked -p chaperone-core -p chaperone-cli --test budgets -- --include-ignored --nocapture
+      - run: cargo test --release --locked -p chaperone-core --test budgets -- --include-ignored --nocapture
+      - run: cargo test --release --locked -p chaperone-cli --test budgets -- --include-ignored --nocapture
 
   # Branch coverage is nightly-only (-Zcoverage-options=branch), so this job
   # alone runs a pinned nightly. GATED files: a missed branch or region fails
