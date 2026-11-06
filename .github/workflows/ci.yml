@@ -48,7 +48,8 @@ jobs:
       - run: cargo nextest run --workspace --locked --profile ci
 
   # R14's CI column, in release: S1, S2, M1 (chaperone-cli) and E1
-  # (chaperone-core). L1 lands with the follower. --include-ignored, so a
+  # (chaperone-core). L1 lands with the follower; E2 (fifty_writers) is not
+  # timed here yet. --include-ignored, so a
   # budget test that loses its #[ignore] still runs here in release.
   budgets:
     name: budgets (${{ matrix.label }})
