@@ -296,8 +296,9 @@ impl Ledger {
         let lanes = lanes_section(&tx, &key)?;
         let (handoffs, files) = handoff_sections(&tx, &lanes.items)?;
         let notes = notes_section(&tx, &key.to_lowercase())?;
-        // Before the budget cut: a key with any lane keeps its newest in the
-        // caps, and its newest note is never superseded.
+        // Checked before the budget cut, when an empty list means the ledger
+        // has none: the caps keep at least one row, and the newest note is
+        // never superseded.
         if slice.in_spec.is_none()
             && slice.parent_of.is_none()
             && lanes.items.is_empty()
@@ -521,12 +522,6 @@ fn notes_section(conn: &Connection, key: &str) -> Result<Section<NoteRow>, Ledge
     Ok(Section { items, omitted })
 }
 
-fn json_len(v: &impl Serialize) -> Result<usize, LedgerError> {
-    Ok(serde_json::to_string_pretty(v)
-        .map_err(std::io::Error::other)?
-        .len())
-}
-
 /// The answer as the CLI prints it, `meta` aside.
 #[derive(Serialize)]
 struct Printed<'a> {
@@ -536,7 +531,9 @@ struct Printed<'a> {
 
 /// The printed size of the answer, its envelope included.
 fn printed_len(d: &Dossier) -> Result<usize, LedgerError> {
-    Ok(json_len(&Printed { ok: true, data: d })? + META_BYTES)
+    let printed = serde_json::to_string_pretty(&Printed { ok: true, data: d })
+        .map_err(std::io::Error::other)?;
+    Ok(printed.len() + META_BYTES)
 }
 
 /// Cuts the answer to `ANSWER_BYTES`. Ledger facts fill first, so the
