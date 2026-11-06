@@ -57,9 +57,12 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
    gives the denial and derived attention keys. The writer is in the `actor`.
 
    The idempotency key follows `check record`'s: `dossier:` plus the sha256 of the key,
-   the actor's agent and session, the payload after redaction (canonical), and the id of
-   the key's newest `dossier.noted` whose payload differs (as `newest_other` does for
-   checks). A retry from the same session finds the same anchor and replays; a restored
+   the actor's agent and session, the payload exactly as it would be stored (redacted,
+   with `redactions` set, canonical), and the id of the key's newest `dossier.noted`
+   whose stored payload differs from that (as `newest_other` does for checks). Both the
+   hash and the comparison use the stored form, so a note that had a secret redacted
+   still replays; the redactor (`redact::payload`, private to the ledger module today)
+   is called from inside the write for this. A retry from the same session finds the same anchor and replays; a restored
    note (A, then B, then A again) has a new anchor and appends; another session's
    identical note has another actor and appends. Like `check record`, the anchor is read
    before the write lock, so a note that commits in between can only make a retry
@@ -82,13 +85,16 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
 
 4. **Small.** The read is capped three ways, and every cut is reported as `omitted`
    on its section:
-   - counts: the newest 10 lanes, 5 handoffs per lane, 5 decisions per lane, 100 files
-     and 20 notes;
+   - counts: the newest 10 lanes, 5 handoffs per lane, 5 handoff decisions per lane,
+     the newest 20 spec decisions (each printed as its line only; `spec get`'s
+     `siblings` are left out), 100 files and 20 notes;
    - strings: every printed string is cut at 300 characters (titles, branches,
      `next_action`, PR refs, summaries, paths, decisions, link refs), except a note at
      its own 600; the slice and parent spec print their decisions, not the spec body;
-   - total: the whole answer is cut at 48,000 characters, daisy's `context task`
-     budget, filled in section order (`slice`, `lanes`, `notes`, `handoffs`, `files`).
+   - total: the whole answer, measured as serialized JSON including its skeleton as
+     daisy measures it, is cut at 48,000 characters, daisy's `context task` budget.
+     Ledger facts fill first (`slice`, `lanes`, `handoffs`, `files`), then `notes`, so
+     notes any session can write never push out the files earlier lanes touched.
 
    So a key with a long history still prints a bounded answer, about 12,000 tokens at
    worst. `work handoffs <id>` and `spec get` have the full text. A write is one event
@@ -128,9 +134,10 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
   snapshot. The write needs two arms the "no folded table" choice still implies: the
   guard must accept this kind with no lane (its catch-all refuses one), and `fold()`
   must skip it rather than send it to `fold_lane`, or both the write and `rebuild()`
-  fail. It waits for #53. Estimate 450 to 600 lines of code, one migration: about
-  #65's `attention.recorded` (one kind, one write, about 200) plus #32's `spec decide`
-  and `get --key` (about 465), less what the read shares.
+  fail. It waits for #53. Estimate 450 to 650 lines of code, tests not counted, one
+  migration: #65's `attention.recorded` (one kind, one write, 232) plus #32's
+  `spec decide` and `get --key` (436), less what the read shares. The migration and
+  write tests the bar asks for come on top.
 - At the skill switch, `/issue` step 1 reads `dossier get` instead of `lane-brief` and
   daisy's `context task` for ledger facts. #41's lane detail reads the same call. The
   code can land any time after #53; it is not part of a phase's exit.
