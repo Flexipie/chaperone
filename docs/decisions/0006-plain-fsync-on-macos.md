@@ -39,7 +39,7 @@ crash during or just after a checkpoint could leave the file damaged.
 
 ## Alternatives considered
 
-- **`fullfsync=ON`.** About 50x slower per commit, and under parallel writers 4 to 5 ms flush brings back the lock
+- **`fullfsync=ON`.** About 50x slower per commit, and under parallel writers the 4 to 5 ms flush brings back the lock
   starvation that #62 fixed. Parallel writers are the load Chaperone exists for.
 - **`checkpoint_fullfsync=ON` only** (Apple's default). Covers the checkpoint corruption above, but misses E1 in 3
   of 5 runs and leaves E2 near its limit.
