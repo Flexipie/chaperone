@@ -256,6 +256,8 @@ fn get_is_capped_and_cuts_notes_first() {
     // ledger keeps for its meta.
     let printed = serde_json::to_string_pretty(&json!({"ok": true, "data": d})).unwrap();
     assert!(printed.len() + 200 <= 48_000, "{}", printed.len());
+    // And it uses the budget: no more cut than one file row would free.
+    assert!(printed.len() + 200 > 48_000 - 500, "{}", printed.len());
     assert_eq!(d.lanes.items.len(), 10);
     assert_eq!(d.lanes.omitted["lanes"], 1);
     assert_eq!(d.lanes.items[0].id, lanes[10]);

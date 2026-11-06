@@ -304,7 +304,7 @@ impl Ledger {
             && notes.items.is_empty()
         {
             return Ok(Err(Refusal::NotFoundRef {
-                entity: "dossier for",
+                entity: "dossier",
                 reference: key,
             }));
         }
@@ -548,9 +548,8 @@ fn fit(d: &mut Dossier) -> Result<(), LedgerError> {
         if size <= ANSWER_BYTES {
             return Ok(());
         }
-        // Estimates the size down item by item, then measures again: an
-        // item takes more indented in place, and the omitted counts it adds
-        // take a few bytes.
+        // Estimates the size down item by item, then measures again: the
+        // omitted counts it adds take a few bytes.
         while size > ANSWER_BYTES {
             let dropped = if let Some(x) = d.notes.items.pop() {
                 count(&mut d.notes.omitted, "notes", &x)?
@@ -570,14 +569,17 @@ fn fit(d: &mut Dossier) -> Result<(), LedgerError> {
     }
 }
 
-/// Counts a dropped item and returns its bytes with its comma and line.
+/// Counts a dropped item and returns the bytes it took as printed: every
+/// list sits at `data.<section>.<list>`, so each of its lines is indented 8,
+/// and it had a comma and a line break.
 fn count(
     omitted: &mut Omitted,
     name: &'static str,
     item: &impl Serialize,
 ) -> Result<usize, LedgerError> {
     *omitted.entry(name).or_default() += 1;
-    Ok(json_len(item)? + 2)
+    let s = serde_json::to_string_pretty(item).map_err(std::io::Error::other)?;
+    Ok(s.len() + 8 * s.lines().count() + 2)
 }
 
 #[cfg(test)]
