@@ -153,14 +153,44 @@ pub struct BoardItem {
     pub overlaps_omitted: usize,
 }
 
-/// One path two or more live lanes in a repo touch: the other lanes.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// One path two or more live lanes in a repo touch: the other lanes, the
+/// lowest [`OVERLAP_IDS`] ids, and how many more there are.
+#[derive(Clone, Debug, Serialize)]
 pub struct Overlap {
     pub path: String,
     pub work_ids: Vec<i64>,
+    pub work_ids_omitted: usize,
 }
 
 pub const BOARD_OVERLAPS: usize = 50;
+/// Lanes listed per path, so lanes that share a path cost the board
+/// linear work, not one row per pair.
+pub const OVERLAP_IDS: usize = 10;
+
+/// The head of a path's ids, lowest first and comma-separated, as the
+/// board's SQL keeps it: room for at least [`OVERLAP_IDS`] + 1 (this lane
+/// may be among them) of 19 digits, without a sort per row.
+const IDS_CHARS: usize = 240;
+
+/// A path's group as the board's SQL gives it: the head of its ids and its
+/// lane count.
+#[derive(Deserialize)]
+struct SharedPath {
+    path: String,
+    ids: String,
+    n: usize,
+}
+
+impl SharedPath {
+    /// The listed ids; at the cut, the last one may be partial and is dropped.
+    fn ids(&self) -> Vec<i64> {
+        let mut ids: Vec<&str> = self.ids.split(',').collect();
+        if self.ids.len() >= IDS_CHARS {
+            ids.pop();
+        }
+        ids.iter().filter_map(|i| i.parse().ok()).collect()
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct CreateInput {
@@ -690,41 +720,41 @@ impl Ledger {
         mut f: impl FnMut(BoardItem) -> Result<(), E>,
     ) -> Result<Result<(), E>, LedgerError> {
         let one = if id.is_some() { "AND id = ?2" } else { "" };
-        // `live` is every open lane even for one item, so `work ready`
-        // compares it with the rest. A path is compared as the handoff gave
-        // it, less a leading `./` or the lane's worktree.
+        // `shared` groups every open lane's newest handoff paths, even for
+        // one item, so `work ready` compares it with the rest. It holds only
+        // paths two lanes share; each row then matches its own handoff
+        // against it, so nothing per lane is held.
+        let live_path = norm_path("f.value", "live.wt");
+        let own_path = norm_path("f.value", "l.worktree_path");
         let mut stmt = self.conn().prepare(&format!(
-            "WITH live AS MATERIALIZED (
+            "WITH live AS (
                SELECT id, lower(repo_slug) AS repo, worktree_path AS wt,
                       (SELECT id FROM events WHERE lane_id = lanes.id AND {IS_HANDOFF}
                        ORDER BY id DESC LIMIT 1) AS h
                FROM lanes WHERE status NOT IN ('done', 'cancelled') AND repo_slug IS NOT NULL),
-             files AS MATERIALIZED (
-               SELECT DISTINCT live.id, live.repo,
-                      CASE WHEN f.value LIKE './%' THEN substr(f.value, 3)
-                           WHEN live.wt IS NOT NULL AND substr(f.value, 1, length(live.wt) + 1) = live.wt || '/'
-                           THEN substr(f.value, length(live.wt) + 2)
-                           ELSE f.value END AS path
+             files AS (
+               SELECT DISTINCT live.id, live.repo, {live_path} AS path
                FROM live JOIN events e ON e.id = live.h,
                     json_each(e.payload_json, '$.handoff.changed_files') f
                WHERE f.type = 'text'),
-             shared AS (
-               SELECT a.id, a.path, json_group_array(b.id) AS ids
-               FROM files a JOIN files b ON b.repo = a.repo AND b.path = a.path AND b.id != a.id
-               GROUP BY a.id, a.path),
-             per AS (
-               SELECT id, json_group_array(json_object('path', path, 'work_ids', json(ids))) AS overlaps
-               FROM shared GROUP BY id)
+             shared AS MATERIALIZED (
+               SELECT repo, path, count(*) AS n,
+                      substr(group_concat(id, ',' ORDER BY id), 1, {IDS_CHARS}) AS ids
+               FROM files GROUP BY repo, path HAVING n > 1)
              SELECT l.*, h.id, h.lane_id, h.actor_agent, h.actor_session,
                     json_extract(h.payload_json, '$.handoff'), h.at,
                     json_extract(o.payload_json, '$.ready'),
-                    json_extract(o.payload_json, '$.reason'), o.actor_agent, o.at, p.overlaps
+                    json_extract(o.payload_json, '$.reason'), o.actor_agent, o.at,
+                    (SELECT json_group_array(
+                              json_object('path', s.path, 'ids', s.ids, 'n', s.n))
+                     FROM json_each(h.payload_json, '$.handoff.changed_files') f
+                     JOIN shared s ON s.repo = lower(l.repo_slug) AND s.path = {own_path}
+                     WHERE f.type = 'text')
              FROM ({SELECT} WHERE status NOT IN ('done', 'cancelled') {one}) AS l
              LEFT JOIN events h ON h.id = (SELECT id FROM events
                WHERE lane_id = l.id AND {IS_HANDOFF} ORDER BY id DESC LIMIT 1)
              LEFT JOIN events o ON o.id = (SELECT id FROM events
                WHERE lane_id = l.id AND kind = 'lane.ready_overridden' ORDER BY id DESC LIMIT 1)
-             LEFT JOIN per p ON p.id = l.id
              ORDER BY l.lane_key IS NULL, l.lane_key, l.lane_pos IS NULL, l.lane_pos, l.id"
         ))?;
         let mut rows = match id {
@@ -748,16 +778,27 @@ impl Ledger {
             };
             let (ready, ready_reason) =
                 ready_rule(&item, handoff.as_ref(), ready_override.as_ref());
-            let mut overlaps: Vec<Overlap> = match r.get::<_, Option<String>>(42)? {
+            let mut shared: Vec<SharedPath> = match r.get::<_, Option<String>>(42)? {
                 Some(raw) => serde_json::from_str(&raw).map_err(std::io::Error::other)?,
                 None => Vec::new(),
             };
-            overlaps.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-            let overlaps_omitted = overlaps.len().saturating_sub(BOARD_OVERLAPS);
-            overlaps.truncate(BOARD_OVERLAPS);
-            for o in &mut overlaps {
-                o.work_ids.sort_unstable();
-            }
+            shared.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+            shared.dedup_by(|a, b| a.path == b.path);
+            let overlaps_omitted = shared.len().saturating_sub(BOARD_OVERLAPS);
+            shared.truncate(BOARD_OVERLAPS);
+            let overlaps = shared
+                .into_iter()
+                .map(|s| {
+                    let mut work_ids: Vec<i64> =
+                        s.ids().into_iter().filter(|&i| i != item.id).collect();
+                    work_ids.truncate(OVERLAP_IDS);
+                    Overlap {
+                        path: s.path,
+                        work_ids_omitted: (s.n - 1).saturating_sub(work_ids.len()),
+                        work_ids,
+                    }
+                })
+                .collect();
             let item = BoardItem {
                 item,
                 handoff,
@@ -928,6 +969,17 @@ fn handoff_at(r: &Row, base: usize) -> Result<Handoff, LedgerError> {
         handoff: serde_json::from_str(&raw).map_err(std::io::Error::other)?,
         created_at: r.get(base + 5)?,
     })
+}
+
+/// SQL for a handoff path as git names it: less a leading `./` or the
+/// lane's worktree (`chaperone overlap` does the same).
+fn norm_path(value: &str, wt: &str) -> String {
+    format!(
+        "CASE WHEN {value} LIKE './%' THEN substr({value}, 3)
+              WHEN {wt} IS NOT NULL AND substr({value}, 1, length({wt}) + 1) = {wt} || '/'
+              THEN substr({value}, length({wt}) + 2)
+              ELSE {value} END"
+    )
 }
 
 /// Daisy's ready rule, as far as the ledger knows it: the owner's override
