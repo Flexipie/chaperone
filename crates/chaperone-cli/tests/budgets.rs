@@ -2,7 +2,6 @@
 //! default, because a debug build is not what the budgets describe:
 //! `cargo test --release -p chaperone-cli --test budgets -- --ignored --nocapture`.
 
-use std::path::Path;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
