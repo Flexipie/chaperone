@@ -2,8 +2,7 @@
 //! `daisy-cli reviews get`, Chaperone's only call into daisy, before the
 //! write opens its transaction.
 
-use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use chaperone_core::checks::{AttentionInput, CheckInput};
@@ -11,6 +10,7 @@ use chaperone_core::ledger::Ledger;
 use chaperone_core::usage::Roots;
 use serde_json::{Value, json};
 
+use crate::child;
 use crate::cli::{AttentionCmd, CheckCmd, JobsCmd, ReviewsCmd, UsageCmd};
 use crate::output::{CliError, ErrorBody, Outcome};
 use crate::work::one;
@@ -130,46 +130,24 @@ fn daisy_review(job: i64) -> Result<Value, CliError> {
             details: Some(details),
         })
     };
-    let mut child = Command::new(&bin)
-        .args(["reviews", "get", &job.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| failed(format!("could not run {}: {e}", bin.display()), json!({})))?;
-    // Read both pipes while waiting, so a large answer cannot fill one and
-    // stall daisy until the timeout.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut buf);
-            }
-            buf
-        })
-    };
-    let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
-    let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
     let deadline = Instant::now() + DAISY_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(failed(
-                    format!("no answer in {}s", DAISY_TIMEOUT.as_secs()),
-                    json!({}),
-                ));
-            }
-            Err(e) => return Err(failed(e.to_string(), json!({}))),
+    let child::Done {
+        status, out, err, ..
+    } = child::run(
+        Command::new(&bin).args(["reviews", "get", &job.to_string()]),
+        deadline,
+        usize::MAX,
+    )
+    .map_err(|e| match e {
+        child::Failed::Spawn(e) => {
+            failed(format!("could not run {}: {e}", bin.display()), json!({}))
         }
-    };
-    let (out, err) = (
-        out.join().unwrap_or_default(),
-        err.join().unwrap_or_default(),
-    );
+        child::Failed::TimedOut => failed(
+            format!("no answer in {}s", DAISY_TIMEOUT.as_secs()),
+            json!({}),
+        ),
+        child::Failed::Wait(e) => failed(e.to_string(), json!({})),
+    })?;
     if status.success() {
         let env: Value = serde_json::from_slice(&out).unwrap_or(Value::Null);
         return match env.get("data") {
