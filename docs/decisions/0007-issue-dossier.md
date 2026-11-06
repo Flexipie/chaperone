@@ -31,7 +31,7 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
    | Section | From | Written by |
    | --- | --- | --- |
    | `key` | the argument, in `normalize_key`'s form (`owner/repo#N` or `TEAM-123`); a bare `#N` is `invalid_input` | the caller |
-   | `slice` | the spec slice whose heading names the key, and that spec's decisions for the slice and the whole spec; for a parent key (`specs.external_key`), the spec itself: title, version, slice count and decisions | `spec create`, `spec update`, `spec decide` |
+   | `slice` | the spec slice whose heading names the key, and that spec's decisions for the slice and the whole spec; for a parent key (`specs.external_key`), the spec itself: title, version, slice count and decisions. A key that is both (a slice that later got its own spec) shows both | `spec create`, `spec update`, `spec decide` |
    | `lanes` | every lane `work_for_key` would match: `source` is `linear`, `issue` or `github` and `source_id` is the key, ignoring case. Per lane: `id`, `title`, `status`, `branch`, `pr_ref`, `agent`, `pipeline_id`, `created_at`, `updated_at` | `work create`, `claim`, `update` |
    | `handoffs` | per lane, its handoffs newest first: `at`, `status`, `ready`, `next_action`, `commit`, `pull_request`, the summary's first 300 characters; the handoff brief's `decisions` from each lane's newest handoff only | `work handoff` |
    | `files` | per lane, the newest handoff's `changed_files`, each path cut at 300 characters (`LOOK_AT_PATH_CHARS`), with the lane and the handoff's `commit` | `work handoff` (the source #42 reads) |
@@ -54,11 +54,17 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
    `lane_id` and `spec_id` are null, so a note is never a lane event: it does not
    touch any lane's `updated_at` (a note never makes a lane's next
    `--expected-updated-at` stale), and it never becomes the anchor `newest_fact_event`
-   gives the denial and derived attention keys. The writer is in the `actor`. The
-   idempotency key is `dossier:` plus the sha256 of the key, the canonical payload and
-   the id of the key's newest `dossier.noted`, so a retry replays, while the same text
-   written again later (a restored note, a second lane's identical link) appends. Notes are never edited or deleted: a correction is a new note that supersedes
-   the old one, and the log keeps both.
+   gives the denial and derived attention keys. The writer is in the `actor`.
+
+   The idempotency key follows `check record`'s: `dossier:` plus the sha256 of the key,
+   the actor's agent and session, the payload after redaction (canonical), and the id of
+   the key's newest `dossier.noted` whose payload differs (as `newest_other` does for
+   checks). A retry from the same session finds the same anchor and replays; a restored
+   note (A, then B, then A again) has a new anchor and appends; another session's
+   identical note has another actor and appends. Like `check record`, the anchor is read
+   before the write lock, so a note that commits in between can only make a retry
+   append, never lose a write. Notes are never edited or deleted: a correction is a new
+   note that supersedes the old one, and the log keeps both.
 
    Who writes: `/issue` (what it learned that the issue does not say), `/ship` (links to
    the PR and ADRs), `/orchestrate` and the owner. Text from the tracker, PRs or reviews
@@ -74,12 +80,19 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
    second write of the same facts on the handoff path, one more thing `rebuild()` must
    reproduce, and one more place to go stale.
 
-4. **Small.** The read is capped: the newest 10 lanes, 10 handoffs per lane, 200 files
-   and 20 notes, and each section reports `omitted` when it cuts, so a key with a long
-   history still prints a bounded answer. `work handoffs <id>` has the full handoff.
-   Every printed string has a cap (summary 300, path 300, note 600, a decision 500), so
-   the counts bound the bytes. A write is one event with at most one 600-character note
-   and five links.
+4. **Small.** The read is capped three ways, and every cut is reported as `omitted`
+   on its section:
+   - counts: the newest 10 lanes, 5 handoffs per lane, 5 decisions per lane, 100 files
+     and 20 notes;
+   - strings: every printed string is cut at 300 characters (titles, branches,
+     `next_action`, PR refs, summaries, paths, decisions, link refs), except a note at
+     its own 600; the slice and parent spec print their decisions, not the spec body;
+   - total: the whole answer is cut at 48,000 characters, daisy's `context task`
+     budget, filled in section order (`slice`, `lanes`, `notes`, `handoffs`, `files`).
+
+   So a key with a long history still prints a bounded answer, about 12,000 tokens at
+   worst. `work handoffs <id>` and `spec get` have the full text. A write is one event
+   with at most one 600-character note and five links of at most 300 characters.
 
 5. **Data, never instructions, never a gate.** No fact reads `dossier.*`, so a note
    cannot satisfy or deny a transition ([R13](../research/r13-security-and-trust.md)).
@@ -112,7 +125,12 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
 - One code PR follows: the kind in the write and its validation, the index as a
   migration (a one-way door, with the migration tests the bar asks for), `dossier note`
   and `dossier get`, the rows in `events.md` and `cli-contract.md`, and the `--help`
-  snapshot. It waits for #53. Estimate about 400 lines of code.
+  snapshot. The write needs two arms the "no folded table" choice still implies: the
+  guard must accept this kind with no lane (its catch-all refuses one), and `fold()`
+  must skip it rather than send it to `fold_lane`, or both the write and `rebuild()`
+  fail. It waits for #53. Estimate 450 to 600 lines of code, one migration: about
+  #65's `attention.recorded` (one kind, one write, about 200) plus #32's `spec decide`
+  and `get --key` (about 465), less what the read shares.
 - At the skill switch, `/issue` step 1 reads `dossier get` instead of `lane-brief` and
   daisy's `context task` for ledger facts. #41's lane detail reads the same call. The
   code can land any time after #53; it is not part of a phase's exit.
