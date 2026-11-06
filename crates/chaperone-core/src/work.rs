@@ -747,8 +747,10 @@ impl Ledger {
                     json_extract(o.payload_json, '$.reason'), o.actor_agent, o.at,
                     (SELECT json_group_array(
                               json_object('path', s.path, 'ids', s.ids, 'n', s.n))
+                     -- CROSS JOIN keeps the handoff outside: inside, it is parsed again
+                     -- for every shared path.
                      FROM json_each(h.payload_json, '$.handoff.changed_files') f
-                     JOIN shared s ON s.repo = lower(l.repo_slug) AND s.path = {own_path}
+                     CROSS JOIN shared s ON s.repo = lower(l.repo_slug) AND s.path = {own_path}
                      WHERE f.type = 'text')
              FROM ({SELECT} WHERE status NOT IN ('done', 'cancelled') {one}) AS l
              LEFT JOIN events h ON h.id = (SELECT id FROM events
