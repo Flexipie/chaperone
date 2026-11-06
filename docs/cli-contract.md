@@ -88,7 +88,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `reviews record` and `usage report` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `reviews record`, `usage report` and `work merged` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -104,6 +104,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `work handoffs` | `<id>` | read |
 | `work events` | `<id>` | read |
 | `work ready` | `<id> [--yes] [--no] [--clear] [--reason]` | write |
+| `work merged` | `<id> --pr <owner/repo#N> --merge-sha <sha> --head <sha> --merged-at <t> [--patch-id <hex>]` | write |
 | `work board` | | read |
 | `spec create` | `--parent <key> --file <path\|-> [--title]` | write |
 | `spec get` | `[<spec>] [--key <slice key>] [--version <n>]` | read |
@@ -124,6 +125,14 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 `chaperone migrate` is the only command that creates the ledger or migrates it (`Ledger::open_and_migrate`, with a `VACUUM INTO` backup before an upgrade, #4). It creates a missing or empty file. It refuses a non-empty file whose `application_id` is not Chaperone's, a file that is not SQLite, and a version-0 file that already has tables, so it never applies 0001 over someone else's database. Every other command opens with `Ledger::open`, which never creates or migrates and refuses a mismatch with exit 3. Migration 0001 sets `PRAGMA application_id`, and open checks it, so a foreign SQLite file at version 1 is refused (#7).
 
 `work handoff` reads the JSON from `<file>`, or from stdin when the file is omitted or `-`. A handoff with `ready: true` or to `done` runs the `handoff` gate (commands and transitions below). The write itself refuses a `lane.handed_off` that says ready and any event but `phase.entered` that moves a lane to `done`, so no path skips the gate.
+
+`work merged` is new (#59). `/merge` runs it after the merge, from any session (it skips the
+holder rule and leaves `updated_at` alone, as `check record` does). It appends one
+`pr.merged` (events.md, PR). It refuses (`invalid_input`, nothing written) a `--pr` that is not
+`owner/repo#N` or that the item has never held, a PR already merged on another item, a sha that
+is not 7 to 40 lowercase hex digits, and a `--merged-at` that is not RFC 3339 UTC with
+milliseconds. The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
+payload}`.
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`. It answers daisy's way: `{id, ready, ready_reason}` from the board, or `{id, ready_override, on_board: false}` for a done or cancelled item.
 

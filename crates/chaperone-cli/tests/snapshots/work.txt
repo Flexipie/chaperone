@@ -12,6 +12,7 @@ Commands:
   handoff    Record a structured handoff (JSON: summary, status, changed_files, verification, smoke, blockers, open_questions, next_action, commit, pull_request, brief). Its status moves the item; a terminal status clears the holder. A ready or done handoff runs the handoff gate
   handoffs   Every handoff on an item, oldest first
   events     The item's ledger, oldest first
+  merged     Record that one of the item's PRs merged (what /merge runs). The same PR again replays and writes nothing
   ready      Override whether the item is ready: --yes, --no, or --clear to go back to its handoffs. Refused from any session that has held it
   get        One item with its lease state
   board      Every open item with its newest handoff and whether it is ready: the owner's override, else status review and a ready handoff. Every item is under `other`; specs are not grouped yet

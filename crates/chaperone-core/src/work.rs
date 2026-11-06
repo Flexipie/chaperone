@@ -993,7 +993,7 @@ fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
         PhaseEntered if carries_handoff => "handoff",
         PhaseEntered => "update",
         SpecCreated | SpecRevised | SpecApproved | GateDenied | CheckRequested | CheckFinished
-        | FindingUpdated | UsageReported => return None,
+        | FindingUpdated | UsageReported | PrMerged => return None,
     })
 }
 

@@ -29,6 +29,10 @@ fn help_matches_snapshots() {
             include_str!("snapshots/work-cancel.txt"),
         ),
         (&["work", "get"], include_str!("snapshots/work-get.txt")),
+        (
+            &["work", "merged"],
+            include_str!("snapshots/work-merged.txt"),
+        ),
         (&["work", "list"], include_str!("snapshots/work-list.txt")),
         (
             &["work", "handoff"],

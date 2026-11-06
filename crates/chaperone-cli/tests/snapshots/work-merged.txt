@@ -1,0 +1,18 @@
+Record that one of the item's PRs merged (what /merge runs). The same PR again replays and writes nothing
+
+Usage: chaperone work merged [OPTIONS] --pr <PR> --merge-sha <MERGE_SHA> --head <HEAD> --merged-at <MERGED_AT> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --db <DB>                Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --pr <PR>                owner/repo#N, a PR the item has held
+      --format <FORMAT>        Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --merge-sha <MERGE_SHA>  The merge commit on the base
+      --head <HEAD>            The PR head that was merged
+      --merged-at <MERGED_AT>  When the forge merged it, RFC 3339 UTC with milliseconds
+      --patch-id <PATCH_ID>    git patch-id of the merged diff
+      --agent <AGENT>          Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>      Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help                   Print help

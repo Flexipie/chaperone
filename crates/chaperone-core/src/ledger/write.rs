@@ -401,6 +401,16 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             {
                 refuse!(invalid("usage.reported needs a message_id"));
             }
+            if event.kind == PrMerged
+                && (event.payload.head_sha.is_none()
+                    || !["pr", "merge_sha", "merged_at"]
+                        .iter()
+                        .all(|k| event.payload.rest.get(*k).is_some_and(|v| v.is_string())))
+            {
+                refuse!(invalid(
+                    "pr.merged needs pr, merge_sha, head_sha and merged_at"
+                ));
+            }
             // A handoff's id is its event's, so `work handoffs` and the
             // stored payload agree whoever wrote it.
             if event.payload.rest.contains_key("handoff") {

@@ -43,6 +43,17 @@ pub struct CheckInput {
     pub findings: Option<u64>,
 }
 
+/// `work merged`'s input: what the forge says about the merge.
+#[derive(Clone, Debug, Default)]
+pub struct MergedInput {
+    pub work: i64,
+    pub pr: String,
+    pub merge_sha: String,
+    pub head: String,
+    pub merged_at: String,
+    pub patch_id: Option<String>,
+}
+
 /// What `check record` wrote, or the event a retry replayed.
 #[derive(Clone, Debug, Serialize)]
 pub struct Recorded {
@@ -68,11 +79,7 @@ impl Ledger {
             return invalid(format!("check {} is not a session check", input.check));
         };
         let head = &input.head;
-        if !(7..=40).contains(&head.len())
-            || !head
-                .bytes()
-                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
-        {
+        if !sha_ok(head) {
             return invalid(format!(
                 "--head must be 7 to 40 lowercase hex digits, got {head}"
             ));
@@ -153,6 +160,104 @@ impl Ledger {
             }),
             Applied::Refused(r) => Err(r),
             Applied::Heartbeat { .. } => unreachable!("check_record writes an event"),
+        })
+    }
+
+    /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
+    /// `merge_sha` from head `head` at `merged_at` (the forge's time). Keyed
+    /// `merged:<lane>:<pr>`, so a retry replays. Refused for a PR the lane
+    /// never held and for one already merged on another lane.
+    pub fn work_merged(&self, actor: &Actor, input: &MergedInput) -> Checked<Recorded> {
+        let pr = input.pr.trim();
+        if !crate::work::pr_ref_ok(pr) {
+            return invalid(format!("--pr must be owner/repo#N, got {pr}"));
+        }
+        for (flag, sha) in [("--merge-sha", &input.merge_sha), ("--head", &input.head)] {
+            if !sha_ok(sha) {
+                return invalid(format!(
+                    "{flag} must be 7 to 40 lowercase hex digits, got {sha}"
+                ));
+            }
+        }
+        if let Some(p) = &input.patch_id
+            && !sha_ok(p)
+        {
+            return invalid(format!("--patch-id must be lowercase hex, got {p}"));
+        }
+        let work = input.work;
+        let mut payload = Payload {
+            head_sha: Some(input.head.clone()),
+            ..Payload::default()
+        };
+        for (k, v) in [
+            ("pr", Some(pr)),
+            ("merge_sha", Some(input.merge_sha.as_str())),
+            ("merged_at", Some(input.merged_at.as_str())),
+            ("patch_id", input.patch_id.as_deref()),
+        ] {
+            payload.rest.insert(k.into(), json!(v));
+        }
+        let key = format!("merged:{work}:{}", pr.to_lowercase());
+        let (applied, _) = self.apply_planned(
+            actor,
+            Some(&key),
+            None,
+            false,
+            |conn, _| {
+                if !lane_exists(conn, work)? {
+                    return Ok(Err(Refusal::NotFound {
+                        entity: ENTITY,
+                        id: work,
+                    }));
+                }
+                let canonical: bool = conn.query_row(
+                    "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1) IS ?1",
+                    [&input.merged_at],
+                    |r| r.get(0),
+                )?;
+                if !canonical {
+                    return invalid(format!(
+                        "--merged-at must be RFC 3339 UTC with milliseconds, got {}",
+                        input.merged_at
+                    ));
+                }
+                // Every PR the lane has held, not only the latest, so a lane
+                // with several PRs records each merge.
+                let held = exists(
+                    conn,
+                    "SELECT 1 FROM events WHERE lane_id = ?1 AND ?2 IN (
+                       lower(json_extract(payload_json, '$.pr')),
+                       lower(json_extract(payload_json, '$.changed.pr_ref.to')))",
+                    params![work, pr.to_lowercase()],
+                )?;
+                if !held {
+                    return invalid(format!("work item {work} has never held PR {pr}"));
+                }
+                let elsewhere = exists(
+                    conn,
+                    "SELECT 1 FROM events WHERE kind = 'pr.merged' AND lane_id != ?1
+                       AND lower(json_extract(payload_json, '$.pr')) = ?2",
+                    params![work, pr.to_lowercase()],
+                )?;
+                if elsewhere {
+                    return invalid(format!("PR {pr} is already merged on another work item"));
+                }
+                Ok(Ok(check_event(EventKind::PrMerged, work, payload)))
+            },
+            |_, _, _| Ok(()),
+        )?;
+        let replayed = matches!(applied, Applied::Replayed(_));
+        Ok(match applied {
+            Applied::Committed(e) | Applied::Replayed(e) => Ok(Recorded {
+                event_id: e.id,
+                work_id: work,
+                kind: e.kind.as_str(),
+                replayed,
+                at: e.at,
+                payload: e.payload,
+            }),
+            Applied::Refused(r) => Err(r),
+            Applied::Heartbeat { .. } => unreachable!("work_merged writes an event"),
         })
     }
 
@@ -424,6 +529,14 @@ fn newest_other(
         }
     }
     Ok(None)
+}
+
+/// A commit: 7 to 40 lowercase hex digits.
+fn sha_ok(sha: &str) -> bool {
+    (7..=40).contains(&sha.len())
+        && sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
 }
 
 pub(crate) fn lane_exists(conn: &Connection, id: i64) -> Result<bool, LedgerError> {

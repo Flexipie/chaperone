@@ -37,11 +37,11 @@ These rules keep every write small, single and fail-closed.
   whole events, and the next report adds the rest.
 - **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
   `gate.denied` and nothing else. Its key is
-  `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied or usage.reported>`,
+  `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied, usage.reported or pr.merged>`,
   so a retry with no new facts replays the same denial instead of appending again. A
   replayed denial still exits 1 with `gate_denied`.
 - **Lane commands other than `work ready` bump `updated_at`.** `gate.denied`, `check.*`,
-  `finding.updated`, `lane.ready_overridden` and `usage.reported` do not touch the lane row's `updated_at`, so a subagent
+  `finding.updated`, `lane.ready_overridden`, `usage.reported` and `pr.merged` do not touch the lane row's `updated_at`, so a subagent
   recording a check never makes the lane's next `--expected-updated-at` stale.
 - **Replays.** A retry with the same key and kind returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
@@ -49,7 +49,8 @@ These rules keep every write small, single and fail-closed.
   `check.finished` for that check with a different payload (so a retry replays unless another session recorded the same check since, and a
   result that flips back, such as no, yes, no, appends), and `reviews record` uses
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
-  recorded on another lane is `invalid_input`.
+  recorded on another lane is `invalid_input`. `work merged` uses `merged:<lane_id>:<pr>`
+  (the PR lowercased), and a PR already merged on another lane is `invalid_input`.
 - **Small payloads.** No secrets (redacted at write, [R13](research/r13-security-and-trust.md)),
   no blobs. Evidence files sit beside the ledger, named by content hash, and the payload
   carries only the hash (`evidence_ref`). Spec bodies are capped at 256 KiB, handoff
@@ -142,10 +143,20 @@ A requested review with no finish projects the fact `daisy_review.state` as `run
 | Kind | Command | Payload |
 | --- | --- | --- |
 | `pr.opened` | `work update --pr` when the PR goes from null to set | `pr`, `head_sha` (the latest handoff's `commit`, null if none), `changed` |
+| `pr.merged` | `work merged` | `pr`, `merge_sha`, `head_sha` (the PR head that merged), `merged_at` (the forge's merge time; R11's `at`, kept apart from the envelope `at`, which is when it was recorded), `patch_id` (nullable) |
 
 It is that update's one event, in place of `lane.updated`, and `work events` shows it as `update`. When the PR first arrives in
 a handoff, the handoff's event carries `changed.pr_ref` from null, and the fact
 `pr.opened_at` is the `at` of whichever event first set the PR.
+
+`pr.merged` names one PR the lane has held (a `pr.opened` or any `changed.pr_ref.to` on its
+events), so a lane with several PRs records each merge. It changes no column but
+`head_event_id`, is not a lane action in `work events`, and no gate reads it. The ready and
+handoff numbers are read from the log, never stored on it. Commits after the handoff are
+`git rev-list --count <handoff commit>..<head_sha>`, and ready to merge is `merged_at` minus
+the handoff's `at`, where the handoff is R11's first real one among the lane's handoffs with
+a lower event id (one whose `next_action` does not start with `reviewing`), or the newest
+`lane.ready_overridden` with `ready: true` before the merge, when the owner made it ready.
 
 
 ### Usage
@@ -182,6 +193,9 @@ events (`usage get`), never a stored counter. Message text never enters the payl
   `description` its `agent_nickname`.
 - **Cursor** and other CLIs are not read. Their lanes have no usage events, so `usage get`
   says `known: false`, never a guessed zero.
+
+Usage is matched by worktree path, so a redo lane that reuses a path, or a worktree nested
+under another lane's, also counts those sessions. That is lane-stats' rule, kept on purpose.
 
 ## `check.finished` payloads
 
@@ -260,7 +274,7 @@ Named so nothing else takes the name. The write refuses these kinds in M1.
 | `session.started`, `turn.finished`, `session.exited`, `tool.started`, `tool.finished`, `permission.denied` | [R4](research/r4-agent-cli-integration.md) v0 lifecycle | No adapter in M1. M1's `usage.reported` comes from transcripts. |
 | `agent.stalled`, `agent.blocked`, `agent.killed` | [R8](research/r8-process-terminal-runtime.md) | Needs `chaperone supervise`. |
 | `reservation.written`, `intent.granted`, `intent.denied`, `path.released`, `seam.published`, `seam.acked`, `seam.rejected`, `message.sent`, `stack.rebased`, `stack.layer_opened` | [R9](research/r9-coordination-between-lanes.md) | Coordination is Phase 3. |
-| `evidence.recorded`, `escape.judged`, `price.published`, `pr.merged`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |
+| `evidence.recorded`, `escape.judged`, `price.published`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |
 | `question.opened` | [R12](research/r12-interfaces-and-attention.md) | Attention is later. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`, `question.overlap`) are payload values, not kinds. |
 | `human.merge_yes` | [R10](research/r10-verification-review-layer.md) | Needs a user-attributed adapter. M1's done is the `handoff` transition. |
 
