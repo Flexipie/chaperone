@@ -20,8 +20,8 @@ does a second ADR from one lane: `0080b-<slug>.md`. Numbers have gaps, and order
 is roughly order of filing, not of merge.
 
 ADRs 0001 to 0007 (0007 is #69's, numbered before this rule) and R1 to R15 keep their numbers. A lane with no issue,
-or on an issue numbered 15 or lower (it would clash with those), opens an issue for the doc first and uses its
-number.
+or on an issue numbered 15 or lower (it would clash with those), opens an issue for the doc first, uses its
+number and names its branch after it.
 
 **Migrations are excluded.** `crates/chaperone-core/migrations/000N_*.sql` is numbered by `PRAGMA user_version`,
 which is the file's position in `MIGRATIONS` (`crates/chaperone-core/src/ledger/mod.rs`). It has to stay dense and in
