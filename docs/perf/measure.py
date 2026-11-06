@@ -24,6 +24,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 WARM, SAMPLES = 8, 100
+RSS_RUNS = 3
 HEAD = "abcdef1"
 
 
@@ -172,9 +173,6 @@ def max_rss(b, *args, stdin=None, session=None):
         raise SystemExit(f"{args} exited {out.returncode}: {out.stderr[:400]}")
     m = re.search(r"(\d+)\s+maximum resident set size", out.stderr)
     return int(m.group(1)) / 2**20
-
-
-RSS_RUNS = 3
 
 
 def rss_range(b, make, session=None):
