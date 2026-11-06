@@ -316,6 +316,73 @@ def measure(binary, snapshot, items, deep):
         shutil.rmtree(root)
 
 
+LIVE_LANES, REPO_FILES = 50, 400
+
+
+def git(cwd, *args):
+    subprocess.run(["git", "-c", "user.email=b@b", "-c", "user.name=b", *args], cwd=cwd,
+                   check=True, capture_output=True, env={"PATH": "/usr/bin:/bin", "HOME": cwd})
+
+
+def live_lanes(binary):
+    """`overlap` at 50 open lanes, each a worktree of one repo with a commit,
+    an uncommitted edit and a new file, and a handoff listing 10 paths; 5
+    paths each are shared with the next lane. Its own ledger and repo, so
+    the realistic snapshot stays as it was."""
+    root = tempfile.mkdtemp(prefix="chaperone-lanes-")
+    try:
+        b = Bench(binary, root)
+        has = "overlap" in b.run("--help")
+        b.run("migrate")
+        git(root, "init", "-q", "--bare", "-b", "main", "origin.git")
+        git(root, "clone", "-q", "origin.git", "main")
+        repo = os.path.join(root, "main")
+        names = [f"src/m{i // 20}/f{i}.rs" for i in range(REPO_FILES)]
+        for n in names:
+            os.makedirs(os.path.dirname(os.path.join(repo, n)), exist_ok=True)
+            with open(os.path.join(repo, n), "w") as f:
+                f.write(f"// {n}\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "init")
+        git(repo, "push", "-q", "origin", "main")
+        git(repo, "remote", "set-head", "origin", "main")
+        for i in range(LIVE_LANES):
+            wt = os.path.join(root, f"wt{i}")
+            git(repo, "worktree", "add", "-q", wt, "-b", f"lane{i}")
+            mine = [names[(i * 5 + k) % REPO_FILES] for k in range(10)]
+            for n in mine[:8]:
+                with open(os.path.join(wt, n), "a") as f:
+                    f.write("x\n")
+            git(wt, "commit", "-qam", "lane")
+            for n in mine[8:]:
+                with open(os.path.join(wt, n), "a") as f:
+                    f.write("y\n")
+            with open(os.path.join(wt, f"src/new{i}.rs"), "w") as f:
+                f.write("new\n")
+            lane = b.run("work", "create", "--title", f"lane {i}", "--repo", "bench/repo")["id"]
+            b.run("work", "claim", str(lane), "--worktree", wt)
+            b.run("work", "handoff", str(lane), "--stdin", stdin=json.dumps({
+                "summary": "bench", "status": "active", "changed_files": mine}))
+        board = b.timed(lambda i: (["work", "board"], None), warm=2, samples=20)
+        ready = b.timed(lambda i: (["work", "ready", "1", "--clear"], None), session="owner",
+                        warm=2, samples=20)
+        print(f"\n### {LIVE_LANES} open lanes with worktrees (ms)\n")
+        print("| Command | p50 | p99 | max |\n| --- | --- | --- | --- |")
+        if has:
+            print(row("overlap (git in 50 worktrees)",
+                      b.timed(lambda i: (["overlap"], None), warm=2, samples=20)))
+        print(row("work board", board))
+        print(row("work ready (one board item)", ready))
+        print(f"\nM1 max RSS: work board {max_rss(b, 'work', 'board'):.2f} MiB")
+        if has:
+            shared = sum(f["shared"] for f in b.run("overlap")["files"])
+            print(f"overlap {max_rss(b, 'overlap'):.2f} MiB (largest of it and its git "
+                  f"children), {shared} shared files")
+    finally:
+        check_sandbox(root)
+        shutil.rmtree(root)
+
+
 def check_sandbox(root):
     """A missed --db resolves the default ledger from HOME, so into root."""
     stray = os.path.join(root, "Library", "Application Support", "chaperone")
@@ -345,6 +412,7 @@ def main():
               f"through the CLI in {secs:.0f} s, ledger {os.path.getsize(s.db) / 2**20:.1f} MiB")
         for binary in a.binaries:
             measure(binary, s.db, a.items, deep)
+            live_lanes(binary)
     finally:
         check_sandbox(seed_root)
         shutil.rmtree(seed_root)
