@@ -1023,7 +1023,7 @@ pub(crate) fn check_owner(item: &WorkItem, actor: &Actor) -> Result<(), Refusal>
     Ok(())
 }
 
-fn trimmed(s: &Option<String>) -> Option<String> {
+pub(crate) fn trimmed(s: &Option<String>) -> Option<String> {
     s.as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())

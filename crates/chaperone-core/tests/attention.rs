@@ -6,7 +6,7 @@ mod common;
 
 use chaperone_core::checks::AttentionInput;
 use chaperone_core::ledger::{Applied, EventKind, Ledger, Mutation, Payload, Refusal};
-use chaperone_core::work::{ClaimInput, CreateInput};
+use chaperone_core::work::{ClaimInput, CreateInput, UpdateInput};
 use common::{actor, count, read_only};
 
 const ATTENTION: &str = "SELECT count(*) FROM events WHERE kind = 'attention.recorded'";
@@ -105,6 +105,35 @@ fn each_intervention_records_once() {
     };
     let there = ledger.attention_record(&o, &there).unwrap().unwrap();
     assert_eq!((there.replayed, there.work_id), (false, elsewhere));
+    // A blank key is no key: after new lane activity the derived key appends.
+    let blank = AttentionInput {
+        idempotency_key: Some("  ".into()),
+        ..record(elsewhere, "revived")
+    };
+    ledger.attention_record(&o, &blank).unwrap().unwrap();
+    let item = ledger.work_get(elsewhere, common::AT).unwrap().unwrap();
+    let update = UpdateInput {
+        next_action: Some("resumed".into()),
+        ..UpdateInput::default()
+    };
+    ledger
+        .work_update(
+            &actor("1"),
+            elsewhere,
+            &update,
+            Some(&item.updated_at),
+            None,
+            false,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        !ledger
+            .attention_record(&o, &blank)
+            .unwrap()
+            .unwrap()
+            .replayed
+    );
     // A question and its answer keyed alike are two records.
     let asked = AttentionInput {
         reason: Some("question.scope".into()),
@@ -126,7 +155,7 @@ fn each_intervention_records_once() {
             .replayed
     );
     let db = read_only(&path);
-    assert_eq!(count(&db, ATTENTION), 9);
+    assert_eq!(count(&db, ATTENTION), 11);
     assert_eq!(
         count(
             &db,
@@ -163,6 +192,13 @@ fn refusals_write_nothing() {
         "--by",
     );
     refused(record(id, "asked"), "asked needs --reason");
+    refused(
+        AttentionInput {
+            idempotency_key: Some("k".repeat(201)),
+            ..record(id, "nudged")
+        },
+        "longer than 200",
+    );
     refused(
         AttentionInput {
             reason: Some("question.scope".into()),

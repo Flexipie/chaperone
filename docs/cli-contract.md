@@ -142,7 +142,8 @@ one `attention.recorded` (events.md, Attention). It refuses (`invalid_input`, no
 an `asked` without `--reason`, a `--reason` on another type, a `sent_back` without `--round` of
 1 or more, an `answered` without `--answers` and `--note` or whose `--answers` is not a question
 asked on that item, `--answers` or `--round` on another type, and a note that is blank, has a line break or is
-over 500 characters. `--idempotency-key` is scoped to the item and type, so the same key on another item, or on a
+over 500 characters. `--idempotency-key` is trimmed (blank is no key, over 200 characters is refused, as for
+`work create`) and scoped to the item and type, so the same key on another item, or on a
 question and its answer, is a separate record. Without `--idempotency-key`, a record repeated with nothing new on the lane
 replays; a real repeat (a second nudge on a stalled lane) passes its own key. It prints
 `{event_id, work_id, kind, replayed, at, payload}`.

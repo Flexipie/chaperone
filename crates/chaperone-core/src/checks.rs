@@ -328,7 +328,12 @@ impl Ledger {
         }
         // Read before the write lock: a fact that commits in between can
         // only make a retry append a duplicate.
-        let key = match &input.idempotency_key {
+        // As `work create`: a blank key is no key, and a key has a cap.
+        let caller_key = crate::work::trimmed(&input.idempotency_key);
+        if caller_key.as_ref().is_some_and(|k| k.len() > 200) {
+            return invalid("idempotency_key is longer than 200 characters".into());
+        }
+        let key = match &caller_key {
             // Scoped to the lane and type, so the same key on another lane, or
             // a question and its answer keyed alike, each append.
             Some(k) => format!("attention:{work}:{kind}:{k}"),
