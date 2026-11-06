@@ -234,6 +234,6 @@ Lanes in flight finish in daisy; new lanes move when the skills switch to `chape
 3. `chaperone work` and `spec` in daisy's shape (#7 to #11).
 4. Pipeline, evaluator, projection, engine refusals and check events through M1 exit criteria (#12 to #16).
 5. After the demo: switch the skills to `chaperone`.
-6. After #53: the agent dossier per issue key ([ADR 0006](decisions/0006-issue-dossier.md), proposed); `/issue` reads it from the skill switch.
+6. After #53: the agent dossier per issue key ([ADR 0007](decisions/0007-issue-dossier.md)); `/issue` reads it from the skill switch.
 
 [PLAN.md](PLAN.md) is superseded by this file.

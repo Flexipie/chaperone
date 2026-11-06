@@ -1,6 +1,6 @@
-# ADR 0006: An agent dossier per issue key
+# ADR 0007: An agent dossier per issue key
 
-Status: proposed, 2026-11-07 (agree before code, #69)  
+Status: accepted, 2026-11-07, by the orchestrator in the night pass under the owner's grant (owner may overturn)  
 Builds on: the spec and lane kinds in [events.md](../events.md), #42 (files touched per
 lane), #53 (indexed key lookups)
 
@@ -120,7 +120,3 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
   (`crates/chaperone-core/src/work/handoff.rs`). The dossier caps what it prints; the
   write-side check R13 asks for is a separate fix.
 - Until the code PR, `dossier.noted` is reserved in [events.md](../events.md).
-
-## Open items
-
-- The name. `dossier` avoids the three existing briefs; any other unused word works.
