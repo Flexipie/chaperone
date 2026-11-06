@@ -224,7 +224,8 @@ fn spec_version(conn: &Connection, e: &Event, version: i64) -> Result<(), Ledger
 fn index_keys(conn: &Connection, spec_id: Option<i64>, body: &str) -> Result<(), LedgerError> {
     conn.execute("DELETE FROM spec_keys WHERE spec_id = ?1", [spec_id])?;
     // OR IGNORE: two sections may name one key in different cases.
-    let mut insert = conn.prepare_cached("INSERT OR IGNORE INTO spec_keys VALUES (?1, ?2)")?;
+    let mut insert =
+        conn.prepare_cached("INSERT OR IGNORE INTO spec_keys (spec_id, key) VALUES (?1, ?2)")?;
     for key in parse_spec_sections(body).into_iter().filter_map(|s| s.key) {
         insert.execute(params![spec_id, key])?;
     }
