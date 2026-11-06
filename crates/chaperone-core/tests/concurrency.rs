@@ -115,7 +115,7 @@ fn deferred_txns_busy_snapshot() {
     assert!(elapsed < Duration::from_secs(1), "{elapsed:?}");
 }
 
-/// Another process holds the write lock past `busy_timeout`; the write
+/// Another process holds the write lock past the 5 s busy limit; the write
 /// gives up at about 5 s with "database is locked" and writes nothing.
 #[test]
 fn held_txn_times_out() {
@@ -137,8 +137,9 @@ fn held_txn_times_out() {
     let elapsed = held.elapsed();
     assert!(matches!(&err, LedgerError::Sqlite(_)), "{err}");
     assert!(err.to_string().contains("database is locked"), "{err}");
-    // SQLite counts the sleeps it asked for, and slow runners oversleep, so
-    // only the floor is tight; the child holds the lock for 60 s.
+    // The limit is wall time from the first busy callback, and a slow runner
+    // can oversleep the last retry, so only the floor is tight; the child
+    // holds the lock for 60 s.
     assert!(
         (Duration::from_millis(4500)..Duration::from_secs(20)).contains(&elapsed),
         "{elapsed:?}"

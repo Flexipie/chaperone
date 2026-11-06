@@ -69,7 +69,7 @@ No binary change. The table above is the contract. A later test replays recorded
 
 ### 1. The ledger file, with nobody writing it from a lane
 
-Create the SQLite file from [R5](r5-state-and-storage.md): WAL, `synchronous=FULL`, `busy_timeout` 5000, one write function, `BEGIN IMMEDIATE`, idempotency keys, `user_version` migrations, `VACUUM INTO` before an upgrade, reader views, `reader_contract`. Agents do not migrate. Daisy does not open the file yet.
+Create the SQLite file from [R5](r5-state-and-storage.md): WAL, `synchronous=FULL`, a 5 s busy limit retried every 1 ms, one write function, `BEGIN IMMEDIATE`, idempotency keys, `user_version` migrations, `VACUUM INTO` before an upgrade, reader views, `reader_contract`. Agents do not migrate. Daisy does not open the file yet.
 
 Columns from [R8](r8-process-terminal-runtime.md) are in the first migration, nullable: pid, exit code, `cli_session_id`, `port_base`, `port_count`, `viewer_hint`. `spawn` leaves the first five empty. Filling them later is an update on the lane row, not a new identity.
 
