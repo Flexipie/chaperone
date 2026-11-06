@@ -103,6 +103,7 @@ fn help_matches_snapshots() {
             include_str!("snapshots/usage-report.txt"),
         ),
         (&["usage", "get"], include_str!("snapshots/usage-get.txt")),
+        (&["overlap"], include_str!("snapshots/overlap.txt")),
         (&["migrate"], include_str!("snapshots/migrate.txt")),
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_chaperone"))

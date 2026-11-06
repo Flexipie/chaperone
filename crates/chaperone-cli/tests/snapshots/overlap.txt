@@ -1,0 +1,10 @@
+Per file, the open lanes touching it: each lane's newest handoff (changed_files), then the commits on its worktree's HEAD since the merge-base with origin, all git calls within 5 s. Shared files first. Call it before starting work
+
+Usage: chaperone overlap [OPTIONS]
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --repo <REPO>      Only lanes in this repo (owner/repo, any case)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --uncommitted      Also each worktree's uncommitted and untracked files (stats every tracked file: slower, more so in large repos)
+  -h, --help             Print help

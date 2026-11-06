@@ -58,6 +58,19 @@ pub enum Cmd {
     Attention(AttentionCmd),
     #[command(subcommand)]
     Dossier(DossierCmd),
+    /// Per file, the open lanes touching it: each lane's newest handoff
+    /// (changed_files), then the commits on its worktree's HEAD since the
+    /// merge-base with origin, all git calls within 5 s. Shared files
+    /// first. Call it before starting work
+    Overlap {
+        /// Only lanes in this repo (owner/repo, any case)
+        #[arg(long)]
+        repo: Option<String>,
+        /// Also each worktree's uncommitted and untracked files (stats
+        /// every tracked file: slower, more so in large repos)
+        #[arg(long)]
+        uncommitted: bool,
+    },
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
@@ -98,6 +111,7 @@ impl Cmd {
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
+            Cmd::Overlap { .. } => None,
         }
     }
 }
@@ -332,8 +346,9 @@ pub enum WorkCmd {
     /// One item with its lease state
     Get { id: i64 },
     /// Every open item with its newest handoff and whether it is ready: the
-    /// owner's override, else status review and a ready handoff. Every item
-    /// is under `other`; specs are not grouped yet
+    /// owner's override, else status review and a ready handoff, and the
+    /// paths its handoff shares with other open lanes' (`chaperone overlap`
+    /// adds worktrees). Every item is under `other`; specs are not grouped yet
     Board,
     /// List items, newest activity first; done and cancelled hidden
     /// unless --all

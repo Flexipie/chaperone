@@ -2,8 +2,10 @@
 //! (docs/cli-contract.md), so a skill switches by changing the binary path.
 
 mod checks;
+mod child;
 mod cli;
 mod output;
+mod overlap;
 mod spec;
 mod work;
 
@@ -72,6 +74,9 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),
         Cmd::Attention(cmd) => checks::attention(&Ledger::open(&path)?, cmd),
         Cmd::Dossier(cmd) => checks::dossier(&Ledger::open(&path)?, cmd),
+        Cmd::Overlap { repo, uncommitted } => {
+            overlap::run(&Ledger::open(&path)?, repo, uncommitted, meta, cli.format)
+        }
     }
 }
 

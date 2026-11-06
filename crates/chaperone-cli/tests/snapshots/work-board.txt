@@ -1,4 +1,4 @@
-Every open item with its newest handoff and whether it is ready: the owner's override, else status review and a ready handoff. Every item is under `other`; specs are not grouped yet
+Every open item with its newest handoff and whether it is ready: the owner's override, else status review and a ready handoff, and the paths its handoff shares with other open lanes' (`chaperone overlap` adds worktrees). Every item is under `other`; specs are not grouped yet
 
 Usage: chaperone work board [OPTIONS]
 
