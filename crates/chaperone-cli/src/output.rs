@@ -2,9 +2,13 @@
 //! envelope on stdout, or one `{ok: false, error, meta}` on stderr, the
 //! exit-code table and the two renderers.
 
+use std::cell::RefCell;
+use std::io::{BufWriter, Write};
+
 use chaperone_core::cursor::Page;
-use chaperone_core::ledger::{LedgerError, Refusal, SCHEMA_VERSION};
+use chaperone_core::ledger::{Ledger, LedgerError, Refusal, SCHEMA_VERSION};
 use serde::Serialize;
+use serde::ser::{Error as _, SerializeSeq, Serializer};
 use serde_json::{Value, json};
 
 use crate::cli::Format;
@@ -13,6 +17,8 @@ use crate::cli::Format;
 pub enum Outcome {
     One(Value),
     Page(Page<Value>),
+    /// Already on stdout (`write_board`).
+    Written,
 }
 
 /// `schema_version` is the ledger's `user_version`: every command but
@@ -239,6 +245,7 @@ pub fn exit_code(e: &CliError) -> i32 {
 
 pub fn render_ok(outcome: &Outcome, meta: &Meta, format: Format) -> String {
     let (data, lines, page) = match outcome {
+        Outcome::Written => return String::new(),
         Outcome::One(v) => (
             v.clone(),
             vec![v],
@@ -276,6 +283,99 @@ pub fn render_ok(outcome: &Outcome, meta: &Meta, format: Format) -> String {
             out += &serde_json::to_string(&json!({ "ok": true, "meta": meta })).unwrap_or_default();
             out.push('\n');
             out
+        }
+    }
+}
+
+/// `work board` written to stdout as its rows are read, so the board is
+/// never held whole (R14 M1), in the bytes `render_ok` gives: every map
+/// through a `Value`, so keys sort. A ledger error before the first 8 KiB
+/// leaves stdout empty; after it, stdout holds a partial document and the
+/// exit code says so. A closed stdout is ignored, as `finish` ignores it.
+pub fn write_board(
+    ledger: &Ledger,
+    now: &str,
+    meta: &Meta,
+    format: Format,
+) -> Result<Outcome, CliError> {
+    struct Other<'a> {
+        ledger: &'a Ledger,
+        now: &'a str,
+        failed: &'a RefCell<Option<LedgerError>>,
+    }
+    impl Serialize for Other<'_> {
+        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            let mut seq = s.serialize_seq(None)?;
+            match self.ledger.work_board_each(self.now, |b| {
+                seq.serialize_element(&serde_json::to_value(b).map_err(S::Error::custom)?)
+            }) {
+                Ok(each) => each?,
+                Err(e) => {
+                    let message = e.to_string();
+                    *self.failed.borrow_mut() = Some(e);
+                    return Err(S::Error::custom(message));
+                }
+            }
+            seq.end()
+        }
+    }
+    #[derive(Serialize)]
+    struct Data<'a> {
+        other: Other<'a>,
+        specs: [Value; 0],
+    }
+    #[derive(Serialize)]
+    struct Envelope<'a> {
+        data: Data<'a>,
+        meta: Value,
+        ok: bool,
+    }
+
+    let failed = RefCell::new(None);
+    let data = Data {
+        other: Other {
+            ledger,
+            now,
+            failed: &failed,
+        },
+        specs: [],
+    };
+    let mut out = BufWriter::new(std::io::stdout().lock());
+    let written = match format {
+        Format::Json => {
+            let env = Envelope {
+                data,
+                meta: serde_json::to_value(meta).map_err(|e| CliError::Internal(e.to_string()))?,
+                ok: true,
+            };
+            serde_json::to_writer_pretty(&mut out, &env)
+                .and_then(|()| out.write_all(b"\n").map_err(serde_json::Error::io))
+        }
+        Format::Jsonl => serde_json::to_writer(&mut out, &data).and_then(|()| {
+            let meta = Meta {
+                page: Some(PageMeta {
+                    count: 1,
+                    next_cursor: None,
+                    has_more: false,
+                }),
+                ..meta.clone()
+            };
+            writeln!(out, "\n{}", json!({ "ok": true, "meta": meta }))
+                .map_err(serde_json::Error::io)
+        }),
+    };
+    if let Some(e) = failed.into_inner() {
+        let _ = out.into_parts();
+        return Err(e.into());
+    }
+    match written {
+        Err(e) if !e.is_io() => {
+            let _ = out.into_parts();
+            Err(CliError::Internal(e.to_string()))
+        }
+        _ => {
+            let _ = out.flush();
+            Ok(Outcome::Written)
         }
     }
 }

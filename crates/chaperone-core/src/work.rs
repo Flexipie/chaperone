@@ -5,6 +5,7 @@
 mod handoff;
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 
 use rusqlite::{Connection, OptionalExtension, Row, ToSql};
 use serde::Serialize;
@@ -656,20 +657,61 @@ impl Ledger {
     /// Daisy's board: every open item with its newest handoff, its override
     /// and the ready rule's answer. One statement, so one snapshot.
     pub fn work_board(&self, now: &str) -> Result<Board, LedgerError> {
+        let mut other = Vec::new();
+        let Ok(()) = self.work_board_each(now, |b| {
+            other.push(b);
+            Ok::<_, Infallible>(())
+        })?;
+        Ok(Board {
+            specs: Vec::new(),
+            other,
+        })
+    }
+
+    /// `work_board`'s items one at a time, in board order, so a caller can
+    /// write each out without holding the board. Stops at `f`'s first error.
+    pub fn work_board_each<E>(
+        &self,
+        now: &str,
+        f: impl FnMut(BoardItem) -> Result<(), E>,
+    ) -> Result<Result<(), E>, LedgerError> {
+        self.board_rows(now, None, f)
+    }
+
+    /// One item as the board shows it, or None when it is not on the board
+    /// (unknown, done or cancelled).
+    pub fn work_board_item(&self, id: i64, now: &str) -> Result<Option<BoardItem>, LedgerError> {
+        let mut out = None;
+        let Ok(()) = self.board_rows(now, Some(id), |b| {
+            out = Some(b);
+            Ok::<_, Infallible>(())
+        })?;
+        Ok(out)
+    }
+
+    fn board_rows<E>(
+        &self,
+        now: &str,
+        id: Option<i64>,
+        mut f: impl FnMut(BoardItem) -> Result<(), E>,
+    ) -> Result<Result<(), E>, LedgerError> {
+        let one = if id.is_some() { "AND id = ?2" } else { "" };
         let mut stmt = self.conn().prepare(&format!(
             "SELECT l.*, h.id, h.lane_id, h.actor_agent, h.actor_session,
                     json_extract(h.payload_json, '$.handoff'), h.at,
                     json_extract(o.payload_json, '$.ready'),
                     json_extract(o.payload_json, '$.reason'), o.actor_agent, o.at
-             FROM ({SELECT} WHERE status NOT IN ('done', 'cancelled')) AS l
+             FROM ({SELECT} WHERE status NOT IN ('done', 'cancelled') {one}) AS l
              LEFT JOIN events h ON h.id = (SELECT id FROM events
                WHERE lane_id = l.id AND {IS_HANDOFF} ORDER BY id DESC LIMIT 1)
              LEFT JOIN events o ON o.id = (SELECT id FROM events
                WHERE lane_id = l.id AND kind = 'lane.ready_overridden' ORDER BY id DESC LIMIT 1)
              ORDER BY l.lane_key IS NULL, l.lane_key, l.lane_pos IS NULL, l.lane_pos, l.id"
         ))?;
-        let mut rows = stmt.query([now])?;
-        let mut other = Vec::new();
+        let mut rows = match id {
+            Some(id) => stmt.query(rusqlite::params![now, id])?,
+            None => stmt.query([now])?,
+        };
         while let Some(r) = rows.next()? {
             let item = WorkItem::from_row(r)?;
             let handoff = match r.get::<_, Option<i64>>(32)? {
@@ -687,18 +729,18 @@ impl Ledger {
             };
             let (ready, ready_reason) =
                 ready_rule(&item, handoff.as_ref(), ready_override.as_ref());
-            other.push(BoardItem {
+            let item = BoardItem {
                 item,
                 handoff,
                 ready_override,
                 ready,
                 ready_reason,
-            });
+            };
+            if let Err(e) = f(item) {
+                return Ok(Err(e));
+            }
         }
-        Ok(Board {
-            specs: Vec::new(),
-            other,
-        })
+        Ok(Ok(()))
     }
 
     /// The item's lane actions, oldest first, with daisy's action words.

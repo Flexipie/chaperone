@@ -10,10 +10,15 @@ use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput, W
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::{ActorArgs, WorkCmd};
-use crate::output::{CliError, Meta, Outcome};
+use crate::cli::{ActorArgs, Format, WorkCmd};
+use crate::output::{self, CliError, Meta, Outcome};
 
-pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, CliError> {
+pub fn run(
+    ledger: &Ledger,
+    cmd: WorkCmd,
+    meta: &mut Meta,
+    format: Format,
+) -> Result<Outcome, CliError> {
     let mut dry = |dry_run: bool| {
         if dry_run {
             meta.dry_run = Some(true);
@@ -183,8 +188,7 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
             }
             // Daisy's answer: what the board now says, or for an item off
             // it (done or cancelled) the override echoed.
-            let board = ledger.work_board(&ledger.now()?)?;
-            match board.other.iter().find(|b| b.item.id == id) {
+            match ledger.work_board_item(id, &ledger.now()?)? {
                 Some(b) => {
                     one(json!({ "id": id, "ready": b.ready, "ready_reason": b.ready_reason }))
                 }
@@ -192,7 +196,7 @@ pub fn run(ledger: &Ledger, cmd: WorkCmd, meta: &mut Meta) -> Result<Outcome, Cl
             }
         }
         WorkCmd::Get { id } => one(ledger.work_get(id, &ledger.now()?)??),
-        WorkCmd::Board => one(ledger.work_board(&ledger.now()?)?),
+        WorkCmd::Board => output::write_board(ledger, &ledger.now()?, meta, format),
         WorkCmd::List {
             status,
             agent,
