@@ -28,6 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 WARM, SAMPLES = 8, 100
+RSS_RUNS = 3
 HEAD = "abcdef1"
 
 
@@ -144,35 +145,47 @@ def seed(b, items, open_specs):
 
 
 def hot(b, label, spec_key):
-    """The hot commands, each on items prepared outside the timed loop."""
+    """The hot commands, each on items prepared outside the timed loop, then
+    the max RSS of each on items the loop did not touch."""
     n = WARM + SAMPLES
-    fresh = b.create(n)
-    held = b.create(n)
+    fresh = b.create(n + RSS_RUNS)
+    held = b.create(n + RSS_RUNS)
     for lane in held:
         b.run("work", "claim", str(lane))
-    rows = [
-        row("work get", b.timed(lambda i: (["work", "get", str(held[0])], None))),
-        row("work list", b.timed(lambda i: (["work", "list"], None))),
-        row("work claim", b.timed(lambda i: (["work", "claim", str(fresh[i])], None))),
-        row("work heartbeat", b.timed(lambda i: (["work", "heartbeat", str(held[0])], None))),
-        row("work handoff", b.timed(lambda i: (["work", "handoff", str(held[i])], handoff()))),
-        row("spec get --key", b.timed(lambda i: (["spec", "get", "--key", spec_key], None))),
-        row("check record", b.timed(
-            lambda i: (["check", "record", "--work", str(held[i]), "--check", "smoke",
-                        "--head", HEAD, "--outcome", "ran"], None), session="checker")),
+    check = ["check", "record", "--check", "smoke", "--head", HEAD, "--outcome", "ran"]
+    cmds = [
+        ("work get", lambda i: (["work", "get", str(held[0])], None), None),
+        ("work list", lambda i: (["work", "list"], None), None),
+        ("work claim", lambda i: (["work", "claim", str(fresh[i])], None), None),
+        ("work heartbeat", lambda i: (["work", "heartbeat", str(held[0])], None), None),
+        ("work handoff", lambda i: (["work", "handoff", str(held[i])], handoff()), None),
+        ("spec get --key", lambda i: (["spec", "get", "--key", spec_key], None), None),
+        ("check record", lambda i: ([*check, "--work", str(held[i])], None), "checker"),
     ]
+    rows = [row(name, b.timed(make, session=session)) for name, make, session in cmds]
     print(f"\n### Hot commands, {label} ledger (ms)\n")
     print("| Command | p50 | p99 | max |\n| --- | --- | --- | --- |")
     print("\n".join(rows))
+    print(f"\nM1 max RSS, {label} ledger (MiB, {RSS_RUNS} runs): " + ", ".join(
+        f"{name} {rss_range(b, make, session)}" for name, make, session in cmds))
 
 
-def max_rss(b, *args):
-    out = subprocess.run(["/usr/bin/time", "-l", *b.argv(args)], capture_output=True,
-                         text=True, env=b.env)
+def max_rss(b, *args, stdin=None, session=None):
+    out = subprocess.run(["/usr/bin/time", "-l", *b.argv(args)], input=stdin,
+                         capture_output=True, text=True, env=b.env_for(session))
     if out.returncode != 0:
         raise SystemExit(f"{args} exited {out.returncode}: {out.stderr[:400]}")
     m = re.search(r"(\d+)\s+maximum resident set size", out.stderr)
     return int(m.group(1)) / 2**20
+
+
+def rss_range(b, make, session=None):
+    """make(i) -> (args, stdin), called with the indexes after the timed loop's."""
+    mibs = []
+    for i in range(WARM + SAMPLES, WARM + SAMPLES + RSS_RUNS):
+        args, stdin = make(i)
+        mibs.append(max_rss(b, *args, stdin=stdin, session=session))
+    return f"{min(mibs):.2f} to {max(mibs):.2f}"
 
 
 def contention(b, writers=50, each=20):
@@ -288,8 +301,9 @@ def measure(binary, snapshot, items, deep):
         # Empty: a fresh ledger holding only what each command needs.
         b.run("migrate")
         print(row("S2+ work list, empty ledger", b.timed(lambda i: (["work", "list"], None))))
-        print(f"\nM1 max RSS: --version {max_rss(b, '--version'):.2f} MiB, "
-              f"work list (empty) {max_rss(b, 'work', 'list'):.2f} MiB")
+        print(f"\nM1 max RSS (MiB, {RSS_RUNS} runs): "
+              f"--version {rss_range(b, lambda i: (['--version'], None))}, "
+              f"work list (empty) {rss_range(b, lambda i: (['work', 'list'], None))}")
         parent, key = "bench/repo#1", "bench/repo#2"
         b.run("spec", "create", "--parent", parent, "--file", "-", stdin=spec_body(parent, [key]))
         hot(b, "empty", key)
@@ -300,12 +314,15 @@ def measure(binary, snapshot, items, deep):
             if os.path.exists(snapshot + suffix):
                 shutil.copy(snapshot + suffix, b.db + suffix)
         # The snapshot is at the first binary's version; a newer one upgrades it.
+        t0 = time.perf_counter_ns()
         b.run("migrate")
+        print(f"\nmigrate on the snapshot: {(time.perf_counter_ns() - t0) / 1e6:.0f} ms")
         hot(b, f"realistic ({items} items)", f"bench/repo#{200000 + items // 2}")
-        handoffs = b.timed(lambda i: (["work", "handoff", str(deep[i % len(deep)])], handoff()))
-        print(row(f"work handoff, lane with {DEEP_EVENTS}+ events", handoffs))
-        print(f"\nM1 max RSS, realistic: work list {max_rss(b, 'work', 'list'):.2f} MiB, "
-              f"work board {max_rss(b, 'work', 'board'):.2f} MiB")
+        deep_handoff = lambda i: (["work", "handoff", str(deep[i % len(deep)])], handoff())
+        print(row(f"work handoff, lane with {DEEP_EVENTS}+ events", b.timed(deep_handoff)))
+        print(f"\nM1 max RSS, realistic (MiB, {RSS_RUNS} runs): work board "
+              f"{rss_range(b, lambda i: (['work', 'board'], None))}, "
+              f"work handoff, deep lane {rss_range(b, deep_handoff)}")
         board = b.timed(lambda i: (["work", "board"], None), warm=2, samples=20)
         print(f"\nwork board, realistic: p50 {pct(board, 50):.2f} ms, "
               f"max {max(board):.2f} ms (20 samples)")
