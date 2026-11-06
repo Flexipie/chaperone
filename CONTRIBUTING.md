@@ -110,6 +110,11 @@ An architectural choice that picks among real alternatives gets a file in
 `docs/decisions/`, with the alternatives and the evidence. Research notes in
 `docs/research/` stay the evidence. Link them. Don't paste them into the ADR.
 
+A new ADR or research note takes the number of the issue it comes from, not the
+next free one: `docs/decisions/0080-<slug>.md`, `docs/research/r80-<slug>.md`.
+Migrations stay sequential; the second to merge renumbers
+([ADR 0080](docs/decisions/0080-numbered-files-take-the-issue-number.md)).
+
 ## Dependencies
 
 Name a new dependency in the PR: what it is for, and what licenses it pulls in.
