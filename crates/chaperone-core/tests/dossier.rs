@@ -252,9 +252,10 @@ fn get_is_capped_and_cuts_notes_first() {
     }
 
     let d = ledger.dossier_get(KEY).unwrap().unwrap();
-    // The printed envelope, as the CLI writes it with its meta (about 100 bytes).
+    // The printed envelope, as the CLI writes it, with the 200 bytes the
+    // ledger keeps for its meta.
     let printed = serde_json::to_string_pretty(&json!({"ok": true, "data": d})).unwrap();
-    assert!(printed.len() + 100 <= 48_000, "{}", printed.len());
+    assert!(printed.len() + 200 <= 48_000, "{}", printed.len());
     assert_eq!(d.lanes.items.len(), 10);
     assert_eq!(d.lanes.omitted["lanes"], 1);
     assert_eq!(d.lanes.items[0].id, lanes[10]);

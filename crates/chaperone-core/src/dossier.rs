@@ -10,18 +10,18 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::checks::newest_other;
+use crate::checks::{Recorded, newest_other, recorded};
 use crate::ledger::{
-    Actor, Applied, Checked, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal, exists,
+    Actor, Checked, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal, exists,
     redact_payload,
 };
 use crate::pipeline::canonical_string;
 use crate::spec::parse::{Decision, parse_decisions, parse_spec_sections};
 use crate::spec::slice::{KEY_LANES, section_for, spec_for_key};
 use crate::spec::{Spec, normalize_key, read as read_spec};
-use crate::work::{HandoffInput, IS_HANDOFF, SPEC_BY_KEY, pr_ref_ok};
+use crate::work::{HandoffInput, IS_HANDOFF, SPEC_BY_KEY, commit_ok, pr_ref_ok};
 
-pub const LINK_KINDS: &[&str] = &["issue", "pr", "adr", "doc", "commit"];
+const LINK_KINDS: &[&str] = &["issue", "pr", "adr", "doc", "commit"];
 /// The finding cap.
 const NOTE_CHARS: usize = 600;
 const LINKS: usize = 5;
@@ -45,22 +45,12 @@ const META_BYTES: usize = 200;
 const NOTE_EVENTS: &str = "kind = 'dossier.noted' AND json_extract(payload_json, '$.key') = ?1";
 
 /// `dossier note`'s input. `links` are `<kind>:<ref>` as typed.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct NoteInput {
     pub key: String,
     pub note: String,
     pub links: Vec<String>,
     pub supersedes: Option<i64>,
-}
-
-/// What `dossier note` wrote, or the event a retry replayed.
-#[derive(Clone, Debug, Serialize)]
-pub struct Noted {
-    pub event_id: i64,
-    pub kind: &'static str,
-    pub replayed: bool,
-    pub at: String,
-    pub payload: Payload,
 }
 
 /// What was left out of a section, by list (and `strings` cut short).
@@ -194,8 +184,7 @@ fn link_ref(kind: &str, r: &str) -> Option<String> {
     match kind {
         "issue" => normalize_key(r),
         "pr" => pr_ref_ok(r).then(|| r.to_string()),
-        "commit" => ((7..=64).contains(&r.len()) && r.bytes().all(|b| b.is_ascii_hexdigit()))
-            .then(|| r.to_string()),
+        "commit" => commit_ok(r).then(|| r.to_string()),
         "adr" | "doc" => (!r.is_empty()
             && !r.starts_with('/')
             && !r.split('/').any(|p| p == "..")
@@ -210,7 +199,7 @@ impl Ledger {
     /// the payload as stored (redacted) and the key's newest note that says
     /// something else, so a retry replays, a restored note (A, B, A) appends,
     /// and another session's identical note appends.
-    pub fn dossier_note(&self, actor: &Actor, input: &NoteInput) -> Checked<Noted> {
+    pub fn dossier_note(&self, actor: &Actor, input: &NoteInput) -> Checked<Recorded> {
         let key = match key_of(&input.key) {
             Ok(k) => k.to_lowercase(),
             Err(r) => return Ok(Err(r)),
@@ -291,18 +280,7 @@ impl Ledger {
             },
             |_, _, _| Ok(()),
         )?;
-        let replayed = matches!(applied, Applied::Replayed(_));
-        Ok(match applied {
-            Applied::Committed(e) | Applied::Replayed(e) => Ok(Noted {
-                event_id: e.id,
-                kind: e.kind.as_str(),
-                replayed,
-                at: e.at,
-                payload: e.payload,
-            }),
-            Applied::Refused(r) => Err(r),
-            Applied::Heartbeat { .. } => unreachable!("dossier note writes an event"),
-        })
+        Ok(recorded(applied, None))
     }
 
     /// Everything the ledger knows about `key`, in one read transaction,
@@ -315,10 +293,16 @@ impl Ledger {
         };
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
         let slice = slice_section(&tx, &key)?;
-        let (lanes, found_lanes) = lanes_section(&tx, &key)?;
+        let lanes = lanes_section(&tx, &key)?;
         let (handoffs, files) = handoff_sections(&tx, &lanes.items)?;
-        let (notes, found_notes) = notes_section(&tx, &key.to_lowercase())?;
-        if slice.in_spec.is_none() && slice.parent_of.is_none() && !found_lanes && !found_notes {
+        let notes = notes_section(&tx, &key.to_lowercase())?;
+        // Before the budget cut: a key with any lane keeps its newest in the
+        // caps, and its newest note is never superseded.
+        if slice.in_spec.is_none()
+            && slice.parent_of.is_none()
+            && lanes.items.is_empty()
+            && notes.items.is_empty()
+        {
             return Ok(Err(Refusal::NotFoundRef {
                 entity: "dossier for",
                 reference: key,
@@ -350,18 +334,13 @@ fn cut_opt(s: Option<String>, omitted: &mut Omitted) -> Option<String> {
     s.map(|s| cut(s, TEXT_CHARS, omitted))
 }
 
-/// The newest `max` items (the last ones), counting the rest under `name`.
-fn newest<T>(mut v: Vec<T>, max: usize, name: &'static str, omitted: &mut Omitted) -> Vec<T> {
-    if v.len() > max {
-        *omitted.entry(name).or_default() += v.len() - max;
-        v.drain(..v.len() - max);
+/// The newest `SPEC_DECISIONS` (the last ones), counting the rest under `name`.
+fn decision_lines(mut d: Vec<Decision>, name: &'static str, omitted: &mut Omitted) -> Vec<String> {
+    if d.len() > SPEC_DECISIONS {
+        *omitted.entry(name).or_default() += d.len() - SPEC_DECISIONS;
+        d.drain(..d.len() - SPEC_DECISIONS);
     }
-    v
-}
-
-fn decision_lines(d: Vec<Decision>, name: &'static str, omitted: &mut Omitted) -> Vec<String> {
-    newest(d, SPEC_DECISIONS, name, omitted)
-        .into_iter()
+    d.into_iter()
         .map(|d| cut(d.text, TEXT_CHARS, omitted))
         .collect()
 }
@@ -402,18 +381,16 @@ fn slice_section(conn: &Connection, key: &str) -> Result<SliceSection, LedgerErr
     })
 }
 
-/// The newest lanes on the key, and whether it has any.
-fn lanes_section(conn: &Connection, key: &str) -> Result<(Section<LaneRow>, bool), LedgerError> {
+/// The newest lanes on the key.
+fn lanes_section(conn: &Connection, key: &str) -> Result<Section<LaneRow>, LedgerError> {
     let mut omitted = Omitted::new();
     let mut items = Vec::new();
-    let mut found = false;
     let mut stmt = conn.prepare(&format!(
         "SELECT id, title, status, branch, pr_ref, agent, pipeline_id, created_at, updated_at
            FROM lanes WHERE {KEY_LANES} ORDER BY id DESC"
     ))?;
     let mut rows = stmt.query([key])?;
     while let Some(r) = rows.next()? {
-        found = true;
         if items.len() == LANES {
             *omitted.entry("lanes").or_default() += 1;
             continue;
@@ -430,7 +407,7 @@ fn lanes_section(conn: &Connection, key: &str) -> Result<(Section<LaneRow>, bool
             updated_at: r.get(8)?,
         });
     }
-    Ok((Section { items, omitted }, found))
+    Ok(Section { items, omitted })
 }
 
 fn handoff_sections(
@@ -502,13 +479,11 @@ fn handoff_sections(
     Ok((h, files))
 }
 
-/// The newest notes on the (lowercased) key that no later note supersedes,
-/// and whether the key has any note.
-fn notes_section(conn: &Connection, key: &str) -> Result<(Section<NoteRow>, bool), LedgerError> {
+/// The newest notes on the (lowercased) key that no later note supersedes.
+fn notes_section(conn: &Connection, key: &str) -> Result<Section<NoteRow>, LedgerError> {
     let mut omitted = Omitted::new();
     let mut items = Vec::new();
     let mut superseded = HashSet::new();
-    let mut found = false;
     let mut stmt = conn.prepare(&format!(
         "SELECT id, actor_agent, actor_session, payload_json, at FROM events
           WHERE {NOTE_EVENTS} ORDER BY id DESC"
@@ -517,7 +492,6 @@ fn notes_section(conn: &Connection, key: &str) -> Result<(Section<NoteRow>, bool
     // Newest first, and a note only supersedes an older one, so each
     // superseding note is read before the note it replaces.
     while let Some(r) = rows.next()? {
-        found = true;
         let id: i64 = r.get(0)?;
         let mut p: Payload =
             serde_json::from_str(&r.get::<_, String>(3)?).map_err(std::io::Error::other)?;
@@ -544,7 +518,7 @@ fn notes_section(conn: &Connection, key: &str) -> Result<(Section<NoteRow>, bool
             supersedes,
         });
     }
-    Ok((Section { items, omitted }, found))
+    Ok(Section { items, omitted })
 }
 
 fn json_len(v: &impl Serialize) -> Result<usize, LedgerError> {
@@ -618,7 +592,6 @@ mod tests {
         let path = dir.path().join("ledger.db");
         drop(Ledger::open_and_migrate_with(&path, &MIGRATIONS[..3]).unwrap());
         let ledger = Ledger::open_and_migrate(&path).unwrap();
-        assert_eq!(crate::ledger::SCHEMA_VERSION, 4);
         let sql = format!("EXPLAIN QUERY PLAN SELECT id FROM events WHERE {NOTE_EVENTS}");
         let plan: String = ledger
             .conn()

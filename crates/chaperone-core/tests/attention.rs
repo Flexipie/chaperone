@@ -104,7 +104,7 @@ fn each_intervention_records_once() {
         ..again.clone()
     };
     let there = ledger.attention_record(&o, &there).unwrap().unwrap();
-    assert_eq!((there.replayed, there.work_id), (false, elsewhere));
+    assert_eq!((there.replayed, there.work_id), (false, Some(elsewhere)));
     // A blank key is no key: after new lane activity the derived key appends.
     let blank = AttentionInput {
         idempotency_key: Some("  ".into()),

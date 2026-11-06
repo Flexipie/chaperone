@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension, Row, ToSql};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+pub(crate) use self::handoff::commit_ok;
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
 use crate::cursor::{self, Cursor, Page};
 use crate::engine;
