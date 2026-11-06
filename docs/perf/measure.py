@@ -321,7 +321,7 @@ def main():
     a = ap.parse_args()
     real = os.path.expanduser("~/Library/Application Support/chaperone")
     real_before = stamp(real)
-    print(f"python sqlite {sqlite3.sqlite_version} (query plans only)")
+    print(f"python sqlite {sqlite3.sqlite_version} (query plans and the in-process job lookup)")
     seed_root = tempfile.mkdtemp(prefix="chaperone-seed-")
     try:
         # One seeded snapshot, checkpointed, so every binary reads the same data.
