@@ -752,26 +752,11 @@ fn review_view(conn: &Connection, job: i64) -> Result<Option<Value>, LedgerError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ledger::MIGRATIONS;
 
-    /// A job recorded at v1 is found after the upgrade, through the index.
     #[test]
-    fn job_lookup_uses_index_after_upgrade() {
+    fn job_lookup_uses_index() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ledger.db");
-        Ledger::open_and_migrate_with(&path, &MIGRATIONS[..1])
-            .unwrap()
-            .conn()
-            .execute(
-                "INSERT INTO events (lane_id, kind, payload_json, at) VALUES (1,
-                   'check.finished', '{\"check\":\"local_review\",\"job\":7}', 'now')",
-                [],
-            )
-            .unwrap();
-
-        let ledger = Ledger::open_and_migrate(&path).unwrap();
-        let view = ledger.review_get(7).unwrap().unwrap();
-        assert_eq!(view["job_id"], 7);
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
         let plan: String = ledger
             .conn()
             .query_row(

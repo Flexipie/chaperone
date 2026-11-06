@@ -352,11 +352,12 @@ mod tests {
         let src = dir.path().join("newer.db");
         let newer = Connection::open(&src).unwrap();
         newer
-            .execute_batch(
+            .execute_batch(&format!(
                 "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;
-                 CREATE TABLE t (a); INSERT INTO t VALUES (1); PRAGMA user_version = 3;
+                 CREATE TABLE t (a); INSERT INTO t VALUES (1); PRAGMA user_version = {};
                  PRAGMA application_id = 1128808784;",
-            )
+                SCHEMA_VERSION + 1
+            ))
             .unwrap();
         std::fs::copy(&src, &path).unwrap();
         std::fs::copy(dir.path().join("newer.db-wal"), &wal).unwrap();
@@ -369,9 +370,9 @@ mod tests {
             assert!(matches!(
                 err,
                 LedgerError::SchemaMismatch {
-                    found: 3,
+                    found,
                     supported: SCHEMA_VERSION
-                }
+                } if found == SCHEMA_VERSION + 1
             ));
             assert!(err.to_string().contains("left untouched"), "{err}");
         }
