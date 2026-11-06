@@ -28,7 +28,8 @@ const CHECKS: &[(&str, &[&str])] = &[
     ("kept_tests", &["none"]),
 ];
 
-/// The check events that carry a daisy job.
+/// The check events that carry a daisy job. Matches the `events_job`
+/// index (migration 0002) term for term, or lookups scan every event.
 const JOB_EVENTS: &str = "kind IN ('check.requested', 'check.finished')
       AND json_extract(payload_json, '$.job') = ?1";
 
@@ -746,4 +747,39 @@ fn review_view(conn: &Connection, job: i64) -> Result<Option<Value>, LedgerError
         "error_summary": null,
         "deferred": null,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ledger::MIGRATIONS;
+
+    /// A job recorded at v1 is found after the upgrade, through the index.
+    #[test]
+    fn job_lookup_uses_index_after_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.db");
+        Ledger::open_and_migrate_with(&path, &MIGRATIONS[..1])
+            .unwrap()
+            .conn()
+            .execute(
+                "INSERT INTO events (lane_id, kind, payload_json, at) VALUES (1,
+                   'check.finished', '{\"check\":\"local_review\",\"job\":7}', 'now')",
+                [],
+            )
+            .unwrap();
+
+        let ledger = Ledger::open_and_migrate(&path).unwrap();
+        let view = ledger.review_get(7).unwrap().unwrap();
+        assert_eq!(view["job_id"], 7);
+        let plan: String = ledger
+            .conn()
+            .query_row(
+                &format!("EXPLAIN QUERY PLAN SELECT id FROM events WHERE {JOB_EVENTS}"),
+                [7],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("USING INDEX events_job"), "{plan}");
+    }
 }
