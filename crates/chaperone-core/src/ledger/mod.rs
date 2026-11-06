@@ -157,8 +157,8 @@ pub(crate) fn check_schema(conn: &Connection) -> Result<(), LedgerError> {
 }
 
 fn apply_pragmas(conn: &mut Connection) -> Result<(), LedgerError> {
-    // Retries the lock every 1 ms and gives up 5 s after a statement's first
-    // busy callback (SQLite restarts the count at 0 for each statement).
+    // Retries the lock every 1 ms and gives up 5 s after a step's first
+    // busy callback (SQLite restarts the count at 0 for each step).
     // SQLite's own busy_timeout backs off to 100 ms sleeps, and a writer that
     // just committed takes the lock again before a sleeper wakes, so under a
     // burst of writers a waiter could starve for the whole 5 s (#62).
