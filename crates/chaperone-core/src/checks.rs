@@ -28,7 +28,8 @@ const CHECKS: &[(&str, &[&str])] = &[
     ("kept_tests", &["none"]),
 ];
 
-/// The check events that carry a daisy job.
+/// The check events that carry a daisy job. Matches the `events_job`
+/// index (migration 0002) term for term, or lookups scan every event.
 const JOB_EVENTS: &str = "kind IN ('check.requested', 'check.finished')
       AND json_extract(payload_json, '$.job') = ?1";
 
@@ -746,4 +747,24 @@ fn review_view(conn: &Connection, job: i64) -> Result<Option<Value>, LedgerError
         "error_summary": null,
         "deferred": null,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_lookup_uses_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let plan: String = ledger
+            .conn()
+            .query_row(
+                &format!("EXPLAIN QUERY PLAN SELECT id FROM events WHERE {JOB_EVENTS}"),
+                [7],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("USING INDEX events_job"), "{plan}");
+    }
 }

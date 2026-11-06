@@ -3,7 +3,8 @@
 
     python3 -I docs/perf/measure.py <before-binary> <after-binary> [--items 3000]
 
-The first binary seeds the shared snapshot.
+The first binary seeds the shared snapshot, so list the oldest schema first:
+a newer binary migrates its copy, an older one refuses a newer file.
 
 Everything runs in a fresh temp dir: every call passes --db there, and HOME
 and XDG_DATA_HOME point there too, so a missed --db can never reach a real
@@ -233,6 +234,16 @@ def plans(b):
         n = sql.count("?")
         detail = "; ".join(r[3] for r in con.execute(f"EXPLAIN QUERY PLAN {sql}", [None] * n))
         print(f"| {name} | {detail} |")
+    # A missing job: a scan reads every event either way, an index search none.
+    jobs = PLANS["jobs (JOB_EVENTS)"]
+    times = []
+    for i in range(WARM + SAMPLES):
+        t0 = time.perf_counter_ns()
+        con.execute(jobs, [10**9]).fetchall()
+        if i >= WARM:
+            times.append((time.perf_counter_ns() - t0) / 1e6)
+    print(f"\njob lookup in the process (ms): p50 {pct(times, 50):.3f}, "
+          f"p99 {pct(times, 99):.3f}, max {max(times):.3f}")
     con.close()
 
 
@@ -281,6 +292,8 @@ def measure(binary, snapshot, items, deep):
                 os.remove(b.db + suffix)
             if os.path.exists(snapshot + suffix):
                 shutil.copy(snapshot + suffix, b.db + suffix)
+        # The snapshot is at the first binary's version; a newer one upgrades it.
+        b.run("migrate")
         hot(b, f"realistic ({items} items)", f"bench/repo#{200000 + items // 2}")
         handoffs = b.timed(lambda i: (["work", "handoff", str(deep[i % len(deep)])], handoff()))
         print(row(f"work handoff, lane with {DEEP_EVENTS}+ events", handoffs))
@@ -303,12 +316,12 @@ def stamp(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("binaries", nargs="+", help="the first one seeds the shared snapshot")
+    ap.add_argument("binaries", nargs="+", help="oldest first; the first one seeds the shared snapshot")
     ap.add_argument("--items", type=int, default=3000)
     a = ap.parse_args()
     real = os.path.expanduser("~/Library/Application Support/chaperone")
     real_before = stamp(real)
-    print(f"python sqlite {sqlite3.sqlite_version} (query plans only)")
+    print(f"python sqlite {sqlite3.sqlite_version} (query plans and the in-process job lookup)")
     seed_root = tempfile.mkdtemp(prefix="chaperone-seed-")
     try:
         # One seeded snapshot, checkpointed, so every binary reads the same data.

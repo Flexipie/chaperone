@@ -29,7 +29,10 @@ pub(crate) use write::{
 };
 pub use write::{KINDS, PR_FLOWS, SESSION_CHECKS, SOURCES, SPEC_BODY_MAX_BYTES, STATUSES};
 
-pub(crate) const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_ledger.sql")];
+pub(crate) const MIGRATIONS: &[&str] = &[
+    include_str!("../../migrations/0001_ledger.sql"),
+    include_str!("../../migrations/0002_events_job.sql"),
+];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -247,7 +250,7 @@ mod tests {
         assert_eq!(pragma::<String>(conn, "journal_mode"), "wal");
         assert_eq!(pragma::<i64>(conn, "synchronous"), 2);
         assert_eq!(pragma::<i64>(conn, "foreign_keys"), 1);
-        assert_eq!(user_version(conn).unwrap(), 1);
+        assert_eq!(user_version(conn).unwrap(), SCHEMA_VERSION);
         assert_eq!(pragma::<i64>(conn, "application_id"), APPLICATION_ID);
         for table in [
             "events",
@@ -302,7 +305,7 @@ mod tests {
             err,
             LedgerError::SchemaMismatch {
                 found: 0,
-                supported: 1
+                supported: SCHEMA_VERSION
             }
         ));
         assert!(err.to_string().contains("chaperone migrate"), "{err}");
@@ -349,11 +352,12 @@ mod tests {
         let src = dir.path().join("newer.db");
         let newer = Connection::open(&src).unwrap();
         newer
-            .execute_batch(
+            .execute_batch(&format!(
                 "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;
-                 CREATE TABLE t (a); INSERT INTO t VALUES (1); PRAGMA user_version = 2;
+                 CREATE TABLE t (a); INSERT INTO t VALUES (1); PRAGMA user_version = {};
                  PRAGMA application_id = 1128808784;",
-            )
+                SCHEMA_VERSION + 1
+            ))
             .unwrap();
         std::fs::copy(&src, &path).unwrap();
         std::fs::copy(dir.path().join("newer.db-wal"), &wal).unwrap();
@@ -366,9 +370,9 @@ mod tests {
             assert!(matches!(
                 err,
                 LedgerError::SchemaMismatch {
-                    found: 2,
-                    supported: 1
-                }
+                    found,
+                    supported: SCHEMA_VERSION
+                } if found == SCHEMA_VERSION + 1
             ));
             assert!(err.to_string().contains("left untouched"), "{err}");
         }
@@ -381,7 +385,7 @@ mod tests {
     fn upgrade_backs_up_first() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.db");
-        Ledger::open_and_migrate(&path)
+        Ledger::open_and_migrate_with(&path, &MIGRATIONS[..1])
             .unwrap()
             .conn()
             .execute(
@@ -438,7 +442,7 @@ mod tests {
             });
         };
 
-        race(MIGRATIONS);
+        race(&MIGRATIONS[..1]);
         assert_eq!(user_version(&read_only(&path)).unwrap(), 1);
         assert!(!dir.path().join("backups").exists());
 
