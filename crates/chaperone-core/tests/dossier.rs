@@ -6,7 +6,7 @@
 mod common;
 
 use chaperone_core::dossier::NoteInput;
-use chaperone_core::ledger::{Applied, EventKind, Ledger, Mutation, Payload, Refusal};
+use chaperone_core::ledger::{Applied, Change, EventKind, Ledger, Mutation, Payload, Refusal};
 use chaperone_core::work::{Brief, ClaimInput, CreateInput, HandoffInput};
 use common::{actor, count, read_only};
 use serde_json::json;
@@ -140,19 +140,39 @@ fn notes_record_once_and_never_touch_a_lane() {
         let m = refused(&ledger, "9", &input);
         assert!(m.contains(says), "{m}");
     }
-    // The write itself refuses a note on a lane and one without a key.
-    let event = |lane_id, rest: serde_json::Value| Mutation::Event {
+    // The write itself refuses a note on a lane or a spec, one that changes a
+    // column, and one without a lowercased key or a note.
+    let event = |lane_id, spec_id, changed: &[&str], rest: serde_json::Value| Mutation::Event {
         kind: EventKind::DossierNoted,
         lane_id,
-        spec_id: None,
+        spec_id,
         payload: Payload {
+            changed: changed
+                .iter()
+                .map(|c| {
+                    (
+                        c.to_string(),
+                        Change {
+                            from: json!(null),
+                            to: json!("x"),
+                        },
+                    )
+                })
+                .collect(),
             rest: serde_json::from_value(rest).unwrap(),
             ..Payload::default()
         },
     };
+    let ok = json!({"key": KEY, "note": "x"});
     for m in [
-        event(Some(id), json!({"key": KEY, "note": "x"})),
-        event(None, json!({"note": "x"})),
+        event(Some(id), None, &[], ok.clone()),
+        event(None, Some(1), &[], ok.clone()),
+        event(None, None, &["branch"], ok.clone()),
+        event(None, None, &[], json!({"note": "x"})),
+        event(None, None, &[], json!({"key": 7, "note": "x"})),
+        event(None, None, &[], json!({"key": "O/R#2", "note": "x"})),
+        event(None, None, &[], json!({"key": KEY})),
+        event(None, None, &[], json!({"key": KEY, "note": 7})),
     ] {
         let applied = ledger.apply(&actor("9"), None, common::AT, m).unwrap();
         assert!(matches!(
