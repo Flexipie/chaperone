@@ -273,12 +273,15 @@ fn tree(bin: &Path, lane: &Lane, deadline: Instant, uncommitted: bool) -> Git {
         let mut committed = None;
         for base in BASES.iter().copied().chain(lane.base_sha.as_deref()) {
             let range = format!("{base}..HEAD");
+            // `--end-of-options`: a claimed base_sha is not checked as hex.
             let args = [
                 "log",
                 "--no-renames",
+                "--no-show-signature",
                 "--name-only",
                 "-z",
                 "--format=%x01%H",
+                "--end-of-options",
                 &range,
                 "--",
             ];
@@ -287,8 +290,10 @@ fn tree(bin: &Path, lane: &Lane, deadline: Instant, uncommitted: bool) -> Git {
                     committed = Some(out);
                     break;
                 }
-                Err(Failure::TimedOut) => return Err(Failure::TimedOut),
-                Err(_) => {}
+                // A base this clone lacks: try the next one.
+                Err(Failure::Other(e))
+                    if e.contains("unknown revision") || e.contains("bad revision") => {}
+                Err(e) => return Err(e),
             }
         }
         let Some(committed) = committed else {

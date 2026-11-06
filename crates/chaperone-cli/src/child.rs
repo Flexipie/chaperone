@@ -24,6 +24,9 @@ pub enum Failed {
 /// read to the end while it runs, so a large answer cannot fill one and
 /// stall the child until the deadline; stdout past `cap` bytes is dropped.
 pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Failed> {
+    if Instant::now() >= deadline {
+        return Err(Failed::TimedOut);
+    }
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

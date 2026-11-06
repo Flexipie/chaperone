@@ -749,7 +749,7 @@ impl Ledger {
                SELECT DISTINCT live.id, live.repo, {live_path} AS path
                FROM live JOIN events e ON e.id = live.h,
                     json_each(e.payload_json, '$.handoff.changed_files') f
-               WHERE f.type = 'text'),
+               WHERE f.type = 'text' AND path <> ''),
              shared AS MATERIALIZED (
                SELECT repo, path, count(*) AS n,
                       substr(group_concat(id, ',' ORDER BY id), 1, {IDS_CHARS}) AS ids
