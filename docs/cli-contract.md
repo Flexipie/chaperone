@@ -284,7 +284,7 @@ These fields keep their daisy names and meaning:
 - `work events`: `action` and `at` per item. `action` is daisy's word (`create`, `claim`,
   `renew`, `takeover`, `update`, `reopen`, `cancel`, `release`, `handoff`,
   `ready_override`), mapped from the event kind (`pr.opened` is `update`, `phase.entered`
-  is the command's). `gate.denied`, `check.*`, `finding.updated` and `usage.reported` are not lane actions
+  is the command's). `gate.denied`, `check.*`, `finding.updated`, `usage.reported`, `pr.merged` and `attention.recorded` are not lane actions
   and do not appear in `work events`.
 - `work handoffs`: `created_at` and `handoff.next_action`.
 

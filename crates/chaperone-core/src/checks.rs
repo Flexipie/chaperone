@@ -43,7 +43,6 @@ pub struct CheckInput {
     pub findings: Option<u64>,
 }
 
-/// The attention types, who handles one, and R12's question reasons.
 pub const ATTENTION_TYPES: &[&str] = &["asked", "answered", "nudged", "sent_back", "revived"];
 pub const ATTENTION_BY: &[&str] = &["orchestrator", "owner"];
 pub const QUESTION_REASONS: &[&str] = &[
@@ -294,13 +293,11 @@ impl Ledger {
             }
             _ => {}
         }
-        if (kind == "sent_back") != input.round.is_some_and(|r| r >= 1) {
+        if (kind == "sent_back") != input.round.is_some() || input.round == Some(0) {
             return invalid("--round <k>, 1 or more, goes with sent_back, and only there".into());
         }
         let answered = kind == "answered";
-        if answered != (input.answers.is_some() && input.note.is_some())
-            || !answered && input.answers.is_some()
-        {
+        if answered != input.answers.is_some() || answered && input.note.is_none() {
             return invalid("answered needs --answers <asked event id> and --note <the answer>; --answers goes with answered only".into());
         }
         if let Some(note) = &input.note
