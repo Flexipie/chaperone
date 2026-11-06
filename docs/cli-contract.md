@@ -131,7 +131,8 @@ holder rule and leaves `updated_at` alone, as `check record` does). It appends o
 `pr.merged` (events.md, PR). It refuses (`invalid_input`, nothing written) a `--pr` that is not
 `owner/repo#N` or that the item has never held, a PR already merged on another item, a sha that
 is not 7 to 40 lowercase hex digits, and a `--merged-at` that is not RFC 3339 UTC with
-milliseconds. The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
+milliseconds (GitHub's `mergedAt`, `2026-11-05T10:00:00Z`, is passed as
+`2026-11-05T10:00:00.000Z`). The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
 payload}`.
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`. It answers daisy's way: `{id, ready, ready_reason}` from the board, or `{id, ready_override, on_board: false}` for a done or cancelled item.

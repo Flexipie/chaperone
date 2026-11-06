@@ -155,9 +155,12 @@ events), spelled as the lane held it, so a lane with several PRs records each me
 handoff numbers are read from the log, never stored on it. Commits after the handoff are
 `git rev-list --count <handoff commit>..<head_sha>`, and ready to merge is `merged_at` minus
 the handoff's `at`. The handoff is R11's first real one (its `next_action` does not start
-with `reviewing`) among the lane's handoffs after its previous `pr.merged` and before this
-one, so a lane's second PR is measured from its own handoff. When the owner made it ready,
-it is the newest `lane.ready_overridden` with `ready: true` in that window.
+with `reviewing`; if every one is a progress note, the earliest stands in) among the lane's
+handoffs while it held this PR: from the event that set `pr_ref` to it (`pr.opened` or a
+`changed.pr_ref.to`) until the next `pr_ref` change or this `pr.merged`, whichever is first.
+So each PR of a lane is measured from its own handoffs, even when a later PR was opened
+before an earlier one merged. When the owner made it ready, it is the newest
+`lane.ready_overridden` with `ready: true` in that window.
 
 
 ### Usage
