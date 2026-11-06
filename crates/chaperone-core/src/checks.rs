@@ -426,7 +426,7 @@ fn newest_other(
     Ok(None)
 }
 
-fn lane_exists(conn: &Connection, id: i64) -> Result<bool, LedgerError> {
+pub(crate) fn lane_exists(conn: &Connection, id: i64) -> Result<bool, LedgerError> {
     exists(conn, "SELECT 1 FROM lanes WHERE id = ?1", [id])
 }
 

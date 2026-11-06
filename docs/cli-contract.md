@@ -88,7 +88,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record` and `reviews record` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `reviews record` and `usage report` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -115,6 +115,8 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
+| `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
+| `usage get` | `<id>` | read |
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 
 `work create --kind` and `--pr-flow` are Chaperone's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
@@ -215,6 +217,45 @@ missing fact fails closed. The route comes from `work create`'s `--kind` and `--
 denial exits 1 with `gate_denied`, names the failing gate id on stderr, and leaves the
 lane where it was.
 
+`usage report` is new (#59). It reads the transcripts that started in the lane's
+`worktree_path` and appends one `usage.reported` per provider message the lane does not
+have (events.md, Usage). `/ship` is to run it after each handoff once lanes run on Chaperone, and anyone may run it on demand.
+It skips the holder rule, as `check record` does. `--claude-dir` defaults to
+`$CLAUDE_CONFIG_DIR`, else `~/.claude` when it exists. `--codex-dir` defaults to `$CODEX_HOME`,
+else `~/.codex` when it exists. A folder from a flag or a variable is used as given. It
+refuses (`invalid_input`, nothing written) a lane with no `worktree_path` or one that is not an
+absolute folder below `/` (which would match every transcript or none), a folder that does
+not exist, and a run with no folder at all. Entries in `projects` that are not folders are
+skipped. A file or folder it cannot read is `internal`, naming the path, and the report
+writes nothing. It prints `{work_id, written, existing, pending, sessions}`.
+`sessions` lists each matched transcript as `{cli, session_id, agent_id, messages, pending,
+unknown}`, with ids and counts only.
+
+`usage get` prints `{work_id, known, totals, sources}`. `totals` is keyed by `source`
+(`parent`, `subagent`), and `sources` has one row per transcript (`source`, `cli`, `session_id`,
+`agent_id`, `agent_type`, `description`, `models`). Both carry `messages`, `peak_input_total`
+and the sums of `cache_read`, `cache_write`, `output`, `reasoning`, `input_total` and
+`output_total`. Only the transcript rows carry `uncached_input`, since its meaning differs
+by CLI (Codex's includes the cache). A sum skips the messages where that field is null, and is
+null when every message has it null. `known` is false when the lane has no usage event.
+
+Where these numbers differ from `lane-stats`:
+
+- `lane-stats`' `context_tokens` is the sum of `input_total`, but it counts a missing key as 0.
+  Here a message with a missing key has a null `input_total`, which the sum skips.
+- A message still streaming at the end of a transcript is counted by `lane-stats` and is
+  pending here until it stops or the transcript has been idle for 10 minutes.
+- `lane-stats` counts a message id once per transcript. Here it counts once per lane, so a
+  resumed or forked session that copies earlier messages adds them once, and a lane total
+  can be lower than `lane-stats`. Which transcript row a copied message lands on follows
+  the scan order.
+- `lane-stats` splits a session evenly between stack lanes that share a worktree. Here each
+  lane that matches a session records its messages.
+- `lane-stats` also matches old daisy items by branch name when they have no worktree path.
+  Here a lane without `worktree_path` is refused.
+- `lane-stats` reads Claude only. Codex rollouts are counted here, with Codex subagents
+  under `subagent`.
+
 ## What lane-stats reads
 
 These fields keep their daisy names and meaning:
@@ -222,7 +263,7 @@ These fields keep their daisy names and meaning:
 - `work events`: `action` and `at` per item. `action` is daisy's word (`create`, `claim`,
   `renew`, `takeover`, `update`, `reopen`, `cancel`, `release`, `handoff`,
   `ready_override`), mapped from the event kind (`pr.opened` is `update`, `phase.entered`
-  is the command's). `gate.denied`, `check.*` and `finding.updated` are not lane actions
+  is the command's). `gate.denied`, `check.*`, `finding.updated` and `usage.reported` are not lane actions
   and do not appear in `work events`.
 - `work handoffs`: `created_at` and `handoff.next_action`.
 

@@ -1,6 +1,6 @@
 # R11: Observability, cost and metrics
 
-Status: draft, 2026-11-02. The metrics list for bet 6 in [VISION.md](../VISION.md), and the event definition of every number `lane-stats` prints. R5 stores the events. R7 stamps the cohort. R4's adapters are the only writers of usage.
+Status: draft, 2026-11-02. The metrics list for bet 6 in [VISION.md](../VISION.md), and the event definition of every number `lane-stats` prints. R5 stores the events. R7 stamps the cohort. R4's adapters write usage, and until then `usage report` writes it from transcripts (`origin: transcript`).
 
 ## Recommendation
 
@@ -77,7 +77,7 @@ Classifiers are versioned because a regex edit would otherwise rewrite history:
 
 ## Token and cost across CLIs
 
-`usage.reported` carries the CLI's raw object plus a normalized record. A missing field is null. A field the CLI sent as `0` stays `0`. The current transcript parser treats a missing key inside a usage object as `0`, which turns a partial record into a fake zero. The event does not.
+`usage.reported` carries the CLI's raw object plus a normalized record. Its `origin` says where it came from. In M1 that is `transcript`: `chaperone usage report` reads the lane's Claude Code and Codex transcripts ([events.md](../events.md), Usage). The R4 adapters write the same kind later. A missing field is null. A field the CLI sent as `0` stays `0`. The current transcript parser treats a missing key inside a usage object as `0`, which turns a partial record into a fake zero. The event does not.
 
 | Field | Meaning |
 |---|---|

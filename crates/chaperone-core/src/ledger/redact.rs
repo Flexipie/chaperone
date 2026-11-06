@@ -20,6 +20,7 @@ const PROSE: &[&str] = &[
     "check_by_hand",
     "command",
     "decisions",
+    "description",
     "error",
     "evidence",
     "goal",

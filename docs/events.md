@@ -32,14 +32,16 @@ These rules keep every write small, single and fail-closed.
 
 - **One command, one event, one transaction.** Each command appends exactly one event and
   folds it inside one `BEGIN IMMEDIATE` transaction. A crash leaves the event and its
-  fold both there or both absent.
+  fold both there or both absent. The one exception is `usage report`. It appends one
+  `usage.reported` per message the lane lacks, each in its own transaction, so a crash leaves
+  whole events, and the next report adds the rest.
 - **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
   `gate.denied` and nothing else. Its key is
-  `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied>`,
+  `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied or usage.reported>`,
   so a retry with no new facts replays the same denial instead of appending again. A
   replayed denial still exits 1 with `gate_denied`.
 - **Lane commands other than `work ready` bump `updated_at`.** `gate.denied`, `check.*`,
-  `finding.updated` and `lane.ready_overridden` do not touch the lane row's `updated_at`, so a subagent
+  `finding.updated`, `lane.ready_overridden` and `usage.reported` do not touch the lane row's `updated_at`, so a subagent
   recording a check never makes the lane's next `--expected-updated-at` stale.
 - **Replays.** A retry with the same key and kind returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
@@ -57,7 +59,7 @@ These rules keep every write small, single and fail-closed.
   pre-redaction copy and a retry replays the redacted bytes. Strings under a prose key
   (`title`, `body`, `summary`, `reason`, `note`, `command`, `what`, `shows`, `showed`,
   `error`, `evidence`, `blocker`, `blockers`, `open_questions`, `next_action`, `goal`,
-  `merge_case`, `decisions`, `check_by_hand`, `why`, `proven`, `not_proven`, `verdict`,
+  `merge_case`, `decisions`, `description`, `check_by_hand`, `why`, `proven`, `not_proven`, `verdict`,
   `shape`, `message`, `question`, `answer`, `where`, at any depth) have R13's patterns
   replaced with `[redacted:<kind>]` (`private_key`, `github_token`, `aws_key`,
   `slack_token`, `bearer`, `api_key`, `assignment`), and the payload gets `redactions`,
@@ -145,6 +147,42 @@ It is that update's one event, in place of `lane.updated`, and `work events` sho
 a handoff, the handoff's event carries `changed.pr_ref` from null, and the fact
 `pr.opened_at` is the `at` of whichever event first set the PR.
 
+
+### Usage
+
+| Kind | Command | Payload |
+| --- | --- | --- |
+| `usage.reported` | `usage report` | One provider message, in [R11](research/r11-observability-cost-metrics.md)'s fields: `message_id`, `source` (`parent` or `subagent`), `model`, `uncached_input`, `cache_read`, `cache_write`, `output`, `reasoning`, `input_includes_cache`, `output_includes_reasoning`, `input_total`, `output_total`, `cost_usd`, `raw` (the CLI's usage object, counts only: R13's allowlist, strings dropped). Plus `origin` (`transcript` in M1; the R4 adapters write the same kind later), `cli` (`claude` or `codex`), `session_id`, and for a subagent `agent_id`, `agent_type` and `description` |
+
+The key is `usage:<lane_id>:<message_id>`, so a message is recorded once per lane, and a report
+that finds nothing new writes nothing. The write refuses a `usage.reported` without a
+`message_id`. A missing count is null, never 0. It folds nothing but `head_event_id`, it is
+not a lane action in `work events`, and no gate reads it. Totals are sums over these
+events (`usage get`), never a stored counter. Message text never enters the payload.
+
+- **Claude Code.** The transcripts whose first `cwd` is the lane's `worktree_path` or a folder
+  under it, under `<claude dir>/projects/*/<session>.jsonl`, and their subagents under
+  `<session>/subagents/agent-<id>.jsonl` with `agent_type` and `description` from the sibling
+  `.meta.json`. A response is one line per content block, and earlier lines can carry partial
+  usage, so the last line of a message id counts. A message is recorded once a line of it
+  has a `stop_reason`, a later message has begun, or the transcript has not been written for
+  10 minutes (an interrupt or a killed subagent never writes a stop). Until then it is
+  pending, and the next report records it. `input_includes_cache` is false and `input_total` is
+  `uncached_input + cache_read + cache_write` (null if any is null). `output_includes_reasoning`
+  is true, because Anthropic counts thinking inside `output_tokens`.
+- **Codex.** The rollouts under `<codex home>/sessions/**/rollout-*.jsonl` whose `session_meta`
+  `cwd` matches. Each `token_usage_record` is one response (`message_id` is its
+  `response_id`), with the model from the latest `turn_context`. `input_tokens` already holds
+  the cached count. In local records `total_tokens` is input plus output, and input is never
+  below cached. So `input_includes_cache` is true, `uncached_input` and `input_total` are
+  `input_tokens`, and `cache_read` is `cached_input_tokens`. A rollout with no
+  `token_usage_record` (older Codex) is reported as `unknown` and writes nothing. A rollout
+  whose `session_meta.source` has `subagent` is a subagent: `session_id` is its
+  `parent_thread_id`, `agent_id` its own id, `agent_type` the spawn's `agent_role` and
+  `description` its `agent_nickname`.
+- **Cursor** and other CLIs are not read. Their lanes have no usage events, so `usage get`
+  says `known: false`, never a guessed zero.
+
 ## `check.finished` payloads
 
 `producer` says who ran the check:
@@ -219,7 +257,7 @@ Named so nothing else takes the name. The write refuses these kinds in M1.
 
 | Kind | From | Why not M1 |
 | --- | --- | --- |
-| `session.started`, `turn.finished`, `session.exited`, `tool.started`, `tool.finished`, `usage.reported`, `permission.denied` | [R4](research/r4-agent-cli-integration.md) v0 lifecycle | No adapter in M1. Tokens still come from transcripts. |
+| `session.started`, `turn.finished`, `session.exited`, `tool.started`, `tool.finished`, `permission.denied` | [R4](research/r4-agent-cli-integration.md) v0 lifecycle | No adapter in M1. M1's `usage.reported` comes from transcripts. |
 | `agent.stalled`, `agent.blocked`, `agent.killed` | [R8](research/r8-process-terminal-runtime.md) | Needs `chaperone supervise`. |
 | `reservation.written`, `intent.granted`, `intent.denied`, `path.released`, `seam.published`, `seam.acked`, `seam.rejected`, `message.sent`, `stack.rebased`, `stack.layer_opened` | [R9](research/r9-coordination-between-lanes.md) | Coordination is Phase 3. |
 | `evidence.recorded`, `escape.judged`, `price.published`, `pr.merged`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |

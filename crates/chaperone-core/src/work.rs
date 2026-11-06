@@ -709,7 +709,7 @@ impl Ledger {
             "SELECT id, lane_id, actor_agent, actor_session, kind,
                     json_extract(payload_json, '$.reason'), payload_json, at,
                     json_extract(payload_json, '$.handoff') IS NOT NULL
-             FROM events WHERE lane_id = ?1 ORDER BY id",
+             FROM events WHERE lane_id = ?1 AND kind != 'usage.reported' ORDER BY id",
         )?;
         let mut rows = stmt.query([id])?;
         let mut out = Vec::new();
@@ -993,7 +993,7 @@ fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
         PhaseEntered if carries_handoff => "handoff",
         PhaseEntered => "update",
         SpecCreated | SpecRevised | SpecApproved | GateDenied | CheckRequested | CheckFinished
-        | FindingUpdated => return None,
+        | FindingUpdated | UsageReported => return None,
     })
 }
 

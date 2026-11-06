@@ -128,8 +128,7 @@ Slices of #1 (one issue each). Chaperone replaces daisy's ledger; no router, no 
 **Still in dotfiles for M1:** all pipeline skills, `ship-handoff`, `spawn`, herdr parent,
 `lane-stats` transcript scan, `pipeline-profile`, changelog.
 
-**Not in M1:** MCP adapters on the hot path, `chaperone supervise`, coordination (R9), usage events
-replacing transcript tokens, switching the skills to `chaperone` (after the demo).
+**Not in M1:** MCP adapters on the hot path, `chaperone supervise`, coordination (R9), adapter-written usage events (M1's `usage.reported` comes from transcripts), switching the skills to `chaperone` (after the demo).
 
 **Exit:** M1 success bar table above on ledger-lane cohorts; zero stopped in-flight lanes.
 

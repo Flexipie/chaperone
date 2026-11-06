@@ -57,6 +57,7 @@ kinds! {
     CheckFinished => "check.finished",
     FindingUpdated => "finding.updated",
     PrOpened => "pr.opened",
+    UsageReported => "usage.reported",
 }
 
 impl EventKind {
@@ -79,6 +80,7 @@ impl EventKind {
                 | EventKind::CheckFinished
                 | EventKind::FindingUpdated
                 | EventKind::LaneReadyOverridden
+                | EventKind::UsageReported
         )
     }
 }

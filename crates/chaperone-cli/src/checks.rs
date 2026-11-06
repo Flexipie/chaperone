@@ -1,4 +1,4 @@
-//! `chaperone check`, `reviews` and `jobs`. `reviews record` runs
+//! `chaperone check`, `reviews`, `jobs` and `usage`. `reviews record` runs
 //! `daisy-cli reviews get`, Chaperone's only call into daisy, before the
 //! write opens its transaction.
 
@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 
 use chaperone_core::checks::CheckInput;
 use chaperone_core::ledger::Ledger;
+use chaperone_core::usage::Roots;
 use serde_json::{Value, json};
 
-use crate::cli::{CheckCmd, JobsCmd, ReviewsCmd};
+use crate::cli::{CheckCmd, JobsCmd, ReviewsCmd, UsageCmd};
 use crate::output::{CliError, ErrorBody, Outcome};
 use crate::work::one;
 
@@ -59,6 +60,32 @@ pub fn jobs(ledger: &Ledger, cmd: JobsCmd) -> Result<Outcome, CliError> {
     match cmd {
         JobsCmd::Get { id } => one(ledger.job_get(id)??),
     }
+}
+
+pub fn usage(ledger: &Ledger, cmd: UsageCmd) -> Result<Outcome, CliError> {
+    match cmd {
+        UsageCmd::Report {
+            work,
+            claude_dir,
+            codex_dir,
+            actor,
+        } => {
+            let roots = Roots {
+                claude: claude_dir.or_else(|| home("CLAUDE_CONFIG_DIR", ".claude")),
+                codex: codex_dir.or_else(|| home("CODEX_HOME", ".codex")),
+            };
+            one(ledger.usage_report(&actor.resolve(), work, &roots)??)
+        }
+        UsageCmd::Get { id } => one(ledger.usage_get(id)??),
+    }
+}
+
+/// A CLI's default home: its variable as given (so a typo is refused, as
+/// with a flag), else `~/<dir>` when that folder exists.
+fn home(var: &str, dir: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os(var)
+        .map(Into::into)
+        .or_else(|| dirs::home_dir().map(|h| h.join(dir)).filter(|p| p.is_dir()))
 }
 
 /// The `data` of `daisy-cli reviews get <job>`. Daisy's exit 5 and

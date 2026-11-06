@@ -74,10 +74,11 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
         return Ok(Ok(None));
     };
     // A retry with no new event on the lane replays this denial instead of
-    // appending another (events.md, write rules).
+    // appending another (events.md, write rules). Usage is no gate's fact.
     let latest: Option<i64> = conn
         .query_row(
-            "SELECT id FROM events WHERE lane_id = ?1 AND kind != 'gate.denied'
+            "SELECT id FROM events WHERE lane_id = ?1
+               AND kind NOT IN ('gate.denied', 'usage.reported')
              ORDER BY id DESC LIMIT 1",
             [lane_id],
             |r| r.get(0),

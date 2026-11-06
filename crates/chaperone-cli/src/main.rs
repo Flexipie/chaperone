@@ -69,6 +69,7 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Check(cmd) => checks::check(&Ledger::open(&path)?, cmd),
         Cmd::Reviews(cmd) => checks::reviews(&Ledger::open(&path)?, cmd),
         Cmd::Jobs(cmd) => checks::jobs(&Ledger::open(&path)?, cmd),
+        Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),
     }
 }
 
