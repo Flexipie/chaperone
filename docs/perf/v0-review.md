@@ -5,7 +5,7 @@ against the budgets in [R14](../research/r14-engineering-standards.md#performanc
 switch onto Chaperone.
 
 **Short answer:** every R14 product budget that v0 can be measured against passes, most with a wide margin. One
-command misses M1 at scale (`work board` past about 150 open items). One read was cheap to fix and is fixed here
+command missed M1 at scale (`work board` past about 150 open items; fixed since in #51 and #74). One read was cheap to fix and is fixed here
 (`spec get --key`, p50 9.8 ms to 6.7 ms on the realistic ledger). The rest become follow-up issues, listed at the end.
 
 ## Method
