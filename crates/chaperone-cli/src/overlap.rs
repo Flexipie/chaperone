@@ -147,8 +147,8 @@ pub fn run(
                 }
             }
             Git::Skip(status) => row.worktree = status,
-            Git::Err(status, e) => {
-                row.worktree = status;
+            Git::Err(e) => {
+                row.worktree = "error";
                 row.error = Some(e);
             }
         }
@@ -157,15 +157,11 @@ pub fn run(
 
     let mut rows: Vec<_> = files
         .into_iter()
-        .map(|((repo, path), lanes)| {
-            let mut ids: Vec<_> = lanes.iter().map(|e| e.id).collect();
-            ids.dedup();
-            Row {
-                shared: ids.len() > 1,
-                lanes,
-                path,
-                repo,
-            }
+        .map(|((repo, path), lanes)| Row {
+            shared: lanes.iter().any(|e| e.id != lanes[0].id),
+            lanes,
+            path,
+            repo,
         })
         .collect();
     // Stable, so each group keeps repo and path order.
@@ -219,7 +215,7 @@ enum Git {
         cut: usize,
     },
     Skip(&'static str),
-    Err(&'static str, String),
+    Err(String),
 }
 
 /// Every lane's worktree, in lane order, from at most [`WORKERS`] threads.
@@ -361,7 +357,7 @@ fn tree(bin: &Path, lane: &Lane, deadline: Instant, uncommitted: bool) -> Git {
         Ok(Some((head, paths, cut))) => Git::Ok { head, paths, cut },
         Ok(None) => Git::Skip("no_base"),
         Err(Failure::TimedOut) => Git::Skip("timed_out"),
-        Err(Failure::Other(e)) => Git::Err("error", e),
+        Err(Failure::Other(e)) => Git::Err(e),
     }
 }
 

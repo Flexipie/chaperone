@@ -162,10 +162,10 @@ pub struct Overlap {
     pub work_ids_omitted: usize,
 }
 
-pub const BOARD_OVERLAPS: usize = 50;
+const BOARD_OVERLAPS: usize = 50;
 /// Lanes listed per path, so lanes that share a path cost the board
 /// linear work, not one row per pair.
-pub const OVERLAP_IDS: usize = 10;
+const OVERLAP_IDS: usize = 10;
 
 /// The head of a path's ids, lowest first and comma-separated, as the
 /// board's SQL keeps it: room for at least [`OVERLAP_IDS`] + 1 (this lane
