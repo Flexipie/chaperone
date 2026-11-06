@@ -97,8 +97,16 @@ fn each_intervention_records_once() {
             .unwrap()
             .replayed
     );
+    // The same key on another lane is that lane's record, not a replay.
+    let elsewhere = lane(&ledger);
+    let there = AttentionInput {
+        work: elsewhere,
+        ..again.clone()
+    };
+    let there = ledger.attention_record(&o, &there).unwrap().unwrap();
+    assert_eq!((there.replayed, there.work_id), (false, elsewhere));
     let db = read_only(&path);
-    assert_eq!(count(&db, ATTENTION), 6);
+    assert_eq!(count(&db, ATTENTION), 7);
     assert_eq!(
         count(
             &db,
@@ -165,13 +173,15 @@ fn refusals_write_nothing() {
         },
         "answered only",
     );
-    refused(
-        AttentionInput {
-            note: Some("two\nlines".into()),
-            ..record(id, "nudged")
-        },
-        "one line",
-    );
+    for note in ["two\nlines", "two\u{2028}lines", "  "] {
+        refused(
+            AttentionInput {
+                note: Some(note.into()),
+                ..record(id, "nudged")
+            },
+            "one non-blank line",
+        );
+    }
     // An answer must point at a question asked on the same lane.
     let asked = ledger
         .attention_record(

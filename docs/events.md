@@ -51,7 +51,8 @@ These rules keep every write small, single and fail-closed.
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
   recorded on another lane is `invalid_input`. `work merged` uses `merged:<lane_id>:<pr>`
   (the PR lowercased), and a PR already merged on another lane is `invalid_input`.
-  `attention record` takes `--idempotency-key`; without one it uses `attention:` plus the
+  `attention record` scopes its `--idempotency-key` to the lane (`attention:<lane_id>:<key>`);
+  without one it uses `attention:` plus the
   sha256 of the lane id, its canonical payload and the id of the lane's newest event that is
   not a `gate.denied`, `usage.reported`, `pr.merged` or `attention.recorded` (the anchor the
   denial key uses), so a retry replays and the same record after new lane activity appends.

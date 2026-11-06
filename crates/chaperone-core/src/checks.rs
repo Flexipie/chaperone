@@ -301,10 +301,14 @@ impl Ledger {
             return invalid("answered needs --answers <asked event id> and --note <the answer>; --answers goes with answered only".into());
         }
         if let Some(note) = &input.note
-            && (note.contains(['\n', '\r']) || note.chars().count() > NOTE_CHARS)
+            && (note.trim().is_empty()
+                || note
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+                || note.chars().count() > NOTE_CHARS)
         {
             return invalid(format!(
-                "--note is one line of at most {NOTE_CHARS} characters"
+                "--note is one non-blank line of at most {NOTE_CHARS} characters"
             ));
         }
         let work = input.work;
@@ -325,7 +329,8 @@ impl Ledger {
         // Read before the write lock: a fact that commits in between can
         // only make a retry append a duplicate.
         let key = match &input.idempotency_key {
-            Some(k) => k.clone(),
+            // Scoped to the lane, so the same key on another lane appends there.
+            Some(k) => format!("attention:{work}:{k}"),
             None => {
                 let after = crate::engine::newest_fact_event(self.conn(), work)?;
                 let canonical =
