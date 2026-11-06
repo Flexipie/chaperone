@@ -185,6 +185,9 @@ fn apply_pragmas(conn: &mut Connection) -> Result<(), LedgerError> {
     }
     conn.pragma_update(None, "synchronous", "FULL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    // 512 KiB, not the default 2 MiB: the default cache alone put `work list`
+    // and `work board` at R14's 8 MiB M1, and no measured latency moved (#74).
+    conn.pragma_update(None, "cache_size", -512)?;
     Ok(())
 }
 
@@ -294,6 +297,7 @@ mod tests {
         assert!(!parent.join("backups").exists());
         let ledger = Ledger::open(&path).unwrap();
         assert_eq!(pragma::<i64>(ledger.conn(), "synchronous"), 2);
+        assert_eq!(pragma::<i64>(ledger.conn(), "cache_size"), -512);
     }
 
     #[test]
