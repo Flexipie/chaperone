@@ -67,7 +67,7 @@ jobs:
         with:
           tool: cargo-llvm-cov,nextest
       # Crash and concurrency tests gate nothing here, and instrumentation
-      # eats the 50 writers' headroom under busy_timeout.
+      # eats the 50 writers' headroom under the 5 s busy limit.
       - run: cargo +"$NIGHTLY" llvm-cov nextest -p chaperone-core --locked --branch --json --output-path cov.json -E 'not (binary(crash) | binary(concurrency))'
       - name: no missed branch or region in a gated file
         run: |

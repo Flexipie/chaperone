@@ -14,7 +14,7 @@ mod write;
 use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
 
@@ -36,6 +36,9 @@ pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 /// `PRAGMA application_id`, set by 0001: "CHAP".
 pub const APPLICATION_ID: i64 = 0x4348_4150;
 
+/// How long a statement waits for a lock before it fails with `busy`.
+const BUSY_GIVE_UP: Duration = Duration::from_secs(5);
+
 pub struct Ledger {
     conn: Connection,
 }
@@ -56,8 +59,8 @@ impl Ledger {
             });
         }
         let flags = OpenFlags::default().difference(OpenFlags::SQLITE_OPEN_CREATE);
-        let conn = Connection::open_with_flags(path, flags)?;
-        apply_pragmas(&conn)?;
+        let mut conn = Connection::open_with_flags(path, flags)?;
+        apply_pragmas(&mut conn)?;
         check_schema(&conn)?;
         Ok(Self { conn })
     }
@@ -80,7 +83,7 @@ impl Ledger {
         };
         std::fs::create_dir_all(dir)?;
         // Serialises create, backup and migrate across processes. Switching
-        // to WAL does not wait out busy_timeout, and two backups of one
+        // to WAL does not wait on the busy handler, and two backups of one
         // version must not race.
         let lock = File::options()
             .create(true)
@@ -100,8 +103,8 @@ impl Ledger {
             }
             Some((found, ..)) => found,
         };
-        let conn = Connection::open(path)?;
-        apply_pragmas(&conn)?;
+        let mut conn = Connection::open(path)?;
+        apply_pragmas(&mut conn)?;
         if found > 0 && found < supported {
             migrate::backup(&conn, dir, path, found)?;
         }
@@ -155,8 +158,20 @@ pub(crate) fn check_schema(conn: &Connection) -> Result<(), LedgerError> {
     Ok(())
 }
 
-fn apply_pragmas(conn: &Connection) -> Result<(), LedgerError> {
-    conn.busy_timeout(Duration::from_millis(5000))?;
+fn apply_pragmas(conn: &mut Connection) -> Result<(), LedgerError> {
+    // Retries the lock every 1 ms and gives up 5 s after a step's first
+    // busy callback (SQLite restarts the count at 0 for each step).
+    // SQLite's own busy_timeout backs off to 100 ms sleeps, and a writer that
+    // just committed takes the lock again before a sleeper wakes, so under a
+    // burst of writers a waiter could starve for the whole 5 s (#62).
+    let mut first_busy = Instant::now();
+    conn.busy_handler(Some(move |n| {
+        if n == 0 {
+            first_busy = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(1));
+        first_busy.elapsed() < BUSY_GIVE_UP
+    }))?;
     let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
     if mode != "wal" {
         return Err(std::io::Error::other(format!("journal_mode is {mode}, not wal")).into());
@@ -231,7 +246,6 @@ mod tests {
         let conn = ledger.conn();
         assert_eq!(pragma::<String>(conn, "journal_mode"), "wal");
         assert_eq!(pragma::<i64>(conn, "synchronous"), 2);
-        assert_eq!(pragma::<i64>(conn, "busy_timeout"), 5000);
         assert_eq!(pragma::<i64>(conn, "foreign_keys"), 1);
         assert_eq!(user_version(conn).unwrap(), 1);
         assert_eq!(pragma::<i64>(conn, "application_id"), APPLICATION_ID);
