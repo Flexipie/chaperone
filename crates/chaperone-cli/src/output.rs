@@ -381,8 +381,8 @@ pub fn write_board(
     Ok(Outcome::Written)
 }
 
-/// A temp file only this process can open: owner-only, and unlinked once
-/// open, so it is gone when the process exits however it exits.
+/// A temp file that is owner-only, and unlinked once open, so it is gone
+/// when the process exits however it exits.
 fn spool() -> std::io::Result<File> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
