@@ -290,12 +290,13 @@ fn jsonl_end(meta: &Meta, page: PageMeta) -> String {
     serde_json::to_string(&json!({ "ok": true, "meta": meta })).unwrap_or_default() + "\n"
 }
 
-/// `work board` written to stdout as its rows are read, so the board is
-/// never held whole (R14 M1), in the bytes `render_ok` gives: its sorted
-/// keys. Items and meta go through a `Value`; `Envelope` and `Data` declare
-/// their fields in sorted order, so a new field goes in its sorted place. A ledger error before the first 8 KiB
-/// leaves stdout empty; after it, stdout holds a partial document and the
-/// exit code says so. A closed stdout is ignored, as `finish` ignores it.
+/// `work board` written to stdout as its rows are read, so the CLI never
+/// holds the whole board (R14 M1), in the bytes `render_ok` gives: its
+/// sorted keys. Items and meta go through a `Value`; `Envelope` and `Data`
+/// declare their fields in sorted order, so a new field goes in its sorted
+/// place. A ledger error before the first 8 KiB leaves stdout empty; after
+/// it, stdout holds a partial document and the exit code says so. A closed
+/// stdout is ignored, as `finish` ignores it.
 pub fn write_board(
     ledger: &Ledger,
     now: &str,
