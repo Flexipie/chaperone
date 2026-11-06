@@ -12,7 +12,7 @@ drive loses power or the OS crashes, the application may find that only some or 
 disk drive may also re-order the data so that later writes may be present, while earlier writes are not." SQLite
 ([How To Corrupt An SQLite Database File](https://www.sqlite.org/howtocorrupt.html), §3.1) says the same of drives that report a
 sync before the data is on the media, for "a power loss or hard reset", and that in WAL mode such a failed sync can lose
-a commit but corrupts the file only during a checkpoint. A kernel panic reboots the Mac, so it is a hard reset. Apple's own
+a commit but corrupts the file only during a checkpoint. Apple's own
 SQLite (`/usr/bin/sqlite3` 3.51.0) defaults to `fullfsync=0` and `checkpoint_fullfsync=1`; the bundled SQLite from
 `libsqlite3-sys` 0.39.1 sets neither.
 
@@ -28,8 +28,10 @@ Measured on the reference machine (Apple M2 Max, release, 2026-11-07), E1 is `te
 ## Decision
 
 Keep plain `fsync`: no `fullfsync`, no `checkpoint_fullfsync`. This is weaker than Apple's default, which flushes
-fully at checkpoints. On macOS, `synchronous=FULL` means a commit that returned survives a killed process. It does not
-promise to survive a power loss or an OS crash (a kernel panic).
+fully at checkpoints. On macOS, `synchronous=FULL` hands every commit to the drive before it returns, where
+`NORMAL` would leave it in the OS's memory. A returned commit survives a killed process. Across an OS crash it
+survives when the drive keeps power and writes out its cache, which Apple's `fsync(2)` does not promise; a power loss
+can lose it. So a returned commit is not promised to survive a power loss or an OS crash.
 
 On a power loss or an OS crash the last commits can be lost. **Checkpoint corruption is an accepted risk, not ruled
 out:** without a full flush the drive can reorder a checkpoint's writes to the database file, so a power loss or OS
@@ -41,6 +43,8 @@ crash during or just after a checkpoint could leave the file damaged.
   starvation that #62 fixed. Parallel writers are the load Chaperone exists for.
 - **`checkpoint_fullfsync=ON` only** (Apple's default). Covers the checkpoint corruption above, but misses E1 in 3
   of 5 runs and leaves E2 near its limit.
+- **`F_BARRIERFSYNC`** (ordering without a full flush, `fcntl(2)`). Bundled SQLite has no pragma for it, so it would
+  need our own VFS, which R14 rules out.
 
 ## Consequences
 
