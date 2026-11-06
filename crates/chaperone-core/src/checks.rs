@@ -43,6 +43,37 @@ pub struct CheckInput {
     pub findings: Option<u64>,
 }
 
+/// The attention types, who handles one, and R12's question reasons.
+pub const ATTENTION_TYPES: &[&str] = &["asked", "answered", "nudged", "sent_back", "revived"];
+pub const ATTENTION_BY: &[&str] = &["orchestrator", "owner"];
+pub const QUESTION_REASONS: &[&str] = &[
+    "question.done_ambiguous",
+    "question.scope",
+    "question.one_way",
+    "question.recorded_decision",
+    "question.size",
+    "question.investigation",
+    "question.verdict_no",
+    "question.product",
+    "question.seam_reject",
+    "question.overlap",
+];
+/// An attention note's cap, in characters: one line, not a document.
+const NOTE_CHARS: usize = 500;
+
+/// `attention record`'s input. `kind` is `--type`.
+#[derive(Clone, Debug, Default)]
+pub struct AttentionInput {
+    pub work: i64,
+    pub kind: String,
+    pub by: String,
+    pub reason: Option<String>,
+    pub round: Option<u64>,
+    pub answers: Option<i64>,
+    pub note: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
 /// `work merged`'s input: what the forge says about the merge.
 #[derive(Clone, Debug, Default)]
 pub struct MergedInput {
@@ -235,6 +266,102 @@ impl Ledger {
                     return invalid(format!("PR {pr} is already merged on another work item"));
                 }
                 Ok(Ok(check_event(EventKind::PrMerged, work, payload)))
+            },
+            |_, _, _| Ok(()),
+        )?;
+        Ok(recorded(applied, work))
+    }
+
+    /// One `attention.recorded`: an intervention on lane `input.work` by the
+    /// orchestrator or the owner. Without `--idempotency-key` the key covers
+    /// the payload and the lane's newest fact event, so a retry replays; a
+    /// repeat with nothing new on the lane needs its own key to append.
+    pub fn attention_record(&self, actor: &Actor, input: &AttentionInput) -> Checked<Recorded> {
+        let kind = input.kind.as_str();
+        if !ATTENTION_TYPES.contains(&kind) || !ATTENTION_BY.contains(&input.by.as_str()) {
+            return invalid(format!(
+                "--type is one of {ATTENTION_TYPES:?} and --by one of {ATTENTION_BY:?}"
+            ));
+        }
+        match &input.reason {
+            None if kind == "asked" => {
+                return invalid(format!("asked needs --reason, one of {QUESTION_REASONS:?}"));
+            }
+            Some(r) if kind != "asked" || !QUESTION_REASONS.contains(&r.as_str()) => {
+                return invalid(format!(
+                    "--reason goes with asked only, one of {QUESTION_REASONS:?}"
+                ));
+            }
+            _ => {}
+        }
+        if (kind == "sent_back") != input.round.is_some_and(|r| r >= 1) {
+            return invalid("--round <k>, 1 or more, goes with sent_back, and only there".into());
+        }
+        let answered = kind == "answered";
+        if answered != (input.answers.is_some() && input.note.is_some())
+            || !answered && input.answers.is_some()
+        {
+            return invalid("answered needs --answers <asked event id> and --note <the answer>; --answers goes with answered only".into());
+        }
+        if let Some(note) = &input.note
+            && (note.contains(['\n', '\r']) || note.chars().count() > NOTE_CHARS)
+        {
+            return invalid(format!(
+                "--note is one line of at most {NOTE_CHARS} characters"
+            ));
+        }
+        let work = input.work;
+        let mut payload = Payload::default();
+        let fields = [
+            ("type", Some(json!(kind))),
+            ("by", Some(json!(input.by))),
+            ("reason", input.reason.as_ref().map(|r| json!(r))),
+            ("round", input.round.map(|r| json!(r))),
+            ("answers", input.answers.map(|a| json!(a))),
+            ("note", input.note.as_ref().map(|n| json!(n))),
+        ];
+        for (k, v) in fields {
+            if let Some(v) = v {
+                payload.rest.insert(k.into(), v);
+            }
+        }
+        // Read before the write lock: a fact that commits in between can
+        // only make a retry append a duplicate.
+        let key = match &input.idempotency_key {
+            Some(k) => k.clone(),
+            None => {
+                let after = crate::engine::newest_fact_event(self.conn(), work)?;
+                let canonical =
+                    canonical_string(&json!({"work": work, "payload": payload, "after": after}));
+                format!("attention:{:x}", Sha256::digest(canonical))
+            }
+        };
+        let (applied, _) = self.apply_planned(
+            actor,
+            Some(&key),
+            None,
+            false,
+            |conn, _| {
+                if !lane_exists(conn, work)? {
+                    return Ok(Err(Refusal::NotFound {
+                        entity: ENTITY,
+                        id: work,
+                    }));
+                }
+                if let Some(asked) = input.answers
+                    && !exists(
+                        conn,
+                        "SELECT 1 FROM events WHERE id = ?1 AND lane_id = ?2
+                           AND kind = 'attention.recorded'
+                           AND json_extract(payload_json, '$.type') = 'asked'",
+                        params![asked, work],
+                    )?
+                {
+                    return invalid(format!(
+                        "--answers {asked} is not a question asked on work item {work}"
+                    ));
+                }
+                Ok(Ok(check_event(EventKind::AttentionRecorded, work, payload)))
             },
             |_, _, _| Ok(()),
         )?;

@@ -37,11 +37,11 @@ These rules keep every write small, single and fail-closed.
   whole events, and the next report adds the rest.
 - **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
   `gate.denied` and nothing else. Its key is
-  `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied, usage.reported or pr.merged>`,
+  `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied, usage.reported, pr.merged or attention.recorded>`,
   so a retry with no new facts replays the same denial instead of appending again. A
   replayed denial still exits 1 with `gate_denied`.
 - **Lane commands other than `work ready` bump `updated_at`.** `gate.denied`, `check.*`,
-  `finding.updated`, `lane.ready_overridden`, `usage.reported` and `pr.merged` do not touch the lane row's `updated_at`, so a subagent
+  `finding.updated`, `lane.ready_overridden`, `usage.reported`, `pr.merged` and `attention.recorded` do not touch the lane row's `updated_at`, so a subagent
   recording a check never makes the lane's next `--expected-updated-at` stale.
 - **Replays.** A retry with the same key and kind returns the stored event, even if the new
   payload differs. Commands that take no `--idempotency-key` derive one: `check record`
@@ -51,6 +51,10 @@ These rules keep every write small, single and fail-closed.
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
   recorded on another lane is `invalid_input`. `work merged` uses `merged:<lane_id>:<pr>`
   (the PR lowercased), and a PR already merged on another lane is `invalid_input`.
+  `attention record` takes `--idempotency-key`; without one it uses `attention:` plus the
+  sha256 of the lane id, its canonical payload and the id of the lane's newest event that is
+  not a `gate.denied`, `usage.reported`, `pr.merged` or `attention.recorded` (the anchor the
+  denial key uses), so a retry replays and the same record after new lane activity appends.
 - **Small payloads.** No secrets (redacted at write, [R13](research/r13-security-and-trust.md)),
   no blobs. Evidence files sit beside the ledger, named by content hash, and the payload
   carries only the hash (`evidence_ref`). Spec bodies are capped at 256 KiB, handoff
@@ -162,6 +166,19 @@ So each PR of a lane is measured from its own handoffs, even when a later PR was
 before an earlier one merged. When the owner made it ready, it is the newest
 `lane.ready_overridden` with `ready: true` in that window.
 
+
+### Attention
+
+| Kind | Command | Payload |
+| --- | --- | --- |
+| `attention.recorded` | `attention record` | `type` (`asked`, `answered`, `nudged`, `sent_back`, `revived`), `by` (`orchestrator` or `owner`: who handled it; for `asked`, who the question went to), `reason` (`asked` only: one of R12's question ids, below), `round` (`sent_back` only, 1 or more), `answers` (`answered` only: the event id of the `asked` it answers, on the same lane), `note` (one line of at most 500 characters, redacted at write; the answer itself for `answered`) |
+
+One intervention on a lane by the orchestrator or the owner. It changes no column but
+`head_event_id`, is not a lane action in `work events`, and no gate reads it. Time to an
+answer is the `answered` event's `at` minus its question's. The owner's attention is the
+events with `by: owner`. R12's planned `chaperone attention answer` writes this same kind
+with `type: answered`. `question.opened` stays reserved for R12's question lifecycle; an
+`asked` carries the question's reason id.
 
 ### Usage
 
@@ -279,7 +296,7 @@ Named so nothing else takes the name. The write refuses these kinds in M1.
 | `agent.stalled`, `agent.blocked`, `agent.killed` | [R8](research/r8-process-terminal-runtime.md) | Needs `chaperone supervise`. |
 | `reservation.written`, `intent.granted`, `intent.denied`, `path.released`, `seam.published`, `seam.acked`, `seam.rejected`, `message.sent`, `stack.rebased`, `stack.layer_opened` | [R9](research/r9-coordination-between-lanes.md) | Coordination is Phase 3. |
 | `evidence.recorded`, `escape.judged`, `price.published`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |
-| `question.opened` | [R12](research/r12-interfaces-and-attention.md) | Attention is later. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`, `question.overlap`) are payload values, not kinds. |
+| `question.opened` | [R12](research/r12-interfaces-and-attention.md) | R12's question lifecycle is later; M1 records a question as `attention.recorded` with `type: asked`. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`, `question.overlap`) are payload values, not kinds. |
 | `human.merge_yes` | [R10](research/r10-verification-review-layer.md) | Needs a user-attributed adapter. M1's done is the `handoff` transition. |
 
 Reserved `check.finished` values. No M1 command produces them, so they are not

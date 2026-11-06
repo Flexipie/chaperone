@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use chaperone_core::checks::{ATTENTION_BY, ATTENTION_TYPES, QUESTION_REASONS};
 use chaperone_core::cursor::DEFAULT_LIMIT;
 use chaperone_core::ledger::{Actor, KINDS, PR_FLOWS, SESSION_CHECKS};
 use clap::builder::PossibleValuesParser;
@@ -53,6 +54,8 @@ pub enum Cmd {
     Jobs(JobsCmd),
     #[command(subcommand)]
     Usage(UsageCmd),
+    #[command(subcommand)]
+    Attention(AttentionCmd),
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
@@ -90,6 +93,7 @@ impl Cmd {
             Cmd::Spec(SpecCmd::Get { .. } | SpecCmd::List) => None,
             Cmd::Usage(UsageCmd::Report { .. }) => Some("usage report"),
             Cmd::Usage(UsageCmd::Get { .. }) => None,
+            Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
         }
     }
 }
@@ -547,4 +551,38 @@ pub enum UsageCmd {
     /// The work item's usage: totals per source (parent, subagent) and one
     /// row per transcript. known is false when nothing was recorded
     Get { id: i64 },
+}
+
+/// Interventions on a lane by the orchestrator or the owner
+#[derive(Subcommand, Debug)]
+pub enum AttentionCmd {
+    /// Record one intervention: a question asked, its answer, a nudge, a
+    /// send-back or a revive. The same record again with nothing new on the
+    /// lane replays; pass --idempotency-key for a real repeat
+    Record {
+        #[arg(long)]
+        work: i64,
+        #[arg(long = "type", value_parser = PossibleValuesParser::new(ATTENTION_TYPES))]
+        kind: String,
+        /// Who handled it (for asked, who the question went to)
+        #[arg(long, value_parser = PossibleValuesParser::new(ATTENTION_BY))]
+        by: String,
+        /// asked only, required there: R12's reason id
+        #[arg(long, value_parser = PossibleValuesParser::new(QUESTION_REASONS))]
+        reason: Option<String>,
+        /// sent_back only, required there: the send-back round, 1 or more
+        #[arg(long)]
+        round: Option<u64>,
+        /// answered only, required there: the event id of the question
+        #[arg(long)]
+        answers: Option<i64>,
+        /// One line, at most 500 characters; required for answered (the
+        /// answer). Redacted at write
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
 }
