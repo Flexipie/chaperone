@@ -35,7 +35,13 @@ pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Fai
             let (mut buf, mut cut) = (Vec::new(), false);
             if let Some(mut pipe) = pipe {
                 let mut chunk = [0u8; 8192];
-                while let Ok(n @ 1..) = pipe.read(&mut chunk) {
+                loop {
+                    let n = match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    };
                     let keep = n.min(cap - buf.len());
                     buf.extend_from_slice(&chunk[..keep]);
                     cut |= keep < n;

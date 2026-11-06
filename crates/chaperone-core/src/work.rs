@@ -702,8 +702,9 @@ impl Ledger {
         self.board_rows(now, None, f)
     }
 
-    /// One item as the board shows it, or None when it is not on the board
-    /// (unknown, done or cancelled).
+    /// One item as the board shows it, without `overlaps` (they need every
+    /// open lane; `work ready` reads one item), or None when it is not on
+    /// the board (unknown, done or cancelled).
     pub fn work_board_item(&self, id: i64, now: &str) -> Result<Option<BoardItem>, LedgerError> {
         let mut out = None;
         let Ok(()) = self.board_rows(now, Some(id), |b| {
@@ -720,12 +721,24 @@ impl Ledger {
         mut f: impl FnMut(BoardItem) -> Result<(), E>,
     ) -> Result<Result<(), E>, LedgerError> {
         let one = if id.is_some() { "AND id = ?2" } else { "" };
-        // `shared` groups every open lane's newest handoff paths, even for
-        // one item, so `work ready` compares it with the rest. It holds only
-        // paths two lanes share; each row then matches its own handoff
-        // against it, so nothing per lane is held.
+        // `shared` groups every open lane's newest handoff paths. It holds
+        // only paths two lanes share; each row then matches its own handoff
+        // against it, so nothing per lane is held. One item skips it, and
+        // SQLite never computes a CTE nothing reads.
         let live_path = norm_path("f.value", "live.wt");
         let own_path = norm_path("f.value", "l.worktree_path");
+        let overlaps = match id {
+            Some(_) => "NULL".to_string(),
+            None => format!(
+                "(SELECT json_group_array(
+                          json_object('path', s.path, 'ids', s.ids, 'n', s.n))
+                 -- CROSS JOIN keeps the handoff outside: inside, it is parsed
+                 -- again for every shared path.
+                 FROM json_each(h.payload_json, '$.handoff.changed_files') f
+                 CROSS JOIN shared s ON s.repo = lower(l.repo_slug) AND s.path = {own_path}
+                 WHERE f.type = 'text')"
+            ),
+        };
         let mut stmt = self.conn().prepare(&format!(
             "WITH live AS (
                SELECT id, lower(repo_slug) AS repo, worktree_path AS wt,
@@ -745,13 +758,7 @@ impl Ledger {
                     json_extract(h.payload_json, '$.handoff'), h.at,
                     json_extract(o.payload_json, '$.ready'),
                     json_extract(o.payload_json, '$.reason'), o.actor_agent, o.at,
-                    (SELECT json_group_array(
-                              json_object('path', s.path, 'ids', s.ids, 'n', s.n))
-                     -- CROSS JOIN keeps the handoff outside: inside, it is parsed again
-                     -- for every shared path.
-                     FROM json_each(h.payload_json, '$.handoff.changed_files') f
-                     CROSS JOIN shared s ON s.repo = lower(l.repo_slug) AND s.path = {own_path}
-                     WHERE f.type = 'text')
+                    {overlaps}
              FROM ({SELECT} WHERE status NOT IN ('done', 'cancelled') {one}) AS l
              LEFT JOIN events h ON h.id = (SELECT id FROM events
                WHERE lane_id = l.id AND {IS_HANDOFF} ORDER BY id DESC LIMIT 1)
