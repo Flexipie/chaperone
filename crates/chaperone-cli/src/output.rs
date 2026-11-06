@@ -2,9 +2,16 @@
 //! envelope on stdout, or one `{ok: false, error, meta}` on stderr, the
 //! exit-code table and the two renderers.
 
+use std::cell::RefCell;
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use chaperone_core::cursor::Page;
-use chaperone_core::ledger::{LedgerError, Refusal, SCHEMA_VERSION};
+use chaperone_core::ledger::{Ledger, LedgerError, Refusal, SCHEMA_VERSION};
 use serde::Serialize;
+use serde::ser::{Error as _, SerializeSeq, Serializer};
 use serde_json::{Value, json};
 
 use crate::cli::Format;
@@ -13,6 +20,8 @@ use crate::cli::Format;
 pub enum Outcome {
     One(Value),
     Page(Page<Value>),
+    /// Already on stdout (`write_board`).
+    Written,
 }
 
 /// `schema_version` is the ledger's `user_version`: every command but
@@ -239,6 +248,7 @@ pub fn exit_code(e: &CliError) -> i32 {
 
 pub fn render_ok(outcome: &Outcome, meta: &Meta, format: Format) -> String {
     let (data, lines, page) = match outcome {
+        Outcome::Written => return String::new(),
         Outcome::One(v) => (
             v.clone(),
             vec![v],
@@ -269,15 +279,124 @@ pub fn render_ok(outcome: &Outcome, meta: &Meta, format: Format) -> String {
                 out += &serde_json::to_string(line).unwrap_or_default();
                 out.push('\n');
             }
-            let meta = Meta {
-                page: Some(page),
-                ..meta.clone()
-            };
-            out += &serde_json::to_string(&json!({ "ok": true, "meta": meta })).unwrap_or_default();
-            out.push('\n');
-            out
+            out + &jsonl_end(meta, page)
         }
     }
+}
+
+/// The jsonl closing line: meta with its page.
+fn jsonl_end(meta: &Meta, page: PageMeta) -> String {
+    let meta = Meta {
+        page: Some(page),
+        ..meta.clone()
+    };
+    serde_json::to_string(&json!({ "ok": true, "meta": meta })).unwrap_or_default() + "\n"
+}
+
+/// `work board` written as its rows are read, so the CLI never holds the
+/// whole board (R14 M1), in the bytes `render_ok` gives: its sorted keys.
+/// Items and meta go through a `Value`; `Envelope` and `Data` declare their
+/// fields in sorted order, so a new field goes in its sorted place. The rows
+/// go to an unlinked temp file and reach stdout only after the read ends, so
+/// a slow reader never holds the WAL snapshot and a ledger error leaves
+/// stdout empty. A closed stdout is ignored, as `finish` ignores it.
+pub fn write_board(
+    ledger: &Ledger,
+    now: &str,
+    meta: &Meta,
+    format: Format,
+) -> Result<Outcome, CliError> {
+    struct Other<'a> {
+        ledger: &'a Ledger,
+        now: &'a str,
+        failed: &'a RefCell<Option<LedgerError>>,
+    }
+    impl Serialize for Other<'_> {
+        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            let mut seq = s.serialize_seq(None)?;
+            match self.ledger.work_board_each(self.now, |b| {
+                seq.serialize_element(&serde_json::to_value(b).map_err(S::Error::custom)?)
+            }) {
+                Ok(each) => each?,
+                Err(e) => {
+                    let message = e.to_string();
+                    *self.failed.borrow_mut() = Some(e);
+                    return Err(S::Error::custom(message));
+                }
+            }
+            seq.end()
+        }
+    }
+    #[derive(Serialize)]
+    struct Data<'a> {
+        other: Other<'a>,
+        specs: [Value; 0],
+    }
+    #[derive(Serialize)]
+    struct Envelope<'a> {
+        data: Data<'a>,
+        meta: Value,
+        ok: bool,
+    }
+
+    let failed = RefCell::new(None);
+    let data = Data {
+        other: Other {
+            ledger,
+            now,
+            failed: &failed,
+        },
+        specs: [],
+    };
+    let mut out =
+        BufWriter::new(spool().map_err(|e| CliError::Internal(format!("temp file: {e}")))?);
+    let written = match format {
+        Format::Json => {
+            let env = Envelope {
+                data,
+                meta: serde_json::to_value(meta).map_err(|e| CliError::Internal(e.to_string()))?,
+                ok: true,
+            };
+            serde_json::to_writer_pretty(&mut out, &env)
+                .and_then(|()| out.write_all(b"\n").map_err(serde_json::Error::io))
+        }
+        Format::Jsonl => serde_json::to_writer(&mut out, &data).and_then(|()| {
+            let page = PageMeta {
+                count: 1,
+                next_cursor: None,
+                has_more: false,
+            };
+            write!(out, "\n{}", jsonl_end(meta, page)).map_err(serde_json::Error::io)
+        }),
+    };
+    if let Some(e) = failed.into_inner() {
+        return Err(e.into());
+    }
+    let mut file = written
+        .map_err(std::io::Error::from)
+        .and_then(|()| out.into_inner().map_err(|e| e.into_error()))
+        .and_then(|mut f| f.seek(SeekFrom::Start(0)).map(|_| f))
+        .map_err(|e| CliError::Internal(format!("temp file: {e}")))?;
+    let _ = std::io::copy(&mut file, &mut std::io::stdout().lock());
+    Ok(Outcome::Written)
+}
+
+/// A temp file that is owner-only, and unlinked once open, so it is gone
+/// when the process exits however it exits.
+fn spool() -> std::io::Result<File> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("chaperone-{}-{nanos}", std::process::id()));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    std::fs::remove_file(&path)?;
+    Ok(file)
 }
 
 pub fn render_err(err: &CliError, meta: &Meta) -> String {

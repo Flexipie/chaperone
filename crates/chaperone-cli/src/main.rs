@@ -64,7 +64,7 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
                 json!({ "path": path, "schema_version": SCHEMA_VERSION }),
             ))
         }
-        Cmd::Work(cmd) => work::run(&Ledger::open(&path)?, cmd, meta),
+        Cmd::Work(cmd) => work::run(&Ledger::open(&path)?, cmd, meta, cli.format),
         Cmd::Spec(cmd) => spec::run(&Ledger::open(&path)?, cmd, meta),
         Cmd::Check(cmd) => checks::check(&Ledger::open(&path)?, cmd),
         Cmd::Reviews(cmd) => checks::reviews(&Ledger::open(&path)?, cmd),
