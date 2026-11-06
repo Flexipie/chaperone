@@ -6,17 +6,23 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::LedgerError;
 
+/// One schema version: its SQL, then a Rust step for what SQL cannot fill.
+pub(crate) type Migration = (
+    &'static str,
+    Option<fn(&Connection) -> Result<(), LedgerError>>,
+);
+
 pub(crate) fn user_version(conn: &Connection) -> Result<i64, LedgerError> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
 }
 
 /// Applies each pending migration in its own `BEGIN IMMEDIATE` transaction
 /// together with its `user_version` bump, so a failure rolls back that
-/// migration whole. The version is re-read under the write lock, so a
+/// migration whole, its Rust step included. The version is re-read under the write lock, so a
 /// concurrent migrator's work is skipped, not applied twice.
-pub(crate) fn migrate(conn: &Connection, migrations: &[&str]) -> Result<(), LedgerError> {
+pub(crate) fn migrate(conn: &Connection, migrations: &[Migration]) -> Result<(), LedgerError> {
     let supported = migrations.len() as i64;
-    for (i, sql) in migrations.iter().enumerate() {
+    for (i, (sql, step)) in migrations.iter().enumerate() {
         let version = i as i64 + 1;
         let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
         let found = user_version(&tx)?;
@@ -27,6 +33,9 @@ pub(crate) fn migrate(conn: &Connection, migrations: &[&str]) -> Result<(), Ledg
             continue;
         }
         tx.execute_batch(sql)?;
+        if let Some(step) = step {
+            step(&tx)?;
+        }
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
     }

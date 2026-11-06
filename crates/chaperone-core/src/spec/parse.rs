@@ -72,7 +72,9 @@ pub fn field(text: &str, name: &str) -> String {
 }
 
 /// The issue key in parentheses at the end of a heading, if any: an
-/// uppercase `CORE-1234`/`PER-12` or a GitHub `owner/repo#40`.
+/// uppercase `CORE-1234`/`PER-12` or a GitHub `owner/repo#40`. The fold
+/// stores its result in `spec_keys`: a change here needs a migration that
+/// refills it, as 0003's step does.
 fn heading_key(heading: &str) -> Option<String> {
     let open = heading.rfind('(')?;
     let close = heading[open..].find(')')? + open;

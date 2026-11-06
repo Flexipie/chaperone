@@ -8,6 +8,7 @@ use serde_json::Value;
 use super::event::{Event, EventKind};
 use super::write::{EVENT_COLUMNS, event_from_row};
 use super::{Ledger, LedgerError, check_schema};
+use crate::spec::parse::parse_spec_sections;
 
 /// Lane columns an event may set through `changed`. The lease columns, the
 /// pipeline stamp, `head_event_id` and `updated_at` are set by the fold itself.
@@ -53,6 +54,7 @@ pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
                 params![e.spec_id, p.parent_key, p.title, e.id, e.at],
             )?;
             spec_version(conn, e, 1)?;
+            index_keys(conn, e.spec_id, p.body.as_deref().unwrap_or_default())?;
         }
         SpecRevised => {
             one(conn.execute(
@@ -62,6 +64,7 @@ pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
                 params![e.spec_id, p.version, e.id, e.at, p.title],
             )?)?;
             spec_version(conn, e, p.version.unwrap_or_default())?;
+            index_keys(conn, e.spec_id, p.body.as_deref().unwrap_or_default())?;
         }
         SpecApproved => one(conn.execute(
             "UPDATE specs SET status = 'approved', head_event_id = ?2, updated_at = ?3
@@ -217,6 +220,31 @@ fn spec_version(conn: &Connection, e: &Event, version: i64) -> Result<(), Ledger
     Ok(())
 }
 
+/// The head version's slice keys replace the spec's old ones.
+fn index_keys(conn: &Connection, spec_id: Option<i64>, body: &str) -> Result<(), LedgerError> {
+    conn.execute("DELETE FROM spec_keys WHERE spec_id = ?1", [spec_id])?;
+    // OR IGNORE: two sections may name one key in different cases.
+    let mut insert =
+        conn.prepare_cached("INSERT OR IGNORE INTO spec_keys (spec_id, key) VALUES (?1, ?2)")?;
+    for key in parse_spec_sections(body).into_iter().filter_map(|s| s.key) {
+        insert.execute(params![spec_id, key])?;
+    }
+    Ok(())
+}
+
+/// Migration 0003's step: the keys of every spec's head version.
+pub(super) fn fill_spec_keys(conn: &Connection) -> Result<(), LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, v.body FROM specs s
+           JOIN spec_versions v ON v.spec_id = s.id AND v.version = s.head_version",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        index_keys(conn, Some(r.get(0)?), &r.get::<_, String>(1)?)?;
+    }
+    Ok(())
+}
+
 fn one(changes: usize) -> Result<(), LedgerError> {
     if changes != 1 {
         return Err(std::io::Error::other(format!("fold changed {changes} rows, not 1")).into());
@@ -236,8 +264,8 @@ impl Ledger {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<_, _>>()?;
         tx.execute_batch(
-            "DELETE FROM specs; DELETE FROM spec_versions; DELETE FROM lanes;
-             DELETE FROM gate_results; DELETE FROM findings; DELETE FROM messages;",
+            "DELETE FROM specs; DELETE FROM spec_versions; DELETE FROM spec_keys;
+             DELETE FROM lanes; DELETE FROM gate_results; DELETE FROM findings; DELETE FROM messages;",
         )?;
         {
             let mut stmt =

@@ -23,15 +23,19 @@ pub use error::LedgerError;
 pub use event::{
     Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
 };
-use migrate::user_version;
+use migrate::{Migration, user_version};
 pub(crate) use write::{
     Checked, MAX_LEASE_SECS, MIN_LEASE_SECS, canonical_at, exists, has_held, lease_held,
 };
 pub use write::{KINDS, PR_FLOWS, SESSION_CHECKS, SOURCES, SPEC_BODY_MAX_BYTES, STATUSES};
 
-pub(crate) const MIGRATIONS: &[&str] = &[
-    include_str!("../../migrations/0001_ledger.sql"),
-    include_str!("../../migrations/0002_events_job.sql"),
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    (include_str!("../../migrations/0001_ledger.sql"), None),
+    (include_str!("../../migrations/0002_events_job.sql"), None),
+    (
+        include_str!("../../migrations/0003_keys.sql"),
+        Some(fold::fill_spec_keys),
+    ),
 ];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -76,7 +80,7 @@ impl Ledger {
 
     pub(crate) fn open_and_migrate_with(
         path: &Path,
-        migrations: &[&str],
+        migrations: &[Migration],
     ) -> Result<Self, LedgerError> {
         let supported = migrations.len() as i64;
         // A bare file name has the parent "", which cannot be opened to sync.
@@ -220,7 +224,7 @@ fn lock_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-    const V2: &[&str] = &[MIGRATIONS[0], "CREATE TABLE extra (a)"];
+    const V2: &[Migration] = &[MIGRATIONS[0], ("CREATE TABLE extra (a)", None)];
 
     fn pragma<T: rusqlite::types::FromSql>(conn: &Connection, name: &str) -> T {
         conn.query_row(&format!("PRAGMA {name}"), [], |r| r.get(0))
@@ -260,6 +264,7 @@ mod tests {
             "gate_results",
             "findings",
             "messages",
+            "spec_keys",
         ] {
             assert!(has_table(conn, table), "{table}");
         }
@@ -416,7 +421,7 @@ mod tests {
     fn failed_migration_rolls_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.db");
-        let broken = &[MIGRATIONS[0], "CREATE TABLE half (a); not sql"];
+        let broken = &[MIGRATIONS[0], ("CREATE TABLE half (a); not sql", None)];
         assert!(matches!(
             Ledger::open_and_migrate_with(&path, broken),
             Err(LedgerError::Sqlite(_))
@@ -431,7 +436,7 @@ mod tests {
     fn concurrent_create_and_upgrade() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ledger.db");
-        let race = |migrations: &'static [&'static str]| {
+        let race = |migrations: &'static [Migration]| {
             std::thread::scope(|s| {
                 let runs: Vec<_> = (0..4)
                     .map(|_| s.spawn(|| Ledger::open_and_migrate_with(&path, migrations).map(drop)))

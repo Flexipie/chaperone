@@ -1065,6 +1065,9 @@ fn check_lane(lane: &Option<String>) -> Result<Option<String>, Refusal> {
     Ok(lane)
 }
 
+/// A spec by its parent key in any case, through `specs_key`.
+pub(crate) const SPEC_BY_KEY: &str = "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE";
+
 /// A spec by id, or by its parent key in any case.
 pub(crate) fn resolve_spec(conn: &Connection, spec: &str) -> Checked<i64> {
     let spec = spec.trim();
@@ -1074,11 +1077,7 @@ pub(crate) fn resolve_spec(conn: &Connection, spec: &str) -> Checked<i64> {
             .optional()?
             .ok_or(Refusal::NotFound { entity: "spec", id }),
         Err(_) => conn
-            .query_row(
-                "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE",
-                [spec],
-                |r| r.get(0),
-            )
+            .query_row(SPEC_BY_KEY, [spec], |r| r.get(0))
             .optional()?
             .ok_or_else(|| Refusal::NotFoundRef {
                 entity: "spec",

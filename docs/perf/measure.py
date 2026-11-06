@@ -202,6 +202,9 @@ PLANS = {
     "work list": "SELECT id FROM lanes WHERE status NOT IN ('done', 'cancelled') "
                  "ORDER BY updated_at DESC, id DESC LIMIT 50",
     "spec by key (NOCASE)": "SELECT id FROM specs WHERE external_key = ?1 COLLATE NOCASE",
+    "spec by slice key (spec_keys, v3)":
+        "SELECT s.id FROM spec_keys k JOIN specs s ON s.id = k.spec_id WHERE k.key = ?1 "
+        "ORDER BY s.updated_at DESC, s.id DESC LIMIT 1",
     "slice lane, linked to the spec":
         "SELECT id, status, pr_ref FROM lanes WHERE spec_id = ?2 AND source IN ('linear', "
         "'issue', 'github') AND source_id = ?1 COLLATE NOCASE ORDER BY id DESC LIMIT 1",
@@ -229,7 +232,10 @@ def plans(b):
     print("| Read | Plan |\n| --- | --- |")
     for name, sql in PLANS.items():
         n = sql.count("?")
-        detail = "; ".join(r[3] for r in con.execute(f"EXPLAIN QUERY PLAN {sql}", [None] * n))
+        try:
+            detail = "; ".join(r[3] for r in con.execute(f"EXPLAIN QUERY PLAN {sql}", [None] * n))
+        except sqlite3.OperationalError as e:  # a table an older schema lacks
+            detail = f"n/a ({e})"
         print(f"| {name} | {detail} |")
     # A missing job: a scan reads every event either way, an index search none.
     jobs = PLANS["jobs (JOB_EVENTS)"]
