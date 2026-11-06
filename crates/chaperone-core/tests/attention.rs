@@ -105,8 +105,28 @@ fn each_intervention_records_once() {
     };
     let there = ledger.attention_record(&o, &there).unwrap().unwrap();
     assert_eq!((there.replayed, there.work_id), (false, elsewhere));
+    // A question and its answer keyed alike are two records.
+    let asked = AttentionInput {
+        reason: Some("question.scope".into()),
+        idempotency_key: Some("q1".into()),
+        ..record(id, "asked")
+    };
+    let asked = ledger.attention_record(&o, &asked).unwrap().unwrap();
+    let answer = AttentionInput {
+        answers: Some(asked.event_id),
+        note: Some("cut it".into()),
+        idempotency_key: Some("q1".into()),
+        ..record(id, "answered")
+    };
+    assert!(
+        !ledger
+            .attention_record(&o, &answer)
+            .unwrap()
+            .unwrap()
+            .replayed
+    );
     let db = read_only(&path);
-    assert_eq!(count(&db, ATTENTION), 7);
+    assert_eq!(count(&db, ATTENTION), 9);
     assert_eq!(
         count(
             &db,

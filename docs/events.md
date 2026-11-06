@@ -51,7 +51,7 @@ These rules keep every write small, single and fail-closed.
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
   recorded on another lane is `invalid_input`. `work merged` uses `merged:<lane_id>:<pr>`
   (the PR lowercased), and a PR already merged on another lane is `invalid_input`.
-  `attention record` scopes its `--idempotency-key` to the lane (`attention:<lane_id>:<key>`);
+  `attention record` scopes its `--idempotency-key` to the lane and type (`attention:<lane_id>:<type>:<key>`);
   without one it uses `attention:` plus the
   sha256 of the lane id, its canonical payload and the id of the lane's newest event that is
   not a `gate.denied`, `usage.reported`, `pr.merged` or `attention.recorded` (the anchor the
@@ -172,7 +172,7 @@ before an earlier one merged. When the owner made it ready, it is the newest
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `attention.recorded` | `attention record` | `type` (`asked`, `answered`, `nudged`, `sent_back`, `revived`), `by` (`orchestrator` or `owner`: who handled it; for `asked`, who the question went to), `reason` (`asked` only: one of R12's question ids, below), `round` (`sent_back` only, 1 or more), `answers` (`answered` only: the event id of the `asked` it answers, on the same lane), `note` (one line of at most 500 characters, redacted at write; the answer itself for `answered`) |
+| `attention.recorded` | `attention record` | `type` (`asked`, `answered`, `nudged`, `sent_back`, `revived`), `by` (`orchestrator` or `owner`: who handled it; for `asked`, who the question went to), `reason` (`asked` only: one of R12's question ids, below), `round` (`sent_back` only, 1 or more), `answers` (`answered` only: the event id of the `asked` it answers, on the same lane), `note` (one non-blank line of at most 500 characters as sent, redacted at write; the answer itself for `answered`) |
 
 One intervention on a lane by the orchestrator or the owner. It changes no column but
 `head_event_id`, is not a lane action in `work events`, and no gate reads it. Time to an

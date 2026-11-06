@@ -329,8 +329,9 @@ impl Ledger {
         // Read before the write lock: a fact that commits in between can
         // only make a retry append a duplicate.
         let key = match &input.idempotency_key {
-            // Scoped to the lane, so the same key on another lane appends there.
-            Some(k) => format!("attention:{work}:{k}"),
+            // Scoped to the lane and type, so the same key on another lane, or
+            // a question and its answer keyed alike, each append.
+            Some(k) => format!("attention:{work}:{kind}:{k}"),
             None => {
                 let after = crate::engine::newest_fact_event(self.conn(), work)?;
                 let canonical =
