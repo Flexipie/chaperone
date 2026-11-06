@@ -291,8 +291,7 @@ fn tree(bin: &Path, lane: &Lane, deadline: Instant, uncommitted: bool) -> Git {
                     break;
                 }
                 // A base this clone lacks: try the next one.
-                Err(Failure::Other(e))
-                    if e.contains("unknown revision") || e.contains("bad revision") => {}
+                Err(Failure::BadRevision) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -362,14 +361,30 @@ fn tree(bin: &Path, lane: &Lane, deadline: Instant, uncommitted: bool) -> Git {
         Ok(Some((head, paths, cut))) => Git::Ok { head, paths, cut },
         Ok(None) => Git::Skip("no_base"),
         Err(Failure::TimedOut) => Git::Skip("timed_out"),
+        Err(Failure::BadRevision) => Git::Skip("no_base"),
         Err(Failure::Other(e)) => Git::Err(e),
     }
 }
 
 enum Failure {
     TimedOut,
+    /// A revision this clone does not have.
+    BadRevision,
     Other(String),
 }
+
+/// Variables that point git at a repository other than `-C`'s, as git sets
+/// them for hooks and `rebase --exec` (`git rev-parse --local-env-vars`).
+const GIT_REPO_VARS: [&str; 8] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+];
 
 /// One git call in `wt`, never taking the worktree's index lock (it
 /// belongs to the lane) and never prompting.
@@ -379,23 +394,38 @@ fn git(
     args: &[&str],
     deadline: Instant,
 ) -> Result<(Vec<u8>, bool), Failure> {
-    let done = child::run(
-        Command::new(bin)
-            .arg("-C")
-            .arg(wt)
-            .args(args)
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("GIT_TERMINAL_PROMPT", "0"),
-        deadline,
-        OUT_BYTES,
-    )
-    .map_err(|e| match e {
+    let mut cmd = Command::new(bin);
+    for v in GIT_REPO_VARS {
+        cmd.env_remove(v);
+    }
+    cmd.arg("-C")
+        .arg(wt)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // Messages in English, so a missing revision is recognised.
+        .env("LC_ALL", "C");
+    let done = child::run(&mut cmd, deadline, OUT_BYTES).map_err(|e| match e {
         child::Failed::TimedOut => Failure::TimedOut,
         child::Failed::Spawn(e) | child::Failed::Wait(e) => Failure::Other(format!("git: {e}")),
     })?;
     if !done.status.success() {
         let err = String::from_utf8_lossy(&done.err);
-        let line: String = err.lines().next().unwrap_or("").chars().take(300).collect();
+        if ["unknown revision", "bad revision", "Invalid revision range"]
+            .iter()
+            .any(|m| err.contains(m))
+        {
+            return Err(Failure::BadRevision);
+        }
+        // The fatal line is last; warnings come before it.
+        let line: String = err
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .chars()
+            .take(300)
+            .collect();
         return Err(Failure::Other(format!("git {}: {line}", args[0])));
     }
     Ok((done.out, done.cut))
