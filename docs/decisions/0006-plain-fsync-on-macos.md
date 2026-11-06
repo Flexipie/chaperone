@@ -33,18 +33,18 @@ fully at checkpoints. On macOS, `synchronous=FULL` hands every commit to the dri
 survives when the drive keeps power and writes out its cache, which Apple's `fsync(2)` does not promise; a power loss
 can lose it. So a returned commit is not promised to survive a power loss or an OS crash.
 
-On a power loss or an OS crash the last commits can be lost. **Checkpoint corruption is an accepted risk, not ruled
+**Checkpoint corruption is an accepted risk, not ruled
 out:** without a full flush the drive can reorder a checkpoint's writes to the database file, so a power loss or OS
 crash during or just after a checkpoint could leave the file damaged.
 
 ## Alternatives considered
 
-- **`fullfsync=ON`.** About 50x slower per commit, and under parallel writers the 4.5 ms flush brings back the lock
+- **`fullfsync=ON`.** About 50x slower per commit, and under parallel writers 4 to 5 ms flush brings back the lock
   starvation that #62 fixed. Parallel writers are the load Chaperone exists for.
 - **`checkpoint_fullfsync=ON` only** (Apple's default). Covers the checkpoint corruption above, but misses E1 in 3
   of 5 runs and leaves E2 near its limit.
 - **`F_BARRIERFSYNC`** (ordering without a full flush, `fcntl(2)`). Bundled SQLite has no pragma for it, so it would
-  need our own VFS, which R14 rules out.
+  need our own VFS, out of scope for v0.
 
 ## Consequences
 
