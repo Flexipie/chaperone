@@ -32,8 +32,9 @@ the same reason: the version is not a slug-suffixed name, so two lanes writing o
 `include_str!` list in `crates/chaperone-core/src/pipeline/mod.rs` conflicts too.
 
 **CI checks it.** The `doc-numbers` job in `.github/workflows/ci.yml` fails a PR that adds a file under
-`docs/decisions/` or `docs/research/` whose number is not the issue number in its branch name (`chaperone-80-...`). A
-lane that reads the directory and takes "next free" (0081, a live issue's number) fails there, not at merge.
+`docs/decisions/` or `docs/research/` whose number is not the issue number in its branch name (`chaperone-80-...` or
+`80-...`), or is 15 or lower. A lane that reads the directory and takes "next free" (0081, a live issue's number) sees
+a red check before merge.
 
 ## Alternatives considered
 
