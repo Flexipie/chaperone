@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measures a chaperone release binary the R14 way, for docs/perf/v0-review.md.
 
-    python3 -I docs/perf/measure.py <before-binary> <after-binary> [--items 3000]
+    python3 -I docs/perf/measure.py <before-binary> <after-binary> [--items 3000] [--open-specs 5]
 
 The first binary seeds the shared snapshot, so list the oldest schema first:
 a newer binary migrates its copy, an older one refuses a newer file.
@@ -106,14 +106,11 @@ def spec_body(parent, keys):
     return f"# {parent}\n\n{slices}\n## decisions\n\n- [slice 1] Q: one? A: yes.\n"
 
 
-OPEN_SPECS = 5
-
-
-def seed(b, items):
+def seed(b, items, open_specs):
     """Realistic ledger through the CLI: specs with slices, and per item a
     create, claim, heartbeat, two handoffs and a check from a fresh session.
-    Only the newest OPEN_SPECS specs stay open; older items are cancelled, as
-    finished work leaves the board."""
+    Only the newest open_specs specs (10 items each) stay open; older items
+    are cancelled, as finished work leaves the board."""
     t0 = time.monotonic()
     per_spec = 10
     specs = items // per_spec
@@ -131,7 +128,7 @@ def seed(b, items):
             b.run("work", "handoff", str(lane), stdin=handoff("blocked"))
             b.run("check", "record", "--work", str(lane), "--check", "smoke",
                   "--head", HEAD, "--outcome", "ran", session="checker")
-            if s < specs - OPEN_SPECS:
+            if s < specs - open_specs:
                 b.run("work", "cancel", str(lane))
     con = sqlite3.connect(f"file:{b.db}?mode=ro", uri=True)
     counts = {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
@@ -324,6 +321,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("binaries", nargs="+", help="oldest first; the first one seeds the shared snapshot")
     ap.add_argument("--items", type=int, default=3000)
+    ap.add_argument("--open-specs", type=int, default=5,
+                    help="specs left open, 10 items each (100 with --items 1000 for 1,000 open)")
     a = ap.parse_args()
     real = os.path.expanduser("~/Library/Application Support/chaperone")
     real_before = stamp(real)
@@ -333,7 +332,7 @@ def main():
         # One seeded snapshot, checkpointed, so every binary reads the same data.
         s = Bench(a.binaries[0], seed_root)
         s.run("migrate")
-        counts, secs = seed(s, a.items)
+        counts, secs = seed(s, a.items, a.open_specs)
         deep = deepen(s)
         con = sqlite3.connect(s.db)
         con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
