@@ -7,8 +7,12 @@ Evidence: issue [#55](https://github.com/Flexipie/chaperone/issues/55), finding 
 ## Context
 
 The ledger runs WAL with `synchronous=FULL` (locked in the roadmap). On macOS, `fsync` hands the data to the drive
-but does not flush the drive's write cache; only `fcntl(F_FULLFSYNC)` does. Apple's `fsync(2)` says that if the drive
-loses power or the OS crashes, only some or none of the data may be written, and the drive may reorder it. Apple's own
+but does not flush the drive's write cache; only `fcntl(F_FULLFSYNC)` does. Apple's `fsync(2)` (macOS 26): "if the
+drive loses power or the OS crashes, the application may find that only some or none of their data was written. The
+disk drive may also re-order the data so that later writes may be present, while earlier writes are not." SQLite
+([How To Corrupt An SQLite Database File](https://www.sqlite.org/howtocorrupt.html), §3.1) says the same of drives that report a
+sync before the data is on the media, for "a power loss or hard reset", and that in WAL mode such a failed sync can lose
+a commit but corrupts the file only during a checkpoint. A kernel panic reboots the Mac, so it is a hard reset. Apple's own
 SQLite (`/usr/bin/sqlite3` 3.51.0) defaults to `fullfsync=0` and `checkpoint_fullfsync=1`; the bundled SQLite from
 `libsqlite3-sys` 0.39.1 sets neither.
 
