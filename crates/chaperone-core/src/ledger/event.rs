@@ -59,6 +59,7 @@ kinds! {
     PrOpened => "pr.opened",
     UsageReported => "usage.reported",
     PrMerged => "pr.merged",
+    AttentionRecorded => "attention.recorded",
 }
 
 impl EventKind {
@@ -83,6 +84,7 @@ impl EventKind {
                 | EventKind::LaneReadyOverridden
                 | EventKind::UsageReported
                 | EventKind::PrMerged
+                | EventKind::AttentionRecorded
         )
     }
 }

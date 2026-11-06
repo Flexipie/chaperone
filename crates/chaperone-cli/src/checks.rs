@@ -6,12 +6,12 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::CheckInput;
+use chaperone_core::checks::{AttentionInput, CheckInput};
 use chaperone_core::ledger::Ledger;
 use chaperone_core::usage::Roots;
 use serde_json::{Value, json};
 
-use crate::cli::{CheckCmd, JobsCmd, ReviewsCmd, UsageCmd};
+use crate::cli::{AttentionCmd, CheckCmd, JobsCmd, ReviewsCmd, UsageCmd};
 use crate::output::{CliError, ErrorBody, Outcome};
 use crate::work::one;
 
@@ -59,6 +59,34 @@ pub fn reviews(ledger: &Ledger, cmd: ReviewsCmd) -> Result<Outcome, CliError> {
 pub fn jobs(ledger: &Ledger, cmd: JobsCmd) -> Result<Outcome, CliError> {
     match cmd {
         JobsCmd::Get { id } => one(ledger.job_get(id)??),
+    }
+}
+
+pub fn attention(ledger: &Ledger, cmd: AttentionCmd) -> Result<Outcome, CliError> {
+    match cmd {
+        AttentionCmd::Record {
+            work,
+            kind,
+            by,
+            reason,
+            round,
+            answers,
+            note,
+            idempotency_key,
+            actor,
+        } => {
+            let input = AttentionInput {
+                work,
+                kind,
+                by,
+                reason,
+                round,
+                answers,
+                note,
+                idempotency_key,
+            };
+            one(ledger.attention_record(&actor.resolve(), &input)??)
+        }
     }
 }
 

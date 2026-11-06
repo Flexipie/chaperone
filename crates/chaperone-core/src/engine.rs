@@ -74,17 +74,8 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
         return Ok(Ok(None));
     };
     // A retry with no new event on the lane replays this denial instead of
-    // appending another (events.md, write rules). Usage and a merge are no
-    // gate's fact.
-    let latest: Option<i64> = conn
-        .query_row(
-            "SELECT id FROM events WHERE lane_id = ?1
-               AND kind NOT IN ('gate.denied', 'usage.reported', 'pr.merged')
-             ORDER BY id DESC LIMIT 1",
-            [lane_id],
-            |r| r.get(0),
-        )
-        .optional()?;
+    // appending another (events.md, write rules).
+    let latest = newest_fact_event(conn, lane_id)?;
     Ok(Ok(Some(Event {
         kind: EventKind::GateDenied,
         idempotency_key: Some(format!(
@@ -100,4 +91,19 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
         },
         ..entered.clone()
     })))
+}
+
+/// The lane's newest event a gate could read: not a denial, and not usage,
+/// a merge or an attention record, which are no gate's fact. Anchors the
+/// denial key and the derived attention key, so a retry with nothing new on
+/// the lane replays.
+pub(crate) fn newest_fact_event(conn: &Connection, lane_id: i64) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT id FROM events WHERE lane_id = ?1 AND kind NOT IN
+           ('gate.denied', 'usage.reported', 'pr.merged', 'attention.recorded')
+         ORDER BY id DESC LIMIT 1",
+        [lane_id],
+        |r| r.get(0),
+    )
+    .optional()
 }

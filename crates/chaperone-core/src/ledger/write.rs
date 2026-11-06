@@ -406,6 +406,13 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
                     "pr.merged needs pr, merge_sha, head_sha and merged_at"
                 ));
             }
+            if event.kind == AttentionRecorded
+                && !["type", "by"]
+                    .iter()
+                    .all(|k| event.payload.rest.get(*k).is_some_and(|v| v.is_string()))
+            {
+                refuse!(invalid("attention.recorded needs type and by"));
+            }
             // A handoff's id is its event's, so `work handoffs` and the
             // stored payload agree whoever wrote it.
             if event.payload.rest.contains_key("handoff") {

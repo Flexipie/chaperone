@@ -1,0 +1,31 @@
+Record one intervention: a question asked, its answer, a nudge, a send-back or a revive. The same record again with nothing new on the lane replays; pass --idempotency-key for a real repeat
+
+Usage: chaperone attention record [OPTIONS] --work <WORK> --type <KIND> --by <BY>
+
+Options:
+      --db <DB>
+          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --work <WORK>
+          
+      --format <FORMAT>
+          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --type <KIND>
+          [possible values: asked, answered, nudged, sent_back, revived]
+      --by <BY>
+          Who handled it (for asked, who the question went to) [possible values: orchestrator, owner]
+      --reason <REASON>
+          asked only, required there: R12's reason id [possible values: question.done_ambiguous, question.scope, question.one_way, question.recorded_decision, question.size, question.investigation, question.verdict_no, question.product, question.seam_reject, question.overlap]
+      --round <ROUND>
+          sent_back only, required there: the send-back round, 1 or more
+      --answers <ANSWERS>
+          answered only, required there: the event id of the question
+      --note <NOTE>
+          One line, at most 500 characters; required for answered (the answer). Redacted at write
+      --idempotency-key <IDEMPOTENCY_KEY>
+          
+      --agent <AGENT>
+          Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>
+          Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help
+          Print help

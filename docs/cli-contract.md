@@ -88,7 +88,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `reviews record`, `usage report` and `work merged` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `reviews record`, `usage report`, `work merged` and `attention record` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -118,6 +118,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `jobs get` | `<job id>` | read |
 | `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
 | `usage get` | `<id>` | read |
+| `attention record` | `--work <id> --type asked\|answered\|nudged\|sent_back\|revived --by orchestrator\|owner [--reason <R12 id>] [--round <k>] [--answers <event id>] [--note <one line>] [--idempotency-key]` | write |
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 
 `work create --kind` and `--pr-flow` are Chaperone's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
@@ -134,6 +135,18 @@ is not 7 to 40 lowercase hex digits, and a `--merged-at` that is not RFC 3339 UT
 milliseconds (GitHub's `mergedAt`, `2026-11-05T10:00:00Z`, is passed as
 `2026-11-05T10:00:00.000Z`). The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
 payload}`.
+
+`attention record` is new (#59). `/orchestrate` and the owner run it for each intervention on
+a lane, from any session (it skips the holder rule and leaves `updated_at` alone). It appends
+one `attention.recorded` (events.md, Attention). It refuses (`invalid_input`, nothing written)
+an `asked` without `--reason`, a `--reason` on another type, a `sent_back` without `--round` of
+1 or more, an `answered` without `--answers` and `--note` or whose `--answers` is not a question
+asked on that item, `--answers` or `--round` on another type, and a note that is blank, has a line break or is
+over 500 characters. `--idempotency-key` is trimmed (blank is no key, over 200 characters is refused, as for
+`work create`) and scoped to the item and type, so the same key on another item, or on a
+question and its answer, is a separate record. Without `--idempotency-key`, a record repeated with nothing new on the lane
+replays; a real repeat (a second nudge on a stalled lane) passes its own key. It prints
+`{event_id, work_id, kind, replayed, at, payload}`.
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`. It answers daisy's way: `{id, ready, ready_reason}` from the board, or `{id, ready_override, on_board: false}` for a done or cancelled item.
 
@@ -273,7 +286,7 @@ These fields keep their daisy names and meaning:
 - `work events`: `action` and `at` per item. `action` is daisy's word (`create`, `claim`,
   `renew`, `takeover`, `update`, `reopen`, `cancel`, `release`, `handoff`,
   `ready_override`), mapped from the event kind (`pr.opened` is `update`, `phase.entered`
-  is the command's). `gate.denied`, `check.*`, `finding.updated` and `usage.reported` are not lane actions
+  is the command's). `gate.denied`, `check.*`, `finding.updated`, `usage.reported`, `pr.merged` and `attention.recorded` are not lane actions
   and do not appear in `work events`.
 - `work handoffs`: `created_at` and `handoff.next_action`.
 

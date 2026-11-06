@@ -993,7 +993,7 @@ fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
         PhaseEntered if carries_handoff => "handoff",
         PhaseEntered => "update",
         SpecCreated | SpecRevised | SpecApproved | GateDenied | CheckRequested | CheckFinished
-        | FindingUpdated | UsageReported | PrMerged => return None,
+        | FindingUpdated | UsageReported | PrMerged | AttentionRecorded => return None,
     })
 }
 
@@ -1023,7 +1023,7 @@ pub(crate) fn check_owner(item: &WorkItem, actor: &Actor) -> Result<(), Refusal>
     Ok(())
 }
 
-fn trimmed(s: &Option<String>) -> Option<String> {
+pub(crate) fn trimmed(s: &Option<String>) -> Option<String> {
     s.as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())

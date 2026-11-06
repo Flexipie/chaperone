@@ -154,7 +154,7 @@ Answer
   chaperone attention answer CORE-4370 --decision "<one line>"
 ```
 
-The answer command appends the decision and leaves `needs_you`. It does not paste into the PTY. Until milestone 2's subscription, it prints the one line a person can pass to the lane. The transcript stays in the agent's terminal. This screen is the question, the few evidence fields the projection already stores, and the command that closes it.
+The answer command appends the decision and leaves `needs_you`. In M1 the answer is an `attention.recorded` with `type: answered` ([events.md](../events.md), Attention), and this command writes the same kind. It does not paste into the PTY. Until milestone 2's subscription, it prints the one line a person can pass to the lane. The transcript stays in the agent's terminal. This screen is the question, the few evidence fields the projection already stores, and the command that closes it.
 
 `show` on a ready lane prints the merge case, the smoke line, the scores, the verdict sha, and `human.merge_yes` as the next command. It does not print a diff.
 
