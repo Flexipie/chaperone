@@ -1,4 +1,4 @@
-Record that one of the item's PRs merged (what /merge runs). The same PR again replays and writes nothing
+Record that one of the item's PRs merged (for /merge). The same PR again replays and writes nothing
 
 Usage: chaperone work merged [OPTIONS] --pr <PR> --merge-sha <MERGE_SHA> --head <HEAD> --merged-at <MERGED_AT> <ID>
 

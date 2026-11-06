@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::ledger::{
     Actor, Applied, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation, Payload,
-    Refusal, exists,
+    Refusal, canonical_at, exists,
 };
 use crate::pipeline::canonical_string;
 
@@ -148,19 +148,7 @@ impl Ledger {
             },
             |_, _, _| Ok(()),
         )?;
-        let replayed = matches!(applied, Applied::Replayed(_));
-        Ok(match applied {
-            Applied::Committed(e) | Applied::Replayed(e) => Ok(Recorded {
-                event_id: e.id,
-                work_id: input.work,
-                kind: e.kind.as_str(),
-                replayed,
-                at: e.at,
-                payload: e.payload,
-            }),
-            Applied::Refused(r) => Err(r),
-            Applied::Heartbeat { .. } => unreachable!("check_record writes an event"),
-        })
+        Ok(recorded(applied, input.work))
     }
 
     /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
@@ -182,7 +170,9 @@ impl Ledger {
         if let Some(p) = &input.patch_id
             && !sha_ok(p)
         {
-            return invalid(format!("--patch-id must be lowercase hex, got {p}"));
+            return invalid(format!(
+                "--patch-id must be 7 to 40 lowercase hex digits, got {p}"
+            ));
         }
         let work = input.work;
         let mut payload = Payload {
@@ -210,24 +200,17 @@ impl Ledger {
                         id: work,
                     }));
                 }
-                let canonical: bool = conn.query_row(
-                    "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1) IS ?1",
-                    [&input.merged_at],
-                    |r| r.get(0),
-                )?;
-                if !canonical {
+                if !canonical_at(conn, &input.merged_at)? {
                     return invalid(format!(
                         "--merged-at must be RFC 3339 UTC with milliseconds, got {}",
                         input.merged_at
                     ));
                 }
-                // Every PR the lane has held, not only the latest, so a lane
-                // with several PRs records each merge.
                 let held = exists(
                     conn,
-                    "SELECT 1 FROM events WHERE lane_id = ?1 AND ?2 IN (
-                       lower(json_extract(payload_json, '$.pr')),
-                       lower(json_extract(payload_json, '$.changed.pr_ref.to')))",
+                    "SELECT 1 FROM events WHERE lane_id = ?1 AND (
+                       kind = 'pr.opened' AND lower(json_extract(payload_json, '$.pr')) = ?2
+                       OR lower(json_extract(payload_json, '$.changed.pr_ref.to')) = ?2)",
                     params![work, pr.to_lowercase()],
                 )?;
                 if !held {
@@ -246,19 +229,7 @@ impl Ledger {
             },
             |_, _, _| Ok(()),
         )?;
-        let replayed = matches!(applied, Applied::Replayed(_));
-        Ok(match applied {
-            Applied::Committed(e) | Applied::Replayed(e) => Ok(Recorded {
-                event_id: e.id,
-                work_id: work,
-                kind: e.kind.as_str(),
-                replayed,
-                at: e.at,
-                payload: e.payload,
-            }),
-            Applied::Refused(r) => Err(r),
-            Applied::Heartbeat { .. } => unreachable!("work_merged writes an event"),
-        })
+        Ok(recorded(applied, work))
     }
 
     /// Records daisy job `job` on lane `work` from `view`, the `data` of
@@ -529,6 +500,24 @@ fn newest_other(
         }
     }
     Ok(None)
+}
+
+/// What a one-event record command answers: the event it wrote or the one
+/// a retry replayed, else the refusal.
+fn recorded(applied: Applied, work_id: i64) -> Result<Recorded, Refusal> {
+    let replayed = matches!(applied, Applied::Replayed(_));
+    match applied {
+        Applied::Committed(e) | Applied::Replayed(e) => Ok(Recorded {
+            event_id: e.id,
+            work_id,
+            kind: e.kind.as_str(),
+            replayed,
+            at: e.at,
+            payload: e.payload,
+        }),
+        Applied::Refused(r) => Err(r),
+        Applied::Heartbeat { .. } => unreachable!("a record command writes an event"),
+    }
 }
 
 /// A commit: 7 to 40 lowercase hex digits.

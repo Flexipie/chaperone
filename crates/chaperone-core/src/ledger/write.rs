@@ -147,12 +147,7 @@ fn write(
     at: &str,
     mutation: Mutation,
 ) -> Result<Applied, LedgerError> {
-    let canonical: bool = tx.query_row(
-        "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1) IS ?1",
-        [at],
-        |r| r.get(0),
-    )?;
-    if !canonical {
+    if !canonical_at(tx, at)? {
         return Ok(Applied::Refused(Refusal::InvalidInput(format!(
             "at {at} is not RFC 3339 UTC with milliseconds"
         ))));
@@ -699,6 +694,15 @@ fn spec_head(tx: &Transaction, id: i64) -> Checked<i64> {
         })
         .optional()?;
     Ok(head.ok_or(Refusal::NotFound { entity: "spec", id }))
+}
+
+/// `at` is RFC 3339 UTC with milliseconds, as SQLite prints it back.
+pub(crate) fn canonical_at(conn: &Connection, at: &str) -> Result<bool, LedgerError> {
+    Ok(conn.query_row(
+        "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?1) IS ?1",
+        [at],
+        |r| r.get(0),
+    )?)
 }
 
 pub(crate) fn exists(conn: &Connection, sql: &str, args: impl Params) -> Result<bool, LedgerError> {

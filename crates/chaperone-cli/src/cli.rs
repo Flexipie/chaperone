@@ -276,7 +276,7 @@ pub enum WorkCmd {
     Handoffs { id: i64 },
     /// The item's ledger, oldest first
     Events { id: i64 },
-    /// Record that one of the item's PRs merged (what /merge runs). The
+    /// Record that one of the item's PRs merged (for /merge). The
     /// same PR again replays and writes nothing
     Merged {
         id: i64,

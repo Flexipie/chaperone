@@ -1,9 +1,9 @@
 //! `chaperone work ...`: runs a parsed command against the ledger and
 //! returns an `Outcome`; rendering is `output`'s.
 
-use chaperone_core::checks::MergedInput;
 use std::io::{IsTerminal, Read};
 
+use chaperone_core::checks::MergedInput;
 use chaperone_core::cursor::Page;
 use chaperone_core::ledger::{Ledger, Refusal};
 use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter};
