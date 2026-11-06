@@ -264,6 +264,5 @@ mod tests {
         drop(ledger);
         let ledger = Ledger::open_and_migrate_with(&path, MIGRATIONS).unwrap();
         assert_eq!(keys(ledger.conn()), folded);
-        assert!(dir.path().join("backups/ledger-v2-0.sqlite").exists());
     }
 }

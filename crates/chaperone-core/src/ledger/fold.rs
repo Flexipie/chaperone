@@ -54,7 +54,7 @@ pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
                 params![e.spec_id, p.parent_key, p.title, e.id, e.at],
             )?;
             spec_version(conn, e, 1)?;
-            spec_keys(conn, e)?;
+            index_keys(conn, e.spec_id, p.body.as_deref().unwrap_or_default())?;
         }
         SpecRevised => {
             one(conn.execute(
@@ -64,7 +64,7 @@ pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
                 params![e.spec_id, p.version, e.id, e.at, p.title],
             )?)?;
             spec_version(conn, e, p.version.unwrap_or_default())?;
-            spec_keys(conn, e)?;
+            index_keys(conn, e.spec_id, p.body.as_deref().unwrap_or_default())?;
         }
         SpecApproved => one(conn.execute(
             "UPDATE specs SET status = 'approved', head_event_id = ?2, updated_at = ?3
@@ -221,14 +221,6 @@ fn spec_version(conn: &Connection, e: &Event, version: i64) -> Result<(), Ledger
 }
 
 /// The head version's slice keys replace the spec's old ones.
-fn spec_keys(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
-    index_keys(
-        conn,
-        e.spec_id,
-        e.payload.body.as_deref().unwrap_or_default(),
-    )
-}
-
 fn index_keys(conn: &Connection, spec_id: Option<i64>, body: &str) -> Result<(), LedgerError> {
     conn.execute("DELETE FROM spec_keys WHERE spec_id = ?1", [spec_id])?;
     // OR IGNORE: two sections may name one key in different cases.
