@@ -148,14 +148,14 @@ pub struct BoardItem {
     pub ready: bool,
     pub ready_reason: String,
     /// Paths this lane's newest handoff shares with another live lane's in
-    /// the same repo, the first [`BOARD_OVERLAPS`] by path. Handoffs only:
+    /// the same repo, the first 50 by path. Handoffs only:
     /// `chaperone overlap` adds the worktrees.
     pub overlaps: Vec<Overlap>,
     pub overlaps_omitted: usize,
 }
 
 /// One path two or more live lanes in a repo touch: the other lanes, the
-/// lowest [`OVERLAP_IDS`] ids, and how many more there are.
+/// lowest 10 ids, and how many more there are.
 #[derive(Clone, Debug, Serialize)]
 pub struct Overlap {
     pub path: String,
