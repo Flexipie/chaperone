@@ -73,7 +73,7 @@ impl Ledger {
 }
 
 /// The newest-changed spec whose newest version has a section for `key`.
-fn spec_for_key(conn: &Connection, key: &str) -> Result<Option<i64>, LedgerError> {
+pub(crate) fn spec_for_key(conn: &Connection, key: &str) -> Result<Option<i64>, LedgerError> {
     Ok(conn
         .query_row(SPEC_FOR_KEY, [key.trim()], |r| r.get(0))
         .optional()?)

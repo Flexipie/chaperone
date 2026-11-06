@@ -56,6 +56,8 @@ pub enum Cmd {
     Usage(UsageCmd),
     #[command(subcommand)]
     Attention(AttentionCmd),
+    #[command(subcommand)]
+    Dossier(DossierCmd),
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
@@ -94,6 +96,8 @@ impl Cmd {
             Cmd::Usage(UsageCmd::Report { .. }) => Some("usage report"),
             Cmd::Usage(UsageCmd::Get { .. }) => None,
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
+            Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
+            Cmd::Dossier(DossierCmd::Get { .. }) => None,
         }
     }
 }
@@ -584,5 +588,38 @@ pub enum AttentionCmd {
         idempotency_key: Option<String>,
         #[command(flatten)]
         actor: ActorArgs,
+    },
+}
+
+/// The agent-only record of an issue key: notes, and one capped read of
+/// what the ledger knows about the key. Data for agents, never a gate
+#[derive(Subcommand, Debug)]
+pub enum DossierCmd {
+    /// Leave a note on a key: what you learned that the issue does not say.
+    /// The same note again from the same session replays. Notes are never
+    /// edited; --supersedes hides an older one from `dossier get`
+    Note {
+        /// The issue key: CORE-1234, PER-12 or owner/repo#12
+        key: String,
+        /// At most 600 characters. Redacted at write
+        #[arg(long)]
+        note: String,
+        /// <kind>:<ref>, up to 5: issue:CORE-1, pr:owner/repo#12,
+        /// adr:docs/decisions/0007-issue-dossier.md, doc:<path>, commit:<sha>
+        #[arg(long = "link")]
+        links: Vec<String>,
+        /// The event id of an earlier note on the same key that this one
+        /// replaces
+        #[arg(long)]
+        supersedes: Option<i64>,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// The key's slice and spec decisions, lanes, handoffs, files and notes,
+    /// capped (48,000 characters at most); every cut is counted in its
+    /// section's `omitted`. not_found when the ledger has none of them
+    Get {
+        /// The issue key: CORE-1234, PER-12 or owner/repo#12
+        key: String,
     },
 }

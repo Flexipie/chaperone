@@ -376,6 +376,21 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             }
             event.lane_id = Some(next_id(tx, "lanes")?);
         }
+        // On a key, never a lane, so it moves no lane's `updated_at` and is
+        // no fact anchor (ADR 0007). `dossier note` checks the rest.
+        DossierNoted => {
+            if event.lane_id.is_some() || event.spec_id.is_some() || !p.changed.is_empty() {
+                refuse!(invalid(
+                    "dossier.noted names no lane or spec and changes no column"
+                ));
+            }
+            if !["key", "note"]
+                .iter()
+                .all(|k| p.rest.get(*k).is_some_and(|v| v.is_string()))
+            {
+                refuse!(invalid("dossier.noted needs key and note"));
+            }
+        }
         _ => {
             if event.spec_id.is_some() {
                 refuse!(invalid("only spec events and lane.created name a spec"));

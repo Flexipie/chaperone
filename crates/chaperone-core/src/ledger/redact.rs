@@ -70,7 +70,7 @@ const REDACTED: &str = "[redacted:";
 
 /// Redacts the prose strings of `p` in place and returns how many matches
 /// it replaced. A match outside prose refuses, naming the key, not the value.
-pub(super) fn payload(p: &mut Payload) -> Checked<u64> {
+pub(crate) fn payload(p: &mut Payload) -> Checked<u64> {
     let mut v = serde_json::to_value(&*p).map_err(std::io::Error::other)?;
     let mut count = 0;
     if let Err(r) = root(&mut v, &mut count) {
