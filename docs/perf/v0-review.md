@@ -117,6 +117,7 @@ what the schema allows, not a capture from the binary).
 | slice sibling linked to the spec, after | `lanes_slot (spec_id=?)`, 0.026 ms; `lanes_source (source_id=?)` since ledger v3 | new |
 | slice sibling, fallback when none is linked | `lanes_source (source_id=?)` since ledger v3 (#53); a **scan** of `lanes` before | finding 4, fixed |
 | job lookup by `$.job` (`reviews get`, `jobs get`, `reviews record`) | `events_job (<expr>=?)` since ledger v2 (#54); a **scan** before, 1.9 ms at 18,000 events | finding 5, fixed |
+| a key's notes by `$.key` (`dossier get`, `dossier note`) | `events_dossier (<expr>=?)` since ledger v4 (#83) | new; `dossier::tests::note_lookup_uses_index` holds it. `measure.py` realistic ledger (19,156 events, a slice key with its lane, 2 handoffs and 20 notes), two runs: `dossier get` p50 5.10 to 5.18 ms, p99 5.72 to 6.37 ms; `dossier note` p50 4.98 to 5.36 ms |
 
 Unused indexes: none worth dropping. `lanes_holder (agent, session)` is used by `work list --mine`; `messages_to` has
 no reader yet, because messages have no command in v0.

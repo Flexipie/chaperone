@@ -24,6 +24,7 @@ pub use event::{
     Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
 };
 use migrate::{Migration, user_version};
+pub(crate) use redact::payload as redact_payload;
 pub(crate) use write::{
     Checked, MAX_LEASE_SECS, MIN_LEASE_SECS, canonical_at, exists, has_held, lease_held,
 };
@@ -35,6 +36,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     (
         include_str!("../../migrations/0003_keys.sql"),
         Some(fold::fill_spec_keys),
+    ),
+    (
+        include_str!("../../migrations/0004_events_dossier.sql"),
+        None,
     ),
 ];
 

@@ -1,4 +1,4 @@
-//! `chaperone check`, `reviews`, `jobs` and `usage`. `reviews record` runs
+//! `chaperone check`, `reviews`, `jobs`, `usage`, `attention` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, Chaperone's only call into daisy, before the
 //! write opens its transaction.
 
@@ -6,12 +6,13 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use chaperone_core::checks::{AttentionInput, CheckInput};
+use chaperone_core::dossier::NoteInput;
 use chaperone_core::ledger::Ledger;
 use chaperone_core::usage::Roots;
 use serde_json::{Value, json};
 
 use crate::child;
-use crate::cli::{AttentionCmd, CheckCmd, JobsCmd, ReviewsCmd, UsageCmd};
+use crate::cli::{AttentionCmd, CheckCmd, DossierCmd, JobsCmd, ReviewsCmd, UsageCmd};
 use crate::output::{CliError, ErrorBody, Outcome};
 use crate::work::one;
 
@@ -87,6 +88,27 @@ pub fn attention(ledger: &Ledger, cmd: AttentionCmd) -> Result<Outcome, CliError
             };
             one(ledger.attention_record(&actor.resolve(), &input)??)
         }
+    }
+}
+
+pub fn dossier(ledger: &Ledger, cmd: DossierCmd) -> Result<Outcome, CliError> {
+    match cmd {
+        DossierCmd::Note {
+            key,
+            note,
+            links,
+            supersedes,
+            actor,
+        } => {
+            let input = NoteInput {
+                key,
+                note,
+                links,
+                supersedes,
+            };
+            one(ledger.dossier_note(&actor.resolve(), &input)??)
+        }
+        DossierCmd::Get { key } => one(ledger.dossier_get(&key)??),
     }
 }
 

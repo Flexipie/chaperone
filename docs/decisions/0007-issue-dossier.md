@@ -144,4 +144,5 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
 - `changed_files` is neither capped nor checked as repo-relative paths today
   (`crates/chaperone-core/src/work/handoff.rs`). The dossier caps what it prints; the
   write-side check R13 asks for is a separate fix.
-- Until the code PR, `dossier.noted` is reserved in [events.md](../events.md).
+- The code shipped in #83 (ledger v4, `events_dossier`); `dossier.noted` is an M1 kind in
+  [events.md](../events.md), no longer reserved.

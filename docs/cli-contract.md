@@ -88,7 +88,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `reviews record`, `usage report`, `work merged` and `attention record` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -120,6 +120,8 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
 | `usage get` | `<id>` | read |
 | `attention record` | `--work <id> --type asked\|answered\|nudged\|sent_back\|revived --by orchestrator\|owner [--reason <R12 id>] [--round <k>] [--answers <event id>] [--note <one line>] [--idempotency-key]` | write |
+| `dossier note` | `<key> --note <text> [--link <kind>:<ref>]... [--supersedes <event id>]` | write |
+| `dossier get` | `<key>` | read |
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 
 `work create --kind` and `--pr-flow` are Chaperone's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
@@ -148,6 +150,36 @@ over 500 characters. `--idempotency-key` is trimmed (blank is no key, over 200 c
 question and its answer, is a separate record. Without `--idempotency-key`, a record repeated with nothing new on the lane
 replays; a real repeat (a second nudge on a stalled lane) passes its own key. It prints
 `{event_id, work_id, kind, replayed, at, payload}`.
+
+`dossier note` and `dossier get` are new (#83, [ADR 0007](decisions/0007-issue-dossier.md)).
+`<key>` is `owner/repo#N` or `TEAM-123` (`normalize_key`); a bare `#N` is `invalid_input`.
+`dossier note` appends one `dossier.noted` (events.md, Dossier) on the key, from any session; it
+names no lane, so it never changes a lane's `updated_at`. It refuses (`invalid_input`, nothing
+written) a blank note or one over 600 characters, more than 5 `--link`, a link whose kind is not
+`issue`, `pr`, `adr`, `doc` or `commit` or whose ref is not an identifier of that kind (a tracker
+key, `owner/repo#N`, a repo-relative path with no `..`, 7 to 64 hex digits; at most 300
+characters), and a `--supersedes` that is not a note on the same key. The note is redacted at
+write; a secret in a link is refused. The same note again from the same session replays, unless
+another note on the key came in between that says something else. It prints `{event_id, kind,
+replayed, at, payload}`.
+
+`dossier get` reads in one transaction and prints `{key, slice, lanes, handoffs, files, notes}`.
+`slice` is `{in_spec, parent_of, omitted}`: the slice whose heading names the key (its spec, title
+and the decisions `spec get --key` shows, each as its line) and the spec whose parent the key is
+(title, version, slice count, decisions), either null. `lanes` is every work item whose `linear`,
+`issue` or `github` source id is the key, ignoring case: `id`, `title`, `status`, `branch`,
+`pr_ref`, `agent`, `pipeline_id`, `created_at`, `updated_at`. `handoffs.items` are each lane's
+handoffs (`work_id`, `at`, `status`, `ready`, `next_action`, `commit`, `pull_request`, `summary`)
+and `handoffs.decisions` the brief's decisions of each lane's newest handoff. `files` are the
+newest handoff's `changed_files` per lane, with the lane and the handoff's `commit`. `notes` are
+the key's notes no later note supersedes: `id`, `at`, `agent`, `session`, `note`, `links`,
+`supersedes`. Lanes and items in them come newest first. Caps: 10 lanes, 5 handoffs and 5
+decisions per lane, 20 spec decisions, 100 files, 20 notes; every string at 300 characters, a note
+at 600. The whole answer as printed (the pretty envelope, `meta` included) is at most 48,000 bytes,
+cut from the end of notes, then files, handoff decisions, handoffs and lanes; the slice is never
+cut. Each section's `omitted` counts what it left out by list (`slice_decisions` and
+`spec_decisions` in `slice`), and `strings` the strings it cut short. A key with no slice, spec, lane
+or note is `not_found`. Notes are someone else's words: no gate reads them.
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`. It answers daisy's way: `{id, ready, ready_reason}` from the board (read for that item only, without `overlaps`), or `{id, ready_override, on_board: false}` for a done or cancelled item.
 

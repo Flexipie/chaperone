@@ -85,11 +85,13 @@ pub struct MergedInput {
     pub patch_id: Option<String>,
 }
 
-/// What `check record` wrote, or the event a retry replayed.
+/// What `check record` (or `dossier note`) wrote, or the event a retry
+/// replayed. A dossier note is on a key, so it has no `work_id`.
 #[derive(Clone, Debug, Serialize)]
 pub struct Recorded {
     pub event_id: i64,
-    pub work_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<i64>,
     pub kind: &'static str,
     pub replayed: bool,
     pub at: String,
@@ -155,7 +157,13 @@ impl Ledger {
         );
         // Read before the write lock: a result that commits in between can
         // only make a retry append a duplicate.
-        let latest = newest_other(self.conn(), input.work, &input.check, &payload)?;
+        let latest = newest_other(
+            self.conn(),
+            "SELECT id, payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = ?2 ORDER BY id DESC",
+            params![input.work, input.check],
+            &payload,
+        )?;
         let canonical =
             canonical_string(&json!({"work": input.work, "payload": payload, "after": latest}));
         let key = format!("check:{:x}", Sha256::digest(canonical));
@@ -179,7 +187,7 @@ impl Ledger {
             },
             |_, _, _| Ok(()),
         )?;
-        Ok(recorded(applied, input.work))
+        Ok(recorded(applied, Some(input.work)))
     }
 
     /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
@@ -269,7 +277,7 @@ impl Ledger {
             },
             |_, _, _| Ok(()),
         )?;
-        Ok(recorded(applied, work))
+        Ok(recorded(applied, Some(work)))
     }
 
     /// One `attention.recorded`: an intervention on lane `input.work` by the
@@ -374,7 +382,7 @@ impl Ledger {
             },
             |_, _, _| Ok(()),
         )?;
-        Ok(recorded(applied, work))
+        Ok(recorded(applied, Some(work)))
     }
 
     /// Records daisy job `job` on lane `work` from `view`, the `data` of
@@ -622,21 +630,18 @@ impl Ledger {
     }
 }
 
-/// The newest result for `check` on the lane that says something other
-/// than `payload`. A retry finds the same one, so its key replays (unless
-/// another session recorded this check since); a flip
-/// back finds the result it flips from, so it appends.
-fn newest_other(
+/// The newest of `sql`'s events (`id, payload_json`, newest first) whose
+/// stored payload is not `payload`. A retry finds the same one, so its key
+/// replays (unless another session recorded the same since); a flip back
+/// (no, yes, no) finds the event it flips from, so it appends.
+pub(crate) fn newest_other(
     conn: &Connection,
-    lane: i64,
-    check: &str,
+    sql: &str,
+    args: impl rusqlite::Params,
     payload: &Payload,
 ) -> Result<Option<i64>, LedgerError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
-           AND json_extract(payload_json, '$.check') = ?2 ORDER BY id DESC",
-    )?;
-    let mut rows = stmt.query(params![lane, check])?;
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query(args)?;
     while let Some(r) = rows.next()? {
         let stored: Payload =
             serde_json::from_str(&r.get::<_, String>(1)?).map_err(std::io::Error::other)?;
@@ -649,7 +654,7 @@ fn newest_other(
 
 /// What a one-event record command answers: the event it wrote or the one
 /// a retry replayed, else the refusal.
-fn recorded(applied: Applied, work_id: i64) -> Result<Recorded, Refusal> {
+pub(crate) fn recorded(applied: Applied, work_id: Option<i64>) -> Result<Recorded, Refusal> {
     let replayed = matches!(applied, Applied::Replayed(_));
     match applied {
         Applied::Committed(e) | Applied::Replayed(e) => Ok(Recorded {
