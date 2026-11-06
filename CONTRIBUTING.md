@@ -65,8 +65,8 @@ fixture does not need the fake agent. The script does.
 
 ## CI plan
 
-Required on every pull request. A red job is a failed PR. `coverage`,
-`budgets` and `regress` land with the code they gate; the other jobs run now.
+Required on every pull request. A red job is a failed PR. `regress` waits on
+its bench dependency (#56); the other jobs run now.
 
 | Job | What it runs |
 | --- | --- |
@@ -76,7 +76,7 @@ Required on every pull request. A red job is a failed PR. `coverage`,
 | `coverage` | llvm-cov. A missed branch or region in `eval`, ledger `write` or `fold` fails the job. In `write` and `fold` a region that is only a `?` is exempt: most propagate a SQLite error no test reaches without fault injection, and the rest propagate a refusal whose own check is gated. |
 | `doc` | `cargo doc -p chaperone-core --no-deps` with warnings denied. |
 | `deny` | `cargo deny check` (licenses, advisories, bans, sources). |
-| `budgets` | Release build. Coarse ceilings: `--version` p50 ≤ 100 ms, open-and-exit p50 ≤ 150 ms, 1,000 full-sync commits ≤ 10 s, follower p99 ≤ 50 ms, one-shot RSS ≤ 32 MiB. Timeout 20 min. |
+| `budgets` | Release build. Coarse ceilings: `--version` p50 ≤ 100 ms, open-and-exit p50 ≤ 150 ms, 1,000 full-sync commits ≤ 10 s, one-shot RSS ≤ 32 MiB, on Ubuntu and macOS (`budgets (linux)`, `budgets (macos)`). Follower p99 ≤ 50 ms joins when the follower exists. Timeout 20 min. |
 | `regress` | Linux instruction counts, ≤ +10% against the base branch, on the pipeline hash, `to_ready`, and 100 in-memory appends. |
 
 Windows is not required. A tag (`v*`) is a separate workflow: the tag matches
