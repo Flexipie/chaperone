@@ -2,6 +2,8 @@
 
 > Superseded in part by [ADR 0003](../decisions/0003-chaperone-replaces-daisy.md) and [events.md](../events.md): daisy does not read the ledger (no `reader_contract`). Event kinds, lane columns, nullability and folded statuses are in events.md "Folded rows".
 
+> Amended by [ADR 0006](../decisions/0006-plain-fsync-on-macos.md): on macOS `FULL` uses plain `fsync`, not `F_FULLFSYNC`, so a returned commit survives a killed process but not a power loss or an OS crash, and checkpoint corruption is an accepted risk.
+
 Status: draft, 2026-11-02. Storage decision for the ledger. Language and the pipeline format stay with R6 and R7. This feeds a decision record when those land.
 
 ## Recommendation
@@ -45,7 +47,7 @@ Probe on this machine, 2026-11-02: SQLite 3.54.1 (Homebrew Python 3.15), local A
 
 A real lane does not write 40 events a second. It writes on claim, a few gates, findings, and messages, and it renews a lease on a timer. Fifty lanes are far under 2060 commits/s. The number that matters is the other one: a transaction that stays open for longer than `busy_timeout` fails every other writer.
 
-`FULL` is the setting to ship. SQLite documents that WAL plus `synchronous=NORMAL` survives an application crash without corruption, and that an OS crash or power loss can roll back commits that had already returned. A gate acknowledgement is one of those commits. `FULL` syncs the WAL on commit. The probe's gap (0.97 s versus 0.63 s for 2000 commits) is not worth a gate that the process believed had landed. On macOS `FULL` uses plain `fsync`, not `F_FULLFSYNC`, so it does not promise to survive a power loss ([ADR 0006](../decisions/0006-plain-fsync-on-macos.md)).
+`FULL` is the setting to ship. SQLite documents that WAL plus `synchronous=NORMAL` survives an application crash without corruption, and that an OS crash or power loss can roll back commits that had already returned. A gate acknowledgement is one of those commits. `FULL` syncs the WAL on commit. The probe's gap (0.97 s versus 0.63 s for 2000 commits) is not worth a gate that the process believed had landed.
 
 Sources for the SQLite behaviour: [WAL](https://www.sqlite.org/wal.html), [synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous), [SQLITE_BUSY_SNAPSHOT](https://www.sqlite.org/rescode.html#busy_snapshot). WAL is one writer, many readers, and it does not work on a network filesystem. The file stays on the local disk, not in iCloud or Dropbox, same rule as a database that depends on file locks.
 

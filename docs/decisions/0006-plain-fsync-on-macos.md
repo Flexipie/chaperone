@@ -7,9 +7,10 @@ Evidence: issue [#55](https://github.com/Flexipie/chaperone/issues/55), finding 
 ## Context
 
 The ledger runs WAL with `synchronous=FULL` (locked in the roadmap). On macOS, `fsync` hands the data to the drive
-but does not flush the drive's write cache; only `fcntl(F_FULLFSYNC)` does. Apple's own SQLite sets
-`PRAGMA fullfsync`; the bundled SQLite from `libsqlite3-sys` does not. So a commit that returned can still sit in the
-drive cache, and the drive may write it out in a different order than SQLite issued it.
+but does not flush the drive's write cache; only `fcntl(F_FULLFSYNC)` does. Apple's `fsync(2)` says that if the drive
+loses power or the OS crashes, only some or none of the data may be written, and the drive may reorder it. Apple's own
+SQLite (`/usr/bin/sqlite3` 3.51.0) defaults to `fullfsync=0` and `checkpoint_fullfsync=1`; the bundled SQLite from
+`libsqlite3-sys` 0.39.1 sets neither.
 
 Measured on the reference machine (Apple M2 Max, release, 2026-11-07), E1 is `tests/budgets.rs`, E2 is
 `fifty_writers` in `tests/concurrency.rs`, each pragma added to `apply_pragmas` for the run only:
@@ -22,27 +23,30 @@ Measured on the reference machine (Apple M2 Max, release, 2026-11-07), E1 is `te
 
 ## Decision
 
-Keep plain `fsync`: no `fullfsync`, no `checkpoint_fullfsync`. On macOS, `synchronous=FULL` means a commit that
-returned survives a killed process and an OS crash. It does not promise to survive a sudden power loss.
+Keep plain `fsync`: no `fullfsync`, no `checkpoint_fullfsync`. This is weaker than Apple's default, which flushes
+fully at checkpoints. On macOS, `synchronous=FULL` means a commit that returned survives a killed process. It does not
+promise to survive a power loss or an OS crash (a kernel panic).
 
-On power loss the last commits can be lost. **Checkpoint corruption is an accepted risk, not ruled out:** without a
-full flush the drive can reorder a checkpoint's writes to the database file, so a power cut during or just after a
-checkpoint could leave the file damaged.
+On a power loss or an OS crash the last commits can be lost. **Checkpoint corruption is an accepted risk, not ruled
+out:** without a full flush the drive can reorder a checkpoint's writes to the database file, so a power loss or OS
+crash during or just after a checkpoint could leave the file damaged.
 
 ## Alternatives considered
 
 - **`fullfsync=ON`.** About 50x slower per commit, and under parallel writers the 4.5 ms flush brings back the lock
   starvation that #62 fixed. Parallel writers are the load Chaperone exists for.
-- **`checkpoint_fullfsync=ON` only.** Covers the checkpoint corruption above, but misses E1 in 3 of 5 runs and leaves
-  E2 near its limit.
+- **`checkpoint_fullfsync=ON` only** (Apple's default). Covers the checkpoint corruption above, but misses E1 in 3
+  of 5 runs and leaves E2 near its limit.
 
 ## Consequences
 
 Revisit this when either happens:
 
-- a ledger is found corrupted (`PRAGMA integrity_check` fails) after a power loss;
+- a ledger returns a corruption error (`SQLITE_CORRUPT`, "database disk image is malformed") after a power loss or
+  OS crash; nothing runs `integrity_check` on its own, so this is noticed when a command fails;
 - a user runs Chaperone on a machine with no battery (a desktop Mac), where power loss is a real event.
 
-Recovery that exists today: `chaperone migrate` takes a `VACUUM INTO` backup in `<ledger dir>/backups/` before every
-schema upgrade (`crates/chaperone-core/src/ledger/migrate.rs`). Restoring one loses every event since that upgrade.
+Recovery that exists: `chaperone migrate` takes a `VACUUM INTO` backup in `<ledger dir>/backups/` before every schema
+upgrade (`crates/chaperone-core/src/ledger/migrate.rs`). Restoring one loses every event since that upgrade. The
+schema is still at version 1, so no ledger has a backup yet: until the first upgrade ships there is nothing to restore.
 There is no periodic backup.
