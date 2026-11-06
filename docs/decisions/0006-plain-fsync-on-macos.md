@@ -55,6 +55,6 @@ Revisit this when either happens:
 - a user runs Chaperone on a machine with no battery (a desktop Mac), where power loss is a real event.
 
 Recovery that exists: `chaperone migrate` takes a `VACUUM INTO` backup in `<ledger dir>/backups/` before every schema
-upgrade (`crates/chaperone-core/src/ledger/migrate.rs`). Restoring one loses every event since that upgrade. The
-schema is still at version 1, so no ledger has a backup yet: until the first upgrade ships there is nothing to restore.
-There is no periodic backup.
+upgrade (`crates/chaperone-core/src/ledger/migrate.rs`). Restoring one loses every event since that upgrade. A
+ledger created at the current version has none until the next upgrade (the first, v1 to v2, came with #54), and there
+is no periodic backup.
