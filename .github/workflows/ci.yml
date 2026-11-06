@@ -112,6 +112,28 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  # ADR 0080. HEAD is the PR's merge commit, so HEAD^1 is the base it merges into.
+  doc-numbers:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - name: a new ADR or research note takes the branch's issue number
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          n=$(printf '%s\n' "$BRANCH" | sed -nE 's/^([a-z0-9]+-)?0*([0-9]+)-.*/\2/p')
+          files=$(git diff --name-only --diff-filter=A HEAD^1 HEAD -- docs/decisions docs/research)
+          bad=0
+          for f in $files; do
+            got=$(basename "$f" | sed -nE 's/^r?0*([0-9]+)[a-z]?-.*/\1/p')
+            [ -n "$n" ] && [ "$n" -gt 15 ] && [ "$got" = "$n" ] \
+              || { echo "$f: name it with an issue number above 15 from the branch (branch: $BRANCH)"; bad=1; }
+          done
+          exit $bad
+
   deny:
     runs-on: ubuntu-latest
     steps:
