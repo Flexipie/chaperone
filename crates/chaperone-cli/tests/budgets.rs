@@ -63,10 +63,6 @@ fn max_rss_mib(args: &[&str]) -> f64 {
     } else {
         ("-v", "Maximum resident set size (kbytes):", 1024.0)
     };
-    assert!(
-        Path::new("/usr/bin/time").exists(),
-        "M1 needs /usr/bin/time"
-    );
     let out = Command::new("/usr/bin/time")
         .arg(flag)
         .arg(BIN)
