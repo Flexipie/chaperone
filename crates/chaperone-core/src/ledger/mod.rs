@@ -34,7 +34,7 @@ pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 /// `PRAGMA application_id`, set by 0001: "CHAP".
 pub const APPLICATION_ID: i64 = 0x4348_4150;
 
-/// How long a write waits for the lock before it fails with `busy`.
+/// How long a statement waits for a lock before it fails with `busy`.
 const BUSY_GIVE_UP: Duration = Duration::from_secs(5);
 
 pub struct Ledger {
