@@ -299,6 +299,7 @@ Named so nothing else takes the name. The write refuses these kinds in M1.
 | `evidence.recorded`, `escape.judged`, `price.published`, `pr.commit`, `pr.threads_observed`, `issue.opened`, `guard.blocked` | [R11](research/r11-observability-cost-metrics.md) | Metrics stay in `lane-stats` for M1. |
 | `question.opened` | [R12](research/r12-interfaces-and-attention.md) | R12's question lifecycle is later; M1 records a question as `attention.recorded` with `type: asked`. Its reason ids (`question.done_ambiguous`, `question.scope`, `question.one_way`, `question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`, `question.product`, `question.seam_reject`, `question.overlap`) are payload values, not kinds. |
 | `human.merge_yes` | [R10](research/r10-verification-review-layer.md) | Needs a user-attributed adapter. M1's done is the `handoff` transition. |
+| `dossier.noted` | [ADR 0006](decisions/0006-issue-dossier.md) | Proposed; the code waits for #53's key indexes. |
 
 Reserved `check.finished` values. No M1 command produces them, so they are not
 accepted yet:

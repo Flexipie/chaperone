@@ -149,6 +149,7 @@ Slices of #1 (one issue each). Chaperone replaces daisy's ledger; no router, no 
 - Spec reservations before code; seam publish/revise; typed inbox ([R9](research/r9-coordination-between-lanes.md))
 - Overlap and stack rules enforced at grant and at ready
 - Still no free-text agent chat between lanes
+- Agent dossier per issue key: slice, lanes, handoffs, files touched, notes ([ADR 0006](decisions/0006-issue-dossier.md), proposed)
 
 **Exit:** Design cases in R9 covered in tests; fewer “helper reimplemented” / overlap findings.
 
