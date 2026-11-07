@@ -16,8 +16,9 @@ use sha2::{Digest, Sha256};
 pub use parse::FACTS_VERSION;
 
 /// Files past this size are not parsed (generated code): their references
-/// are unknown, so the answer is a lower bound.
-const MAX_BYTES: usize = 1024 * 1024;
+/// are unknown, so the answer is a lower bound. A parse holds about 45
+/// bytes of tree per byte of source, so this bounds a call's peak RSS.
+const MAX_BYTES: usize = 256 * 1024;
 /// `unsure` entries listed; the rest are counted.
 const UNSURE_ROWS: usize = 20;
 
@@ -129,6 +130,7 @@ pub fn impact(
     let mut found = store.get(&live, cache);
     let (mut parsed, mut reused) = (0, 0);
     let mut new = Vec::new();
+    let mut parser = parse::parser();
     let mut facts = Vec::with_capacity(rust.len());
     for (i, f) in rust.iter().enumerate() {
         let Some(key) = &keys[i] else {
@@ -146,7 +148,7 @@ pub fn impact(
         };
         match b {
             Ok(b) if b.len() <= MAX_BYTES => {
-                let fresh = parse::facts(&b);
+                let fresh = parse::facts(parser.as_mut(), &b);
                 parsed += 1;
                 if let Ok(json) = serde_json::to_vec(&fresh) {
                     new.push((key.clone(), json));

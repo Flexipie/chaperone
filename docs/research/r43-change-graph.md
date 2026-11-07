@@ -48,7 +48,7 @@ workspace crate's name. Two edges the paths miss:
 changed by it; one that re-exports it has a `pub use` edge.
 
 **Exact or lower bound.** The answer is `exact` only when every Rust file was read and
-understood. A file not read (unreadable, over 1 MiB), with a parse error, a `#[path]`
+understood. A file not read (unreadable, over 256 KiB), with a parse error, a `#[path]`
 module, `include!`, `super` above the crate root, or reached from no crate root makes the
 whole answer `lower_bound`, and is listed in `unsure` with why. Its references could point
 anywhere in the workspace through crate names, so narrowing the bound to a crate or a
@@ -64,9 +64,30 @@ SQLite file per origin; edges rebuilt in memory per call.
 
 ## Measured
 
-On this repo (57 Rust files), release build, Apple M-series, warm page cache:
+On this repo (57 Rust files), Apple M-series, warm page cache.
 
-TIMINGS
+Method: R14's (8 unmeasured spawns, then the samples, wall time around the spawn), target
+`crates/chaperone-core/src/ledger/write.rs`, release builds of `1f2687d` (main) and this
+branch, `--cache` in a temp dir.
+
+| | main | this branch |
+| --- | --- | --- |
+| `impact`, cold (cache file removed before each call: list, parse 57 files, write, resolve), p50 / max of 30 | | 97 / 110 ms |
+| `impact`, warm (every file cached), p50 / p99 of 100 | | 31.6 / 37.5 ms |
+| `impact` RSS, cold / warm | | 9.9 / 6.0 MiB |
+| `--version` p50 / p99 (S1) | 3.1 / 3.7 ms | 3.2 / 4.0 ms |
+| stripped binary (B1) | 4.23 MiB | 5.57 MiB |
+
+Most of the warm time is git: four calls of 5 to 9 ms each, run at once. A second
+worktree at a commit 8 behind reused 28 of 47 files' facts and parsed 19.
+
+**Memory.** A parse holds about 45 bytes of tree per byte of source, so a call's peak
+RSS follows the largest file it parses, not the file count: a one-file repo holding
+`engine.rs` (4 KB) peaks at 5.9 MiB, holding `ledger/write.rs` (62 KB) at 8.5 MiB. A cold
+call over this repo is 9.9 MiB, past M1's 8 MiB product budget; a warm one, the usual
+case once a lane has called it, is 6.0 MiB. Files over 256 KiB are not parsed (they make
+the answer `lower_bound`), which caps the peak near 17 MiB, inside M1's 32 MiB CI
+ceiling. The owner decides whether M1 gets a row for a cold `impact`.
 
 ## Next
 

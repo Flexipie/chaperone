@@ -30,13 +30,18 @@ pub struct Ref {
     pub alias: Option<String>,
 }
 
-pub fn facts(src: &[u8]) -> Facts {
+/// A Rust parser, made once per call and reused for every file.
+pub fn parser() -> Option<Parser> {
     let mut parser = Parser::new();
-    let mut f = Facts::default();
-    let tree = parser
+    parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .ok()
-        .and_then(|()| parser.parse(src, None));
+        .ok()?;
+    Some(parser)
+}
+
+pub fn facts(parser: Option<&mut Parser>, src: &[u8]) -> Facts {
+    let mut f = Facts::default();
+    let tree = parser.and_then(|p| p.parse(src, None));
     let Some(tree) = tree else {
         f.inexact = Some("parse_error".into());
         return f;

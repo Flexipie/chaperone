@@ -41,15 +41,49 @@ pub fn run(
         }
         Err(Failure::Other(e)) => Err(Refusal::InvalidInput(e).into()),
     };
-    let out = call(
-        Path::new("."),
-        &[
-            "rev-parse",
-            "--show-toplevel",
-            "--show-prefix",
-            "--git-common-dir",
-        ],
-    )?;
+    // The four calls are independent: from here, `:/` is the whole tree.
+    let here = Path::new(".");
+    let joined = |h: std::thread::ScopedJoinHandle<'_, Result<Vec<u8>, CliError>>| {
+        h.join()
+            .unwrap_or_else(|_| Err(CliError::Internal("git thread panicked".into())))
+    };
+    let (out, origin, status, staged) = std::thread::scope(|s| {
+        let rev = s.spawn(|| {
+            call(
+                here,
+                &[
+                    "rev-parse",
+                    "--show-toplevel",
+                    "--show-prefix",
+                    "--git-common-dir",
+                ],
+            )
+        });
+        let origin = s.spawn(|| match cache {
+            Some(_) => Ok(Vec::new()),
+            None => call(here, &["config", "--get", "remote.origin.url"]),
+        });
+        let status = s.spawn(|| {
+            call(
+                here,
+                &[
+                    "ls-files",
+                    "-z",
+                    "-t",
+                    "-m",
+                    "-d",
+                    "-o",
+                    "--exclude-standard",
+                    "--full-name",
+                    "--",
+                    ":/",
+                ],
+            )
+        });
+        let staged = call(here, &["ls-files", "-z", "-s", "--full-name", "--", ":/"]);
+        (joined(rev), joined(origin), joined(status), staged)
+    });
+    let out = out?;
     let out = String::from_utf8_lossy(&out);
     let mut lines = out.lines();
     let (top, prefix, common) = (
@@ -66,7 +100,7 @@ pub fn run(
     let cache = match cache {
         Some(c) => Some(c),
         None => {
-            let origin = call(&top, &["config", "--get", "remote.origin.url"])
+            let origin = origin
                 .map(|o| String::from_utf8_lossy(&o).trim().to_string())
                 .ok()
                 .filter(|o| !o.is_empty())
@@ -85,19 +119,7 @@ pub fn run(
     // untracked ones are hashed from the worktree.
     let (mut changed, mut deleted) = (HashSet::new(), HashSet::new());
     let mut files = Vec::new();
-    let out = call(
-        &top,
-        &[
-            "ls-files",
-            "-z",
-            "-t",
-            "-m",
-            "-d",
-            "-o",
-            "--exclude-standard",
-            "--full-name",
-        ],
-    )?;
+    let out = status?;
     for e in out.split(|b| *b == 0).filter(|e| e.len() > 2) {
         let path = String::from_utf8_lossy(&e[2..]).to_string();
         match e[0] {
@@ -115,7 +137,7 @@ pub fn run(
         path: path.clone(),
         key: None,
     }));
-    let out = call(&top, &["ls-files", "-z", "-s", "--full-name"])?;
+    let out = staged?;
     for e in out.split(|b| *b == 0) {
         // `<mode> <blob> <stage>\t<path>`; a conflict lists stages 1 to 3.
         let Some((head, path)) = String::from_utf8_lossy(e)
