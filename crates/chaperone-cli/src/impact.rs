@@ -90,6 +90,7 @@ pub fn run(
         .collect();
 
     // One cache per origin, so every worktree and clone of it shares one.
+    let given = cache.is_some();
     let cache = match cache {
         Some(c) => Some(c),
         None => {
@@ -168,7 +169,7 @@ pub fn run(
         }
         out
     };
-    let data = chaperone_graph::impact(&files, read, ids, cache.as_deref(), &targets, LIMIT);
+    let data = chaperone_graph::impact(&files, read, ids, cache.as_deref(), given, &targets, LIMIT);
     output::write_one(&data, meta, format)
 }
 

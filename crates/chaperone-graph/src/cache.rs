@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rusqlite::{Connection, ErrorCode, ffi, params};
+use rusqlite::{Connection, ErrorCode, OpenFlags, ffi, params};
 
 use crate::parse::{FACTS_VERSION, Facts};
 
@@ -23,7 +23,9 @@ fn table() -> String {
 }
 
 impl Cache {
-    pub fn open(path: Option<&Path>) -> Cache {
+    /// `given`: the path was passed by hand (`--cache`), not Chaperone's
+    /// own per-origin file.
+    pub fn open(path: Option<&Path>, given: bool) -> Cache {
         let Some(path) = path else {
             return Cache {
                 conn: None,
@@ -31,7 +33,7 @@ impl Cache {
                 skipped: Some("no cache path".into()),
             };
         };
-        match Self::connect(path) {
+        match Self::connect(path, given) {
             Ok(conn) => Cache {
                 conn: Some(conn),
                 path: path.to_path_buf(),
@@ -45,29 +47,59 @@ impl Cache {
         }
     }
 
-    fn connect(path: &Path) -> rusqlite::Result<Connection> {
+    fn connect(path: &Path, given: bool) -> rusqlite::Result<Connection> {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        // SQLite takes an empty file for an empty database: one that exists
-        // empty is someone else's (a lock file), never made into a cache.
-        let empty = std::fs::metadata(path).is_ok_and(|m| m.len() == 0);
-        let conn = Connection::open(path)?;
-        conn.busy_timeout(Duration::from_secs(5))?;
-        // `--cache` may name another SQLite file (the ledger): never write to it.
-        let foreign: bool = empty
-            || conn.query_row(
-                "SELECT (SELECT user_version FROM pragma_user_version) != 0 OR EXISTS (
-                SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'facts_v[0-9]*')",
-                [],
-                |r| r.get(0),
-            )?;
-        if foreign {
-            return Err(rusqlite::Error::SqliteFailure(
+        let not_cache = || {
+            rusqlite::Error::SqliteFailure(
                 ffi::Error::new(ffi::SQLITE_CANTOPEN),
                 Some("not a chaperone graph cache".into()),
-            ));
+            )
+        };
+        // SQLite takes an empty file for an empty database. One passed by
+        // hand is someone else's (a lock file); one at Chaperone's own path
+        // is a cache a first run left before writing to it.
+        match std::fs::metadata(path) {
+            Ok(m) if m.len() == 0 && given => return Err(not_cache()),
+            Ok(m) if m.len() > 0 => {
+                // `--cache` may name another SQLite file (the ledger), and the
+                // check must not write to it: a read-write connection would
+                // checkpoint its WAL into it on close. Without a WAL, read it
+                // as immutable (a read-only open would still make -wal and
+                // -shm beside it); with one, read-only, so its WAL is seen.
+                let mut wal = path.as_os_str().to_owned();
+                wal.push("-wal");
+                let ro = if Path::new(&wal).exists() {
+                    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
+                } else {
+                    let Some(p) = path.to_str() else {
+                        return Err(not_cache());
+                    };
+                    let uri = format!(
+                        "file:{}?immutable=1",
+                        p.replace('%', "%25")
+                            .replace('?', "%3f")
+                            .replace('#', "%23")
+                    );
+                    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+                    Connection::open_with_flags(uri, flags)?
+                };
+                ro.busy_timeout(Duration::from_secs(5))?;
+                let foreign: bool = ro.query_row(
+                    "SELECT (SELECT user_version FROM pragma_user_version) != 0 OR EXISTS (
+                    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'facts_v[0-9]*')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if foreign {
+                    return Err(not_cache());
+                }
+            }
+            _ => {}
         }
+        let conn = Connection::open(path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(&format!(

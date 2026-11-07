@@ -93,17 +93,19 @@ pub fn cache_file(dir: &Path, origin: &str) -> PathBuf {
 /// The files that depend on `targets`, nearest first, listing at most
 /// `limit` of them. `read` gives a file's bytes by path; `ids` the key of
 /// those bytes as `File::key` names it (`None`: unknown); `cache` is the
-/// facts file, `None` to parse everything.
+/// facts file, `None` to parse everything, and `cache_given` whether it
+/// was passed by hand (an empty one is then refused, not used).
 pub fn impact(
     files: &[File],
     read: impl Fn(&str) -> io::Result<Vec<u8>>,
     ids: impl Fn(&[&str]) -> Vec<Option<String>>,
     cache: Option<&Path>,
+    cache_given: bool,
     targets: &[String],
     limit: usize,
 ) -> Impact {
     let rust: Vec<&File> = files.iter().filter(|f| f.path.ends_with(".rs")).collect();
-    let mut store = cache::Cache::open(cache);
+    let mut store = cache::Cache::open(cache, cache_given);
 
     // Keys: given, or the hash of the bytes read now (kept to parse).
     let mut bytes: Vec<Option<Vec<u8>>> = Vec::with_capacity(rust.len());
