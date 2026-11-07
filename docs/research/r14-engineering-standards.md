@@ -8,7 +8,7 @@ Language is Rust ([R6](r6-language-and-runtime.md)). Storage is one SQLite file 
 
 ## Recommendation
 
-A Cargo workspace of three crates (a fourth, `chaperone-ui`, came with #40), pipelines as data on disk, and a GitHub Actions workflow that blocks the PR. Tests are five layers. The bottom three are pure or single-process. Crash and concurrency spawn real processes against the real write function. A fake agent CLI runs a whole lane with no model.
+A Cargo workspace of four crates, pipelines as data on disk, and a GitHub Actions workflow that blocks the PR. Tests are five layers. The bottom three are pure or single-process. Crash and concurrency spawn real processes against the real write function. A fake agent CLI runs a whole lane with no model.
 
 Performance has two numbers per budget. The **product** number is the promise, measured on the same class of machine as R6 (Apple M-series, local APFS, warm page cache, release profile). The **CI** number is a coarse ceiling on a GitHub-hosted runner, plus an instruction-count regression of 10% on Linux. Wall-clock percentages are not the merge gate: Criterion's FAQ and Tokio's own CI discussion both treat hosted-runner timings as too noisy for that ([criterion FAQ](https://bheisler.github.io/criterion.rs/book/faq.html), [tokio#7779](https://github.com/tokio-rs/tokio/pull/7779)).
 
@@ -82,7 +82,7 @@ R6 on this machine, 2026-11-02, release, thin LTO: warm ping p50 **3.9 ms**, ope
 | I1 | Instruction count vs the base branch | CI only | ≤ **+10%** on three benches: semantic hash of `pipelines/v17.toml`, `to_ready` on the R7 fixture, 100 append-and-fold calls on a memory VFS with `synchronous=OFF` |
 | U1 | `chaperone-ui` start to the first frame that shows the board (`--first-frame`) | p50 ≤ **300 ms** (2026-11-07: p50 236 ms, max 290 ms, 20 samples after 3 warm) | Not in CI: runners have no display |
 | U2 | `chaperone-ui`: another process commits, the watcher asks for a repaint; 50 lanes × 200 events | p99 ≤ **150 ms** (123 ms: the 100 ms poll plus a 17.6 ms board reload) | Not in CI |
-| U3 | `chaperone-ui` CPU, window open, ledger quiet, 60 s | ≤ **0.5%** of one core (0.06%) | Not in CI |
+| U3 | `chaperone-ui` CPU, window open, ledger quiet, 50 s | ≤ **0.5%** of one core (0.06%) | Not in CI |
 | U4 | `chaperone-ui` max RSS | ≤ **128 MiB** (116 MiB at start, 78 MiB steady; the GL context and fonts, not the board) | Not in CI |
 
 L1 is the budget that forces a wake. A 50 ms poll fails the product p50. The 300 s orchestrate poll fails it by a wide margin. M3 is the budget that matches R8: the supervisor keeps no scrollback and no transcript. A 1 MiB buffer per lane fails at 50 lanes on the product number (50 × 256 KiB). Agent CLI RSS is outside these budgets. R6 already measured that the agent, not the harness, dominates per-lane memory.
@@ -116,7 +116,7 @@ CONTRIBUTING.md
 crates/chaperone-core/      ledger, engine, migrations. No clap, no PTY, no home directory.
 crates/chaperone-cli/       the `chaperone` binary. CLI, supervise, in-tree adapters.
 crates/chaperone-fake/      scripted agent. publish = false. Not installed by `cargo install`.
-crates/chaperone-ui/        the `chaperone-ui` window (#40). Read-only, the only crate with a GUI dependency.
+crates/chaperone-ui/        the `chaperone-ui` window. Read-only, the only crate with a GUI dependency.
 pipelines/                 v17.toml and later ids. Loaded from disk.
 docs/                      vision, research, decisions, events.md, the CLI contract
 .github/workflows/ci.yml

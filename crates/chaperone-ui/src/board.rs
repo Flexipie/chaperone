@@ -46,12 +46,9 @@ pub fn group(board: &LaneBoard) -> Vec<Repo<'_>> {
         .collect()
 }
 
-/// Time since `at` (the ledger's RFC 3339 UTC form) at `now`, in seconds
-/// since the epoch: `<1m`, `5m`, `3h`, `2d`.
-pub fn age(at: &str, now: i64) -> String {
-    let Some(then) = unix_secs(at) else {
-        return "?".into();
-    };
+/// Time from `then` to `now`, both seconds since the epoch: `<1m`, `5m`,
+/// `3h`, `2d`.
+pub fn age(then: i64, now: i64) -> String {
     match (now - then).max(0) {
         s if s < 60 => "<1m".into(),
         s if s < 3600 => format!("{}m", s / 60),
@@ -59,18 +56,3 @@ pub fn age(at: &str, now: i64) -> String {
         s => format!("{}d", s / 86_400),
     }
 }
-
-/// `2026-11-07T05:01:02.693Z` as seconds since the epoch (days from civil,
-/// H. Hinnant), the fraction dropped.
-fn unix_secs(at: &str) -> Option<i64> {
-    let n = |from: usize, to: usize| at.get(from..to)?.parse::<i64>().ok();
-    let (y, m, d) = (n(0, 4)?, n(5, 7)?, n(8, 10)?);
-    let secs = n(11, 13)? * 3600 + n(14, 16)? * 60 + n(17, 19)?;
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some((era * 146_097 + doe - 719_468) * 86_400 + secs)
-}
-

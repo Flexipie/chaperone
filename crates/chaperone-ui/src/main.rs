@@ -153,7 +153,7 @@ fn cells(lane: &BoardLane, now: i64) -> [String; 12] {
         text(&item.branch),
         text(&item.agent),
         item.status.clone(),
-        board::age(&item.updated_at, now),
+        board::age(lane.updated_secs, now),
         text(&item.pr_ref),
         // No ledger record carries CI yet (ci_snapshot is reserved).
         "not recorded".into(),

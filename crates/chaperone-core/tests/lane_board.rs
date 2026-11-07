@@ -2,6 +2,8 @@
 //! refused like `Ledger::open`, and `lane_board` reads one snapshot with
 //! the gate stamps the projection gives.
 
+mod common;
+
 use chaperone_core::checks::CheckInput;
 use chaperone_core::ledger::{Actor, Ledger, LedgerError, SCHEMA_VERSION};
 use chaperone_core::work::CreateInput;
@@ -80,9 +82,8 @@ fn read_only_writes_nothing_and_sees_other_commits() {
 
 #[test]
 fn read_only_refuses_other_versions() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("ledger.db");
-    drop(Ledger::open_and_migrate(&path).unwrap());
+    let (dir, path, rw) = common::ledger();
+    drop(rw);
     let ro = Ledger::open_read_only(&path).unwrap();
 
     // A newer binary migrates while the viewer is open: the next board is

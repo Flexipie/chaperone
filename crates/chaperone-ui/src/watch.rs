@@ -64,7 +64,7 @@ fn poll(
         Some(l) => l,
         None => ledger.insert(Ledger::open_read_only(path)?),
     };
-    if seen.is_some() && seen == Some(ledger.data_version()?) {
+    if seen == Some(ledger.data_version()?) {
         return Ok(None);
     }
     let now = ledger.now()?;
@@ -178,9 +178,6 @@ mod tests {
         eprintln!("U2 commit to repaint request: p50 {p50:?}, p99 {p99:?}");
         // Quiet ledger: no new board.
         assert!(rx.recv_timeout(POLL * 5).is_err(), "redrew with no change");
-        assert!(
-            p99 <= POLL + reload * 3 + Duration::from_millis(50),
-            "U2: {p99:?}"
-        );
+        assert!(p99 <= Duration::from_millis(150), "U2: {p99:?}");
     }
 }

@@ -30,6 +30,8 @@ pub struct SpecTitle {
 #[derive(Clone, Debug, Serialize)]
 pub struct BoardLane {
     pub board: BoardItem,
+    /// `updated_at` in seconds since the epoch, for a viewer's clock.
+    pub updated_secs: i64,
     pub stamps: Stamps,
 }
 
@@ -63,6 +65,10 @@ impl Ledger {
             .into_iter()
             .map(|board| {
                 let facts = self.project(board.item.id, None)?;
+                let updated_secs =
+                    tx.query_row("SELECT unixepoch(?1)", [&board.item.updated_at], |r| {
+                        r.get(0)
+                    })?;
                 let text = |path: &str| match facts.get(path) {
                     Fact::Str(s) => Some(s.clone()),
                     _ => None,
@@ -73,7 +79,11 @@ impl Ledger {
                     verdict: text("verdict.decision"),
                     verdict_sha: text("verdict.sha"),
                 };
-                Ok(BoardLane { board, stamps })
+                Ok(BoardLane {
+                    board,
+                    updated_secs,
+                    stamps,
+                })
             })
             .collect::<Result<_, LedgerError>>()?;
         let mut stmt = tx.prepare(
