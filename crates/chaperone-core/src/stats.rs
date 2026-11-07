@@ -59,9 +59,8 @@ struct Lane {
     first_pr_event: Option<i64>,
     /// PR (lowercased) to its merged head, `merged_at` and julian day.
     merged: BTreeMap<String, (String, String, f64)>,
-    /// Per source, the null-skipping sums of `TOKENS`, and message counts.
+    /// Per source, the null-skipping sums of `TOKENS`.
     tokens: BTreeMap<String, [Option<i64>; 4]>,
-    messages: i64,
     peak: Option<i64>,
     attention: BTreeMap<String, i64>,
     rounds: Option<i64>,
@@ -97,6 +96,15 @@ fn median(mut v: Vec<f64>) -> Value {
         v[mid]
     };
     json!(m)
+}
+
+fn token_fields(sums: &[Option<i64>; 4]) -> Value {
+    let fields: Map<String, Value> = TOKENS
+        .iter()
+        .zip(sums)
+        .map(|(k, v)| (k.to_string(), json!(v)))
+        .collect();
+    fields.into()
 }
 
 fn hours(days: f64) -> f64 {
@@ -137,7 +145,6 @@ impl Lane {
                     .is_some_and(|(_, yes)| *yes)
             })
         });
-        // Every merged head has a local review that ran on it.
         let head_reviewed = (!heads.is_empty()).then(|| {
             heads.iter().all(|head| {
                 self.reviews
@@ -145,7 +152,6 @@ impl Lane {
                     .any(|r| r.local && r.head.as_deref().is_some_and(|h| same_commit(h, head)))
             })
         });
-        // Local scores after the first PR, in daisy's job order.
         let mut after_pr: Vec<&Review> = self
             .reviews
             .iter()
@@ -196,16 +202,12 @@ impl Lane {
     }
 
     fn json(&self, row: &Row, reviews_known: bool) -> Value {
-        let tokens = (self.messages > 0).then(|| {
-            let mut out = Map::new();
-            for (source, sums) in &self.tokens {
-                let fields: Map<String, Value> = TOKENS
-                    .iter()
-                    .zip(sums)
-                    .map(|(k, v)| (k.to_string(), json!(v)))
-                    .collect();
-                out.insert(source.clone(), fields.into());
-            }
+        let tokens = (!self.tokens.is_empty()).then(|| {
+            let out: Map<String, Value> = self
+                .tokens
+                .iter()
+                .map(|(source, sums)| (source.clone(), token_fields(sums)))
+                .collect();
             out
         });
         let known = |v: Value| if reviews_known { v } else { Value::Null };
@@ -256,7 +258,6 @@ impl Lane {
                 self.claimed = Some((e.at.clone(), e.day));
             }
             "usage.reported" => {
-                self.messages += 1;
                 let source = e.source.clone().unwrap_or_default();
                 let sums = self.tokens.entry(source.clone()).or_default();
                 for (sum, n) in sums.iter_mut().zip(e.tokens) {
@@ -486,14 +487,7 @@ fn summarize(lanes: &[Lane]) -> Value {
     }
     let tokens: Map<String, Value> = tokens
         .into_iter()
-        .map(|(source, sums)| {
-            let fields: Map<String, Value> = TOKENS
-                .iter()
-                .zip(sums)
-                .map(|(k, v)| (k.to_string(), json!(v)))
-                .collect();
-            (source.to_string(), fields.into())
-        })
+        .map(|(source, sums)| (source.to_string(), token_fields(&sums)))
         .collect();
     let per_pr: Vec<f64> = lanes
         .iter()
@@ -522,7 +516,7 @@ fn summarize(lanes: &[Lane]) -> Value {
         "claim_to_merge_h_median": median(rows.iter().filter_map(|r| r.claim_to_merge_h).collect()),
         "tokens": tokens,
         "attention": attention,
-        "lanes_with_usage": count(&|l, _| l.messages > 0),
+        "lanes_with_usage": count(&|l, _| !l.tokens.is_empty()),
         "peak_context_median": median(lanes.iter().filter_map(|l| l.peak.map(|p| p as f64)).collect()),
         "context_tokens_per_merged_pr_median": median(per_pr),
         "lanes_peak_over_500k": count(&|l, _| l.peak.is_some_and(|p| p > PEAK_OVER)),

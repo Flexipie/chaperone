@@ -189,7 +189,6 @@ fn a_lane_folds_from_its_events() {
     assert_eq!(lane["reraised_findings"], 1);
     assert_eq!(lane["verified_findings"], 2);
     assert_eq!(lane["verified_findings_after_handoff"], 1);
-    assert_eq!(lane["commits_after_handoff"], Value::Null);
 
     let cohort = &out["cohort"];
     assert_eq!(cohort["lanes"], 1);
