@@ -7,8 +7,8 @@ use crate::parse::{Facts, Ref};
 
 /// One crate target: a lib, a bin, an integration test or a build script.
 struct Krate {
-    /// The crate's name with `-` as `_`: the package's for its lib and
-    /// `src/main.rs`, else the target's.
+    /// The crate's name with `-` as `_`: `[lib] name` or the package's for
+    /// its lib, the package's for `src/main.rs`, else the target's.
     name: String,
     root: usize,
     lib: bool,
@@ -202,10 +202,14 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
             d => format!("{d}/{p}"),
         };
         let path_of = |t: &toml::Value| t.get("path").and_then(|p| p.as_str()).map(at);
-        let lib = table
-            .get("lib")
+        let lib_target = table.get("lib");
+        let lib = lib_target
             .and_then(path_of)
             .unwrap_or_else(|| at("src/lib.rs"));
+        let lib_name = lib_target
+            .and_then(|l| l.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or(name);
         let stem = |p: &str| {
             p.rsplit('/')
                 .next()
@@ -237,7 +241,7 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
                 });
             }
         };
-        add(name, &lib, true, false);
+        add(lib_name, &lib, true, false);
         for (name, path) in &bins {
             add(name, path, false, false);
         }
