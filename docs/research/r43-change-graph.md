@@ -58,7 +58,7 @@ with why. Its references could point
 anywhere in the workspace through crate names, so narrowing the bound to a crate or a
 depth would claim more than is known. Dynamic dispatch through `dyn Trait`, macro-made
 modules and renamed dependencies are not seen; those are the known gaps of a module graph.
-Macros brought in by `#[macro_use] extern crate` get no edge.
+Macros brought in by `#[macro_use] extern crate` get no edge. An `impl` of a workspace trait for a foreign type (`impl LocalTrait for String`) gets no edge to the trait's users either.
 
 **Staleness.** Every call lists the tree from git and reads changed and untracked files
 from the worktree, so the answer is for the worktree as it is now. `stale` is true when
