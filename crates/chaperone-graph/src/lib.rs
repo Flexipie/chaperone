@@ -135,6 +135,8 @@ pub fn impact(
     for (i, f) in rust.iter().enumerate() {
         if f.key.is_some() && keys[i].as_ref().is_some_and(|k| !found.contains_key(k)) {
             match read(&f.path) {
+                // Never parsed, so its key does not matter.
+                Ok(b) if b.len() > MAX_BYTES => bytes[i] = Some(b),
                 Ok(b) => {
                     bytes[i] = Some(b);
                     check.push(i);

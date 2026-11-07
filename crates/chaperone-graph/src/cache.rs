@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rusqlite::{Connection, ErrorCode, params};
+use rusqlite::{Connection, ErrorCode, ffi, params};
 
 use crate::parse::{FACTS_VERSION, Facts};
 
@@ -51,6 +51,19 @@ impl Cache {
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
+        // `--cache` may name another SQLite file (the ledger): never write to it.
+        let foreign: bool = conn.query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version) != 0 OR EXISTS (
+                SELECT 1 FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 7) != 'facts_v')",
+            [],
+            |r| r.get(0),
+        )?;
+        if foreign {
+            return Err(rusqlite::Error::SqliteFailure(
+                ffi::Error::new(ffi::SQLITE_CANTOPEN),
+                Some("not a chaperone graph cache".into()),
+            ));
+        }
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(&format!(
