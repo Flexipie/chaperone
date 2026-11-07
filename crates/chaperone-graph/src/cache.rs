@@ -97,8 +97,7 @@ impl Cache {
                     ins.execute(params![key, facts])?;
                 }
             }
-            let rows: i64 =
-                tx.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))?;
+            let rows: i64 = tx.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))?;
             if rows as usize > 4 * live.len().max(256) {
                 tx.execute_batch(
                     "CREATE TEMP TABLE IF NOT EXISTS live (key TEXT PRIMARY KEY); DELETE FROM live",

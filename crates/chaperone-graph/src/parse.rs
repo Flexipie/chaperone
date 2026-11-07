@@ -94,13 +94,12 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
                 return;
             }
         }
-        "macro_invocation" => {
+        "macro_invocation"
             if node
                 .child_by_field_name("macro")
-                .is_some_and(|m| text(m, src) == "include")
-            {
-                f.inexact.get_or_insert_with(|| "include".into());
-            }
+                .is_some_and(|m| text(m, src) == "include") =>
+        {
+            f.inexact.get_or_insert_with(|| "include".into());
         }
         // Macro arguments are tokens, not expressions: `a::b` in them is
         // read from the token run.

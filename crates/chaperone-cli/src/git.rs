@@ -9,7 +9,14 @@ use crate::child;
 /// The git binary itself, from its exec path: macOS's `/usr/bin/git` is
 /// an xcrun shim that adds about 9 ms to every call. Else plain `git`.
 pub fn git_bin(deadline: Instant) -> PathBuf {
-    let found = git(Path::new("git"), Path::new("."), &["--exec-path"], deadline, 4096).ok();
+    let found = git(
+        Path::new("git"),
+        Path::new("."),
+        &["--exec-path"],
+        deadline,
+        4096,
+    )
+    .ok();
     found
         .map(|(out, _)| Path::new(String::from_utf8_lossy(&out).trim()).join("git"))
         .filter(|p| p.is_file())

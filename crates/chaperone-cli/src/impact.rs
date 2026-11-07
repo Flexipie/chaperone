@@ -44,11 +44,11 @@ pub fn run(
     let out = call(
         Path::new("."),
         &[
-        "rev-parse",
-        "--show-toplevel",
-        "--show-prefix",
-        "--git-common-dir",
-    ],
+            "rev-parse",
+            "--show-toplevel",
+            "--show-prefix",
+            "--git-common-dir",
+        ],
     )?;
     let out = String::from_utf8_lossy(&out);
     let mut lines = out.lines();
@@ -85,16 +85,19 @@ pub fn run(
     // untracked ones are hashed from the worktree.
     let (mut changed, mut deleted) = (HashSet::new(), HashSet::new());
     let mut files = Vec::new();
-    let out = call(&top, &[
-        "ls-files",
-        "-z",
-        "-t",
-        "-m",
-        "-d",
-        "-o",
-        "--exclude-standard",
-        "--full-name",
-    ])?;
+    let out = call(
+        &top,
+        &[
+            "ls-files",
+            "-z",
+            "-t",
+            "-m",
+            "-d",
+            "-o",
+            "--exclude-standard",
+            "--full-name",
+        ],
+    )?;
     for e in out.split(|b| *b == 0).filter(|e| e.len() > 2) {
         let path = String::from_utf8_lossy(&e[2..]).to_string();
         match e[0] {
@@ -108,11 +111,10 @@ pub fn run(
             _ => {}
         }
     }
-    files.extend(
-        changed
-            .difference(&deleted)
-            .map(|path| File { path: path.clone(), key: None }),
-    );
+    files.extend(changed.difference(&deleted).map(|path| File {
+        path: path.clone(),
+        key: None,
+    }));
     let out = call(&top, &["ls-files", "-z", "-s", "--full-name"])?;
     for e in out.split(|b| *b == 0) {
         // `<mode> <blob> <stage>\t<path>`; a conflict lists stages 1 to 3.

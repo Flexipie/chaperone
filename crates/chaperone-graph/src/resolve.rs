@@ -81,7 +81,10 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
     }
     // A package's integration tests run its binaries.
     for t in krates.iter().filter(|k| k.test) {
-        for b in krates.iter().filter(|b| b.package == t.package && !b.lib && !b.test) {
+        for b in krates
+            .iter()
+            .filter(|b| b.package == t.package && !b.lib && !b.test)
+        {
             g.deps[t.root].insert(b.root);
         }
     }
@@ -251,10 +254,9 @@ impl Cx<'_> {
     }
 
     fn alias(&self, name: &str) -> Option<&Ref> {
-        self.facts
-            .refs
-            .iter()
-            .find(|r| r.alias.as_deref() == Some(name) && r.path.first().map(String::as_str) != Some(name))
+        self.facts.refs.iter().find(|r| {
+            r.alias.as_deref() == Some(name) && r.path.first().map(String::as_str) != Some(name)
+        })
     }
 
     /// The modules this file's glob imports name.
@@ -298,9 +300,7 @@ impl Cx<'_> {
                         alias: None,
                     };
                     return self.resolve(&via, depth + 1);
-                } else if let Some((gk, g)) = (depth < 2)
-                    .then(|| self.globs_with(first))
-                    .flatten()
+                } else if let Some((gk, g)) = (depth < 2).then(|| self.globs_with(first)).flatten()
                 {
                     (gk, g, &r.path[..])
                 } else if let Some(&lk) = self.libs.get(first) {
@@ -325,7 +325,9 @@ impl Cx<'_> {
         self.facts
             .refs
             .iter()
-            .filter(|r| r.alias.as_deref() == Some("*") && r.path.first().map(String::as_str) != Some(name))
+            .filter(|r| {
+                r.alias.as_deref() == Some("*") && r.path.first().map(String::as_str) != Some(name)
+            })
             .filter_map(|r| match self.resolve(r, 2) {
                 Res::Module(m) => Some(m),
                 _ => None,
