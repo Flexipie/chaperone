@@ -104,7 +104,7 @@ fn review(ledger: &Ledger, work: i64, job: i64, score: i64, head: &str, title: &
         "job_id": job, "source": "local", "status": "reviewed", "phase": "done", "done": true,
         "repo": "o/r", "branch": "b", "head_sha": head, "score": score, "verdict": "safe",
         "findings": [{
-            "id": format!("f{job}"), "severity": "risk", "title": title, "body": "b",
+            "id": "f1", "severity": "risk", "title": title, "body": "b",
             "path": "a.rs", "line": 1, "verified": true, "lenses": [], "body_truncated": false,
         }],
     });
@@ -187,8 +187,10 @@ fn a_lane_folds_from_its_events() {
     assert_eq!(lane["head_reviewed"], true);
     assert_eq!(lane["flat_rounds"], 1);
     assert_eq!(lane["reraised_findings"], 1);
-    assert_eq!(lane["verified_findings"], 2);
-    assert_eq!(lane["verified_findings_after_handoff"], 1);
+    // One finding (same key in both jobs), counted once; its latest record
+    // in job order is job 8's, recorded before the handoff.
+    assert_eq!(lane["verified_findings"], 1);
+    assert_eq!(lane["verified_findings_after_handoff"], 0);
 
     let cohort = &out["cohort"];
     assert_eq!(cohort["lanes"], 1);
@@ -218,6 +220,11 @@ fn without_reviews_review_numbers_are_null_and_named() {
     // No usage: unknown, never zero.
     assert_eq!(lane["tokens"], Value::Null);
     assert_eq!(out["cohort"]["lanes_with_usage"], 0);
+    assert_eq!(out["cohort"]["lanes_peak_over_500k"], Value::Null);
+    assert_eq!(
+        out["cohort"]["missing"]["lanes_peak_over_500k"],
+        "usage.reported"
+    );
     assert_eq!(out["cohort"]["peak_context_median"], Value::Null);
     for field in [
         "head_reviewed",

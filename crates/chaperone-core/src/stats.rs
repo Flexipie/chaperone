@@ -28,6 +28,8 @@ const PEAK_OVER: i64 = 500_000;
 const TOKENS: [&str; 4] = ["input_total", "cache_read", "cache_write", "output_total"];
 /// What a review number needs when the cohort has no recorded review.
 const NO_REVIEW: &str = "check.finished local_review or pr_review";
+/// What a token number needs when no lane in the cohort has usage.
+const NO_USAGE: &str = "usage.reported";
 /// Commits after the handoff are a git count (events.md, PR), never a
 /// ledger read.
 const NO_COMMITS: &str =
@@ -42,8 +44,8 @@ struct Review {
     at: String,
     score: Option<f64>,
     head: Option<String>,
-    /// Titles of the verified findings.
-    verified: Vec<String>,
+    /// Each finding's `finding_key`, title and whether it was verified.
+    findings: Vec<(String, String, bool)>,
 }
 
 #[derive(Default)]
@@ -161,14 +163,13 @@ impl Lane {
         let scores: Vec<f64> = after_pr.iter().filter_map(|r| r.score).collect();
         let flat_rounds = scores.windows(2).filter(|w| w[1] <= w[0]).count() as i64;
         // Verified titles raised again by another review.
-        let mut by_title: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
+        let mut by_title: BTreeMap<String, BTreeSet<Option<i64>>> = BTreeMap::new();
         for r in &self.reviews {
-            for title in &r.verified {
-                let id = r.job.unwrap_or(-r.event);
+            for (_, title, _) in r.findings.iter().filter(|f| f.2) {
                 by_title
                     .entry(title.trim().to_lowercase())
                     .or_default()
-                    .insert(id);
+                    .insert(r.job);
             }
         }
         let reraised = by_title.values().map(|s| s.len() as i64 - 1).sum();
@@ -180,13 +181,21 @@ impl Lane {
             .find(|h| h.1)
             .or(self.handoffs.first())
             .map(|h| h.0.as_str());
-        let verified = self.reviews.iter().map(|r| r.verified.len() as i64).sum();
-        let verified_after = self
-            .reviews
-            .iter()
-            .filter(|r| handoff.is_none_or(|h| r.at.as_str() > h))
-            .map(|r| r.verified.len() as i64)
-            .sum();
+        // R11 counts a finding once, as its latest record (in job order)
+        // says, with its phase from that record's review.
+        let mut ordered: Vec<&Review> = self.reviews.iter().collect();
+        ordered.sort_by_key(|r| (r.job, r.event));
+        let mut latest: BTreeMap<&str, (&Review, bool)> = BTreeMap::new();
+        for r in ordered {
+            for (key, _, verified) in &r.findings {
+                latest.insert(key, (r, *verified));
+            }
+        }
+        let verified = latest.values().filter(|f| f.1).count() as i64;
+        let verified_after = latest
+            .values()
+            .filter(|(r, v)| *v && handoff.is_none_or(|h| r.at.as_str() > h))
+            .count() as i64;
         Row {
             with_pr,
             merged,
@@ -314,11 +323,14 @@ impl Lane {
             }
             Some(check @ ("local_review" | "pr_review")) if ran => {
                 let findings = p.get("findings").and_then(Value::as_array);
-                let verified = findings
+                let field = |f: &Value, k: &str| f.get(k).and_then(Value::as_str).map(String::from);
+                let findings = findings
                     .into_iter()
                     .flatten()
-                    .filter(|f| f.get("verified").and_then(Value::as_bool) == Some(true))
-                    .filter_map(|f| f.get("title").and_then(Value::as_str).map(String::from))
+                    .filter_map(|f| {
+                        let verified = f.get("verified").and_then(Value::as_bool) == Some(true);
+                        Some((field(f, "finding_key")?, field(f, "title")?, verified))
+                    })
                     .collect();
                 self.reviews.push(Review {
                     local: check == "local_review",
@@ -327,7 +339,7 @@ impl Lane {
                     at: e.at.clone(),
                     score: p.get("score").and_then(Value::as_f64),
                     head: text("head_sha").map(String::from),
-                    verified,
+                    findings,
                 });
             }
             _ => {}
@@ -421,7 +433,7 @@ impl Ledger {
                 id: r.get(4)?,
                 kind,
                 at: r.get(6)?,
-                day: r.get::<_, Option<f64>>(7)?.unwrap_or(f64::NAN),
+                day: r.get(7)?,
                 payload: payload
                     .map(|p| serde_json::from_str(&p).map_err(std::io::Error::other))
                     .transpose()?
@@ -453,6 +465,7 @@ impl Ledger {
 fn summarize(lanes: &[Lane]) -> Value {
     let rows: Vec<Row> = lanes.iter().map(Lane::row).collect();
     let reviews_known = lanes.iter().any(|l| !l.reviews.is_empty());
+    let usage_known = lanes.iter().any(|l| !l.tokens.is_empty());
     let known = |v: Value| if reviews_known { v } else { Value::Null };
     let count =
         |f: &dyn Fn(&Lane, &Row) -> bool| lanes.iter().zip(&rows).filter(|(l, r)| f(l, r)).count();
@@ -497,6 +510,15 @@ fn summarize(lanes: &[Lane]) -> Value {
         .collect();
     let mut missing = Map::new();
     missing.insert("commits_after_handoff".into(), NO_COMMITS.into());
+    if !usage_known {
+        for field in [
+            "peak_context_median",
+            "context_tokens_per_merged_pr_median",
+            "lanes_peak_over_500k",
+        ] {
+            missing.insert(field.into(), NO_USAGE.into());
+        }
+    }
     if !reviews_known {
         for field in [
             "head_reviewed",
@@ -519,7 +541,8 @@ fn summarize(lanes: &[Lane]) -> Value {
         "lanes_with_usage": count(&|l, _| !l.tokens.is_empty()),
         "peak_context_median": median(lanes.iter().filter_map(|l| l.peak.map(|p| p as f64)).collect()),
         "context_tokens_per_merged_pr_median": median(per_pr),
-        "lanes_peak_over_500k": count(&|l, _| l.peak.is_some_and(|p| p > PEAK_OVER)),
+        "lanes_peak_over_500k": usage_known
+            .then(|| count(&|l, _| l.peak.is_some_and(|p| p > PEAK_OVER))),
         "flat_rounds": known(json!(sum(&|r| r.flat_rounds))),
         "reraised_findings": known(json!(sum(&|r| r.reraised))),
         "lanes_head_reviewed": known(json!(count(&|_, r| r.with_pr && r.head_reviewed == Some(true)))),
