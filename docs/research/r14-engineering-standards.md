@@ -80,8 +80,14 @@ R6 on this machine, 2026-11-02, release, thin LTO: warm ping p50 **3.9 ms**, ope
 | M3 | Supervisor RSS per idle lane, children excluded | ≤ **256 KiB** (50 lanes ≤ **12.5 MiB** above M2) | ≤ **1 MiB** per lane |
 | B1 | Stripped release binary | ≤ **15 MiB**. On macOS the file links system libraries only: `libSystem`, and `libiconv`, which the `libc` crate links on Apple targets (v0: 3.7 MiB, [perf review](../perf/v0-review.md)). SQLite is inside. | Same check, on the release workflow |
 | I1 | Instruction count vs the base branch | CI only | ≤ **+10%** on three benches: semantic hash of `pipelines/v17.toml`, `to_ready` on the R7 fixture, 100 append-and-fold calls on a memory VFS with `synchronous=OFF` |
+| U1 | `chaperone-ui` start to the first frame that shows the board (`--first-frame`) | p50 ≤ **300 ms** (2026-11-07: p50 236 ms, max 290 ms, 20 samples after 3 warm) | Not in CI: runners have no display |
+| U2 | `chaperone-ui`: another process commits, the watcher asks for a repaint; 50 lanes × 200 events | p99 ≤ **150 ms** (123 ms: the 100 ms poll plus a 17.6 ms board reload) | Not in CI |
+| U3 | `chaperone-ui` CPU, window open, ledger quiet, 60 s | ≤ **0.5%** of one core (0.06%) | Not in CI |
+| U4 | `chaperone-ui` max RSS | ≤ **128 MiB** (116 MiB at start, 78 MiB steady; the GL context and fonts, not the board) | Not in CI |
 
 L1 is the budget that forces a wake. A 50 ms poll fails the product p50. The 300 s orchestrate poll fails it by a wide margin. M3 is the budget that matches R8: the supervisor keeps no scrollback and no transcript. A 1 MiB buffer per lane fails at 50 lanes on the product number (50 × 256 KiB). Agent CLI RSS is outside these budgets. R6 already measured that the agent, not the harness, dominates per-lane memory.
+
+U1 to U4 are the overview window's (#40), measured by hand on the reference machine: U1 with `--first-frame` against a seeded ledger, U2 by the ignored `commit_to_redraw` test in `crates/chaperone-ui/src/watch.rs` (`cargo test --release -p chaperone-ui -- --ignored --nocapture`), U3 and U4 with `ps`. The window polls `PRAGMA data_version` every 100 ms and reloads only when it changes, so it is not an L1 follower. On a ledger that changes every poll, it reloads at most once per poll: at 50 lanes × 200 events that is about 15% of one core while the writes last.
 
 I1 runs on Linux with [gungraun](https://github.com/tokio-rs/tokio/pull/7779) (the iai-callgrind successor) under valgrind. It is a required PR check. S1 through M3 on the reference machine run before a tag, and the measured p50 is copied into the release notes next to the budget. CI enforces the right-hand column on every PR, in a release build, on `ubuntu-latest` and `macos-latest`.
 

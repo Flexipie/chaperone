@@ -70,3 +70,117 @@ fn poll(
     let now = ledger.now()?;
     ledger.lane_board(&now).map(Some)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    use chaperone_core::checks::CheckInput;
+    use chaperone_core::ledger::Actor;
+    use chaperone_core::work::{ClaimInput, CreateInput, UpdateInput};
+
+    use super::*;
+
+    const LANES: i64 = 50;
+    /// Per lane: this many updates and as many checks, so a reload replays
+    /// a few hundred events for each lane's stamps.
+    const EVENTS: u64 = 100;
+    const SAMPLES: usize = 50;
+
+    fn p(times: &mut [Duration], q: usize) -> Duration {
+        times.sort();
+        times[(times.len() - 1) * q / 100]
+    }
+
+    /// R14 U2 and the reload cost, on a busy ledger. Release only:
+    /// `cargo test --release -p chaperone-ui -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "release-only budget; run with --ignored"]
+    fn commit_to_redraw() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.db");
+        let rw = Ledger::open_and_migrate(&path).unwrap();
+        let lane = |s: &str| Actor {
+            agent: Some("lane".into()),
+            session: Some(s.into()),
+        };
+        let checker = lane("checker");
+        for id in 1..=LANES {
+            let me = lane(&format!("s{id}"));
+            let create = CreateInput {
+                title: format!("lane {id}"),
+                repo: Some(format!("Flexipie/repo{}", id % 5)),
+                kind: "code".into(),
+                pr_flow: "pr".into(),
+                ..CreateInput::default()
+            };
+            rw.work_create(&me, &create, None, false).unwrap().unwrap();
+            rw.work_claim(&me, id, &ClaimInput::default(), None, false)
+                .unwrap()
+                .unwrap();
+            for n in 0..EVENTS {
+                let update = UpdateInput {
+                    next_action: Some(format!("step {n}")),
+                    ..UpdateInput::default()
+                };
+                rw.work_update(&me, id, &update, None, None, false)
+                    .unwrap()
+                    .unwrap();
+                let check = CheckInput {
+                    work: id,
+                    check: "plan_check".into(),
+                    head: "abc1234".into(),
+                    outcome: "ran".into(),
+                    findings: Some(n),
+                    ..CheckInput::default()
+                };
+                rw.check_record(&checker, &check).unwrap().unwrap();
+            }
+        }
+
+        let ro = Ledger::open_read_only(&path).unwrap();
+        let now = ro.now().unwrap();
+        let mut reloads: Vec<Duration> = (0..20)
+            .map(|_| {
+                let start = Instant::now();
+                assert_eq!(ro.lane_board(&now).unwrap().lanes.len(), LANES as usize);
+                start.elapsed()
+            })
+            .collect();
+        let reload = p(&mut reloads, 50);
+        eprintln!(
+            "reload ({LANES} lanes, {} events each): p50 {reload:?}",
+            2 * EVENTS
+        );
+
+        let shown = Arc::new(Mutex::new(Shown::default()));
+        let (tx, rx) = mpsc::channel();
+        spawn(path, shown.clone(), move || {
+            tx.send(Instant::now()).unwrap()
+        });
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut seen = shown.lock().unwrap().board.as_ref().unwrap().data_version;
+        let mut lags = Vec::with_capacity(SAMPLES);
+        for i in 0..SAMPLES {
+            let id = i as i64 % LANES + 1;
+            let start = Instant::now();
+            rw.work_heartbeat(&lane(&format!("s{id}")), id, None, false)
+                .unwrap()
+                .unwrap();
+            let drawn = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            lags.push(drawn - start);
+            let version = shown.lock().unwrap().board.as_ref().unwrap().data_version;
+            assert_ne!(version, seen, "a commit must bring a new board");
+            seen = version;
+        }
+        let (p50, p99) = (p(&mut lags, 50), p(&mut lags, 99));
+        eprintln!("U2 commit to repaint request: p50 {p50:?}, p99 {p99:?}");
+        // Quiet ledger: no new board.
+        assert!(rx.recv_timeout(POLL * 5).is_err(), "redrew with no change");
+        assert!(
+            p99 <= POLL + reload * 3 + Duration::from_millis(50),
+            "U2: {p99:?}"
+        );
+    }
+}
