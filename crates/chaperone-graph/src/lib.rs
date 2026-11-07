@@ -13,8 +13,6 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-pub use parse::FACTS_VERSION;
-
 /// Files past this size are not parsed (generated code): their references
 /// are unknown, so the answer is a lower bound. A parse holds about 45
 /// bytes of tree per byte of source, so this bounds a call's peak RSS.
@@ -127,7 +125,7 @@ pub fn impact(
         }
     }
     let live: Vec<&str> = keys.iter().flatten().map(String::as_str).collect();
-    let mut found = store.get(&live, cache);
+    let mut found = store.get(&live);
     let (mut parsed, mut reused) = (0, 0);
     let mut new = Vec::new();
     let mut parser = parse::parser();
@@ -148,7 +146,7 @@ pub fn impact(
         };
         match b {
             Ok(b) if b.len() <= MAX_BYTES => {
-                let fresh = parse::facts(parser.as_mut(), &b);
+                let fresh = parse::facts(&mut parser, &b);
                 parsed += 1;
                 if let Ok(json) = serde_json::to_vec(&fresh) {
                     new.push((key.clone(), json));
@@ -158,7 +156,7 @@ pub fn impact(
             _ => facts.push(None),
         }
     }
-    store.put(&new, &live, cache);
+    store.put(&new, &live);
 
     let manifests: Vec<(String, String)> = files
         .iter()

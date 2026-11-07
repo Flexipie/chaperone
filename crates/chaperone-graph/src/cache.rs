@@ -3,7 +3,7 @@
 //! failing the query.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::{Connection, ErrorCode, params};
@@ -12,6 +12,7 @@ use crate::parse::{FACTS_VERSION, Facts};
 
 pub struct Cache {
     conn: Option<Connection>,
+    path: PathBuf,
     /// Why the cache was not used, when it was not.
     pub skipped: Option<String>,
 }
@@ -25,16 +26,19 @@ impl Cache {
         let Some(path) = path else {
             return Cache {
                 conn: None,
+                path: PathBuf::new(),
                 skipped: Some("no cache path".into()),
             };
         };
         match Self::connect(path) {
             Ok(conn) => Cache {
                 conn: Some(conn),
+                path: path.to_path_buf(),
                 skipped: None,
             },
             Err(e) => Cache {
                 conn: None,
+                path: path.to_path_buf(),
                 skipped: Some(set_aside(path, &e)),
             },
         }
@@ -56,7 +60,7 @@ impl Cache {
     }
 
     /// The cached facts for `keys`; keys with none are left out.
-    pub fn get(&mut self, keys: &[&str], path: Option<&Path>) -> HashMap<String, Facts> {
+    pub fn get(&mut self, keys: &[&str]) -> HashMap<String, Facts> {
         let mut out = HashMap::new();
         let Some(conn) = &self.conn else { return out };
         let result = (|| {
@@ -76,7 +80,7 @@ impl Cache {
             Ok(())
         })();
         if let Err(e) = result {
-            self.fail(path, &e);
+            self.fail(&e);
         }
         out
     }
@@ -84,7 +88,7 @@ impl Cache {
     /// Stores new facts in one transaction, and drops rows of files no
     /// worktree has had for a while: past four times this tree's count,
     /// every row not in `live`.
-    pub fn put(&mut self, new: &[(String, Vec<u8>)], live: &[&str], path: Option<&Path>) {
+    pub fn put(&mut self, new: &[(String, Vec<u8>)], live: &[&str]) {
         let Some(conn) = &mut self.conn else { return };
         let t = table();
         let result = (|| {
@@ -115,16 +119,13 @@ impl Cache {
             tx.commit()
         })();
         if let Err(e) = result {
-            self.fail(path, &e);
+            self.fail(&e);
         }
     }
 
-    fn fail(&mut self, path: Option<&Path>, e: &rusqlite::Error) {
+    fn fail(&mut self, e: &rusqlite::Error) {
         self.conn = None;
-        self.skipped = Some(match path {
-            Some(p) => set_aside(p, e),
-            None => e.to_string(),
-        });
+        self.skipped = Some(set_aside(&self.path, e));
     }
 }
 

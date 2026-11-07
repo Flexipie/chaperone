@@ -29,7 +29,8 @@ pub fn run(
 ) -> Result<Outcome, CliError> {
     let deadline = Instant::now() + DEADLINE;
     let bin = git_bin(deadline);
-    let call = |dir: &Path, args: &[&str]| match git(&bin, dir, args, deadline, OUT_BYTES) {
+    // From here, `:/` is the whole tree, so the four calls are independent.
+    let call = |args: &[&str]| match git(&bin, Path::new("."), args, deadline, OUT_BYTES) {
         Ok((out, false)) => Ok(out),
         Ok((_, true)) => Err(CliError::Internal(format!(
             "git {}: output past {OUT_BYTES} bytes",
@@ -41,46 +42,38 @@ pub fn run(
         }
         Err(Failure::Other(e)) => Err(Refusal::InvalidInput(e).into()),
     };
-    // The four calls are independent: from here, `:/` is the whole tree.
-    let here = Path::new(".");
     let joined = |h: std::thread::ScopedJoinHandle<'_, Result<Vec<u8>, CliError>>| {
         h.join()
             .unwrap_or_else(|_| Err(CliError::Internal("git thread panicked".into())))
     };
     let (out, origin, status, staged) = std::thread::scope(|s| {
         let rev = s.spawn(|| {
-            call(
-                here,
-                &[
-                    "rev-parse",
-                    "--show-toplevel",
-                    "--show-prefix",
-                    "--git-common-dir",
-                ],
-            )
+            call(&[
+                "rev-parse",
+                "--show-toplevel",
+                "--show-prefix",
+                "--git-common-dir",
+            ])
         });
         let origin = s.spawn(|| match cache {
             Some(_) => Ok(Vec::new()),
-            None => call(here, &["config", "--get", "remote.origin.url"]),
+            None => call(&["config", "--get", "remote.origin.url"]),
         });
         let status = s.spawn(|| {
-            call(
-                here,
-                &[
-                    "ls-files",
-                    "-z",
-                    "-t",
-                    "-m",
-                    "-d",
-                    "-o",
-                    "--exclude-standard",
-                    "--full-name",
-                    "--",
-                    ":/",
-                ],
-            )
+            call(&[
+                "ls-files",
+                "-z",
+                "-t",
+                "-m",
+                "-d",
+                "-o",
+                "--exclude-standard",
+                "--full-name",
+                "--",
+                ":/",
+            ])
         });
-        let staged = call(here, &["ls-files", "-z", "-s", "--full-name", "--", ":/"]);
+        let staged = call(&["ls-files", "-z", "-s", "--full-name", "--", ":/"]);
         (joined(rev), joined(origin), joined(status), staged)
     });
     let out = out?;

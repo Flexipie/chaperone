@@ -9,7 +9,7 @@ use tree_sitter::{Node, Parser};
 /// with it).
 pub const FACTS_VERSION: u32 = 1;
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Facts {
     /// `mod name;` declarations: (inline modules around it, name).
     pub mods: Vec<(Vec<String>, String)>,
@@ -21,7 +21,7 @@ pub struct Facts {
     pub inexact: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct Ref {
     /// The inline modules the path is written in.
     pub scope: Vec<String>,
@@ -31,18 +31,17 @@ pub struct Ref {
 }
 
 /// A Rust parser, made once per call and reused for every file.
-pub fn parser() -> Option<Parser> {
+pub fn parser() -> Parser {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .ok()?;
-    Some(parser)
+        .expect("the Rust grammar matches the tree-sitter it was built with");
+    parser
 }
 
-pub fn facts(parser: Option<&mut Parser>, src: &[u8]) -> Facts {
+pub fn facts(parser: &mut Parser, src: &[u8]) -> Facts {
     let mut f = Facts::default();
-    let tree = parser.and_then(|p| p.parse(src, None));
-    let Some(tree) = tree else {
+    let Some(tree) = parser.parse(src, None) else {
         f.inexact = Some("parse_error".into());
         return f;
     };
