@@ -7,7 +7,10 @@ use tree_sitter::{Node, Parser};
 /// Bump when what `facts` extracts changes, or the grammar does: cached
 /// facts of another version are never read (`cache.rs` names its table
 /// with it).
-pub const FACTS_VERSION: u32 = 1;
+pub const FACTS_VERSION: u32 = 2;
+/// Tree depth read; every walk below recurses along the tree, so a deeper
+/// file could overflow the stack and is not read.
+const MAX_DEPTH: u32 = 256;
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct Facts {
@@ -16,8 +19,12 @@ pub struct Facts {
     pub refs: Vec<Ref>,
     /// The self type of each `impl`, as written.
     pub impls: Vec<Ref>,
+    /// `macro_rules!` names defined here, with whether `#[macro_export]`.
+    pub macros: Vec<(String, bool)>,
+    /// Bare macro names invoked here (`name!`).
+    pub bangs: Vec<String>,
     /// Why some of this file's references could not be read: a parse
-    /// error, `#[path]`, or `include!`.
+    /// error, `#[path]`, `include!`, or nesting past `MAX_DEPTH`.
     pub inexact: Option<String>,
 }
 
@@ -49,8 +56,29 @@ pub fn facts(parser: &mut Parser, src: &[u8]) -> Facts {
     if root.has_error() {
         f.inexact = Some("parse_error".into());
     }
+    if too_deep(root) {
+        f.inexact.get_or_insert_with(|| "too_deep".into());
+        return f;
+    }
     walk(root, src, &mut Vec::new(), &mut f);
     f
+}
+
+fn too_deep(root: Node) -> bool {
+    let mut c = root.walk();
+    loop {
+        if c.depth() > MAX_DEPTH {
+            return true;
+        }
+        if c.goto_first_child() {
+            continue;
+        }
+        while !c.goto_next_sibling() {
+            if !c.goto_parent() {
+                return false;
+            }
+        }
+    }
 }
 
 fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
@@ -59,7 +87,7 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
             let Some(name) = node.child_by_field_name("name").map(|n| text(n, src)) else {
                 return;
             };
-            if has_path_attr(node, src) {
+            if has_attr(node, src, "#[path") {
                 f.inexact.get_or_insert_with(|| "path_attr".into());
                 return;
             }
@@ -95,26 +123,41 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
                     path,
                     alias: None,
                 });
+                // `Vec::<crate::a::Bar>::new`: type arguments inside the path.
+                let mut at = node.child_by_field_name("path");
+                while let Some(p) = at {
+                    if let Some(args) = p.child_by_field_name("type_arguments") {
+                        walk(args, src, scope, f);
+                    }
+                    at = p
+                        .child_by_field_name("path")
+                        .or_else(|| p.child_by_field_name("type"));
+                }
                 return;
             }
         }
-        "macro_invocation"
-            if node
+        "macro_definition" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                let export = has_attr(node, src, "#[macro_export");
+                f.macros.push((text(name, src), export));
+            }
+        }
+        "macro_invocation" => {
+            if let Some(m) = node
                 .child_by_field_name("macro")
-                .is_some_and(|m| text(m, src) == "include") =>
-        {
-            f.inexact.get_or_insert_with(|| "include".into());
+                .filter(|m| m.kind() == "identifier")
+            {
+                let name = text(m, src);
+                if name == "include" {
+                    f.inexact.get_or_insert_with(|| "include".into());
+                }
+                bang(f, name);
+            }
         }
         // Macro arguments are tokens, not expressions: `a::b` in them is
         // read from the token run.
         "token_tree" => {
-            let mut runs = Vec::new();
-            tokens(node, src, &mut runs);
-            f.refs.extend(runs.into_iter().map(|path| Ref {
-                scope: scope.clone(),
-                path,
-                alias: None,
-            }));
+            tokens(node, src, scope, f);
             return;
         }
         _ => {}
@@ -125,10 +168,16 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
     }
 }
 
-fn has_path_attr(node: Node, src: &[u8]) -> bool {
+fn bang(f: &mut Facts, name: String) {
+    if !f.bangs.contains(&name) {
+        f.bangs.push(name);
+    }
+}
+
+fn has_attr(node: Node, src: &[u8], prefix: &str) -> bool {
     let mut prev = node.prev_named_sibling();
     while let Some(p) = prev.filter(|p| p.kind() == "attribute_item") {
-        if text(p, src).replace(' ', "").starts_with("#[path") {
+        if text(p, src).replace(' ', "").starts_with(prefix) {
             return true;
         }
         prev = p.prev_named_sibling();
@@ -206,8 +255,16 @@ fn segs(node: Node, src: &[u8]) -> Option<Vec<String>> {
     }
 }
 
-/// `a::b::c` runs among a macro's tokens, nested groups included.
-fn tokens(node: Node, src: &[u8], runs: &mut Vec<Vec<String>>) {
+/// `a::b::c` runs among a macro's tokens, nested groups included, strings
+/// that are such a path (`#[serde(default = "crate::a::f")]`), and `name!`.
+fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
+    let push = |f: &mut Facts, path| {
+        f.refs.push(Ref {
+            scope: scope.to_vec(),
+            path,
+            alias: None,
+        })
+    };
     let mut run: Vec<String> = Vec::new();
     let mut joined = false;
     let mut cursor = node.walk();
@@ -215,7 +272,7 @@ fn tokens(node: Node, src: &[u8], runs: &mut Vec<Vec<String>>) {
         match child.kind() {
             "identifier" | "crate" | "self" | "super" => {
                 if !joined && run.len() > 1 {
-                    runs.push(std::mem::take(&mut run));
+                    push(f, std::mem::take(&mut run));
                 }
                 if !joined {
                     run.clear();
@@ -225,20 +282,39 @@ fn tokens(node: Node, src: &[u8], runs: &mut Vec<Vec<String>>) {
             }
             "::" => joined = true,
             kind => {
+                if kind == "!" && run.len() == 1 {
+                    bang(f, run[0].clone());
+                }
                 if run.len() > 1 {
-                    runs.push(std::mem::take(&mut run));
+                    push(f, std::mem::take(&mut run));
                 }
                 run.clear();
                 joined = false;
                 if kind == "token_tree" {
-                    tokens(child, src, runs);
+                    tokens(child, src, scope, f);
+                } else if let Some(path) = (kind == "string_literal")
+                    .then(|| str_path(&text(child, src)))
+                    .flatten()
+                {
+                    push(f, path);
                 }
             }
         }
     }
     if run.len() > 1 {
-        runs.push(run);
+        push(f, run);
     }
+}
+
+/// `"a::b"` as a path: two or more identifiers and nothing else.
+fn str_path(lit: &str) -> Option<Vec<String>> {
+    let inner = lit.strip_prefix('"')?.strip_suffix('"')?;
+    let path: Vec<String> = inner.split("::").map(String::from).collect();
+    let ident = |s: &String| {
+        s.starts_with(|c: char| c.is_alphabetic() || c == '_')
+            && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+    };
+    (path.len() > 1 && path.iter().all(ident)).then_some(path)
 }
 
 fn text(node: Node, src: &[u8]) -> String {

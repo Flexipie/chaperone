@@ -7,7 +7,8 @@ use crate::parse::{Facts, Ref};
 
 /// One crate target: a lib, a bin, an integration test or a build script.
 struct Krate {
-    /// The name paths use: the package name with `-` as `_`.
+    /// The crate's name with `-` as `_`: the package's for its lib and
+    /// `src/main.rs`, else the target's.
     name: String,
     root: usize,
     lib: bool,
@@ -94,6 +95,20 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
         .filter(|(_, k)| k.lib)
         .map(|(i, k)| (k.name.as_str(), i))
         .collect();
+    // `macro_rules!` is in scope by name across its crate; `#[macro_export]`
+    // puts it at the crate root, where `crate::name!` and `other::name!` land.
+    let mut defs: HashMap<(usize, &str), Vec<usize>> = HashMap::new();
+    for file in 0..n {
+        let Some(f) = &facts[file] else { continue };
+        for (k, _) in &owners[file] {
+            for (name, export) in &f.macros {
+                defs.entry((*k, name)).or_default().push(file);
+                if *export {
+                    g.deps[krates[*k].root].insert(file);
+                }
+            }
+        }
+    }
 
     for file in 0..n {
         let Some(f) = &facts[file] else {
@@ -115,6 +130,11 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
                 path,
                 facts: f,
             };
+            for name in &f.bangs {
+                if let Some(d) = defs.get(&(*k, name.as_str())) {
+                    g.deps[file].extend(d);
+                }
+            }
             let mut past_root = false;
             for r in &f.refs {
                 match cx.resolve(r, 0) {
@@ -138,7 +158,21 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
                     _ => targets.extend(cx.globs()),
                 }
                 for m in targets {
-                    g.deps[mods[&m]].insert(file);
+                    let t = mods[&m];
+                    g.deps[t].insert(file);
+                    // `pub use foo::T;` there: callers that name `foo::T`
+                    // need this file too.
+                    let Some(tf) = &facts[t] else { continue };
+                    let there = Cx {
+                        k: m.0,
+                        path: &m.1,
+                        facts: tf,
+                        ..cx
+                    };
+                    let name = &r.path[r.path.len() - 1];
+                    if let Some(Res::Module(d)) = there.alias(name).map(|a| there.resolve(a, 0)) {
+                        g.deps[mods[&d]].insert(file);
+                    }
                 }
             }
             if past_root {
@@ -172,20 +206,30 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
             .get("lib")
             .and_then(path_of)
             .unwrap_or_else(|| at("src/lib.rs"));
-        let mut bins: Vec<String> = table
+        let stem = |p: &str| {
+            p.rsplit('/')
+                .next()
+                .unwrap_or(p)
+                .trim_end_matches(".rs")
+                .to_string()
+        };
+        let mut bins: Vec<(String, String)> = table
             .get("bin")
             .and_then(|b| b.as_array())
-            .map(|b| b.iter().filter_map(path_of).collect())
+            .map(|b| {
+                b.iter()
+                    .filter_map(|t| Some((t.get("name")?.as_str()?.to_string(), path_of(t)?)))
+                    .collect()
+            })
             .unwrap_or_default();
-        bins.push(at("src/main.rs"));
-        bins.push(at("build.rs"));
-        let snake = name.replace('-', "_");
-        let mut add = |path: &str, lib: bool, test: bool| {
+        bins.push((name.to_string(), at("src/main.rs")));
+        bins.push(("build_script".into(), at("build.rs")));
+        let mut add = |name: &str, path: &str, lib: bool, test: bool| {
             if let Some(&root) = index.get(path)
                 && !out.iter().any(|k: &Krate| k.root == root)
             {
                 out.push(Krate {
-                    name: snake.clone(),
+                    name: name.replace('-', "_"),
                     root,
                     lib,
                     package,
@@ -193,9 +237,9 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
                 });
             }
         };
-        add(&lib, true, false);
-        for b in &bins {
-            add(b, false, false);
+        add(name, &lib, true, false);
+        for (name, path) in &bins {
+            add(name, path, false, false);
         }
         let prefixes = [at("src/bin/"), at("tests/")];
         for (path, _) in index.iter() {
@@ -205,7 +249,7 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
                 };
                 let rest = rest.strip_suffix("/main.rs").unwrap_or(rest);
                 if !rest.contains('/') && (rest.ends_with(".rs") || path.ends_with("/main.rs")) {
-                    add(path, false, i == 1);
+                    add(&stem(rest), path, false, i == 1);
                 }
             }
         }

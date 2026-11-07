@@ -150,7 +150,25 @@ pub fn run(
     }
 
     let read = |p: &str| std::fs::read(top.join(p));
-    let data = chaperone_graph::impact(&files, read, cache.as_deref(), &targets, LIMIT);
+    // What `git add` would store for those paths now, with its filters.
+    let ids = |paths: &[&str]| {
+        let mut out = Vec::with_capacity(paths.len());
+        for chunk in paths.chunks(1000) {
+            let start = out.len();
+            let args = [&["hash-object", "--"], chunk].concat();
+            if let Ok((o, false)) = git(&bin, &top, &args, deadline, OUT_BYTES) {
+                out.extend(
+                    String::from_utf8_lossy(&o)
+                        .lines()
+                        .map(|l| Some(l.to_string())),
+                );
+            }
+            // Unknown on a failed call: those files are keyed by their bytes.
+            out.resize(start + chunk.len(), None);
+        }
+        out
+    };
+    let data = chaperone_graph::impact(&files, read, ids, cache.as_deref(), &targets, LIMIT);
     output::write_one(&data, meta, format)
 }
 
@@ -160,14 +178,14 @@ fn wanted(path: &str) -> bool {
     path.ends_with(".rs") || path == "Cargo.toml" || path.ends_with("/Cargo.toml")
 }
 
-/// A target as the repo names it: an absolute path less the top level, a
-/// relative one joined to the directory the command runs in.
+/// A target as the repo names it: its real path (git's top level is one,
+/// and `/tmp` is `/private/tmp` on macOS) less the top level. Outside the
+/// tree, or under no directory that exists, it stays as given.
 fn repo_path(t: &str, top: &Path, prefix: &str) -> String {
-    let p = Path::new(t);
-    let rel = match p.strip_prefix(top) {
-        Ok(r) => r.to_path_buf(),
-        Err(_) if p.is_absolute() => p.to_path_buf(),
-        Err(_) => Path::new(prefix).join(p.strip_prefix("./").unwrap_or(p)),
-    };
-    rel.display().to_string()
+    let p = top.join(prefix).join(t);
+    p.parent()
+        .and_then(|d| std::fs::canonicalize(d).ok())
+        .zip(p.file_name())
+        .and_then(|(d, n)| Some(d.join(n).strip_prefix(top).ok()?.display().to_string()))
+        .unwrap_or_else(|| t.to_string())
 }

@@ -3,6 +3,7 @@
 //! failing the query.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -129,15 +130,20 @@ impl Cache {
     }
 }
 
-/// A file SQLite calls corrupt or not a database is renamed aside, never
-/// deleted (another process may have it open); the next run starts a new
-/// one. Any other error leaves it in place.
+/// A SQLite file SQLite calls corrupt or not a database is renamed aside,
+/// never deleted (another process may have it open); the next run starts a
+/// new one. Any other error, or file (`--cache` may name any), leaves it in
+/// place.
 fn set_aside(path: &Path, e: &rusqlite::Error) -> String {
     let corrupt = matches!(
         e.sqlite_error_code(),
         Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase)
     );
-    if corrupt {
+    let mut head = [0; 16];
+    let sqlite = std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|_| &head == b"SQLite format 3\0");
+    if corrupt && sqlite {
         let mut aside = path.as_os_str().to_owned();
         aside.push(".bad");
         let _ = std::fs::rename(path, aside);

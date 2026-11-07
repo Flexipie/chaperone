@@ -91,11 +91,13 @@ pub fn cache_file(dir: &Path, origin: &str) -> PathBuf {
 }
 
 /// The files that depend on `targets`, nearest first, listing at most
-/// `limit` of them. `read` gives a file's bytes by path; `cache` is the
+/// `limit` of them. `read` gives a file's bytes by path; `ids` the key of
+/// those bytes as `File::key` names it (`None`: unknown); `cache` is the
 /// facts file, `None` to parse everything.
 pub fn impact(
     files: &[File],
     read: impl Fn(&str) -> io::Result<Vec<u8>>,
+    ids: impl Fn(&[&str]) -> Vec<Option<String>>,
     cache: Option<&Path>,
     targets: &[String],
     limit: usize,
@@ -126,6 +128,29 @@ pub fn impact(
     }
     let live: Vec<&str> = keys.iter().flatten().map(String::as_str).collect();
     let mut found = store.get(&live);
+    // A given key on a miss: the bytes read may not be the ones it names
+    // (an edit since, `skip-worktree`), so they are keyed by their own hash
+    // unless `ids` says they match. Never wrong facts under a shared key.
+    let mut check = Vec::new();
+    for (i, f) in rust.iter().enumerate() {
+        if f.key.is_some() && keys[i].as_ref().is_some_and(|k| !found.contains_key(k)) {
+            match read(&f.path) {
+                Ok(b) => {
+                    bytes[i] = Some(b);
+                    check.push(i);
+                }
+                Err(_) => keys[i] = None,
+            }
+        }
+    }
+    let paths: Vec<&str> = check.iter().map(|&i| rust[i].path.as_str()).collect();
+    let got = ids(&paths);
+    for (j, &i) in check.iter().enumerate() {
+        if got.get(j).and_then(Option::as_ref) != keys[i].as_ref() {
+            let b = bytes[i].as_deref().unwrap_or_default();
+            keys[i] = Some(format!("sha256:{:x}", Sha256::digest(b)));
+        }
+    }
     let (mut parsed, mut reused) = (0, 0);
     let mut new = Vec::new();
     let mut parser = parse::parser();
@@ -156,6 +181,7 @@ pub fn impact(
             _ => facts.push(None),
         }
     }
+    let live: Vec<&str> = keys.iter().flatten().map(String::as_str).collect();
     store.put(&new, &live);
 
     let manifests: Vec<(String, String)> = files

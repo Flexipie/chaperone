@@ -23,17 +23,18 @@ shared by worktrees.
    Every worktree and clone of one origin shares it. `impact --cache <file>` picks another.
 2. **Rows are facts by content key**: `facts_v<N>(key TEXT PRIMARY KEY, facts BLOB)`,
    `WITHOUT ROWID`. The key is git's blob id for a clean tracked file (from
-   `git ls-files -s`, no read needed) and `sha256:<hex>` of the bytes for a changed or
-   untracked one. `facts` is what the file says (its `mod` declarations, paths, `use`
-   names, `impl` self types), never the resolved edges: those depend on the whole tree, so
-   they are rebuilt in memory on each call.
+   `git ls-files -s`; on a miss, only if the bytes read still hash to it) and
+   `sha256:<hex>` of the bytes for a changed or untracked one. `facts` is what the file
+   says (its `mod` declarations, paths, `use` names, `impl` self types), never the resolved
+   edges: those depend on the whole tree, so they are rebuilt in memory on each call.
 3. **Versioned by table name.** `N` is `FACTS_VERSION` in `crates/chaperone-graph`,
    bumped when the extractor or the grammar changes. A binary never reads another
    version's rows, so two lanes on different builds share the file without deleting each
    other's work.
 4. **A cache, never a source of truth.** Any SQLite error answers from a fresh parse and
-   says so in `cache.skipped`. A file SQLite calls corrupt or not a database is renamed to
-   `.bad`, never deleted (another process may have it open in WAL mode). Writes are one
+   says so in `cache.skipped`. A SQLite file SQLite calls corrupt or not a database is
+   renamed to `.bad`, never deleted (another process may have it open in WAL mode); any
+   other file is left alone. Writes are one
    transaction of `INSERT OR IGNORE`, so two worktrees writing at once agree. Rows grow
    with history; past four times the current tree's file count (at least 1,024), a write
    drops every row not in the current tree, and other worktrees reparse what they lose.

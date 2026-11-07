@@ -36,11 +36,14 @@ from each package's `Cargo.toml`) follow `mod name;` to `name.rs` or `name/mod.r
 the module map. Then a file depends on the longest module prefix of each path it writes:
 `use` trees, `a::b` paths in code and in macro arguments, rooted at `crate`, `self`,
 `super`, a child module, a name its `use` brought in, a module a glob brought in, or a
-workspace crate's name. Two edges the paths miss:
+workspace crate's name. Three edges the paths miss:
 
 - `impl T` in one file adds methods to `T`, defined in another. Callers name only `T`, so
   `T`'s module depends on the `impl` file. Without it, `impact spec/slice.rs` missed
   `chaperone-cli/src/spec.rs`, which calls `ledger.spec_slice(...)`.
+- `macro_rules!` macros are named without a path: a file invoking `name!` depends on each
+  file of its crate that defines `macro_rules! name`, and a `#[macro_export]` macro's file
+  is a dependency of its crate root, where `crate::name!` and `other_crate::name!` land.
 - Integration tests run the package's binaries (`CARGO_BIN_EXE_*`), so `tests/*.rs`
   depends on each bin root.
 
@@ -48,9 +51,10 @@ workspace crate's name. Two edges the paths miss:
 changed by it; one that re-exports it has a `pub use` edge.
 
 **Exact or lower bound.** The answer is `exact` only when every Rust file was read and
-understood. A file not read (unreadable, over 256 KiB), with a parse error, a `#[path]`
-module, `include!`, `super` above the crate root, or reached from no crate root makes the
-whole answer `lower_bound`, and is listed in `unsure` with why. Its references could point
+understood. A file not read (unreadable, over 256 KiB), with a parse error, nesting past
+256 levels (`too_deep`), a `#[path]` module, `include!`, `super` above the crate root, or
+reached from no crate root makes the whole answer `lower_bound`, and is listed in `unsure`
+with why. Its references could point
 anywhere in the workspace through crate names, so narrowing the bound to a crate or a
 depth would claim more than is known. Dynamic dispatch through `dyn Trait`, macro-made
 modules and renamed dependencies are not seen; those are the known gaps of a module graph.
@@ -60,7 +64,10 @@ from the worktree, so the answer is for the worktree as it is now. `stale` is tr
 some file of it had no facts (could not be read). There is no index that can fall behind.
 
 **Cache.** [ADR 0043](../decisions/0043-code-graph-cache.md): facts by content key in one
-SQLite file per origin; edges rebuilt in memory per call.
+SQLite file per origin; edges rebuilt in memory per call. A clean file is keyed by its
+blob id but read from the worktree, so on a miss `git hash-object` checks the bytes read
+still hash to it, and ones that do not (an edit since, `skip-worktree`) are keyed by their
+sha256, never stored under a blob id they do not match.
 
 ## Measured
 
