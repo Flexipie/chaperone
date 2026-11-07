@@ -9,8 +9,13 @@ Public name **Chaperone** ([ADR 0005](docs/decisions/0005-chaperone-name.md)).
 gates, and lane coordination.
 
 The Rust workspace and CI are in place (`crates/chaperone-core`, `crates/chaperone-cli`,
-`crates/chaperone-fake`); the ledger and gates are being built in milestone 1. To build
-and test, see [CONTRIBUTING.md](CONTRIBUTING.md) "Setup".
+`crates/chaperone-fake`, `crates/chaperone-ui`); the ledger and gates are being built in
+milestone 1. To build and test, see [CONTRIBUTING.md](CONTRIBUTING.md) "Setup".
+
+`chaperone-ui` is a read-only window with every open lane, grouped by repo and spec, that
+redraws when the ledger changes: `cargo run --release -p chaperone-ui -- [--db PATH]`.
+It opens the ledger read-only and never writes it. CI shows "not recorded" until the
+ledger has a CI record.
 
 Planning artifacts:
 

@@ -59,22 +59,30 @@ impl Ledger {
     /// Opens an existing ledger at this binary's schema version. A missing
     /// file or any other version is refused, and a newer file is not written.
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
-        let probed = probe(path)?.ok_or_else(|| LedgerError::Missing(path.into()))?;
-        if foreign(probed) {
-            return Err(LedgerError::NotALedger(path.into()));
-        }
-        let found = probed.0;
-        if found != SCHEMA_VERSION {
-            return Err(LedgerError::SchemaMismatch {
-                found,
-                supported: SCHEMA_VERSION,
-            });
-        }
+        refuse_unless_current(path)?;
         let flags = OpenFlags::default().difference(OpenFlags::SQLITE_OPEN_CREATE);
         let mut conn = Connection::open_with_flags(path, flags)?;
         apply_pragmas(&mut conn)?;
         check_schema(&conn)?;
         Ok(Self { conn })
+    }
+
+    /// Opens an existing ledger for reading only, with [`Ledger::open`]'s
+    /// refusals. SQLite refuses every write on it, and it never checkpoints.
+    pub fn open_read_only(path: &Path) -> Result<Self, LedgerError> {
+        refuse_unless_current(path)?;
+        let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        read_pragmas(&mut conn)?;
+        conn.pragma_update(None, "query_only", "ON")?;
+        check_schema(&conn)?;
+        Ok(Self { conn })
+    }
+
+    /// `PRAGMA data_version`: it changes when another connection commits.
+    pub fn data_version(&self) -> Result<i64, LedgerError> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA data_version", [], |r| r.get(0))?)
     }
 
     /// Creates the ledger if missing and migrates it to this binary's
@@ -148,6 +156,22 @@ impl Ledger {
     }
 }
 
+/// Refuses a missing file, another program's, or any other version.
+fn refuse_unless_current(path: &Path) -> Result<(), LedgerError> {
+    let probed = probe(path)?.ok_or_else(|| LedgerError::Missing(path.into()))?;
+    if foreign(probed) {
+        return Err(LedgerError::NotALedger(path.into()));
+    }
+    let found = probed.0;
+    if found != SCHEMA_VERSION {
+        return Err(LedgerError::SchemaMismatch {
+            found,
+            supported: SCHEMA_VERSION,
+        });
+    }
+    Ok(())
+}
+
 /// Not ours: anything but an empty file that lacks Chaperone's
 /// `application_id` at a positive version. Checked before the version, so
 /// another program's database is never told to upgrade or migrate.
@@ -171,6 +195,18 @@ pub(crate) fn check_schema(conn: &Connection) -> Result<(), LedgerError> {
 }
 
 fn apply_pragmas(conn: &mut Connection) -> Result<(), LedgerError> {
+    read_pragmas(conn)?;
+    let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+    if mode != "wal" {
+        return Err(std::io::Error::other(format!("journal_mode is {mode}, not wal")).into());
+    }
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    Ok(())
+}
+
+/// The pragmas a read-only connection takes too: they write nothing.
+fn read_pragmas(conn: &mut Connection) -> Result<(), LedgerError> {
     // Retries the lock every 1 ms and gives up 5 s after a step's first
     // busy callback (SQLite restarts the count at 0 for each step).
     // SQLite's own busy_timeout backs off to 100 ms sleeps, and a writer that
@@ -184,12 +220,6 @@ fn apply_pragmas(conn: &mut Connection) -> Result<(), LedgerError> {
         std::thread::sleep(Duration::from_millis(1));
         first_busy.elapsed() < BUSY_GIVE_UP
     }))?;
-    let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
-    if mode != "wal" {
-        return Err(std::io::Error::other(format!("journal_mode is {mode}, not wal")).into());
-    }
-    conn.pragma_update(None, "synchronous", "FULL")?;
-    conn.pragma_update(None, "foreign_keys", "ON")?;
     // 512 KiB, not the default 2 MiB: the default cache alone put `work list`
     // and `work board` at R14's 8 MiB M1, and no measured latency moved (#74).
     conn.pragma_update(None, "cache_size", -512)?;
