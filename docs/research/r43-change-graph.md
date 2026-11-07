@@ -31,8 +31,8 @@ note works from the decisions recorded on #39 that day:
 what tree-sitter gives without type checking, it is right far more often than it is
 wrong for "what might this break", and it can say when it does not know.
 
-**Edges, Rust.** From each crate root (lib, bins, `src/bin/*`, `tests/*`, `build.rs`,
-from each package's `Cargo.toml`) follow `mod name;` to `name.rs` or `name/mod.rs` to get
+**Edges, Rust.** From each crate root (lib, bins, `src/bin/*`, `tests/*`, `examples/*`,
+`benches/*`, `build.rs`, from each package's `Cargo.toml`) follow `mod name;` to `name.rs` or `name/mod.rs` to get
 the module map. Then a file depends on the longest module prefix of each path it writes:
 `use` trees, `a::b` paths in code and in macro arguments, rooted at `crate`, `self`,
 `super`, a child module, a name its `use` brought in, a module a glob brought in, or a

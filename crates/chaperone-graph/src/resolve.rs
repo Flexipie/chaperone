@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::parse::{Facts, Ref};
 
-/// One crate target: a lib, a bin, an integration test or a build script.
+/// One crate target: a lib, a bin, an integration test, an example, a bench
+/// or a build script.
 struct Krate {
     /// The crate's name with `-` as `_`: `[lib] name` or the package's for
     /// its lib, the package's for `src/main.rs`, else the target's.
@@ -245,7 +246,12 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
         for (name, path) in &bins {
             add(name, path, false, false);
         }
-        let prefixes = [at("src/bin/"), at("tests/")];
+        let prefixes = [
+            at("src/bin/"),
+            at("tests/"),
+            at("examples/"),
+            at("benches/"),
+        ];
         for (path, _) in index.iter() {
             for (i, prefix) in prefixes.iter().enumerate() {
                 let Some(rest) = path.strip_prefix(prefix.as_str()) else {
