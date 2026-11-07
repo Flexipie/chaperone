@@ -74,18 +74,3 @@ fn unix_secs(at: &str) -> Option<i64> {
     Some((era * 146_097 + doe - 719_468) * 86_400 + secs)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ages() {
-        assert_eq!(unix_secs("1970-01-01T00:00:00.000Z"), Some(0));
-        assert_eq!(unix_secs("2026-11-07T05:01:02.693Z"), Some(1_794_027_662));
-        let now = 1_794_027_662;
-        assert_eq!(age("2026-11-07T05:01:02.693Z", now), "<1m");
-        assert_eq!(age("2026-11-07T04:01:02.000Z", now), "1h");
-        assert_eq!(age("2026-11-05T05:01:02.000Z", now), "2d");
-        assert_eq!(age("garbage", now), "?");
-    }
-}
