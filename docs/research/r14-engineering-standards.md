@@ -76,6 +76,7 @@ R6 on this machine, 2026-11-02, release, thin LTO: warm ping p50 **3.9 ms**, ope
 | E2 | 50 processes, 40 events, same shape | ≤ **5 s**, and the correctness checks in the concurrency row | ≤ **15 s**, same correctness |
 | L1 | A follower observes a committed event id | p50 ≤ **5 ms**, p99 ≤ **20 ms**, over 1,000 events | p99 ≤ **50 ms** |
 | M1 | One-shot CLI RSS | ≤ **8 MiB** | ≤ **32 MiB** |
+| M4 | `chaperone impact` with a cold cache (every Rust file parsed), on this repo | ≤ **12 MiB** peak RSS (2026-11-07: 10.9 MiB; warm, every file cached, 6.9 MiB, under M1) | Not in CI |
 | M2 | Supervisor RSS, zero lanes | ≤ **16 MiB** | ≤ **48 MiB** |
 | M3 | Supervisor RSS per idle lane, children excluded | ≤ **256 KiB** (50 lanes ≤ **12.5 MiB** above M2) | ≤ **1 MiB** per lane |
 | B1 | Stripped release binary | ≤ **15 MiB**. On macOS the file links system libraries only: `libSystem`, and `libiconv`, which the `libc` crate links on Apple targets (v0: 3.7 MiB, [perf review](../perf/v0-review.md)). SQLite is inside. | Same check, on the release workflow |
@@ -84,6 +85,8 @@ R6 on this machine, 2026-11-02, release, thin LTO: warm ping p50 **3.9 ms**, ope
 | U2 | `chaperone-ui`: another process commits, the watcher asks for a repaint; 50 lanes × 200 events | p99 ≤ **150 ms** (123 ms: the 100 ms poll plus a 17.6 ms board reload) | Not in CI |
 | U3 | `chaperone-ui` CPU, window open, ledger quiet, 50 s | ≤ **0.5%** of one core (0.06%) | Not in CI |
 | U4 | `chaperone-ui` max RSS | ≤ **128 MiB** (116 MiB at start, 78 MiB steady; the GL context and fonts, not the board) | Not in CI |
+
+M4 is above M1 because a cold `impact` holds one tree-sitter tree at a time, about 45 bytes per source byte, so its peak follows the largest file it parses (here `work.rs`, 62 KB), not the file count; the 256 KiB parse cap bounds the worst case near 17 MiB, inside M1's CI ceiling ([ADR 0043](../decisions/0043-code-graph-cache.md), [R43](r43-change-graph.md)). A warm call stays under M1.
 
 L1 is the budget that forces a wake. A 50 ms poll fails the product p50. The 300 s orchestrate poll fails it by a wide margin. M3 is the budget that matches R8: the supervisor keeps no scrollback and no transcript. A 1 MiB buffer per lane fails at 50 lanes on the product number (50 × 256 KiB). Agent CLI RSS is outside these budgets. R6 already measured that the agent, not the harness, dominates per-lane memory.
 

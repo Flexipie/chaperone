@@ -101,7 +101,7 @@ RSS follows the largest file it parses, not the file count: a one-file repo hold
 call over this repo is 9.9 to 10.7 MiB, past M1's 8 MiB product budget; a warm one, the usual
 case once a lane has called it, is 6.0 to 6.3 MiB. Files over 256 KiB are not parsed (they make
 the answer `lower_bound`), which caps the peak near 17 MiB, inside M1's 32 MiB CI
-ceiling. The owner decides whether M1 gets a row for a cold `impact`.
+ceiling. R14's M4 row budgets a cold `impact` on this repo at 12 MiB (10.9 MiB measured at the final head, warm 6.9 MiB); a warm call stays under M1's 8 MiB.
 
 ## Next
 
