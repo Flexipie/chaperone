@@ -8,7 +8,7 @@ Language is Rust ([R6](r6-language-and-runtime.md)). Storage is one SQLite file 
 
 ## Recommendation
 
-A Cargo workspace of four crates, pipelines as data on disk, and a GitHub Actions workflow that blocks the PR. Tests are five layers. The bottom three are pure or single-process. Crash and concurrency spawn real processes against the real write function. A fake agent CLI runs a whole lane with no model.
+A Cargo workspace of five crates, pipelines as data on disk, and a GitHub Actions workflow that blocks the PR. Tests are five layers. The bottom three are pure or single-process. Crash and concurrency spawn real processes against the real write function. A fake agent CLI runs a whole lane with no model.
 
 Performance has two numbers per budget. The **product** number is the promise, measured on the same class of machine as R6 (Apple M-series, local APFS, warm page cache, release profile). The **CI** number is a coarse ceiling on a GitHub-hosted runner, plus an instruction-count regression of 10% on Linux. Wall-clock percentages are not the merge gate: Criterion's FAQ and Tokio's own CI discussion both treat hosted-runner timings as too noisy for that ([criterion FAQ](https://bheisler.github.io/criterion.rs/book/faq.html), [tokio#7779](https://github.com/tokio-rs/tokio/pull/7779)).
 
@@ -116,6 +116,7 @@ CONTRIBUTING.md
 crates/chaperone-core/      ledger, engine, migrations. No clap, no PTY, no home directory.
 crates/chaperone-cli/       the `chaperone` binary. CLI, supervise, in-tree adapters.
 crates/chaperone-fake/      scripted agent. publish = false. Not installed by `cargo install`.
+crates/chaperone-graph/     the code graph behind `impact`: tree-sitter facts, module map, cache (ADR 0043).
 crates/chaperone-ui/        the `chaperone-ui` window. Read-only, the only crate with a GUI dependency.
 pipelines/                 v17.toml and later ids. Loaded from disk.
 docs/                      vision, research, decisions, events.md, the CLI contract
