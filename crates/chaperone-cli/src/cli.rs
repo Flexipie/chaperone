@@ -138,9 +138,7 @@ impl Cmd {
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
-            Cmd::Overlap { .. } | Cmd::Stats { .. } => None,
-    },
-            Cmd::Overlap { .. } | Cmd::Impact { .. } => None,
+            Cmd::Overlap { .. } | Cmd::Stats { .. } | Cmd::Impact { .. } => None,
         }
     }
 }
