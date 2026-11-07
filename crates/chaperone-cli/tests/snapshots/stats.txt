@@ -1,0 +1,10 @@
+R11's lane and cohort numbers, read from the ledger: claim to merge, tokens, peak context, attention, checks and the verdict on the merged head. A number nothing records yet is null, and `missing` names what it needs
+
+Usage: chaperone stats [OPTIONS] <--merged-since <MERGED_SINCE>|--work <WORK>>
+
+Options:
+      --db <DB>                      Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --merged-since <MERGED_SINCE>  Lanes with a PR merged at or after this: YYYY-MM-DD (00:00 UTC) or RFC 3339 UTC with milliseconds
+      --format <FORMAT>              Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --work <WORK>                  These work items (repeat the flag for more)
+  -h, --help                         Print help
