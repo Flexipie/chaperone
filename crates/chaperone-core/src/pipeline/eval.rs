@@ -106,14 +106,7 @@ impl Eval<'_> {
                 both_ways,
             } => match (self.val(left)?, self.val(right)?) {
                 (Fact::Str(left), Fact::Str(right)) => {
-                    let (short, head) = if *both_ways && left.len() > right.len() {
-                        (right, left)
-                    } else {
-                        (left, right)
-                    };
-                    (*min_len..=*max_len).contains(&(short.len() as i64))
-                        && short.bytes().all(|b| b.is_ascii_hexdigit())
-                        && head.starts_with(short.as_str())
+                    sha_prefix_eq(left, right, *min_len..=*max_len, *both_ways)
                 }
                 _ => false,
             },
@@ -236,4 +229,22 @@ fn literal(lit: &Literal) -> Fact {
         Literal::Int(i) => Fact::Int(*i),
         Literal::Str(s) => Fact::Str(s.clone()),
     }
+}
+
+/// `left` is a prefix of `right` (with `both_ways`, the shorter of the two
+/// is a prefix of the longer), and that prefix is hex of a length in `len`.
+pub(crate) fn sha_prefix_eq(
+    left: &str,
+    right: &str,
+    len: std::ops::RangeInclusive<i64>,
+    both_ways: bool,
+) -> bool {
+    let (short, head) = if both_ways && left.len() > right.len() {
+        (right, left)
+    } else {
+        (left, right)
+    };
+    len.contains(&(short.len() as i64))
+        && short.bytes().all(|b| b.is_ascii_hexdigit())
+        && head.starts_with(short)
 }

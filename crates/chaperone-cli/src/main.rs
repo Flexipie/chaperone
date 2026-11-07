@@ -13,6 +13,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use chaperone_core::ledger::{Ledger, SCHEMA_VERSION};
+use chaperone_core::stats::Cohort;
 use clap::Parser;
 use clap::error::ErrorKind;
 use serde_json::json;
@@ -74,6 +75,13 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),
         Cmd::Attention(cmd) => checks::attention(&Ledger::open(&path)?, cmd),
         Cmd::Dossier(cmd) => checks::dossier(&Ledger::open(&path)?, cmd),
+        Cmd::Stats { merged_since, work } => {
+            let cohort = match merged_since {
+                Some(since) => Cohort::MergedSince(since),
+                None => Cohort::Work(work),
+            };
+            Ok(Outcome::One(Ledger::open(&path)?.stats(&cohort)??))
+        }
         Cmd::Overlap { repo, uncommitted } => {
             overlap::run(&Ledger::open(&path)?, repo, uncommitted, meta, cli.format)
         }

@@ -71,6 +71,20 @@ pub enum Cmd {
         #[arg(long)]
         uncommitted: bool,
     },
+    /// R11's lane and cohort numbers, read from the ledger: claim to
+    /// merge, tokens, peak context, attention, checks and the verdict on
+    /// the merged head. A number nothing records yet is null, and
+    /// `missing` names what it needs
+    #[command(group(clap::ArgGroup::new("cohort").required(true)))]
+    Stats {
+        /// Lanes with a PR merged at or after this: YYYY-MM-DD (00:00 UTC)
+        /// or RFC 3339 UTC with milliseconds
+        #[arg(long, group = "cohort")]
+        merged_since: Option<String>,
+        /// These work items (repeat the flag for more)
+        #[arg(long, group = "cohort")]
+        work: Vec<i64>,
+    },
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
@@ -111,7 +125,7 @@ impl Cmd {
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
-            Cmd::Overlap { .. } => None,
+            Cmd::Overlap { .. } | Cmd::Stats { .. } => None,
         }
     }
 }

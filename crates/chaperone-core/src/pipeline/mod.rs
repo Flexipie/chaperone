@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 pub use error::PipelineError;
 pub use eval::Denied;
+pub(crate) use eval::sha_prefix_eq;
 pub use facts::{Fact, FactBundle};
 pub(crate) use hash::canonical_string;
 
