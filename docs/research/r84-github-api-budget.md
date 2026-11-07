@@ -6,8 +6,9 @@ Status: 2026-11-07. Evidence for issue [#84](https://github.com/Flexipie/chapero
 
 - **The watcher makes about 95% of the calls, and it makes them in bursts.** One `lanes --json --all` pass (what
   `lanes-watch` runs) made 136 GitHub calls. It started 135 of them in the first 10 seconds and had up to 51 running
-  at once. 132 of the 136 were for lanes already done: 120 `gh issue view` (one per done GitHub-tracked work item,
-  to show a tracker state that can no longer change) and 12 `compare` calls on merged PRs.
+  at once. 127 of the 136 were for lanes already done: 116 of the 120 `gh issue view` (one per GitHub-tracked work
+  item, to show a tracker state that can no longer change on a done one) and 11 of the 12 `compare` calls (on
+  merged PRs).
 - During the incident two orchestrators (chaperone and mobile-app CORE-4547) each ran `lanes-watch --interval 300`.
   Each pass covers every work item in both ledgers, whatever `--keys` says, and a watcher runs one pass right away
   each time it is restarted after a wake.
@@ -15,9 +16,12 @@ Status: 2026-11-07. Evidence for issue [#84](https://github.com/Flexipie/chapero
   minute (`gh pr checks --watch --interval 60`, from the `ship` and `merge` skills).
 - **At 5 lanes**, before: 2 watchers x at least 12 passes an hour x 136 calls, about 3,300 calls an hour, plus about
   150 from lanes. Each pass is a burst of up to 51 concurrent requests. After the proposed change: one shared pass
-  per interval, 9 calls, at most 3 at once (measured), about 110 an hour, plus the same 150 from lanes.
+  per interval, at most 4 calls at once. Measured with 4 lanes not done and 2 open PRs: 9 calls a pass. At 5 active
+  lanes with an open PR each (1 `issue view`, plus `pr view`, threads and sometimes `compare`): 15 to 20 calls a pass,
+  180 to 240 an hour, plus the same 150 from lanes.
 - **The fix is in dotfiles, not in Chaperone.** Chaperone makes no GitHub calls. The two patches below change
-  `lanes.sh` and `lanes-watch`. The owner applies them (issue comment, 2026-11-07).
+  `lanes.sh` and `lanes-watch`, with one-line edits to the global `CLAUDE.md` and the `lanes` skill. The owner
+  applies them (issue comment, 2026-11-07).
 
 ## Why the secondary limit and not the hourly one
 
@@ -70,8 +74,11 @@ request log to read from outside, so they are not in these numbers.
 Both apply cleanly to `~/dotfiles` at `5214444` with its uncommitted edits (`git apply --check`).
 
 **1. `lanes.sh`: no calls for lanes that are done, and at most 4 lanes at once.** A done work item's issue state is
-not asked for again (it is display only: the lane verdict comes from the PR and the work item). `compare` runs only
-for an open PR. The per-lane jobs wait for a free slot (`wait -n`, bash 5, which `lanes` already runs under).
+not asked for again: the lane verdict never reads it (it comes from the PR and the work item), so `lane` and `why`
+do not change. `tracker_state` becomes null on done GitHub rows. `compare` runs only for an open PR. The per-lane
+jobs wait for a free slot with `wait -n`, which needs bash 4.3 or later first on the caller's `PATH` (the shebang
+is `/usr/bin/env bash`; Homebrew's bash 5 is first in the orchestrator's shells). Under macOS `/bin/bash` 3.2 it
+prints an error and spins until a job ends; the output is still right.
 
 ```diff
 --- a/herdr/local-plugins/next-ticket/lanes.sh
@@ -191,6 +198,10 @@ every 10 seconds. Make it `gh pr checks N --watch --interval 60`, as `ship` and 
 
 After the patch, the first pass of each running watcher reports done lanes it watches as changed once
 (`tracker_state` goes from `closed` to null). That is one extra wake per watcher.
+
+**4. `claude/skills/lanes/SKILL.md`.** Where it lists `tracker_state`, add "(null for a done GitHub lane)", so an
+agent reading the board does not fall back to a `gh issue view` per done lane. The `/dispatch` re-run reads the
+tracker state of its children the same way.
 
 ## What this leaves out, and why
 
