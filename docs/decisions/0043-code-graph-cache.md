@@ -54,6 +54,11 @@ shared by worktrees.
 
 ## Consequences
 
-The cache can be deleted at any time; the next call rebuilds it. A change to what a parse
+The cache can be deleted at any time; the next call rebuilds it. It is also what keeps a
+call's memory down: a parse holds about 45 bytes of tree per byte of source, so a cold
+call over this repo peaks at 9.9 MiB RSS, past R14's M1 product budget of 8 MiB, and a
+warm one, with every file cached, at 6.0 MiB (R43). Files over 256 KiB are not parsed
+(the answer is then `lower_bound`), which caps a cold call near 17 MiB. M1 has no row for
+a cold `impact` yet; that is the owner's call. A change to what a parse
 extracts must bump `FACTS_VERSION`. The UI slices (#44 to #48) read the graph through
 `chaperone-graph`, not the cache file.
