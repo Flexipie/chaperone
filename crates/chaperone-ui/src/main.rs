@@ -23,8 +23,8 @@ struct Args {
     /// Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
     #[arg(long)]
     db: Option<PathBuf>,
-    /// Close after the first frame that shows the board or an error (R14
-    /// startup measurement)
+    /// Close after the first frame that shows the board (R14 startup
+    /// measurement)
     #[arg(long, hide = true)]
     first_frame: bool,
 }
@@ -75,7 +75,7 @@ impl eframe::App for App {
                 }
             }
         });
-        if self.first_frame && (shown.board.is_some() || shown.error.is_some()) {
+        if self.first_frame && shown.board.is_some() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ui.ctx().request_repaint_after(AGE_TICK);

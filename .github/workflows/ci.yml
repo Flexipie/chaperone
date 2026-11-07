@@ -30,7 +30,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: chaperone-cli has no GUI crate
         run: |
-          tree=$(cargo tree --locked -p chaperone-cli -e normal --prefix none)
+          tree=$(cargo tree --locked -p chaperone-cli -e normal --target all --prefix none)
           if grep -E '^(eframe|egui|epaint|winit|glow|glutin) ' <<<"$tree"; then exit 1; fi
 
   test:

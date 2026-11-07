@@ -18,21 +18,22 @@ pub struct Spec<'a> {
 /// Sorts lanes with no spec after the rest.
 type SpecKey = (bool, Option<i64>);
 
-/// Repos by slug; in each, specs by id with lanes without one last.
+/// Repos by slug, any case (the first spelling seen is shown); in each, specs by id with lanes without one last.
 pub fn group(board: &LaneBoard) -> Vec<Repo<'_>> {
-    let mut repos: BTreeMap<&str, BTreeMap<SpecKey, Vec<&BoardLane>>> = BTreeMap::new();
+    let mut repos: BTreeMap<String, (&str, BTreeMap<SpecKey, Vec<&BoardLane>>)> = BTreeMap::new();
     for lane in &board.lanes {
         let item = &lane.board.item;
         let slug = item.repo_slug.as_deref().unwrap_or("(no repo)");
         repos
-            .entry(slug)
-            .or_default()
+            .entry(slug.to_lowercase())
+            .or_insert_with(|| (slug, BTreeMap::new()))
+            .1
             .entry((item.spec_id.is_none(), item.spec_id))
             .or_default()
             .push(lane);
     }
     repos
-        .into_iter()
+        .into_values()
         .map(|(slug, specs)| Repo {
             slug,
             specs: specs
