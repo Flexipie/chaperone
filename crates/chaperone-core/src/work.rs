@@ -3,6 +3,7 @@
 //! inside its transaction.
 
 mod handoff;
+mod lane_board;
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -13,6 +14,7 @@ use serde_json::{Value, json};
 
 pub(crate) use self::handoff::commit_ok;
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
+pub use self::lane_board::{BoardLane, LaneBoard, SpecTitle, Stamps};
 use crate::cursor::{self, Cursor, Page};
 use crate::engine;
 use crate::ledger::{

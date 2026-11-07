@@ -15,6 +15,11 @@ allow = [
     "Zlib",
 ]
 
+# egui's bundled fonts, for chaperone-ui only.
+[[licenses.exceptions]]
+crate = "epaint_default_fonts"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
 [bans]
 wildcards = "deny"
 allow-wildcard-paths = true
