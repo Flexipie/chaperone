@@ -97,7 +97,7 @@ fn median(mut v: Vec<f64>) -> Value {
     } else {
         v[mid]
     };
-    json!(m)
+    json!((m * 100.0).round() / 100.0)
 }
 
 fn token_fields(sums: &[Option<i64>; 4]) -> Value {
@@ -137,8 +137,9 @@ impl Lane {
             _ => None,
         };
         let heads: Vec<&str> = self.merged.values().map(|m| m.0.as_str()).collect();
-        // Every merged head has a YES as the latest verdict on it.
-        let verdict_on_head = (!heads.is_empty()).then(|| {
+        // Every merged head has a YES as the latest verdict on it. A lane
+        // with a PR still open (a stack layer) has a head nobody can check.
+        let verdict_on_head = merged.then(|| {
             heads.iter().all(|head| {
                 self.verdicts
                     .iter()
@@ -147,7 +148,7 @@ impl Lane {
                     .is_some_and(|(_, yes)| *yes)
             })
         });
-        let head_reviewed = (!heads.is_empty()).then(|| {
+        let head_reviewed = merged.then(|| {
             heads.iter().all(|head| {
                 self.reviews
                     .iter()
@@ -386,10 +387,7 @@ impl Ledger {
                     at,
                 )
             }
-            Cohort::Work(ids) => {
-                let ids: BTreeSet<i64> = ids.iter().copied().collect();
-                ("SELECT value FROM json_each(?1)", json!(ids).to_string())
-            }
+            Cohort::Work(ids) => ("SELECT value FROM json_each(?1)", json!(ids).to_string()),
         };
         let tok = |k: &str| format!("json_extract(payload_json, '$.{k}')");
         let sql = format!(
@@ -465,7 +463,7 @@ impl Ledger {
 fn summarize(lanes: &[Lane]) -> Value {
     let rows: Vec<Row> = lanes.iter().map(Lane::row).collect();
     let reviews_known = lanes.iter().any(|l| !l.reviews.is_empty());
-    let usage_known = lanes.iter().any(|l| !l.tokens.is_empty());
+    let usage_known = rows.iter().any(|r| r.context_tokens.is_some());
     let known = |v: Value| if reviews_known { v } else { Value::Null };
     let count =
         |f: &dyn Fn(&Lane, &Row) -> bool| lanes.iter().zip(&rows).filter(|(l, r)| f(l, r)).count();
@@ -509,7 +507,7 @@ fn summarize(lanes: &[Lane]) -> Value {
         .filter_map(|(l, r)| r.context_tokens.map(|c| c as f64 / l.prs.len() as f64))
         .collect();
     let mut missing = Map::new();
-    missing.insert("commits_after_handoff".into(), NO_COMMITS.into());
+    missing.insert("lanes_with_commits_after_handoff".into(), NO_COMMITS.into());
     if !usage_known {
         for field in [
             "peak_context_median",
@@ -521,7 +519,7 @@ fn summarize(lanes: &[Lane]) -> Value {
     }
     if !reviews_known {
         for field in [
-            "head_reviewed",
+            "lanes_head_reviewed",
             "flat_rounds",
             "reraised_findings",
             "verified_findings",
@@ -538,11 +536,12 @@ fn summarize(lanes: &[Lane]) -> Value {
         "claim_to_merge_h_median": median(rows.iter().filter_map(|r| r.claim_to_merge_h).collect()),
         "tokens": tokens,
         "attention": attention,
-        "lanes_with_usage": count(&|l, _| !l.tokens.is_empty()),
+        "lanes_with_usage": count(&|_, r| r.context_tokens.is_some()),
         "peak_context_median": median(lanes.iter().filter_map(|l| l.peak.map(|p| p as f64)).collect()),
         "context_tokens_per_merged_pr_median": median(per_pr),
         "lanes_peak_over_500k": usage_known
             .then(|| count(&|l, _| l.peak.is_some_and(|p| p > PEAK_OVER))),
+        "lanes_reviewed": count(&|l, _| !l.reviews.is_empty()),
         "flat_rounds": known(json!(sum(&|r| r.flat_rounds))),
         "reraised_findings": known(json!(sum(&|r| r.reraised))),
         "lanes_head_reviewed": known(json!(count(&|_, r| r.with_pr && r.head_reviewed == Some(true)))),

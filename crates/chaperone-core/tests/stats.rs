@@ -204,7 +204,8 @@ fn a_lane_folds_from_its_events() {
     assert_eq!(cohort["attention"]["sent_back"], 2);
     assert_eq!(cohort["attention"]["revived"], 0);
     let missing: Vec<&String> = cohort["missing"].as_object().unwrap().keys().collect();
-    assert_eq!(missing, ["commits_after_handoff"]);
+    assert_eq!(missing, ["lanes_with_commits_after_handoff"]);
+    assert_eq!(cohort["lanes_reviewed"], 1);
 }
 
 #[test]
@@ -226,12 +227,13 @@ fn without_reviews_review_numbers_are_null_and_named() {
         "usage.reported"
     );
     assert_eq!(out["cohort"]["peak_context_median"], Value::Null);
+    assert_eq!(lane["head_reviewed"], Value::Null);
     for field in [
-        "head_reviewed",
+        "lanes_head_reviewed",
         "flat_rounds",
         "verified_findings_after_handoff",
     ] {
-        assert_eq!(lane[field], Value::Null, "{field}");
+        assert_eq!(out["cohort"][field], Value::Null, "{field}");
         assert_eq!(
             out["cohort"]["missing"][field],
             "check.finished local_review or pr_review"
@@ -273,7 +275,10 @@ fn the_cohort_filter() {
     ] {
         assert!(matches!(since(bad), Err(Refusal::InvalidInput(_))), "{bad}");
     }
-    assert_eq!(ids(stats(&ledger, Cohort::Work(vec![open]))), [open]);
+    let only_open = stats(&ledger, Cohort::Work(vec![open]));
+    // A PR still open has a head nobody can check: null, not true.
+    assert_eq!(only_open["lanes"][0]["verdict_on_head"], Value::Null);
+    assert_eq!(ids(only_open), [open]);
     assert!(matches!(
         ledger.stats(&Cohort::Work(vec![open, 99])).unwrap(),
         Err(Refusal::NotFound { id: 99, .. })
