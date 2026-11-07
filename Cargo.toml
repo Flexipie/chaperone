@@ -20,6 +20,8 @@ sha2 = "0.10"
 tempfile = "3.27"
 thiserror = "2.0"
 toml = "1.1"
+tree-sitter = "0.27"
+tree-sitter-rust = "0.24"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -85,6 +85,19 @@ pub enum Cmd {
         #[arg(long, group = "cohort")]
         work: Vec<i64>,
     },
+    /// The files that depend on these Rust files, nearest first: module
+    /// nodes and import edges read with tree-sitter from the worktree,
+    /// facts cached by content per origin. Each depth says if it is exact
+    /// or a lower bound; at most 500 files listed
+    Impact {
+        /// Files, from the repo root or the current directory
+        #[arg(required = true)]
+        files: Vec<String>,
+        /// The cache file (default: one per origin in the user cache
+        /// directory)
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
@@ -125,7 +138,7 @@ impl Cmd {
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
-            Cmd::Overlap { .. } | Cmd::Stats { .. } => None,
+            Cmd::Overlap { .. } | Cmd::Stats { .. } | Cmd::Impact { .. } => None,
         }
     }
 }

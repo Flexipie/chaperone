@@ -1,5 +1,5 @@
 //! A child process with a deadline: `daisy-cli reviews get` and the git
-//! calls of `overlap`.
+//! calls of `overlap` and `impact`.
 
 use std::io::Read;
 use std::process::{Command, ExitStatus, Stdio};
