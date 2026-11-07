@@ -127,7 +127,7 @@ pub fn impact(
         }
     }
     let live: Vec<&str> = keys.iter().flatten().map(String::as_str).collect();
-    let mut found = store.get(&live);
+    let found = store.get(&live);
     // A given key on a miss: the bytes read may not be the ones it names
     // (an edit since, `skip-worktree`), so they are keyed by their own hash
     // unless `ids` says they match. Never wrong facts under a shared key.
@@ -162,7 +162,7 @@ pub fn impact(
             facts.push(None);
             continue;
         };
-        if let Some(cached) = found.remove(key) {
+        if let Some(cached) = found.get(key).cloned() {
             reused += 1;
             facts.push(Some(cached));
             continue;
@@ -200,11 +200,6 @@ pub fn impact(
     let paths: Vec<String> = rust.iter().map(|f| f.path.clone()).collect();
     let graph = resolve::build(&paths, &facts, &manifests);
 
-    let bound = if graph.unsure.is_empty() {
-        "exact"
-    } else {
-        "lower_bound"
-    };
     let mut users: Vec<Vec<usize>> = vec![Vec::new(); paths.len()];
     for (file, deps) in graph.deps.iter().enumerate() {
         for &d in deps {
@@ -213,7 +208,7 @@ pub fn impact(
     }
     let mut seen = HashSet::new();
     let mut frontier = Vec::new();
-    let targets = targets
+    let targets: Vec<Target> = targets
         .iter()
         .map(|t| {
             let i = paths.iter().position(|p| p == t);
@@ -230,6 +225,13 @@ pub fn impact(
             }
         })
         .collect();
+    // A target whose edges are not read (not a Rust file in the tree) has
+    // dependents this answer cannot see.
+    let bound = if graph.unsure.is_empty() && targets.iter().all(|t| t.lang.is_some()) {
+        "exact"
+    } else {
+        "lower_bound"
+    };
     let mut depths = Vec::new();
     let mut listed = 0;
     let mut files_omitted = 0;

@@ -13,6 +13,8 @@ struct Krate {
     name: String,
     root: usize,
     lib: bool,
+    /// A binary the package's integration tests can run.
+    bin: bool,
     package: usize,
     test: bool,
 }
@@ -83,10 +85,7 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
     }
     // A package's integration tests run its binaries.
     for t in krates.iter().filter(|k| k.test) {
-        for b in krates
-            .iter()
-            .filter(|b| b.package == t.package && !b.lib && !b.test)
-        {
+        for b in krates.iter().filter(|b| b.package == t.package && b.bin) {
             g.deps[t.root].insert(b.root);
         }
     }
@@ -229,7 +228,7 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
             .unwrap_or_default();
         bins.push((name.to_string(), at("src/main.rs")));
         bins.push(("build_script".into(), at("build.rs")));
-        let mut add = |name: &str, path: &str, lib: bool, test: bool| {
+        let mut add = |name: &str, path: &str, lib: bool, bin: bool, test: bool| {
             if let Some(&root) = index.get(path)
                 && !out.iter().any(|k: &Krate| k.root == root)
             {
@@ -237,14 +236,15 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
                     name: name.replace('-', "_"),
                     root,
                     lib,
+                    bin,
                     package,
                     test,
                 });
             }
         };
-        add(lib_name, &lib, true, false);
+        add(lib_name, &lib, true, false, false);
         for (name, path) in &bins {
-            add(name, path, false, false);
+            add(name, path, false, true, false);
         }
         let prefixes = [
             at("src/bin/"),
@@ -259,7 +259,8 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
                 };
                 let rest = rest.strip_suffix("/main.rs").unwrap_or(rest);
                 if !rest.contains('/') && (rest.ends_with(".rs") || path.ends_with("/main.rs")) {
-                    add(&stem(rest), path, false, i == 1);
+                    // `src/bin/` is a binary; examples and benches are not.
+                    add(&stem(rest), path, false, i == 0, i == 1);
                 }
             }
         }

@@ -34,7 +34,8 @@ shared by worktrees.
 4. **A cache, never a source of truth.** Any SQLite error answers from a fresh parse and
    says so in `cache.skipped`. A SQLite file SQLite calls corrupt or not a database is
    renamed to `.bad`, never deleted (another process may have it open in WAL mode); any
-   other file is left alone. Writes are one
+   other file, an existing empty one, or a SQLite file with a `user_version` or tables of
+   its own (the ledger) is never written to. Writes are one
    transaction of `INSERT OR IGNORE`, so two worktrees writing at once agree. Rows grow
    with history; past four times the current tree's file count (at least 1,024), a write
    drops every row not in the current tree, and other worktrees reparse what they lose.

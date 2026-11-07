@@ -49,15 +49,19 @@ impl Cache {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
+        // SQLite takes an empty file for an empty database: one that exists
+        // empty is someone else's (a lock file), never made into a cache.
+        let empty = std::fs::metadata(path).is_ok_and(|m| m.len() == 0);
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         // `--cache` may name another SQLite file (the ledger): never write to it.
-        let foreign: bool = conn.query_row(
-            "SELECT (SELECT user_version FROM pragma_user_version) != 0 OR EXISTS (
-                SELECT 1 FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 7) != 'facts_v')",
-            [],
-            |r| r.get(0),
-        )?;
+        let foreign: bool = empty
+            || conn.query_row(
+                "SELECT (SELECT user_version FROM pragma_user_version) != 0 OR EXISTS (
+                SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'facts_v[0-9]*')",
+                [],
+                |r| r.get(0),
+            )?;
         if foreign {
             return Err(rusqlite::Error::SqliteFailure(
                 ffi::Error::new(ffi::SQLITE_CANTOPEN),

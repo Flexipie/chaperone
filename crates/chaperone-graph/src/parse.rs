@@ -12,7 +12,7 @@ pub const FACTS_VERSION: u32 = 3;
 /// file could overflow the stack and is not read.
 const MAX_DEPTH: u32 = 256;
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Facts {
     /// `mod name;` declarations: (inline modules around it, name).
     pub mods: Vec<(Vec<String>, String)>,
@@ -28,7 +28,7 @@ pub struct Facts {
     pub inexact: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Ref {
     /// The inline modules the path is written in.
     pub scope: Vec<String>,
