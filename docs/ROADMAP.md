@@ -226,6 +226,7 @@ Lanes in flight finish in daisy; new lanes move when the skills switch to `chape
 | R13 | Security | [r13-security-and-trust.md](research/r13-security-and-trust.md) |
 | R14 | Engineering | [r14-engineering-standards.md](research/r14-engineering-standards.md) |
 | R15 | Migration | [r15-migration.md](research/r15-migration.md) |
+| R84 | GitHub API budget | [r84-github-api-budget.md](research/r84-github-api-budget.md) |
 
 ## Next actions (implementation)
 
