@@ -218,6 +218,7 @@ fn without_reviews_review_numbers_are_null_and_named() {
     let lane = &out["lanes"][0];
     // A NO is the latest verdict on the merged head.
     assert_eq!(lane["verdict_on_head"], false);
+    assert_eq!(lane["merge_verdict"]["decision"], "no");
     // No usage: unknown, never zero.
     assert_eq!(lane["tokens"], Value::Null);
     assert_eq!(out["cohort"]["lanes_with_usage"], 0);
@@ -278,6 +279,7 @@ fn the_cohort_filter() {
     let only_open = stats(&ledger, Cohort::Work(vec![open]));
     // A PR still open has a head nobody can check: null, not true.
     assert_eq!(only_open["lanes"][0]["verdict_on_head"], Value::Null);
+    assert_eq!(only_open["lanes"][0]["merge_verdict"], Value::Null);
     assert_eq!(ids(only_open), [open]);
     assert!(matches!(
         ledger.stats(&Cohort::Work(vec![open, 99])).unwrap(),

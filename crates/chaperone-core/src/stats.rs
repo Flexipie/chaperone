@@ -237,6 +237,9 @@ impl Lane {
             "send_back_rounds": self.rounds,
             "plan_check": self.plan_check,
             "quality_gate": self.quality_gate,
+            "merge_verdict": self.verdicts.last().map(|(head, yes)| {
+                json!({ "decision": if *yes { "yes" } else { "no" }, "head_sha": head })
+            }),
             "verdict_on_head": row.verdict_on_head,
             "head_reviewed": known(json!(row.head_reviewed)),
             "flat_rounds": known(json!(row.flat_rounds)),
