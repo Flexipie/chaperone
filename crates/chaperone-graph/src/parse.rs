@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 /// Bump when what `facts` extracts changes, or the grammar does: cached
 /// facts of another version are never read (`cache.rs` names its table
 /// with it).
-pub const FACTS_VERSION: u32 = 2;
+pub const FACTS_VERSION: u32 = 3;
 /// Tree depth read; every walk below recurses along the tree, so a deeper
 /// file could overflow the stack and is not read.
 const MAX_DEPTH: u32 = 256;
@@ -255,8 +255,9 @@ fn segs(node: Node, src: &[u8]) -> Option<Vec<String>> {
     }
 }
 
-/// `a::b::c` runs among a macro's tokens, nested groups included, strings
-/// that are such a path (`#[serde(default = "crate::a::f")]`), and `name!`.
+/// `a::b::c` runs among a macro's tokens, nested groups and `$(...)*`
+/// included, `$crate` as `crate`, strings that are such a path
+/// (`#[serde(default = "crate::a::f")]`), and `name!`.
 fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
     let push = |f: &mut Facts, path| {
         f.refs.push(Ref {
@@ -269,7 +270,11 @@ fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
     let mut joined = false;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        match child.kind() {
+        let kind = match child.kind() {
+            "metavariable" if text(child, src) == "$crate" => "crate",
+            k => k,
+        };
+        match kind {
             "identifier" | "crate" | "self" | "super" => {
                 if !joined && run.len() > 1 {
                     push(f, std::mem::take(&mut run));
@@ -277,7 +282,10 @@ fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
                 if !joined {
                     run.clear();
                 }
-                run.push(text(child, src));
+                run.push(match kind {
+                    "crate" => kind.into(),
+                    _ => text(child, src),
+                });
                 joined = false;
             }
             "::" => joined = true,
@@ -290,7 +298,7 @@ fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
                 }
                 run.clear();
                 joined = false;
-                if kind == "token_tree" {
+                if kind == "token_tree" || kind == "token_repetition" {
                     tokens(child, src, scope, f);
                 } else if let Some(path) = (kind == "string_literal")
                     .then(|| str_path(&text(child, src)))
