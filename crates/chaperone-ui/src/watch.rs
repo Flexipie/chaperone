@@ -15,9 +15,8 @@ use chaperone_core::work::{LaneBoard, LaneDetail, WorkItem};
 
 use crate::areas::Areas;
 use crate::diff::Diff;
-use crate::overlap::Markers;
-use crate::graph::Layout;
 use crate::graph::Repos;
+use crate::overlap::Markers;
 
 /// A poll is one pragma on an open connection, so idle costs next to
 /// nothing; a commit shows within this.

@@ -2,9 +2,8 @@
 //! read-only and redraws when the ledger changes; herdr stays where you type.
 //! Clicking a lane shows its detail and its worktree's diff. Above it, the
 //! R11 numbers of the lanes merged since a date. Each lane names the
-//! lanes it shares files with (`chaperone overlap`).
-//! Clicking a lane shows its detail and its worktree's diff; the change
-//! graph tab shows what each lane's commits change and reach.
+//! lanes it shares files with (`chaperone overlap`). The change graph tab
+//! shows what each lane's commits change and reach.
 
 mod areas;
 mod board;
@@ -59,7 +58,7 @@ fn main() -> eframe::Result {
             let ctx = cc.egui_ctx.clone();
             watch::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
-            overlap::spawn(path, shown.clone(), move || ctx.request_repaint());
+            overlap::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
             diff::spawn(shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
