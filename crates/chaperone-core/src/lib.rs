@@ -9,6 +9,7 @@ pub mod dossier;
 mod engine;
 pub mod git;
 pub mod ledger;
+pub mod overlap;
 pub mod pipeline;
 pub mod spec;
 pub mod stats;

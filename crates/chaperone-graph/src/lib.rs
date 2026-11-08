@@ -1,11 +1,13 @@
 //! Chaperone's code graph: Rust module nodes and import edges, and the
-//! files that depend on a change. No git and no ledger: the caller lists
-//! the tree, and the facts live in their own cache (ADR 0043).
+//! files that depend on a change. [`impact`] runs no git and reads no
+//! ledger: the caller lists the tree, and the facts live in their own
+//! cache (ADR 0043). [`impact_in`] lists it from git, for the CLI and the UI.
 
 mod cache;
 mod entry;
 mod parse;
 mod resolve;
+mod worktree;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -15,6 +17,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 pub use entry::{Rules, Unmatched};
+pub use worktree::{Error, impact_in};
 
 /// Files past this size are not parsed (generated code): their references
 /// are unknown, so the answer is a lower bound. A parse holds about 45
