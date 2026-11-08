@@ -196,7 +196,7 @@ fn cells(lane: &BoardLane, now: i64) -> [String; 12] {
         _ => format!("#{}", item.id),
     };
     let verdict = match (&s.verdict, &s.verdict_sha) {
-        (Some(v), Some(sha)) => format!("{v} @ {}", &sha[..sha.len().min(7)]),
+        (Some(v), Some(sha)) => format!("{v} @ {}", board::short(sha)),
         (v, _) => text(v),
     };
     [

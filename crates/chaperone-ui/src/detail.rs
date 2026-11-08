@@ -4,7 +4,8 @@
 use chaperone_core::work::{BoardLane, LaneBoard, LaneDetail};
 use eframe::egui::{self, Color32, RichText, TextStyle};
 
-use crate::diff::{Diff, State};
+use crate::board;
+use crate::diff::{Diff, OUT_BYTES, State};
 use crate::watch::Selected;
 
 /// Lines of diff shown before the panel scrolls them.
@@ -32,7 +33,7 @@ pub fn draw(
             };
             section(ui, "Spec slice", |ui| slice(ui, d));
             section(ui, "Handoffs", |ui| handoffs(ui, sel.id, d));
-            section(ui, "Checks", |ui| checks(ui, lane, d));
+            section(ui, "Checks", |ui| checks(ui, d));
             section(ui, "Review findings", |ui| findings(ui, d));
             section(ui, "Diff against the base", |ui| {
                 refresh = ui.button("Refresh").clicked();
@@ -77,7 +78,10 @@ fn slice(ui: &mut egui::Ui, d: &LaneDetail) {
             "{} {} (v{})",
             i.parent_key, i.parent_title, i.version
         ));
-        lines(ui, &i.decisions, "No decisions.");
+        if i.decisions.is_empty() {
+            ui.label("No decisions.");
+        }
+        lines(ui, &i.decisions);
     } else {
         ui.label("Not a slice of a spec.");
     }
@@ -114,13 +118,7 @@ fn handoffs(ui: &mut egui::Ui, id: i64, d: &LaneDetail) {
     }
 }
 
-fn checks(ui: &mut egui::Ui, lane: Option<&BoardLane>, d: &LaneDetail) {
-    if let Some(s) = lane.map(|l| &l.stamps)
-        && let Some(v) = &s.verdict
-    {
-        let sha = s.verdict_sha.as_deref().unwrap_or("-");
-        ui.label(format!("merge verdict: {v} @ {}", &sha[..sha.len().min(7)]));
-    }
+fn checks(ui: &mut egui::Ui, d: &LaneDetail) {
     if d.checks.is_empty() {
         ui.label("No checks recorded.");
         return;
@@ -128,7 +126,7 @@ fn checks(ui: &mut egui::Ui, lane: Option<&BoardLane>, d: &LaneDetail) {
     egui::Grid::new("checks").striped(true).show(ui, |ui| {
         for c in &d.checks {
             ui.label(&c.check);
-            ui.monospace(&c.head_sha[..c.head_sha.len().min(7)]);
+            ui.monospace(board::short(&c.head_sha));
             ui.label(&c.outcome);
             ui.label(&c.at);
             ui.end_row();
@@ -170,7 +168,10 @@ fn draw_diff(ui: &mut egui::Ui, diff: Option<&Diff>) {
         "Against {base}, tracked files, uncommitted edits included."
     ));
     if cut {
-        ui.colored_label(ui.visuals().warn_fg_color, "Cut at 1 MiB.");
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            format!("Cut at {} KiB.", OUT_BYTES / 1024),
+        );
     }
     let row = ui.text_style_height(&TextStyle::Monospace);
     egui::ScrollArea::both()
@@ -190,9 +191,9 @@ fn draw_diff(ui: &mut egui::Ui, diff: Option<&Diff>) {
         });
 }
 
-/// What lanes and the people answering them agreed, newest first:
-/// questions and answers, each spec's decisions, each lane's newest
-/// handoff decisions.
+/// What lanes and the people answering them agreed: questions and
+/// answers newest first, then each spec's decisions (newest first) and
+/// each lane's newest handoff decisions, in board order.
 pub fn feed(ui: &mut egui::Ui, board: &LaneBoard) {
     egui::ScrollArea::vertical().id_salt("feed").show(ui, |ui| {
         ui.strong("Questions and answers");
@@ -212,7 +213,7 @@ pub fn feed(ui: &mut egui::Ui, board: &LaneBoard) {
         }
         for s in board.specs.iter().filter(|s| !s.decisions.is_empty()) {
             ui.strong(format!("{} {}: decisions", s.key, s.title));
-            lines(ui, &s.decisions, "");
+            lines(ui, &s.decisions);
         }
         for lane in &board.lanes {
             let decisions = lane
@@ -227,16 +228,13 @@ pub fn feed(ui: &mut egui::Ui, board: &LaneBoard) {
                     "#{} {}: handoff decisions",
                     lane.board.item.id, lane.board.item.title
                 ));
-                lines(ui, d, "");
+                lines(ui, d);
             }
         }
     });
 }
 
-fn lines(ui: &mut egui::Ui, lines: &[String], none: &str) {
-    if lines.is_empty() && !none.is_empty() {
-        ui.label(none);
-    }
+fn lines(ui: &mut egui::Ui, lines: &[String]) {
     for l in lines {
         ui.label(format!("- {l}"));
     }

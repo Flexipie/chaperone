@@ -15,7 +15,7 @@ use crate::watch::{Selected, Shown};
 /// A poll stats one file, no process; a commit shows within this.
 const POLL: Duration = Duration::from_millis(250);
 const DEADLINE: Duration = Duration::from_secs(5);
-const OUT_BYTES: usize = 1024 * 1024;
+pub const OUT_BYTES: usize = 1024 * 1024;
 
 /// One lane's diff, or why there is none.
 pub struct Diff {

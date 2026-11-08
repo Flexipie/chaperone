@@ -36,7 +36,6 @@ pub struct CheckRow {
 #[derive(Debug, Serialize)]
 pub struct FindingRow {
     pub check: String,
-    pub head_sha: Option<String>,
     pub severity: String,
     /// open | fixed | answered
     pub status: String,
@@ -75,8 +74,8 @@ impl Ledger {
         // unique (check_event_id, finding_key): a check recorded again on
         // the same head keeps the earlier round's findings.
         let mut stmt = tx.prepare(
-            "SELECT json_extract(e.payload_json, '$.check'), f.head_sha, f.severity,
-                    f.status, f.path, f.title
+            "SELECT json_extract(e.payload_json, '$.check'), f.severity, f.status, f.path,
+                    f.title
                FROM events e JOIN findings f ON f.check_event_id = e.id
               WHERE e.lane_id = ?1 AND e.kind = 'check.finished'
               ORDER BY f.status = 'open' DESC, e.id DESC, f.id LIMIT ?2",
@@ -85,11 +84,10 @@ impl Ledger {
             .query_map((id, ROWS), |r| {
                 Ok(FindingRow {
                     check: r.get(0)?,
-                    head_sha: r.get(1)?,
-                    severity: r.get(2)?,
-                    status: r.get(3)?,
-                    path: r.get(4)?,
-                    title: r.get(5)?,
+                    severity: r.get(1)?,
+                    status: r.get(2)?,
+                    path: r.get(3)?,
+                    title: r.get(4)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
