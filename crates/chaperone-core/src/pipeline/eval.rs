@@ -36,6 +36,33 @@ impl Pipeline {
         to: Phase,
         facts: &FactBundle,
     ) -> Result<(), Denied> {
+        let (gates, eval) = self.row(transition, route, to, facts)?;
+        match gates.into_iter().find(|(_, passed)| !passed) {
+            Some((gate, _)) => Err(eval.deny(&gate)),
+            None => Ok(()),
+        }
+    }
+
+    /// Each gate transition `transition` to `to` requires on `route`, in
+    /// order, and whether it holds on `facts`. No row is denied as in
+    /// [`Pipeline::evaluate`].
+    pub fn gates(
+        &self,
+        transition: &str,
+        route: Route,
+        to: Phase,
+        facts: &FactBundle,
+    ) -> Result<Vec<(String, bool)>, Denied> {
+        self.row(transition, route, to, facts).map(|(gates, _)| gates)
+    }
+
+    fn row<'a>(
+        &'a self,
+        transition: &str,
+        route: Route,
+        to: Phase,
+        facts: &'a FactBundle,
+    ) -> Result<(Vec<(String, bool)>, Eval<'a>), Denied> {
         let Some(row) = self
             .transitions
             .iter()
@@ -48,12 +75,12 @@ impl Pipeline {
             facts,
             loaded: Fact::Str(self.hash.clone()),
         };
-        for gate in &row.requires {
-            if eval.gate(gate) != Some(true) {
-                return Err(eval.deny(gate));
-            }
-        }
-        Ok(())
+        let gates = row
+            .requires
+            .iter()
+            .map(|gate| (gate.clone(), eval.gate(gate) == Some(true)))
+            .collect();
+        Ok((gates, eval))
     }
 }
 

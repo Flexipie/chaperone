@@ -491,6 +491,10 @@ pub struct BoardStats {
     pub lanes: Vec<Value>,
     /// `stats --merged-since <since>`, or why it was refused.
     pub cohort: Result<Value, Refusal>,
+    /// Per repo of an open lane (lowercased slug): the cohort
+    /// `claim_to_merge_h_median` of its lanes with a `pr.merged` in the
+    /// last 30 days, null when none has merged.
+    pub repo_median_h: BTreeMap<String, Value>,
 }
 
 impl Ledger {
@@ -520,11 +524,37 @@ impl Ledger {
             Err(r) => return Err(std::io::Error::other(format!("stats: {r:?}")).into()),
         };
         let cohort = self.stats(&Cohort::MergedSince(since.clone()))?;
+        let mut stmt = tx.prepare(
+            "SELECT DISTINCT lower(repo_slug) FROM lanes
+              WHERE status NOT IN ('done', 'cancelled') AND repo_slug IS NOT NULL",
+        )?;
+        let repos = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        let mut merged = tx.prepare(
+            "SELECT DISTINCT e.lane_id FROM events e JOIN lanes l ON l.id = e.lane_id
+              WHERE e.kind = 'pr.merged' AND lower(l.repo_slug) = ?1
+                AND json_extract(e.payload_json, '$.merged_at')
+                    >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')",
+        )?;
+        let mut repo_median_h = BTreeMap::new();
+        for repo in repos {
+            let ids = merged
+                .query_map([&repo], |r| r.get(0))?
+                .collect::<Result<Vec<i64>, _>>()?;
+            // The ids were just read, so none is refused.
+            let median = match self.stats(&Cohort::Work(ids))? {
+                Ok(v) => v["cohort"]["claim_to_merge_h_median"].clone(),
+                Err(r) => return Err(std::io::Error::other(format!("stats: {r:?}")).into()),
+            };
+            repo_median_h.insert(repo, median);
+        }
         Ok(BoardStats {
             data_version,
             since,
             lanes,
             cohort,
+            repo_median_h,
         })
     }
 }
