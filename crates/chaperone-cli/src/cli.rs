@@ -112,9 +112,40 @@ pub enum Cmd {
         #[arg(long, requires = "entry_points", value_delimiter = ',')]
         declared: Option<Vec<String>>,
     },
+    #[command(subcommand)]
+    Pipeline(PipelineCmd),
+    /// Check skill and script files against this binary: every chaperone
+    /// command, flag and value they call, the handoff fields they write and
+    /// the pipeline version they name. With --repo, also the repo's profile
+    /// areas and whether this binary's code lags the repo's origin/main.
+    /// Any mismatch is a `drift` error (exit 1) listing each with file:line.
+    /// Reads files and git, never the ledger
+    Doctor {
+        /// Directories (searched recursively) or files to read: .md, .sh,
+        /// .py, and scripts with a shell or python shebang
+        #[arg(long, required = true, num_args = 1..)]
+        skills: Vec<PathBuf>,
+        /// A checkout of the repo: check its profile's `[areas]` and
+        /// `[[entry_points]]` against its tracked files, and this binary's
+        /// commit against its origin/main
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// The profile (default: the --repo origin's in
+        /// ~/dotfiles/claude/pipeline/profiles)
+        #[arg(long, requires = "repo")]
+        profile: Option<PathBuf>,
+    },
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
+}
+
+/// The pipeline documents this binary runs
+#[derive(Subcommand, Debug)]
+pub enum PipelineCmd {
+    /// The pipeline a new claim stamps: {id, hash}. Skills read the
+    /// version from here rather than naming one
+    Current,
 }
 
 impl Cmd {
@@ -152,7 +183,11 @@ impl Cmd {
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
-            Cmd::Overlap { .. } | Cmd::Stats { .. } | Cmd::Impact { .. } => None,
+            Cmd::Overlap { .. }
+            | Cmd::Stats { .. }
+            | Cmd::Impact { .. }
+            | Cmd::Pipeline(_)
+            | Cmd::Doctor { .. } => None,
         }
     }
 }

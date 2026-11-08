@@ -72,7 +72,7 @@ impl Rules {
     }
 
     /// Every area `path` is in; only an entry point's file must be in one.
-    pub(crate) fn areas<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a str> {
+    pub fn areas<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a str> {
         self.areas
             .iter()
             .filter(move |(_, globs)| globs.iter().any(|g| glob(g, path)))
