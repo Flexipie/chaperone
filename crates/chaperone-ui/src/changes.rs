@@ -49,6 +49,8 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
         // The (data_version, reflog times) last read.
         let mut seen = None;
         let mut lanes: HashMap<i64, (Key, Lane)> = HashMap::new();
+        // Lanes whose last read failed, read again on the next overlap run.
+        let mut retry: BTreeSet<i64> = BTreeSet::new();
         let mut repos: HashMap<String, Built> = HashMap::new();
         loop {
             thread::sleep(POLL);
@@ -138,12 +140,19 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 if t.cut > 0 {
                     n.push(format!("{} worktree paths cut", t.cut));
                 }
+                if t.worktree == "ok" && t.paths == 0 {
+                    n.push("no commits since the base".into());
+                }
             }
 
             lanes.retain(|id, _| want.iter().any(|w| w.id == *id));
+            retry.retain(|id| lanes.contains_key(id));
             let mut by_repo: BTreeMap<String, (String, Vec<Part>)> = BTreeMap::new();
             for w in &want {
-                let paths = files.remove(&w.id).unwrap_or_default();
+                // Sorted: overlap lists shared files first, so another lane's
+                // clash would reorder them.
+                let mut paths = files.remove(&w.id).unwrap_or_default();
+                paths.sort_unstable();
                 let note = notes.remove(&w.id).unwrap_or_default();
                 if paths.is_empty() && note.is_empty() {
                     lanes.remove(&w.id);
@@ -151,12 +160,23 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 }
                 let key = (heads.get(&w.id).cloned().unwrap_or_default(), paths);
                 // An unread worktree keeps the part last read from it.
-                let fresh = lanes
-                    .get(&w.id)
-                    .is_some_and(|(k, _)| *k == key || unread.contains(&w.id));
+                let fresh = lanes.get(&w.id).is_some_and(|(k, _)| {
+                    (*k == key && !retry.contains(&w.id)) || unread.contains(&w.id)
+                });
                 if !fresh {
                     let lane = read_lane(w, &key);
+                    // A failed read (a timeout on a busy machine) is tried
+                    // again on the next overlap run, not kept for good.
+                    if lane.impact.is_err()
+                        || lane.notes.iter().any(|n| n.starts_with("no line counts"))
+                    {
+                        retry.insert(w.id);
+                    } else {
+                        retry.remove(&w.id);
+                    }
                     lanes.insert(w.id, (key, lane));
+                    // A read under the same key (a retry) changes the part.
+                    repos.remove(&w.slug.to_lowercase());
                 }
                 by_repo
                     .entry(w.slug.to_lowercase())
@@ -199,7 +219,7 @@ fn publish(shown: &Mutex<Shown>, graph: Result<Repos, String>, changed: &impl Fn
 
 /// One lane's impact and lines changed, read at `key`.
 fn read_lane(w: &Want, key: &Key) -> Lane {
-    let (head, paths) = key;
+    let (_, paths) = key;
     let mut notes = Vec::new();
     let Some(wt) = w.worktree.as_deref().map(Path::new).filter(|p| p.is_dir()) else {
         return Lane {
@@ -229,9 +249,6 @@ fn read_lane(w: &Want, key: &Key) -> Lane {
             impact_in(wt, paths.clone(), None, false, None).map_err(why)
         }
     };
-    if head.is_empty() {
-        notes.push("no commits since the base".into());
-    }
     Lane {
         id: w.id,
         files,
