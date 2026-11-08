@@ -102,6 +102,7 @@ fn diff(bin: &Path, lane: &Selected) -> State {
             "diff",
             "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
             "--merge-base",
             "--end-of-options",
             base,

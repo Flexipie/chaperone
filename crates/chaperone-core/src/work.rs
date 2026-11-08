@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 pub(crate) use self::handoff::commit_ok;
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
 pub use self::lane_board::{AttentionRow, BoardLane, LaneBoard, SpecTitle, Stamps};
-pub use self::lane_detail::{CheckRow, FindingRow, LaneDetail};
+pub use self::lane_detail::{CheckRow, DETAIL_ROWS, FindingRow, LaneDetail};
 use crate::cursor::{self, Cursor, Page};
 use crate::engine;
 use crate::ledger::{
@@ -971,7 +971,7 @@ impl Ledger {
 
 /// A handoff event read from columns `base..base + 6` (id, lane, agent,
 /// session, handoff JSON, at).
-fn handoff_at(r: &Row, base: usize) -> Result<Handoff, LedgerError> {
+pub(crate) fn handoff_at(r: &Row, base: usize) -> Result<Handoff, LedgerError> {
     let raw: String = r.get(base + 4)?;
     Ok(Handoff {
         id: r.get(base)?,

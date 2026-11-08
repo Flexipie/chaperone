@@ -26,8 +26,17 @@ pub struct Shown {
     pub selected: Option<Selected>,
     /// Bumped by the diff's Refresh button.
     pub refresh: u64,
-    pub detail: Option<LaneDetail>,
+    pub detail: Option<Detail>,
     pub diff: Option<Diff>,
+}
+
+/// One lane's detail as read at `version`, or why it could not be. A
+/// failed read shows in the panel and is tried again on the next change,
+/// never every poll.
+pub struct Detail {
+    pub lane: i64,
+    version: i64,
+    pub read: Result<LaneDetail, String>,
 }
 
 /// The lane picked on the board, with what its detail and diff read.
@@ -69,9 +78,9 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     }
                     // Dropped if another lane was picked meanwhile.
                     if let Some(d) = detail
-                        && s.selected.as_ref().map(|l| l.id) == Some(d.work_id)
+                        && s.selected.as_ref().map(|l| l.id) == Some(d.lane)
                     {
-                        loaded = Some((d.data_version, d.work_id));
+                        loaded = Some((d.version, d.lane));
                         s.detail = Some(d);
                     }
                     s.error = None;
@@ -105,7 +114,7 @@ fn poll(
     seen: Option<i64>,
     loaded: Option<(i64, i64)>,
     want: Option<&Selected>,
-) -> Result<(Option<LaneBoard>, Option<LaneDetail>), LedgerError> {
+) -> Result<(Option<LaneBoard>, Option<Detail>), LedgerError> {
     let ledger = match ledger {
         Some(l) => l,
         None => ledger.insert(Ledger::open_read_only(path)?),
@@ -118,7 +127,12 @@ fn poll(
     };
     let detail = match want {
         Some(l) if loaded != Some((version, l.id)) => {
-            Some(ledger.lane_detail(l.id, l.key.as_deref())?)
+            let read = ledger.lane_detail(l.id, l.key.as_deref());
+            Some(Detail {
+                lane: l.id,
+                version: read.as_ref().map_or(version, |d| d.data_version),
+                read: read.map_err(|e| e.to_string()),
+            })
         }
         _ => None,
     };

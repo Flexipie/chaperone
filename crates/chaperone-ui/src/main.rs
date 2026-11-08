@@ -69,13 +69,17 @@ impl eframe::App for App {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         let mut shown = self.shown.lock().unwrap();
-        // A claim or update since the click moves the worktree or base.
-        let fresh = shown.selected.as_ref().and_then(|sel| {
-            let board = shown.board.as_ref()?;
-            let lane = board.lanes.iter().find(|l| l.board.item.id == sel.id)?;
-            Some(Selected::of(&lane.board.item)).filter(|f| f != sel)
-        });
-        if fresh.is_some() {
+        // A claim or update since the click moves the worktree or base; a
+        // lane done or cancelled since leaves the board, and its panel closes.
+        let fresh = match (&shown.selected, &shown.board) {
+            (Some(sel), Some(board)) => {
+                let lane = board.lanes.iter().find(|l| l.board.item.id == sel.id);
+                let now = lane.map(|l| Selected::of(&l.board.item));
+                (now.as_ref() != Some(sel)).then_some(now)
+            }
+            _ => None,
+        };
+        if let Some(fresh) = fresh {
             shown.selected = fresh;
         }
         let mut picked = None;
@@ -91,7 +95,7 @@ impl eframe::App for App {
                 .board
                 .as_ref()
                 .and_then(|b| b.lanes.iter().find(|l| l.board.item.id == sel.id));
-            let detail = shown.detail.as_ref().filter(|d| d.work_id == sel.id);
+            let detail = shown.detail.as_ref().filter(|d| d.lane == sel.id);
             let diff = shown.diff.as_ref().filter(|d| d.lane == sel.id);
             egui::Panel::right("detail")
                 .resizable(true)

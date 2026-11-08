@@ -1,12 +1,12 @@
 //! The selected lane's panel (issue, spec slice, handoffs, checks,
 //! findings, diff) and the board's feed of decisions and questions.
 
-use chaperone_core::work::{BoardLane, LaneBoard, LaneDetail};
+use chaperone_core::work::{BoardLane, DETAIL_ROWS, LaneBoard, LaneDetail};
 use eframe::egui::{self, Color32, RichText, TextStyle};
 
 use crate::board;
 use crate::diff::{Diff, OUT_BYTES, State};
-use crate::watch::Selected;
+use crate::watch::{Detail, Selected};
 
 /// Lines of diff shown before the panel scrolls them.
 const DIFF_HEIGHT: f32 = 420.0;
@@ -16,7 +16,7 @@ pub fn draw(
     ui: &mut egui::Ui,
     sel: &Selected,
     lane: Option<&BoardLane>,
-    detail: Option<&LaneDetail>,
+    detail: Option<&Detail>,
     diff: Option<&Diff>,
 ) -> bool {
     let mut refresh = false;
@@ -27,12 +27,19 @@ pub fn draw(
                 ui.heading(&lane.board.item.title);
             }
             issue(ui, sel.key.as_deref());
-            let Some(d) = detail else {
-                ui.label("Reading the lane...");
-                return;
+            let d = match detail.map(|d| &d.read) {
+                None => {
+                    ui.label("Reading the lane...");
+                    return;
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, e);
+                    return;
+                }
+                Some(Ok(d)) => d,
             };
             section(ui, "Spec slice", |ui| slice(ui, d));
-            section(ui, "Handoffs", |ui| handoffs(ui, sel.id, d));
+            section(ui, "Handoffs", |ui| handoffs(ui, d));
             section(ui, "Checks", |ui| checks(ui, d));
             section(ui, "Review findings", |ui| findings(ui, d));
             section(ui, "Diff against the base", |ui| {
@@ -87,21 +94,20 @@ fn slice(ui: &mut egui::Ui, d: &LaneDetail) {
     }
 }
 
-fn handoffs(ui: &mut egui::Ui, id: i64, d: &LaneDetail) {
-    let Some(dossier) = &d.dossier else {
-        ui.label("No handoffs read: the lane has no dossier.");
-        return;
-    };
-    let mut any = false;
-    for h in dossier.handoffs.items.iter().filter(|h| h.work_id == id) {
-        any = true;
+fn handoffs(ui: &mut egui::Ui, d: &LaneDetail) {
+    if d.handoffs.is_empty() {
+        ui.label("No handoffs.");
+    }
+    capped(ui, d.handoffs.len());
+    for h in &d.handoffs {
+        let (at, h) = (&h.created_at, &h.handoff);
         let ready = match h.ready {
             Some(true) => " ready",
             Some(false) => " not ready",
             None => "",
         };
         let status = h.status.as_deref().unwrap_or("-");
-        ui.strong(format!("{} {status}{ready}", h.at));
+        ui.strong(format!("{at} {status}{ready}"));
         ui.label(&h.summary);
         for (name, v) in [
             ("commit", &h.commit),
@@ -113,8 +119,12 @@ fn handoffs(ui: &mut egui::Ui, id: i64, d: &LaneDetail) {
             }
         }
     }
-    if !any {
-        ui.label("No handoffs.");
+}
+
+/// Says so when a list stopped at the read's cap.
+fn capped(ui: &mut egui::Ui, n: usize) {
+    if n as i64 == DETAIL_ROWS {
+        ui.label(format!("The newest {DETAIL_ROWS} shown."));
     }
 }
 
@@ -123,6 +133,7 @@ fn checks(ui: &mut egui::Ui, d: &LaneDetail) {
         ui.label("No checks recorded.");
         return;
     }
+    capped(ui, d.checks.len());
     egui::Grid::new("checks").striped(true).show(ui, |ui| {
         for c in &d.checks {
             ui.label(&c.check);
@@ -139,10 +150,12 @@ fn findings(ui: &mut egui::Ui, d: &LaneDetail) {
         ui.label("No review findings recorded.");
         return;
     }
+    capped(ui, d.findings.len());
     for f in &d.findings {
         let path = f.path.as_deref().map_or(String::new(), |p| format!(" {p}"));
+        let head = f.head_sha.as_deref().map_or("-", board::short);
         ui.label(format!(
-            "{} {} [{}]{path}: {}",
+            "{} @ {head} {} [{}]{path}: {}",
             f.check, f.severity, f.status, f.title
         ));
     }
