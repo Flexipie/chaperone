@@ -286,3 +286,29 @@ fn the_cohort_filter() {
         Err(Refusal::NotFound { id: 99, .. })
     ));
 }
+
+#[test]
+fn board_stats_lists_a_lane_closed_before_its_pr_merged() {
+    let (_dir, path, ledger) = common::ledger();
+    let late = lane(&ledger);
+    let old = lane(&ledger);
+    // Closed a month before the merge: `done` moves `updated_at`, a
+    // `pr.merged` does not.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE lanes SET status = 'done', updated_at = '2026-01-01T00:00:00.000Z'",
+            [],
+        )
+        .unwrap();
+    merged(&ledger, late, &ledger.now().unwrap());
+    merged(&ledger, old, "2026-01-01T00:00:00.000Z");
+    let ids: Vec<i64> = ledger
+        .board_stats(None)
+        .unwrap()
+        .merged
+        .iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, [late]);
+}

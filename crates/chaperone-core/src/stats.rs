@@ -544,32 +544,25 @@ impl Ledger {
         };
         let cohort = self.stats(&Cohort::MergedSince(since.clone()))?;
         // Done lanes only: an open one with a merged PR (a stack lane, or
-        // one not closed yet) stays an open lane. Read from `lanes_status`
-        // (`done` sets `updated_at`, after the merge) and `events_lane`,
-        // never a scan of every event. A day's slack for a lane closed
-        // late; `merged_at` decides.
+        // one not closed yet) stays an open lane. By `merged_at`, as
+        // `repo_median` reads: a lane closed before its PR merged is kept.
         let goal = "json_extract(payload_json, '$.handoff.brief.goal')";
         let mut stmt = tx.prepare(&format!(
-            "SELECT id, repo_slug, lane_key, lane_pos, title, merged, goal FROM (
-               SELECT l.id, l.repo_slug, l.lane_key, l.lane_pos, l.title,
-                      (SELECT unixepoch(max(json_extract(payload_json, '$.merged_at')))
-                         FROM events WHERE lane_id = l.id AND kind = 'pr.merged') AS merged,
-                      (SELECT {goal} FROM events
-                        WHERE lane_id = l.id AND {IS_HANDOFF} AND trim(ifnull({goal}, '')) <> ''
-                        ORDER BY id DESC LIMIT 1) AS goal
-                 FROM lanes l
-                WHERE l.status = 'done'
-                  AND l.updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1))
-              WHERE merged >= unixepoch('now', ?2)
-              ORDER BY merged DESC, id DESC LIMIT ?3"
+            "SELECT l.id, l.repo_slug, l.lane_key, l.lane_pos, l.title,
+                    unixepoch(max(json_extract(e.payload_json, '$.merged_at'))) AS merged,
+                    (SELECT {goal} FROM events
+                      WHERE lane_id = l.id AND {IS_HANDOFF} AND trim(ifnull({goal}, '')) <> ''
+                      ORDER BY id DESC LIMIT 1)
+               FROM events e JOIN lanes l ON l.id = e.lane_id
+              WHERE e.kind = 'pr.merged' AND l.status = 'done'
+                AND json_extract(e.payload_json, '$.merged_at')
+                    >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)
+              GROUP BY l.id
+              ORDER BY merged DESC, l.id DESC LIMIT ?2"
         ))?;
         let merged = stmt
             .query_map(
-                rusqlite::params![
-                    format!("-{} days", MERGED_DAYS + 1),
-                    format!("-{MERGED_DAYS} days"),
-                    MERGED_MAX
-                ],
+                rusqlite::params![format!("-{MERGED_DAYS} days"), MERGED_MAX],
                 |r| {
                     Ok(MergedLane {
                         id: r.get(0)?,
