@@ -38,7 +38,9 @@ shared by worktrees.
    or tables of its own (the ledger) is never written to, its WAL included: the check
    runs in `BEGIN IMMEDIATE` (a migration in flight is waited for and seen) with
    checkpoint-on-close off until it passes, so a refusal rolls back and leaves the file
-   and its WAL as they were. An empty file at
+   and its WAL as they were (a WAL with no frames is removed on close, as any last
+   reader's close does); a file with more than one hard link is refused, since SQLite
+   would name its WAL after the link. An empty file at
    the default path is one a first run left before writing, and is used. Writes are one
    transaction of `INSERT OR IGNORE`, so two worktrees writing at once agree. Rows grow
    with history; past four times the current tree's file count (at least 1,024), a write

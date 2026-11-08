@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -64,6 +65,12 @@ impl Cache {
         if given && std::fs::metadata(path).is_ok_and(|m| m.len() == 0) {
             return Err(not_cache());
         }
+        // SQLite names the WAL after the path it opened, so a hard link to the
+        // ledger hides the ledger's WAL from the check below. Chaperone's own
+        // cache is never hard-linked.
+        if std::fs::metadata(path).is_ok_and(|m| m.nlink() > 1) {
+            return Err(not_cache());
+        }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         // `--cache` may name another SQLite file (the ledger), and nothing may
@@ -80,8 +87,8 @@ impl Cache {
         )?;
         if foreign {
             let _ = conn.execute_batch("ROLLBACK");
-            // A WAL with no frames (made by this open) is safe to checkpoint:
-            // closing then removes it as any reader's close does.
+            // A WAL with no frames (this open's, or one left empty) is safe to
+            // checkpoint: closing then removes it as any last reader's does.
             let wal = conn.path().map(|p| format!("{p}-wal"));
             if wal.is_none_or(|w| std::fs::metadata(w).map_or(true, |m| m.len() == 0)) {
                 let _ = conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false);
@@ -203,7 +210,8 @@ mod tests {
     use super::*;
 
     /// #95: refusing the ledger as a cache must leave it and its WAL as they
-    /// were, also through a symlink (a read-write close checkpointed them).
+    /// were, also through a symlink or a hard link (a read-write close
+    /// checkpointed them).
     #[test]
     fn ledger_and_its_wal_left_byte_for_byte() {
         let dir = tempfile::tempdir().unwrap();
@@ -227,14 +235,22 @@ mod tests {
         std::os::unix::fs::symlink(&ledger, &link).unwrap();
         let bytes = |p: &str| std::fs::read(dir.path().join(p)).unwrap();
         let before = (bytes("ledger.db"), bytes("ledger.db-wal"));
-        for path in [&ledger, &link] {
+        let hard = dir.path().join("hard.db");
+        std::fs::hard_link(&ledger, &hard).unwrap();
+        for path in [&ledger, &link, &hard] {
             let cache = Cache::open(Some(path), true);
-            assert!(cache.skipped.is_some());
+            assert_eq!(
+                cache.skipped.as_deref(),
+                Some("not a chaperone graph cache")
+            );
             drop(cache);
             assert!(
                 before == (bytes("ledger.db"), bytes("ledger.db-wal")),
                 "{path:?}"
             );
         }
+        // A cache of its own is still used.
+        let own = Cache::open(Some(&dir.path().join("own.db")), true);
+        assert!(own.conn.is_some() && own.skipped.is_none());
     }
 }
