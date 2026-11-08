@@ -48,6 +48,11 @@ pub fn group(board: &LaneBoard) -> Vec<Repo<'_>> {
         .collect()
 }
 
+/// A commit's first 7 characters.
+pub fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(7)]
+}
+
 /// Time from `then` to `now`, both seconds since the epoch: `<1m`, `5m`,
 /// `3h`, `2d`.
 pub fn age(then: i64, now: i64) -> String {

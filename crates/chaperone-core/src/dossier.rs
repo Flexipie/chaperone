@@ -346,6 +346,15 @@ fn decision_lines(mut d: Vec<Decision>, name: &'static str, omitted: &mut Omitte
         .collect()
 }
 
+/// The slice section alone (`chaperone-ui`'s lane detail), in the caller's
+/// read transaction. None when the key does not parse.
+pub(crate) fn slice_of(conn: &Connection, raw: &str) -> Result<Option<SliceSection>, LedgerError> {
+    key_of(raw)
+        .ok()
+        .map(|key| slice_section(conn, &key))
+        .transpose()
+}
+
 fn slice_section(conn: &Connection, key: &str) -> Result<SliceSection, LedgerError> {
     let mut omitted = Omitted::new();
     let spec = |id: Option<i64>| -> Result<Option<Spec>, LedgerError> {

@@ -1,10 +1,14 @@
-//! git calls in a worktree, under a deadline: `overlap` and `impact`.
+//! git calls in a worktree, under a deadline: `overlap`, `impact` and the
+//! UI's diff.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
 use crate::child;
+
+/// Where a lane's base is looked for, before its claimed `base_sha`.
+pub const BASES: [&str; 3] = ["origin/HEAD", "origin/main", "origin/master"];
 
 /// The git binary itself, from its exec path: macOS's `/usr/bin/git` is
 /// an xcrun shim that adds about 9 ms to every call. Else plain `git`.

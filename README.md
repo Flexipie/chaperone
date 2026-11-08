@@ -14,6 +14,9 @@ milestone 1. To build and test, see [CONTRIBUTING.md](CONTRIBUTING.md) "Setup".
 
 `chaperone-ui` is a read-only window with every open lane, grouped by repo and spec, that
 redraws when the ledger changes: `cargo run --release -p chaperone-ui -- [--db PATH]`.
+Clicking a lane shows its issue, spec slice and decisions, handoffs, checks, review
+findings and its worktree's diff against the base; a feed shows the questions, answers and
+decisions between lanes.
 It opens the ledger read-only and never writes it. CI shows "not recorded" until the
 ledger has a CI record.
 

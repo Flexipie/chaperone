@@ -82,7 +82,7 @@ R6 on this machine, 2026-11-02, release, thin LTO: warm ping p50 **3.9 ms**, ope
 | B1 | Stripped release binary | ≤ **15 MiB**. On macOS the file links system libraries only: `libSystem`, and `libiconv`, which the `libc` crate links on Apple targets (v0: 3.7 MiB, [perf review](../perf/v0-review.md)). SQLite is inside. | Same check, on the release workflow |
 | I1 | Instruction count vs the base branch | CI only | ≤ **+10%** on three benches: semantic hash of `pipelines/v17.toml`, `to_ready` on the R7 fixture, 100 append-and-fold calls on a memory VFS with `synchronous=OFF` |
 | U1 | `chaperone-ui` start to the first frame that shows the board (`--first-frame`) | p50 ≤ **300 ms** (2026-11-07: p50 236 ms, max 290 ms, 20 samples after 3 warm) | Not in CI: runners have no display |
-| U2 | `chaperone-ui`: another process commits, the watcher asks for a repaint; 50 lanes × 200 events | p99 ≤ **150 ms** (123 ms: the 100 ms poll plus a 17.6 ms board reload) | Not in CI |
+| U2 | `chaperone-ui`: another process commits, the watcher asks for a repaint; 50 lanes × 200 events, a spec of 20 decisions, a question per lane, one lane selected | p99 ≤ **150 ms** (2026-11-08, #41: 126 to 142 ms over four runs, the 100 ms poll plus a 20 ms board, feed and lane detail reload; 123 ms with the board alone) | Not in CI |
 | U3 | `chaperone-ui` CPU, window open, ledger quiet, 50 s | ≤ **0.5%** of one core (0.06%) | Not in CI |
 | U4 | `chaperone-ui` max RSS | ≤ **128 MiB** (116 MiB at start, 78 MiB steady; the GL context and fonts, not the board) | Not in CI |
 
@@ -116,7 +116,7 @@ CHANGELOG.md               first release creates it; every release updates it
 LICENSE-MIT                first commit that contains code (ADR 0001)
 LICENSE-APACHE
 CONTRIBUTING.md
-crates/chaperone-core/      ledger, engine, migrations. No clap, no PTY, no home directory.
+crates/chaperone-core/      ledger, engine, migrations, deadline-bounded git and daisy-cli calls. No clap, no PTY, no home directory.
 crates/chaperone-cli/       the `chaperone` binary. CLI, supervise, in-tree adapters.
 crates/chaperone-fake/      scripted agent. publish = false. Not installed by `cargo install`.
 crates/chaperone-graph/     the code graph behind `impact`: tree-sitter facts, module map, cache (ADR 0043).
