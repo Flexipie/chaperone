@@ -3,8 +3,9 @@
 //! cohort's events in lane order and every number is folded from them.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
-use rusqlite::{Transaction, TransactionBehavior};
+use rusqlite::{ToSql, Transaction, TransactionBehavior};
 use serde_json::{Map, Value, json};
 
 use crate::checks::ATTENTION_TYPES;
@@ -55,6 +56,8 @@ struct Lane {
     title: String,
     kind: Option<String>,
     pipeline_id: Option<String>,
+    /// The first `pipeline vN` a handoff summary names, in log order.
+    stamp: Option<String>,
     /// The first claim: its `at` and its julian day.
     claimed: Option<(String, f64)>,
     /// Every PR the lane held, lowercased, and the event that set the first.
@@ -266,6 +269,10 @@ impl Lane {
             let next = p.pointer("/handoff/next_action").and_then(Value::as_str);
             let real = !next.is_some_and(|n| n.trim_start().starts_with("reviewing"));
             self.handoffs.push((e.at.clone(), real));
+            if self.stamp.is_none() {
+                let summary = p.pointer("/handoff/summary").and_then(Value::as_str);
+                self.stamp = summary.and_then(stamp);
+            }
         }
         match e.kind.as_str() {
             "lane.claimed" if self.claimed.is_none() => {
@@ -393,6 +400,22 @@ impl Ledger {
             }
             Cohort::Work(ids) => ("SELECT value FROM json_each(?1)", json!(ids).to_string()),
         };
+        let lanes = self.load(filter, &arg)?;
+        if let Cohort::Work(ids) = cohort
+            && let Some(&id) = ids.iter().find(|id| !lanes.iter().any(|l| l.id == **id))
+        {
+            return Ok(Err(Refusal::NotFound {
+                entity: "work item",
+                id,
+            }));
+        }
+        Ok(Ok(summarize(&lanes)))
+    }
+
+    /// Every lane `filter` (a statement over `?1`) selects, folded from its
+    /// events in one read, in lane order.
+    fn load(&self, filter: &str, arg: &dyn ToSql) -> Result<Vec<Lane>, LedgerError> {
+        let conn = self.conn();
         let tok = |k: &str| format!("json_extract(payload_json, '$.{k}')");
         let sql = format!(
             "SELECT l.id, l.title, l.kind, l.pipeline_id, e.id, e.kind, e.at, e.day,
@@ -452,15 +475,7 @@ impl Ledger {
                 lane.fold(&ev);
             }
         }
-        if let Cohort::Work(ids) = cohort
-            && let Some(&id) = ids.iter().find(|id| !lanes.iter().any(|l| l.id == **id))
-        {
-            return Ok(Err(Refusal::NotFound {
-                entity: "work item",
-                id,
-            }));
-        }
-        Ok(Ok(summarize(&lanes)))
+        Ok(lanes)
     }
 }
 
@@ -615,4 +630,166 @@ fn summarize(lanes: &[Lane]) -> Value {
         .map(|(l, r)| l.json(r, reviews_known))
         .collect();
     json!({ "cohort": cohort, "lanes": lanes })
+}
+
+/// The pipeline changelog under the dotfiles root, as `lane-stats` reads it.
+pub const CHANGELOG: &str = "claude/pipeline-changelog.md";
+
+/// One `## vN <time>` entry of the pipeline changelog.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Version {
+    /// `v<N>`.
+    pub id: String,
+    /// When it started, RFC 3339 UTC with milliseconds.
+    pub at: String,
+    /// The lines under its heading, trimmed.
+    pub entry: String,
+}
+
+/// `<root>/claude/pipeline-changelog.md`, parsed by [`parse_changelog`].
+pub fn changelog(root: &Path) -> Result<Vec<Version>, Refusal> {
+    let path = root.join(CHANGELOG);
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        Refusal::InvalidInput(format!("pipeline changelog {}: {e}", path.display()))
+    })?;
+    parse_changelog(&text).map_err(Refusal::InvalidInput)
+}
+
+/// The changelog's versions in file order. A heading that starts `## v`
+/// and a digit must be `## v<N> <YYYY-MM-DDTHH:MMZ>`, N and the time both
+/// rising, so a typo fails rather than moving lanes between versions.
+/// Another `## ` heading ends the entry above it.
+pub fn parse_changelog(text: &str) -> Result<Vec<Version>, String> {
+    let mut out: Vec<Version> = Vec::new();
+    let mut body: Option<Vec<&str>> = None;
+    let close = |out: &mut Vec<Version>, body: &mut Option<Vec<&str>>| {
+        if let (Some(v), Some(lines)) = (out.last_mut(), body.take()) {
+            v.entry = lines.join("\n").trim().to_string();
+        }
+    };
+    let mut last_n = 0;
+    for (i, line) in text.lines().enumerate() {
+        if !line.starts_with("## ") {
+            if let Some(lines) = body.as_mut() {
+                lines.push(line);
+            }
+            continue;
+        }
+        close(&mut out, &mut body);
+        let Some(rest) = line
+            .strip_prefix("## v")
+            .filter(|r| r.starts_with(|c: char| c.is_ascii_digit()))
+        else {
+            continue;
+        };
+        let bad = |why: &str| format!("{CHANGELOG}:{}: {line:?} {why}", i + 1);
+        let (n, at) = rest
+            .trim_end()
+            .split_once(' ')
+            .ok_or_else(|| bad("is not `## v<N> <YYYY-MM-DDTHH:MMZ>`"))?;
+        let n: u64 = n
+            .parse()
+            .map_err(|_| bad("is not `## v<N> <YYYY-MM-DDTHH:MMZ>`"))?;
+        let shape = at.len() == 17
+            && at.bytes().zip("dddd-dd-ddTdd:ddZ".bytes()).all(|(c, p)| {
+                if p == b'd' {
+                    c.is_ascii_digit()
+                } else {
+                    c == p
+                }
+            });
+        if !shape {
+            return Err(bad("is not `## v<N> <YYYY-MM-DDTHH:MMZ>`"));
+        }
+        let at = format!("{}:00.000Z", &at[..16]);
+        if n <= last_n || out.last().is_some_and(|v| at <= v.at) {
+            return Err(bad("does not come after the version above it"));
+        }
+        last_n = n;
+        out.push(Version {
+            id: format!("v{n}"),
+            at,
+            entry: String::new(),
+        });
+        body = Some(Vec::new());
+    }
+    close(&mut out, &mut body);
+    Ok(out)
+}
+
+/// The first `pipeline v<N>` in `text`, as words (`lane-stats`'
+/// `\bpipeline (v\d+)\b`): `pipeline v17.1` names v17.
+fn stamp(text: &str) -> Option<String> {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices("pipeline v").find_map(|(i, m)| {
+        let before = text[..i].chars().next_back();
+        let rest = &text[i + m.len()..];
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let after = rest[digits..].chars().next();
+        (digits > 0 && !before.is_some_and(word) && !after.is_some_and(word))
+            .then(|| format!("v{}", &rest[..digits]))
+    })
+}
+
+impl Ledger {
+    /// `stats`' cohort numbers per pipeline version, over every lane not
+    /// cancelled (of `repo` when given). A lane's version is the first
+    /// `pipeline vN` a handoff summary names, else the version active at
+    /// its first claim (`manual` before the first); a lane never claimed
+    /// nor stamped ran no pipeline and is left out. Every changelog
+    /// version is listed, newest first, then stamped versions the
+    /// changelog lacks, then `manual`.
+    pub fn pipeline_history(&self, versions: &[Version], repo: Option<&str>) -> Checked<Value> {
+        for v in versions {
+            if !canonical_at(self.conn(), &v.at)? {
+                return Ok(Err(Refusal::InvalidInput(format!(
+                    "pipeline changelog: {} starts at {}, not a real time",
+                    v.id, v.at
+                ))));
+            }
+        }
+        let lanes = self.load(
+            "SELECT id FROM lanes WHERE status != 'cancelled'
+             AND (?1 IS NULL OR lower(repo_slug) = lower(?1))",
+            &repo,
+        )?;
+        let mut groups: BTreeMap<String, (Vec<Lane>, i64)> = BTreeMap::new();
+        for lane in lanes {
+            let (version, stamped) = match (&lane.stamp, &lane.claimed) {
+                (Some(s), _) => (s.clone(), 1),
+                (None, Some((at, _))) => {
+                    let v = versions.iter().rev().find(|v| v.at <= *at);
+                    (v.map_or("manual".into(), |v| v.id.clone()), 0)
+                }
+                (None, None) => continue,
+            };
+            let group = groups.entry(version).or_default();
+            group.0.push(lane);
+            group.1 += stamped;
+        }
+        let row = |id: &str, v: Option<&Version>, (lanes, stamped): (Vec<Lane>, i64)| {
+            let engine: BTreeSet<&str> = lanes
+                .iter()
+                .filter_map(|l| l.pipeline_id.as_deref())
+                .collect();
+            json!({
+                "version": id,
+                "started_at": v.map(|v| &v.at),
+                "entry": v.map(|v| &v.entry),
+                "engine_ids": engine,
+                "lane_ids": lanes.iter().map(|l| l.id).collect::<Vec<_>>(),
+                "version_from": { "stamp": stamped, "claim": lanes.len() as i64 - stamped },
+                "cohort": summarize(&lanes)["cohort"],
+            })
+        };
+        let mut out: Vec<Value> = versions
+            .iter()
+            .rev()
+            .map(|v| row(&v.id, Some(v), groups.remove(&v.id).unwrap_or_default()))
+            .collect();
+        let manual = groups.remove("manual");
+        out.extend(groups.into_iter().map(|(id, g)| row(&id, None, g)));
+        out.extend(manual.map(|g| row("manual", None, g)));
+        Ok(Ok(json!({ "versions": out })))
+    }
 }

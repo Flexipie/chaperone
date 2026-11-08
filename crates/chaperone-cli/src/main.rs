@@ -13,9 +13,9 @@ mod work;
 use std::io::Write;
 use std::path::PathBuf;
 
-use chaperone_core::ledger::{Ledger, SCHEMA_VERSION};
+use chaperone_core::ledger::{Ledger, Refusal, SCHEMA_VERSION};
 use chaperone_core::pipeline;
-use chaperone_core::stats::Cohort;
+use chaperone_core::stats::{self, Cohort};
 use clap::Parser;
 use clap::error::ErrorKind;
 use serde_json::json;
@@ -102,6 +102,20 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Pipeline(PipelineCmd::Current) => {
             let p = pipeline::current();
             Ok(Outcome::One(json!({ "id": p.id, "hash": p.hash })))
+        }
+        Cmd::Pipeline(PipelineCmd::History { dotfiles, repo }) => {
+            let root = dotfiles
+                .or_else(|| dirs::home_dir().map(|h| h.join("dotfiles")))
+                .ok_or_else(|| {
+                    CliError::from(Refusal::InvalidInput(
+                        "no home directory to find ~/dotfiles in; pass --dotfiles".into(),
+                    ))
+                })?;
+            let versions = stats::changelog(&root)?;
+            let ledger = Ledger::open(&path)?;
+            Ok(Outcome::One(
+                ledger.pipeline_history(&versions, repo.as_deref())??,
+            ))
         }
         Cmd::Doctor {
             skills,
