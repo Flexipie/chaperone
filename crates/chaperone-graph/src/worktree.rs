@@ -260,7 +260,7 @@ pub fn profile_file(slug: &str) -> Option<PathBuf> {
     )
 }
 
-fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, Error> {
+pub fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, Error> {
     let refuse = Error::Invalid;
     let (path, slug) = match profile {
         Some(p) => (p, None),

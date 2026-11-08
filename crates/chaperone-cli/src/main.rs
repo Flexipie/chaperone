@@ -3,6 +3,7 @@
 
 mod checks;
 mod cli;
+mod doctor;
 mod impact;
 mod output;
 mod overlap;
@@ -13,12 +14,13 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use chaperone_core::ledger::{Ledger, SCHEMA_VERSION};
+use chaperone_core::pipeline;
 use chaperone_core::stats::Cohort;
 use clap::Parser;
 use clap::error::ErrorKind;
 use serde_json::json;
 
-use cli::{Cli, Cmd, Format};
+use cli::{Cli, Cmd, Format, PipelineCmd};
 use output::{CliError, Meta, Outcome};
 
 fn main() {
@@ -97,6 +99,15 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
             meta,
             cli.format,
         ),
+        Cmd::Pipeline(PipelineCmd::Current) => {
+            let p = pipeline::current();
+            Ok(Outcome::One(json!({ "id": p.id, "hash": p.hash })))
+        }
+        Cmd::Doctor {
+            skills,
+            repo,
+            profile,
+        } => doctor::run(&skills, repo.as_deref(), profile),
         Cmd::Overlap { repo, uncommitted } => {
             overlap::run(&Ledger::open(&path)?, repo, uncommitted, meta, cli.format)
         }

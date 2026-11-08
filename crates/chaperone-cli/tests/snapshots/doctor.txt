@@ -1,0 +1,11 @@
+Check skill and script files against this binary: every chaperone command, flag and value they call, the handoff fields they write and the pipeline version they name. With --repo, also the repo's profile areas and whether this binary's code differs from the repo's origin/main. Any mismatch is a `drift` error (exit 1) listing each with file:line. Reads files and git, never the ledger
+
+Usage: chaperone doctor [OPTIONS] --skills <SKILLS>...
+
+Options:
+      --db <DB>             Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --skills <SKILLS>...  Directories (searched recursively) or files to read: .md, .sh, .py, and scripts with a shell or python shebang
+      --format <FORMAT>     Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --repo <REPO>         A checkout of the repo: check its profile's `[areas]` and `[[entry_points]]` against its tracked files, and this binary's commit against its origin/main
+      --profile <PROFILE>   The profile (default: the --repo origin's in ~/dotfiles/claude/pipeline/profiles)
+  -h, --help                Print help

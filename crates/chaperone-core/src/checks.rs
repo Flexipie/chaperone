@@ -20,7 +20,7 @@ const JOB: &str = "job";
 const BODY_CHARS: usize = 600;
 
 /// Each session check and the reasons it may be skipped for.
-const CHECKS: &[(&str, &[&str])] = &[
+pub const CHECKS: &[(&str, &[&str])] = &[
     ("plan_check", &["measure", "investigation", "docs", "tests"]),
     ("quality_gate", &["no_code", "tests"]),
     ("merge_verdict", &[]),

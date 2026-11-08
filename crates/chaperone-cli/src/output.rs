@@ -70,6 +70,8 @@ pub enum CliError {
     Internal(String),
     /// A failed `daisy-cli reviews get`, as `reviews record` reports it.
     Daisy(ErrorBody),
+    /// `doctor`'s mismatches, each `{file, line, kind, message}`.
+    Drift(Vec<Value>),
 }
 
 impl From<Refusal> for CliError {
@@ -232,6 +234,14 @@ impl ErrorBody {
             }
             CliError::Internal(m) => body("internal", m.clone(), None),
             CliError::Daisy(b) => b.clone(),
+            CliError::Drift(findings) => body(
+                "drift",
+                format!(
+                    "{} mismatches between the files and this binary",
+                    findings.len()
+                ),
+                Some(json!({ "findings": findings })),
+            ),
         }
     }
 }
