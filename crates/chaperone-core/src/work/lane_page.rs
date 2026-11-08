@@ -1,7 +1,7 @@
 //! The lane page's ledger data (`chaperone-ui` draws it): the lane's
-//! detail, its timeline, its decisions with who made them, its reviews, its review
-//! rounds and the gates its next gated step requires, in one read
-//! transaction. Its files are git's, not the ledger's
+//! detail, its timeline, its decisions with who made them, its local
+//! reviews and rounds and the gates its next gated step requires, in one
+//! read transaction. Its files are git's, not the ledger's
 //! (`git::lane_files`), and its repo's median claim to merge
 //! ([`Ledger::repo_median`]) folds every lane the repo merged in 30 days:
 //! neither belongs on a read that reruns at every commit.
@@ -30,7 +30,7 @@ pub struct LanePage {
     /// `review.local_head`: the head of the newest local review that ran,
     /// as the engine picks it (by job, not by when it was recorded).
     pub review_head: Option<String>,
-    /// The lane's local and PR reviews, newest job first.
+    /// The lane's local reviews, newest job first.
     pub reviews: Vec<ReviewRow>,
     /// None when this binary has no document for the lane's stamp, or the
     /// document no row for its route: unstamped, never "0 of 0 passed".
@@ -65,14 +65,9 @@ pub struct DecisionRow {
 
 #[derive(Debug, Serialize)]
 pub struct ReviewRow {
-    pub at: String,
-    /// local_review | pr_review
-    pub check: String,
     /// ran, or skipped for a failed or cancelled job (no score).
     pub outcome: String,
-    pub head: Option<String>,
     pub score: Option<f64>,
-    pub verdict: Option<String>,
 }
 
 /// The `handoff` transition to ready (to done on a route without one)
@@ -194,15 +189,11 @@ impl Ledger {
         }
 
         let mut stmt = tx.prepare(&format!(
-            "SELECT e.at, {}, {}, {}, {}, {} FROM events e
-              WHERE e.lane_id = ?1 AND e.kind = 'check.finished'
-                AND {} IN ('local_review', 'pr_review')
+            "SELECT {}, {} FROM events e
+              WHERE e.lane_id = ?1 AND e.kind = 'check.finished' AND {} = 'local_review'
               ORDER BY {} IS NULL, {} DESC, e.id DESC LIMIT ?2",
-            j("check"),
             j("outcome"),
-            j("head_sha"),
             j("score"),
-            j("verdict"),
             j("check"),
             j("job"),
             j("job"),
@@ -210,12 +201,8 @@ impl Ledger {
         let reviews = stmt
             .query_map((id, DETAIL_ROWS), |r| {
                 Ok(ReviewRow {
-                    at: r.get(0)?,
-                    check: r.get(1)?,
-                    outcome: r.get(2)?,
-                    head: r.get(3)?,
-                    score: r.get(4)?,
-                    verdict: r.get(5)?,
+                    outcome: r.get(0)?,
+                    score: r.get(1)?,
                 })
             })?
             .collect::<Result<_, _>>()?;

@@ -17,8 +17,8 @@ redraws when the ledger changes: `cargo run --release -p chaperone-ui -- [--db P
 Clicking a lane opens its page: a header (state, goal, agent, branch, PR, pipeline), tiles
 for time against the repo median, tokens, peak context, reviews, people needed and gates,
 then its timeline, decisions, what to check by hand and its files with area and +/-, and
-folded its handoffs, review findings, areas and diff against the base; a feed shows the questions, answers and
-decisions between lanes. The change graph tab draws each lane's changed files in its
+folded its handoffs, review findings, areas and diff against the base. A feed shows the
+questions, answers and decisions between lanes. The change graph tab draws each lane's changed files in its
 colour, the files that depend on them by depth and the entry points they reach
 (`overlap` and `impact`), with files two lanes share ringed.
 It opens the ledger read-only and never writes it; the graph writes only the code graph's

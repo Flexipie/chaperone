@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 pub(crate) use self::handoff::commit_ok;
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
 pub use self::lane_board::{AttentionRow, BoardLane, LaneBoard, SpecTitle, Stamps};
-pub use self::lane_detail::{CheckRow, DETAIL_ROWS, FindingRow, LaneDetail};
+pub use self::lane_detail::{DETAIL_ROWS, FindingRow, LaneDetail};
 pub use self::lane_page::{DecisionRow, GateRow, Gates, LanePage, ReviewRow, TimelineRow};
 use crate::cursor::{self, Cursor, Page};
 use crate::engine;

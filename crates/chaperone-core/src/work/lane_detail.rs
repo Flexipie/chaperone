@@ -1,6 +1,6 @@
 //! One lane's detail (`chaperone-ui` draws it): its issue key's spec
-//! slice (the dossier's section), its handoffs, its check results by head
-//! and its reviews' findings, inside the lane page's read transaction.
+//! slice (the dossier's section), its handoffs and its reviews' findings,
+//! inside the lane page's read transaction.
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -21,19 +21,8 @@ pub struct LaneDetail {
     pub slice: Option<SliceSection>,
     /// Newest first.
     pub handoffs: Vec<Handoff>,
-    /// Newest first, one per check and head (`gate_results`).
-    pub checks: Vec<CheckRow>,
     /// Open first, then newest check first.
     pub findings: Vec<FindingRow>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CheckRow {
-    pub check: String,
-    pub head_sha: String,
-    /// ran | skipped
-    pub outcome: String,
-    pub at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,7 +39,7 @@ pub struct FindingRow {
 impl Ledger {
     /// Lane `id`'s detail inside the caller's read transaction; `key` is
     /// its tracker key (the board's `source_key`). An unknown lane has no
-    /// checks or findings.
+    /// findings.
     pub(super) fn detail_in(
         &self,
         tx: &Connection,
@@ -74,20 +63,6 @@ impl Ledger {
         while let Some(r) = rows.next()? {
             handoffs.push(handoff_at(r, 0)?);
         }
-        let mut stmt = tx.prepare(
-            "SELECT gate, head_sha, status, at FROM gate_results WHERE lane_id = ?1
-             ORDER BY event_id DESC LIMIT ?2",
-        )?;
-        let checks = stmt
-            .query_map((id, DETAIL_ROWS), |r| {
-                Ok(CheckRow {
-                    check: r.get(0)?,
-                    head_sha: r.get(1)?,
-                    outcome: r.get(2)?,
-                    at: r.get(3)?,
-                })
-            })?
-            .collect::<Result<_, _>>()?;
         // Every finished check of the lane (events_lane), then findings'
         // unique (check_event_id, finding_key): a check recorded again on
         // the same head keeps the earlier round's findings.
@@ -115,7 +90,6 @@ impl Ledger {
             data_version,
             slice,
             handoffs,
-            checks,
             findings,
         })
     }

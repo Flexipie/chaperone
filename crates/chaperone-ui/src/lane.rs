@@ -61,12 +61,12 @@ pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, now: i64) -> Asked {
             files(ui, r.diff.and_then(|d| d.files.as_ref()))
         });
         let d = &page.detail;
-        fold(ui, "Handoffs", |ui| detail::handoffs(ui, d));
-        fold(ui, "Review findings", |ui| detail::findings(ui, d));
+        ui.collapsing("Handoffs", |ui| detail::handoffs(ui, d));
+        ui.collapsing("Review findings", |ui| detail::findings(ui, d));
         let declared = areas::declared(lane);
         let a = r.areas.get(&sel.id);
-        fold(ui, "Areas", |ui| detail::draw_areas(ui, declared, a));
-        fold(ui, "Diff against the base", |ui| {
+        ui.collapsing("Areas", |ui| detail::draw_areas(ui, declared, a));
+        ui.collapsing("Diff against the base", |ui| {
             asked.refresh = ui.button("Refresh").clicked();
             detail::draw_diff(ui, r.diff);
         });
@@ -80,12 +80,6 @@ fn card(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
         ui.strong(title);
         body(ui);
     });
-}
-
-fn fold(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(title)
-        .default_open(false)
-        .show(ui, body);
 }
 
 fn header(
@@ -199,8 +193,7 @@ fn time(lane: &BoardLane, median: Option<&Median>, now: i64) -> (String, String)
             };
             match v["claim_to_merge_h_median"].as_f64() {
                 Some(h) => {
-                    let mine = (now - claimed) as f64 / 3600.0;
-                    format!("{mine:.1}h vs repo median {h:.1}h ({lanes} merged in 30 days{few})")
+                    format!("vs repo median {h:.1}h ({lanes} merged in 30 days{few})")
                 }
                 None => "repo median: no merges in 30 days".into(),
             }
@@ -215,14 +208,14 @@ fn review(page: &LanePage) -> (String, String) {
     let scores: Vec<String> = page
         .reviews
         .iter()
-        .filter(|r| r.check == "local_review" && r.outcome == "ran")
+        .filter(|r| r.outcome == "ran")
         .filter_map(|r| r.score)
         .take(3)
         .map(|s| format!("{s}"))
         .collect();
     let value = match scores.is_empty() {
         true => "no score".into(),
-        // Newest last, as they came.
+        // The rows are newest first: oldest first here, the newest last.
         false => scores.into_iter().rev().collect::<Vec<_>>().join(" > "),
     };
     let head = page
@@ -233,7 +226,7 @@ fn review(page: &LanePage) -> (String, String) {
     let on = match (page.review_head.as_deref(), head) {
         (None, _) => "no local review".into(),
         (Some(_), None) => "no handoff commit".into(),
-        (Some(r), Some(h)) if r.starts_with(h) || h.starts_with(r) => "on head".into(),
+        (Some(r), Some(h)) if r == h => "on head".into(),
         (Some(r), Some(_)) => format!("not on head (reviewed {})", board::short(r)),
     };
     let rounds = page.review_rounds;

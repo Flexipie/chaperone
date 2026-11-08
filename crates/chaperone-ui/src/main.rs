@@ -1,9 +1,9 @@
 //! chaperone-ui: a read-only live board of every lane. It opens the ledger
 //! read-only and redraws when the ledger changes; herdr stays where you type.
 //! Clicking a lane opens its page: what it is, how it is doing against its
-//! repo and what it changed. Above it, the
-//! R11 numbers of the lanes merged since a date. Each lane names the
-//! lanes it shares files with (`chaperone overlap`). The change graph tab
+//! repo and what it changed. Above the board, the R11 numbers of the lanes
+//! merged since a date. Each lane names the lanes it shares files with
+//! (`chaperone overlap`). The change graph tab
 //! shows what each lane's commits change and reach. A left nav picks all
 //! repos, one repo or the pipeline, each with how many lanes need you. All
 //! repos opens on a card per repo, a repo on its lanes in plain words and
