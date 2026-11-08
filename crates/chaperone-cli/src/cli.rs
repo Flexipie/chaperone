@@ -106,6 +106,11 @@ pub enum Cmd {
         /// ~/dotfiles/claude/pipeline/profiles)
         #[arg(long, requires = "entry_points")]
         profile: Option<PathBuf>,
+        /// Compare these areas (comma-separated, from the profile's
+        /// `[areas]`, as a handoff's `areas` declares them) with the areas
+        /// the files are in and the entry points they reach
+        #[arg(long, requires = "entry_points", value_delimiter = ',')]
+        declared: Option<Vec<String>>,
     },
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
@@ -314,8 +319,8 @@ pub enum WorkCmd {
         actor: ActorArgs,
     },
     /// Record a structured handoff (JSON: summary, status, changed_files,
-    /// verification, smoke, blockers, open_questions, next_action, commit,
-    /// pull_request, brief). Its status moves the item; a terminal status
+    /// areas, verification, smoke, blockers, open_questions, next_action,
+    /// commit, pull_request, brief). Its status moves the item; a terminal status
     /// clears the holder. A ready or done handoff runs the handoff gate
     Handoff {
         id: i64,

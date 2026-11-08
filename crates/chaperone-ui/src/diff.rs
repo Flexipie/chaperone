@@ -138,7 +138,7 @@ fn diff(bin: &Path, lane: &Selected) -> State {
 
 /// When the worktree's HEAD reflog was last written. `.git` is the git dir
 /// in a main checkout and a `gitdir:` file in a linked worktree.
-fn reflog_time(wt: &str) -> Option<SystemTime> {
+pub fn reflog_time(wt: &str) -> Option<SystemTime> {
     let dot_git = Path::new(wt).join(".git");
     let dir = match fs::read_to_string(&dot_git) {
         Ok(text) => {

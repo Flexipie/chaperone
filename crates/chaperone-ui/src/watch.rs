@@ -2,6 +2,7 @@
 //! `PRAGMA data_version`, and a new board only when that changes; the
 //! selected lane's detail too when it changes or another lane is picked.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -10,6 +11,7 @@ use std::time::Duration;
 use chaperone_core::ledger::{Ledger, LedgerError};
 use chaperone_core::work::{LaneBoard, LaneDetail, WorkItem};
 
+use crate::areas::Areas;
 use crate::diff::Diff;
 
 /// A poll is one pragma on an open connection, so idle costs next to
@@ -28,6 +30,8 @@ pub struct Shown {
     pub refresh: u64,
     pub detail: Option<Detail>,
     pub diff: Option<Diff>,
+    /// Each declaring lane's areas against its diff, by lane id.
+    pub areas: HashMap<i64, Areas>,
 }
 
 /// One lane's detail as read at `version`, or why it could not be. A

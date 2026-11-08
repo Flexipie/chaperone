@@ -17,6 +17,9 @@ const BRIEF_TEXT_CHARS: usize = 2000;
 const BRIEF_ITEM_CHARS: usize = 500;
 const BRIEF_ITEMS: usize = 20;
 const LOOK_AT_PATH_CHARS: usize = 300;
+/// Area names from the repo's pipeline profile; a profile has a handful.
+const AREAS: usize = 20;
+const AREA_CHARS: usize = 100;
 
 /// Daisy's `HandoffInput`. Unknown fields are dropped, so only these are stored.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -26,6 +29,12 @@ pub struct HandoffInput {
     pub status: Option<String>,
     #[serde(default)]
     pub changed_files: Vec<String>,
+    /// What the lane says it changes: areas of the repo's profile, compared
+    /// with its diff by `impact --declared`. None is not declared, which an
+    /// empty list would blur, so one is refused. Not checked against the
+    /// profile here: the ledger reads none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub areas: Option<Vec<String>>,
     #[serde(default)]
     pub verification: Vec<Verification>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -117,6 +126,22 @@ impl HandoffInput {
             return invalid(format!(
                 "handoff status must be one of {STATUSES:?}, got '{s}'"
             ));
+        }
+        if let Some(areas) = &self.areas {
+            if areas.is_empty() {
+                return invalid(
+                    "handoff areas is empty; leave it out when none are declared".into(),
+                );
+            }
+            if areas.len() > AREAS {
+                return invalid(format!("handoff areas has more than {AREAS} entries"));
+            }
+            for a in areas {
+                if a.trim().is_empty() {
+                    return invalid("a handoff area is empty".into());
+                }
+                too_long("handoff area", a, AREA_CHARS)?;
+            }
         }
         for v in &self.verification {
             if v.command.trim().is_empty() {

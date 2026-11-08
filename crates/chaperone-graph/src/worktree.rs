@@ -28,13 +28,15 @@ pub enum Error {
 
 /// `impact` as `chaperone impact` answers it, for the repo `dir` is in;
 /// `targets` are relative to `dir`, a relative `cache` or `profile` to
-/// the process's working directory.
+/// the process's working directory. `declared` is compared only with
+/// `entry_points` (it needs the profile's areas).
 pub fn impact_in(
     dir: &Path,
     targets: Vec<String>,
     cache: Option<PathBuf>,
     entry_points: bool,
     profile: Option<PathBuf>,
+    declared: Option<Vec<String>>,
 ) -> Result<Impact, Error> {
     let deadline = Instant::now() + DEADLINE;
     let bin = git_bin(deadline);
@@ -227,6 +229,7 @@ pub fn impact_in(
                     .filter(|p| !p.is_empty())
                     .map(|p| String::from_utf8_lossy(p).to_string())
                     .collect(),
+                declared,
             })
         }
         None => None,
