@@ -1,10 +1,11 @@
-//! The left nav: All repos, one entry per repo on the board, Pipeline,
-//! each with how many lanes need you.
+//! The left nav: All repos, one entry per repo with open lanes or recent
+//! merges, Pipeline, each with how many lanes need you.
 
+use chaperone_core::stats::BoardStats;
 use chaperone_core::work::LaneBoard;
 use eframe::egui::{self, RichText};
 
-use crate::{board, needs, theme};
+use crate::{needs, repo, theme};
 
 /// What the main view shows.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -27,13 +28,24 @@ impl View {
     }
 }
 
-/// Draws the nav and switches `view` on a click. A repo whose last open
-/// lane closed has no entry, so its view falls back to All.
-pub fn draw(ui: &mut egui::Ui, board: Option<&LaneBoard>, now: i64, view: &mut View) {
-    let repos = board.map(board::group).unwrap_or_default();
+/// Draws the nav and switches `view` on a click. A repo with no open lane
+/// and no recent merge has no entry, so its view falls back to All, once
+/// stats at least as new as the board are read: a merge-only repo's entry
+/// comes from them.
+pub fn draw(
+    ui: &mut egui::Ui,
+    board: Option<&LaneBoard>,
+    stats: Option<&BoardStats>,
+    now: i64,
+    view: &mut View,
+) {
+    let repos = repo::repos(board, stats);
+    let caught_up = board
+        .zip(stats)
+        .is_some_and(|(b, s)| s.data_version >= b.data_version);
     if let View::Repo(r) = view
-        && board.is_some()
-        && !repos.iter().any(|repo| repo.slug.eq_ignore_ascii_case(r))
+        && caught_up
+        && !repos.iter().any(|slug| slug.eq_ignore_ascii_case(r))
     {
         *view = View::All;
     }
@@ -43,10 +55,9 @@ pub fn draw(ui: &mut egui::Ui, board: Option<&LaneBoard>, now: i64, view: &mut V
     entry(ui, view, View::All, "All repos", all);
     ui.add_space(6.0);
     ui.label(RichText::new("REPOS").small().weak());
-    for repo in &repos {
-        let lanes = repo.specs.iter().flat_map(|s| s.lanes.iter().copied());
-        let n = needs::count(lanes, now);
-        entry(ui, view, View::Repo(repo.slug.to_lowercase()), repo.slug, n);
+    for slug in repos {
+        let n = board.map_or(0, |b| needs::count(repo::lanes_of(b, slug), now));
+        entry(ui, view, View::Repo(slug.to_lowercase()), slug, n);
     }
     ui.add_space(6.0);
     entry(ui, view, View::Pipeline, "Pipeline", 0);

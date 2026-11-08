@@ -60,6 +60,10 @@ pub struct BoardLane {
     /// `lease_expires_at` the same way, so a viewer sees a lease expire
     /// while the ledger is quiet.
     pub lease_expires_secs: Option<i64>,
+    /// The first `lane.claimed`'s `at` the same way: `claimed_at` restarts
+    /// on every renewal and takeover; time running, as `stats` counts it,
+    /// does not.
+    pub claimed_secs: Option<i64>,
     /// Questions asked of the owner with no answer recorded.
     pub open_questions: i64,
     pub stamps: Stamps,
@@ -114,10 +118,13 @@ impl Ledger {
             .map(|board| {
                 let facts = self.project(board.item.id, None)?;
                 let item = &board.item;
-                let (updated_secs, lease_expires_secs) = tx.query_row(
-                    "SELECT unixepoch(?1), unixepoch(?2)",
-                    rusqlite::params![item.updated_at, item.lease_expires_at],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                let (updated_secs, lease_expires_secs, claimed_secs) = tx.query_row(
+                    "SELECT unixepoch(?1), unixepoch(?2),
+                            (SELECT unixepoch(at) FROM events
+                              WHERE lane_id = ?3 AND kind = 'lane.claimed'
+                              ORDER BY id LIMIT 1)",
+                    rusqlite::params![item.updated_at, item.lease_expires_at, item.id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )?;
                 let open_questions = open_questions.get(&item.id).copied().unwrap_or(0);
                 let text = |path: &str| match facts.get(path) {
@@ -134,6 +141,7 @@ impl Ledger {
                     board,
                     updated_secs,
                     lease_expires_secs,
+                    claimed_secs,
                     open_questions,
                     stamps,
                 })

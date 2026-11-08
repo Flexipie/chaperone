@@ -24,7 +24,7 @@ pub fn group(board: &LaneBoard) -> Vec<Repo<'_>> {
     let mut repos: BTreeMap<String, (&str, BTreeMap<SpecKey, Vec<&BoardLane>>)> = BTreeMap::new();
     for lane in &board.lanes {
         let item = &lane.board.item;
-        let slug = item.repo_slug.as_deref().unwrap_or("(no repo)");
+        let slug = slug(item.repo_slug.as_deref());
         repos
             .entry(slug.to_lowercase())
             .or_insert_with(|| (slug, BTreeMap::new()))
@@ -50,11 +50,21 @@ pub fn group(board: &LaneBoard) -> Vec<Repo<'_>> {
 
 /// A lane's name on the board: its lane key and position, else its id.
 pub fn label(item: &WorkItem) -> String {
-    match (&item.lane_key, item.lane_pos) {
+    name(item.lane_key.as_deref(), item.lane_pos, item.id)
+}
+
+/// [`label`] from its parts, for a lane that is no longer on the board.
+pub fn name(key: Option<&str>, pos: Option<i64>, id: i64) -> String {
+    match (key, pos) {
         (Some(key), Some(pos)) => format!("{key} {pos}"),
-        (Some(key), None) => key.clone(),
-        _ => format!("#{}", item.id),
+        (Some(key), None) => key.into(),
+        _ => format!("#{id}"),
     }
+}
+
+/// A lane's repo slug, or what stands in for none.
+pub fn slug(repo: Option<&str>) -> &str {
+    repo.unwrap_or("(no repo)")
 }
 
 /// A commit's first 7 characters.
