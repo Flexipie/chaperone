@@ -491,6 +491,29 @@ pub struct BoardStats {
     pub lanes: Vec<Value>,
     /// `stats --merged-since <since>`, or why it was refused.
     pub cohort: Result<Value, Refusal>,
+    /// Done lanes merged in the last [`MERGED_DAYS`] days, newest first.
+    pub merged: Vec<MergedLane>,
+    /// The viewer's local time minus UTC, as SQLite's `localtime` reads
+    /// it now, for "merged today" from local midnight.
+    pub utc_offset_secs: i64,
+}
+
+/// How far back [`BoardStats::merged`] reads, and how many it keeps.
+const MERGED_DAYS: i64 = 7;
+const MERGED_MAX: i64 = 200;
+
+/// A done lane and its newest `pr.merged`.
+#[derive(Clone, Debug)]
+pub struct MergedLane {
+    pub id: i64,
+    pub repo_slug: Option<String>,
+    pub lane_key: Option<String>,
+    pub lane_pos: Option<i64>,
+    pub title: String,
+    /// Its newest handoff's non-empty `brief.goal`.
+    pub goal: Option<String>,
+    /// The newest `merged_at`, in seconds since the epoch.
+    pub merged_secs: i64,
 }
 
 impl Ledger {
@@ -520,11 +543,58 @@ impl Ledger {
             Err(r) => return Err(std::io::Error::other(format!("stats: {r:?}")).into()),
         };
         let cohort = self.stats(&Cohort::MergedSince(since.clone()))?;
+        // Done lanes only: an open one with a merged PR (a stack lane, or
+        // one not closed yet) stays an open lane. Read from `lanes_status`
+        // (`done` sets `updated_at`, after the merge) and `events_lane`,
+        // never a scan of every event. A day's slack for a lane closed
+        // late; `merged_at` decides.
+        let goal = "json_extract(payload_json, '$.handoff.brief.goal')";
+        let mut stmt = tx.prepare(&format!(
+            "SELECT id, repo_slug, lane_key, lane_pos, title, merged, goal FROM (
+               SELECT l.id, l.repo_slug, l.lane_key, l.lane_pos, l.title,
+                      (SELECT unixepoch(max(json_extract(payload_json, '$.merged_at')))
+                         FROM events WHERE lane_id = l.id AND kind = 'pr.merged') AS merged,
+                      (SELECT {goal} FROM events
+                        WHERE lane_id = l.id AND {IS_HANDOFF} AND trim(ifnull({goal}, '')) <> ''
+                        ORDER BY id DESC LIMIT 1) AS goal
+                 FROM lanes l
+                WHERE l.status = 'done'
+                  AND l.updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1))
+              WHERE merged >= unixepoch('now', ?2)
+              ORDER BY merged DESC, id DESC LIMIT ?3"
+        ))?;
+        let merged = stmt
+            .query_map(
+                rusqlite::params![
+                    format!("-{} days", MERGED_DAYS + 1),
+                    format!("-{MERGED_DAYS} days"),
+                    MERGED_MAX
+                ],
+                |r| {
+                    Ok(MergedLane {
+                        id: r.get(0)?,
+                        repo_slug: r.get(1)?,
+                        lane_key: r.get(2)?,
+                        lane_pos: r.get(3)?,
+                        title: r.get(4)?,
+                        merged_secs: r.get(5)?,
+                        goal: r.get(6)?,
+                    })
+                },
+            )?
+            .collect::<Result<_, _>>()?;
+        let utc_offset_secs = tx.query_row(
+            "SELECT unixepoch('now', 'localtime') - unixepoch('now')",
+            [],
+            |r| r.get(0),
+        )?;
         Ok(BoardStats {
             data_version,
             since,
             lanes,
             cohort,
+            merged,
+            utc_offset_secs,
         })
     }
 }

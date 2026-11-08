@@ -4,7 +4,9 @@
 //! R11 numbers of the lanes merged since a date. Each lane names the
 //! lanes it shares files with (`chaperone overlap`). The change graph tab
 //! shows what each lane's commits change and reach. A left nav picks all
-//! repos, one repo or the pipeline, each with how many lanes need you.
+//! repos, one repo or the pipeline, each with how many lanes need you. All
+//! repos opens on a card per repo, a repo on its lanes in plain words and
+//! what merged lately; the full board stays a tab away.
 
 mod areas;
 mod board;
@@ -16,6 +18,7 @@ mod nav;
 mod needs;
 mod numbers;
 mod overlap;
+mod repo;
 mod theme;
 mod watch;
 
@@ -74,7 +77,7 @@ fn main() -> eframe::Result {
                 shown,
                 first_frame: args.first_frame,
                 since: numbers::Since::default(),
-                graph: false,
+                tab: Tab::default(),
                 view: nav::View::default(),
             }))
         }),
@@ -85,9 +88,18 @@ struct App {
     shown: Arc<Mutex<Shown>>,
     first_frame: bool,
     since: numbers::Since,
-    /// The change graph in place of the board.
-    graph: bool,
+    tab: Tab,
     view: nav::View,
+}
+
+/// What the main view shows of All repos or a repo.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Tab {
+    /// The repo cards, or the repo's page.
+    #[default]
+    Page,
+    Board,
+    Graph,
 }
 
 impl eframe::App for App {
@@ -106,7 +118,13 @@ impl eframe::App for App {
             .resizable(false)
             .exact_size(220.0)
             .show(ui, |ui| {
-                nav::draw(ui, shown.board.as_ref(), now, &mut self.view)
+                nav::draw(
+                    ui,
+                    shown.board.as_ref(),
+                    shown.stats.as_ref(),
+                    now,
+                    &mut self.view,
+                )
             });
         // A claim or update since the click moves the worktree or base; a
         // lane done or cancelled since leaves the board, or one the view
@@ -165,6 +183,7 @@ impl eframe::App for App {
                     refresh = detail::draw(ui, sel, lane, detail, diff, areas)
                 });
         }
+        let mut to = None;
         let view = &self.view;
         egui::CentralPanel::default()
             .frame(theme::ground())
@@ -179,11 +198,17 @@ impl eframe::App for App {
                     return;
                 }
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.graph, false, "Board");
-                    ui.selectable_value(&mut self.graph, true, "Change graph");
+                    let page = if *view == nav::View::All {
+                        "Overview"
+                    } else {
+                        "Lanes"
+                    };
+                    ui.selectable_value(&mut self.tab, Tab::Page, page);
+                    ui.selectable_value(&mut self.tab, Tab::Board, "Board");
+                    ui.selectable_value(&mut self.tab, Tab::Graph, "Change graph");
                 });
-                shown.graph_open = self.graph;
-                if self.graph {
+                shown.graph_open = self.tab == Tab::Graph;
+                if self.tab == Tab::Graph {
                     match &shown.graph {
                         Some(Ok(repos)) => {
                             let repos: graph::Repos = repos
@@ -202,13 +227,26 @@ impl eframe::App for App {
                     }
                     return;
                 }
-                match &shown.board {
-                    Some(board) => picked = draw(ui, &shown, board, view, now),
-                    None => {
+                match (&shown.board, view) {
+                    (Some(board), _) if self.tab == Tab::Board => {
+                        picked = draw(ui, &shown, board, view, now)
+                    }
+                    (Some(board), nav::View::Repo(slug)) => {
+                        let stats = shown.stats.as_ref();
+                        let rows = repo::rows(board, slug, stats, &shown.areas, now);
+                        let merged = stats.map(|s| (s, slug.as_str()));
+                        let sel = shown.selected.as_ref();
+                        picked = repo::page(ui, &rows, merged, sel, now);
+                    }
+                    (Some(board), _) => to = repo::cards(ui, board, shown.stats.as_ref(), now),
+                    (None, _) => {
                         ui.label("Reading the ledger...");
                     }
                 }
             });
+        if let Some(to) = to {
+            self.view = to;
+        }
         if let Some(pick) = picked {
             // Clicking the selected lane again closes its detail.
             shown.selected = (shown.selected.as_ref() != Some(&pick)).then_some(pick);

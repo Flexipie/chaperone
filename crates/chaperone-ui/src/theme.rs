@@ -66,6 +66,11 @@ pub fn ground() -> Frame {
     Frame::new().inner_margin(Margin::same(14))
 }
 
+/// Text that needs the owner, in the badge's colour.
+pub fn alert(text: &str) -> RichText {
+    RichText::new(text).strong().color(ALERT)
+}
+
 /// The needs-you count pill; nothing for zero.
 pub fn badge(ui: &mut egui::Ui, n: usize) {
     if n == 0 {
