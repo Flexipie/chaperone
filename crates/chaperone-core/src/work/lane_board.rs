@@ -120,8 +120,9 @@ impl Ledger {
                 let item = &board.item;
                 let (updated_secs, lease_expires_secs, claimed_secs) = tx.query_row(
                     "SELECT unixepoch(?1), unixepoch(?2),
-                            (SELECT unixepoch(min(at)) FROM events
-                              WHERE lane_id = ?3 AND kind = 'lane.claimed')",
+                            (SELECT unixepoch(at) FROM events
+                              WHERE lane_id = ?3 AND kind = 'lane.claimed'
+                              ORDER BY id LIMIT 1)",
                     rusqlite::params![item.updated_at, item.lease_expires_at, item.id],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )?;
