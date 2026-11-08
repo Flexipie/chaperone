@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-pub use entry::Rules;
+pub use entry::{Rules, Unmatched};
 
 /// Files past this size are not parsed (generated code): their references
 /// are unknown, so the answer is a lower bound. A parse holds about 45
@@ -29,6 +29,18 @@ const UNSURE_ROWS: usize = 20;
 pub struct File {
     pub path: String,
     pub key: Option<String>,
+}
+
+/// What `impact` needs to list the entry points reached.
+pub struct Entries<'a> {
+    /// Checked against the tree and the targets by the caller.
+    pub rules: &'a Rules,
+    /// `Rules::check`'s answer.
+    pub unmatched: Vec<Unmatched>,
+    /// The commit the lines are read at.
+    pub head: String,
+    /// Paths whose index differs from `head`: their lines are not `head`'s.
+    pub staged: HashSet<String>,
 }
 
 // Fields in sorted order: the bytes `render_ok` gives.
@@ -74,13 +86,15 @@ pub struct Node {
 
 #[derive(Serialize)]
 pub struct EntryPoints {
-    /// As `Impact::bound`: when `lower_bound`, more may be reached.
+    /// As `Impact::bound`, and `lower_bound` when a rule is `unmatched`:
+    /// more may be reached.
     pub bound: &'static str,
     /// The commit the answer's lines are read at, less `dirty` hops.
     pub head: String,
     pub omitted: usize,
     /// Nearest first.
     pub reached: Vec<Entry>,
+    pub unmatched: Vec<Unmatched>,
 }
 
 #[derive(Serialize)]
@@ -100,7 +114,7 @@ pub struct Hop {
     /// `file:line` of the reference to the next hop; none for the target,
     /// and for an edge Cargo makes (integration tests run the binaries).
     pub at: Option<String>,
-    /// `at` is read from the worktree, not `head`.
+    /// `at` is read from the worktree or the index, not `head`.
     pub dirty: bool,
     pub path: String,
 }
@@ -133,8 +147,7 @@ pub fn cache_file(dir: &Path, origin: &str) -> PathBuf {
 /// those bytes as `File::key` names it (`None`: unknown); `cache` is the
 /// facts file, `None` to parse everything, and `cache_given` whether it
 /// was passed by hand (an empty one is then refused, not used);
-/// `entries` the rules and the head commit, to list the entry points
-/// reached (checked against the tree by the caller, `Rules::check`).
+/// `entries` to list the entry points reached.
 #[allow(clippy::too_many_arguments)]
 pub fn impact(
     files: &[File],
@@ -144,7 +157,7 @@ pub fn impact(
     cache_given: bool,
     targets: &[String],
     limit: usize,
-    entries: Option<(&Rules, String)>,
+    entries: Option<Entries>,
 ) -> Impact {
     let rust: Vec<&File> = files.iter().filter(|f| f.path.ends_with(".rs")).collect();
     let mut store = cache::Cache::open(cache, cache_given);
@@ -313,9 +326,14 @@ pub fn impact(
         frontier = next;
     }
 
-    let entry_points = entries.map(|(rules, head)| {
-        // Read from the worktree: a changed file, or one not matching its blob.
-        let dirty = |i: usize| keys[i].as_deref().is_none_or(|k| k.starts_with("sha256:"));
+    let entry_points = entries.map(|e| {
+        let rules = e.rules;
+        // Read from the worktree (a changed file, or one not matching its
+        // blob), or from an index that differs from `head`.
+        let dirty = |i: usize| {
+            keys[i].as_deref().is_none_or(|k| k.starts_with("sha256:"))
+                || e.staged.contains(&paths[i])
+        };
         let mut reached = Vec::new();
         let mut add = |path: &str, depth: usize, evidence: &dyn Fn() -> Vec<Hop>| {
             for (kind, name) in rules.at(path) {
@@ -370,10 +388,14 @@ pub fn impact(
         let omitted = reached.len().saturating_sub(limit);
         reached.truncate(limit);
         EntryPoints {
-            bound,
-            head,
+            bound: match e.unmatched.is_empty() {
+                true => bound,
+                false => "lower_bound",
+            },
+            head: e.head,
             omitted,
             reached,
+            unmatched: e.unmatched,
         }
     });
 

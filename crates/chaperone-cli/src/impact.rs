@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use chaperone_core::git::{Failure, git, git_bin};
 use chaperone_core::ledger::Refusal;
-use chaperone_graph::{File, Rules};
+use chaperone_graph::{Entries, File, Rules};
 
 use crate::cli::Format;
 use crate::output::{self, CliError, Meta, Outcome};
@@ -32,7 +32,7 @@ pub fn run(
 ) -> Result<Outcome, CliError> {
     let deadline = Instant::now() + DEADLINE;
     let bin = git_bin(deadline);
-    // From here, `:/` is the whole tree, so the four calls are independent.
+    // From here, `:/` is the whole tree, so the calls are independent.
     let call = |args: &[&str]| match git(&bin, Path::new("."), args, deadline, OUT_BYTES) {
         Ok((out, false)) => Ok(out),
         Ok((_, true)) => Err(CliError::Internal(format!(
@@ -40,8 +40,9 @@ pub fn run(
             args[0]
         ))),
         Err(Failure::TimedOut) => Err(CliError::Internal(format!("git {}: timed out", args[0]))),
+        // Only the `HEAD` calls take a revision: a repo with no commits.
         Err(Failure::BadRevision) => {
-            Err(CliError::Internal(format!("git {}: bad revision", args[0])))
+            Err(Refusal::InvalidInput("entry points: no commit yet".into()).into())
         }
         Err(Failure::Other(e)) => Err(Refusal::InvalidInput(e).into()),
     };
@@ -49,7 +50,7 @@ pub fn run(
         h.join()
             .unwrap_or_else(|_| Err(CliError::Internal("git thread panicked".into())))
     };
-    let (out, origin, head, status, staged) = std::thread::scope(|s| {
+    let (out, origin, head, index, status, staged) = std::thread::scope(|s| {
         let rev = s.spawn(|| {
             call(&[
                 "rev-parse",
@@ -65,6 +66,12 @@ pub fn run(
         // Its own call: `HEAD` fails in a repo with no commits yet.
         let head = s.spawn(|| match entry_points {
             true => call(&["rev-parse", "HEAD"]),
+            false => Ok(Vec::new()),
+        });
+        // Staged changes: `ls-files -s` keys them by the index's blob, whose
+        // lines are not `HEAD`'s.
+        let index = s.spawn(|| match entry_points {
+            true => call(&["diff-index", "--cached", "--name-only", "-z", "HEAD"]),
             false => Ok(Vec::new()),
         });
         let status = s.spawn(|| {
@@ -86,6 +93,7 @@ pub fn run(
             joined(rev),
             joined(origin),
             joined(head),
+            joined(index),
             joined(status),
             staged,
         )
@@ -112,6 +120,7 @@ pub fn run(
         false => None,
     };
     let head = String::from_utf8_lossy(&head?).trim().to_string();
+    let index = index?;
 
     // One cache per origin, so every worktree and clone of it shares one.
     let given = cache.is_some();
@@ -197,12 +206,26 @@ pub fn run(
         }
         out
     };
-    if let Some(rules) = &rules {
-        rules
-            .check(tree.iter().map(String::as_str))
-            .map_err(|e| Refusal::InvalidInput(format!("entry points: {e}")))?;
-    }
-    let entries = rules.as_ref().map(|r| (r, head));
+    let entries = match &rules {
+        Some(rules) => {
+            // A target need not be in the tree (deleted, or not written
+            // yet), and is reported all the same.
+            tree.extend(targets.iter().cloned());
+            Some(Entries {
+                rules,
+                unmatched: rules
+                    .check(tree.iter().map(String::as_str))
+                    .map_err(|e| Refusal::InvalidInput(format!("entry points: {e}")))?,
+                head,
+                staged: index
+                    .split(|b| *b == 0)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| String::from_utf8_lossy(p).to_string())
+                    .collect(),
+            })
+        }
+        None => None,
+    };
     let data = chaperone_graph::impact(
         &files,
         read,
@@ -216,9 +239,9 @@ pub fn run(
     output::write_one(&data, meta, format)
 }
 
-/// The entry rules: from `profile`, or the origin's pipeline profile,
-/// found the way `pipeline-profile` finds it. No rules is a refusal, never
-/// an empty answer.
+/// The entry rules: from `profile`, or the origin's pipeline profile, by
+/// the origin URL in git config (an `insteadOf` alias is not expanded). No
+/// rules is a refusal, never an empty answer.
 fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, CliError> {
     let refuse = |e: String| CliError::from(Refusal::InvalidInput(e));
     let (path, slug) = match profile {

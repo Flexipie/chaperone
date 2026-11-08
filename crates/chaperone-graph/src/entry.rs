@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Errors listed before the rest are counted.
 const ERRORS: usize = 10;
@@ -31,6 +31,15 @@ struct Rule {
     name: Option<String>,
 }
 
+/// A rule that names no file: a typo, or a file renamed or deleted since
+/// the profile was written. Listed, not refused, so one lane's rename does
+/// not break the call for every other lane.
+#[derive(Serialize)]
+pub struct Unmatched {
+    pub kind: String,
+    pub path: String,
+}
+
 impl Rules {
     /// The rules in a profile's `+++` TOML front matter. One without
     /// `[[entry_points]]` is refused: an empty answer would look complete.
@@ -55,8 +64,8 @@ impl Rules {
             .map(move |r| (r.kind.as_str(), r.name.as_deref().unwrap_or(path)))
     }
 
-    /// The one area `path` is in; `check` has refused a tree where an
-    /// entry point is in none or several.
+    /// The one area `path` is in; `check` has refused a tree or target
+    /// where an entry point is in none or several.
     pub fn area<'a>(&'a self, path: &'a str) -> &'a str {
         self.areas(path).next().unwrap_or_default()
     }
@@ -68,10 +77,10 @@ impl Rules {
             .map(|(name, _)| name.as_str())
     }
 
-    /// Against every file of the tree: each entry point is in exactly one
-    /// area, never "other", and each rule names some file (a typo would
-    /// otherwise reach nothing, quietly).
-    pub fn check<'a>(&self, tree: impl Iterator<Item = &'a str>) -> Result<(), String> {
+    /// Against every file of the tree and every target: each entry point is
+    /// in exactly one area, never "other". The rules that name none of them
+    /// are returned (a typo would otherwise reach nothing, quietly).
+    pub fn check<'a>(&self, tree: impl Iterator<Item = &'a str>) -> Result<Vec<Unmatched>, String> {
         let mut errors = Vec::new();
         let mut used = vec![false; self.entry_points.len()];
         for path in tree {
@@ -92,11 +101,17 @@ impl Rules {
                 _ => errors.push(format!("{path}: in areas {}", areas.join(", "))),
             }
         }
-        for (r, _) in self.entry_points.iter().zip(&used).filter(|(_, u)| !**u) {
-            errors.push(format!("entry point {} {}: names no file", r.kind, r.path));
-        }
         if errors.is_empty() {
-            return Ok(());
+            return Ok(self
+                .entry_points
+                .iter()
+                .zip(&used)
+                .filter(|(_, u)| !**u)
+                .map(|(r, _)| Unmatched {
+                    kind: r.kind.clone(),
+                    path: r.path.clone(),
+                })
+                .collect());
         }
         let more = errors.len().saturating_sub(ERRORS);
         errors.truncate(ERRORS);
