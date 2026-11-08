@@ -286,8 +286,7 @@ impl eframe::App for App {
                         let stats = shown.stats.as_ref();
                         let rows = repo::rows(board, slug, stats, &shown.areas, now);
                         let merged = stats.map(|s| (s, slug.as_str()));
-                        let sel = shown.selected.as_ref();
-                        picked = repo::page(ui, &rows, merged, sel, now);
+                        picked = repo::page(ui, &rows, merged, now);
                     }
                     (Some(board), _) => to = repo::cards(ui, board, shown.stats.as_ref(), now),
                     (None, _) => {
@@ -338,7 +337,6 @@ fn draw(
     view: &nav::View,
     now: i64,
 ) -> Option<Selected> {
-    let selected = shown.selected.as_ref();
     let repos: Vec<_> = board::group(board)
         .into_iter()
         .filter(|r| view.shows(r.slug))
@@ -369,8 +367,7 @@ fn draw(
                             let stats = shown.stats.as_ref();
                             let [first, rest @ ..] = cells(lane, areas, stats, now);
                             let item = &lane.board.item;
-                            let on = selected.is_some_and(|s| s.id == item.id);
-                            if ui.selectable_label(on, first).clicked() {
+                            if ui.selectable_label(false, first).clicked() {
                                 picked = Some(Selected::of(item));
                             }
                             for cell in rest {

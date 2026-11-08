@@ -82,7 +82,7 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
                         *d = Some(Diff {
                             lane: id,
                             state: State::Running,
-                            files: None,
+                            files: kept(d, id),
                         })
                     })
                     && set(&shown, &read, &changed, {
@@ -91,7 +91,7 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
                             *d = Some(Diff {
                                 lane: id,
                                 state,
-                                files: None,
+                                files: kept(d, id),
                             })
                         }
                     })
@@ -127,6 +127,11 @@ fn set(
     drop(s);
     changed();
     true
+}
+
+/// The files the lane showed, kept until the new ones are read.
+fn kept(d: &mut Option<Diff>, lane: i64) -> Option<Result<Files, String>> {
+    d.take().filter(|d| d.lane == lane).and_then(|d| d.files)
 }
 
 /// Against the first base this clone has. The last, the lane's `base_sha`,

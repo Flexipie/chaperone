@@ -183,11 +183,10 @@ fn time(lane: &BoardLane, median: Option<&Median>, now: i64) -> (String, String)
         return ("not started".into(), String::new());
     };
     let value = board::age(claimed, now);
-    let repo = lane.board.item.repo_slug.as_deref();
-    let under = match median
-        .filter(|m| Some(m.repo.as_str()) == repo)
-        .map(|m| &m.read)
-    {
+    let Some(repo) = lane.board.item.repo_slug.as_deref() else {
+        return (value, "no repo to compare with".into());
+    };
+    let under = match median.filter(|m| m.repo == repo).map(|m| &m.read) {
         None => "repo median: ...".into(),
         Some(Err(e)) => format!("repo median not read: {e}"),
         Some(Ok(v)) => {

@@ -137,7 +137,6 @@ pub fn page(
     ui: &mut egui::Ui,
     rows: &[RepoLaneRow],
     merged: Option<(&BoardStats, &str)>,
-    selected: Option<&Selected>,
     now: i64,
 ) -> Option<Selected> {
     let mut picked = None;
@@ -163,8 +162,7 @@ pub fn page(
                 ui.end_row();
                 for r in rows {
                     let item = &r.lane.board.item;
-                    let on = selected.is_some_and(|s| s.id == item.id);
-                    if ui.selectable_label(on, &r.label).clicked() {
+                    if ui.selectable_label(false, &r.label).clicked() {
                         picked = Some(Selected::of(item));
                     }
                     ui.label(&item.title);
