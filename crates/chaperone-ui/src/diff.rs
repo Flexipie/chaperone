@@ -91,6 +91,8 @@ fn set(shown: &Mutex<Shown>, read: &Read, state: State, changed: &impl Fn()) -> 
     true
 }
 
+/// Against the first base this clone has. The last, the lane's `base_sha`,
+/// is its newest handoff commit once it has handed off (as for `overlap`).
 fn diff(bin: &Path, lane: &Selected) -> State {
     let Some(wt) = lane.worktree.as_deref().map(Path::new) else {
         return State::Failed("no worktree recorded".into());

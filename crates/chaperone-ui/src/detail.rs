@@ -27,21 +27,21 @@ pub fn draw(
                 ui.heading(&lane.board.item.title);
             }
             issue(ui, sel.key.as_deref());
-            let d = match detail.map(|d| &d.read) {
+            // The diff is its own read: it shows whatever the detail's is.
+            match detail.map(|d| &d.read) {
                 None => {
                     ui.label("Reading the lane...");
-                    return;
                 }
                 Some(Err(e)) => {
                     ui.colored_label(ui.visuals().error_fg_color, e);
-                    return;
                 }
-                Some(Ok(d)) => d,
-            };
-            section(ui, "Spec slice", |ui| slice(ui, d));
-            section(ui, "Handoffs", |ui| handoffs(ui, d));
-            section(ui, "Checks", |ui| checks(ui, d));
-            section(ui, "Review findings", |ui| findings(ui, d));
+                Some(Ok(d)) => {
+                    section(ui, "Spec slice", |ui| slice(ui, d));
+                    section(ui, "Handoffs", |ui| handoffs(ui, d));
+                    section(ui, "Checks", |ui| checks(ui, d));
+                    section(ui, "Review findings", |ui| findings(ui, d));
+                }
+            }
             section(ui, "Diff against the base", |ui| {
                 refresh = ui.button("Refresh").clicked();
                 draw_diff(ui, diff);
@@ -92,9 +92,9 @@ fn slice(ui: &mut egui::Ui, d: &LaneDetail) {
     } else {
         ui.label("Not a slice of a spec.");
     }
-    // Cut to the dossier's caps: the newest 20 decisions, 300 characters.
-    for (what, n) in &slice.omitted {
-        ui.label(format!("Left out: {n} {what}."));
+    // The dossier keeps the newest 20.
+    if let Some(n) = slice.omitted.get("slice_decisions") {
+        ui.label(format!("Left out: the {n} oldest decisions."));
     }
 }
 
@@ -223,8 +223,10 @@ pub fn feed(ui: &mut egui::Ui, board: &LaneBoard) {
                 .as_deref()
                 .map_or(String::new(), |r| format!(", {r}"));
             let note = a.note.as_deref().unwrap_or("-");
+            let lane = board.lanes.iter().find(|l| l.board.item.id == a.work_id);
+            let title = lane.map_or("", |l| l.board.item.title.as_str());
             ui.label(format!(
-                "{} #{} {} ({}{reason}): {note}",
+                "{} #{} {title}: {} ({}{reason}): {note}",
                 a.at, a.work_id, a.kind, a.by
             ));
         }
