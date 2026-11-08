@@ -2,6 +2,7 @@
 //! and its spec, and the feed of decisions and questions between them, in
 //! one read transaction (`chaperone-ui` draws it).
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 
 use rusqlite::{Transaction, TransactionBehavior};
@@ -90,6 +91,24 @@ impl Ledger {
             lanes.push(board);
             Ok::<_, Infallible>(())
         })?;
+        // Questions to the owner with no answer, per open lane, on
+        // events_lane: an answer is on its question's lane.
+        let open_questions: HashMap<i64, i64> = tx
+            .prepare(
+                "SELECT a.lane_id, count(*) FROM events a
+                  WHERE a.lane_id IN
+                          (SELECT id FROM lanes WHERE status NOT IN ('done', 'cancelled'))
+                    AND a.kind = 'attention.recorded'
+                    AND json_extract(a.payload_json, '$.type') = 'asked'
+                    AND json_extract(a.payload_json, '$.by') = 'owner'
+                    AND NOT EXISTS (SELECT 1 FROM events b
+                          WHERE b.lane_id = a.lane_id AND b.id > a.id
+                            AND b.kind = 'attention.recorded'
+                            AND json_extract(b.payload_json, '$.answers') = a.id)
+                  GROUP BY a.lane_id",
+            )?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
         let lanes = lanes
             .into_iter()
             .map(|board| {
@@ -100,19 +119,7 @@ impl Ledger {
                     rusqlite::params![item.updated_at, item.lease_expires_at],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )?;
-                // On events_lane: an answer is on its question's lane.
-                let open_questions = tx.query_row(
-                    "SELECT count(*) FROM events a
-                      WHERE a.lane_id = ?1 AND a.kind = 'attention.recorded'
-                        AND json_extract(a.payload_json, '$.type') = 'asked'
-                        AND json_extract(a.payload_json, '$.by') = 'owner'
-                        AND NOT EXISTS (SELECT 1 FROM events b
-                              WHERE b.lane_id = a.lane_id AND b.id > a.id
-                                AND b.kind = 'attention.recorded'
-                                AND json_extract(b.payload_json, '$.answers') = a.id)",
-                    [item.id],
-                    |r| r.get(0),
-                )?;
+                let open_questions = open_questions.get(&item.id).copied().unwrap_or(0);
                 let text = |path: &str| match facts.get(path) {
                     Fact::Str(s) => Some(s.clone()),
                     _ => None,
