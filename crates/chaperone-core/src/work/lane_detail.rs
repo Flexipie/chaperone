@@ -1,12 +1,12 @@
-//! One lane's detail (`chaperone-ui` draws it): its issue key's dossier
-//! for the spec slice, its handoffs, its check results by head and its
-//! reviews' findings, in one read transaction.
+//! One lane's detail (`chaperone-ui` draws it): its issue key's spec
+//! slice (the dossier's section), its handoffs, its check results by head
+//! and its reviews' findings, in one read transaction.
 
 use rusqlite::{Transaction, TransactionBehavior};
 use serde::Serialize;
 
 use super::{Handoff, IS_HANDOFF, handoff_at};
-use crate::dossier::{Dossier, dossier_read};
+use crate::dossier::{SliceSection, slice_of};
 use crate::ledger::{Ledger, LedgerError, check_schema};
 
 /// Rows kept per list, newest first.
@@ -17,8 +17,8 @@ pub struct LaneDetail {
     pub work_id: i64,
     /// The ledger's `data_version` this detail was read at.
     pub data_version: i64,
-    /// None when the lane has no tracker key, or the ledger has nothing on it.
-    pub dossier: Option<Dossier>,
+    /// None when the lane has no tracker key, or one that does not parse.
+    pub slice: Option<SliceSection>,
     /// Newest first.
     pub handoffs: Vec<Handoff>,
     /// Newest first, one per check and head (`gate_results`).
@@ -54,10 +54,8 @@ impl Ledger {
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
         check_schema(&tx)?;
         let data_version = self.data_version()?;
-        // A key that does not parse or has no record is no dossier, not an
-        // error: the rest of the detail still shows.
-        let dossier = match key {
-            Some(k) => dossier_read(&tx, k)?.ok(),
+        let slice = match key {
+            Some(k) => slice_of(&tx, k)?,
             None => None,
         };
         // By lane, not through the dossier: a lane with no tracker key has
@@ -111,7 +109,7 @@ impl Ledger {
         Ok(LaneDetail {
             work_id: id,
             data_version,
-            dossier,
+            slice,
             handoffs,
             checks,
             findings,

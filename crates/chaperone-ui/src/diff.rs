@@ -1,6 +1,9 @@
 //! The diff thread: the selected lane's worktree against its base
 //! (`git diff --merge-base`, tracked files, uncommitted edits included),
-//! read again when the worktree commits or the viewer asks.
+//! read again when the worktree commits or the viewer asks. Locks are off
+//! and text conversion and external diff drivers are not run; a clean
+//! filter set in `.gitattributes` (git-lfs) still runs for a modified
+//! file, and git has no switch for that.
 
 use std::fs;
 use std::path::{Path, PathBuf};

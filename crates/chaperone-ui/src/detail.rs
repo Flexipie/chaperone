@@ -74,11 +74,11 @@ fn issue(ui: &mut egui::Ui, key: Option<&str>) {
 }
 
 fn slice(ui: &mut egui::Ui, d: &LaneDetail) {
-    let Some(dossier) = &d.dossier else {
-        ui.label("Nothing in the ledger on this key.");
+    let Some(slice) = &d.slice else {
+        ui.label("No tracker key to find a slice by.");
         return;
     };
-    if let Some(i) = &dossier.slice.in_spec {
+    if let Some(i) = &slice.in_spec {
         let n = i.n.map_or(String::new(), |n| format!("slice {n}: "));
         ui.strong(format!("{n}{}", i.title));
         ui.label(format!(
@@ -91,6 +91,10 @@ fn slice(ui: &mut egui::Ui, d: &LaneDetail) {
         lines(ui, &i.decisions);
     } else {
         ui.label("Not a slice of a spec.");
+    }
+    // Cut to the dossier's caps: the newest 20 decisions, 300 characters.
+    for (what, n) in &slice.omitted {
+        ui.label(format!("Left out: {n} {what}."));
     }
 }
 
