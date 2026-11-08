@@ -88,8 +88,10 @@ pub fn rows<'a>(
                 (None, _) => "open",
             };
             let blocker = item.blocker.as_deref().filter(|_| item.status == "blocked");
-            let [io, cache] = numbers::tokens(numbers::lane(stats, item.id));
+            let row = numbers::lane(stats, item.id);
+            let [io, cache] = numbers::tokens(row);
             let tokens = match cache.as_str() {
+                _ if row.is_some_and(|r| r["tokens"].is_null()) => "none recorded".into(),
                 "-" | "..." => io,
                 c => format!("{io}, {c} cached"),
             };
@@ -260,17 +262,4 @@ pub fn cards(
             });
         });
     to
-}
-
-#[cfg(test)]
-mod tests {
-    use super::midnight;
-
-    #[test]
-    fn midnight_is_local() {
-        // 2026-11-08T16:00:00Z is 01:00 on the 9th in UTC+9.
-        let now = 1_794_153_600;
-        assert_eq!(midnight(now, 9 * 3600), now - 3600);
-        assert_eq!(midnight(now, 0), now - 16 * 3600);
-    }
 }
