@@ -117,7 +117,7 @@ pub enum Cmd {
     /// Check skill and script files against this binary: every chaperone
     /// command, flag and value they call, the handoff fields they write and
     /// the pipeline version they name. With --repo, also the repo's profile
-    /// areas and whether this binary's code lags the repo's origin/main.
+    /// areas and whether this binary's code differs from the repo's origin/main.
     /// Any mismatch is a `drift` error (exit 1) listing each with file:line.
     /// Reads files and git, never the ledger
     Doctor {
