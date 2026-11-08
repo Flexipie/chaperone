@@ -266,7 +266,7 @@ fn matched(a: &[char], b: &[char]) -> usize {
 
 /// Two decision questions are one: equal once case and punctuation go,
 /// or a light rewording (ratio 0.85 or more), as `ship-handoff` reads them.
-pub fn same_question(a: &str, b: &str) -> bool {
+fn same_question(a: &str, b: &str) -> bool {
     let (a, b) = (words(a), words(b));
     let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
     let total = a.len() + b.len();

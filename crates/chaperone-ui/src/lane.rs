@@ -13,8 +13,9 @@ use eframe::egui::{self, RichText};
 use crate::areas::{self, Areas};
 use crate::diff::{Diff, Files};
 use crate::watch::{Detail, Median, Selected};
-use crate::writer::{Act, Confirm, Lane, NOTE_CHARS, Wrote};
+use crate::writer::{Act, Confirm, Lane, Wrote};
 use crate::{board, detail, needs, numbers, repo, theme};
+use chaperone_core::checks::NOTE_CHARS;
 use chaperone_core::spec::parse::asks_about;
 
 /// What the viewer asked for on the page.
@@ -211,13 +212,10 @@ fn actions(
             .clone()
             .unwrap_or_else(|| board::label(item)),
     };
-    // Answers question `asks`, else records one first.
     let answer = |asks, text: String, confirm| Act::Answer {
         lane: target.clone(),
         asks,
-        blocker: blocker
-            .clone()
-            .unwrap_or_else(|| "the lane needs you".into()),
+        blocker: blocker.clone(),
         text,
         confirm,
     };

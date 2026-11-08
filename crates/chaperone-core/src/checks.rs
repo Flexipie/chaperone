@@ -61,7 +61,7 @@ pub const QUESTION_REASONS: &[&str] = &[
     "question.overlap",
 ];
 /// An attention note's cap, in characters: one line, not a document.
-const NOTE_CHARS: usize = 500;
+pub const NOTE_CHARS: usize = 500;
 
 /// `attention record`'s input. `kind` is `--type`.
 #[derive(Clone, Debug, Default)]
