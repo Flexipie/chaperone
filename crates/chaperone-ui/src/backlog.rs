@@ -28,6 +28,11 @@ const PAGE_CAP: usize = 32 << 20;
 /// The mirror syncs on its own clock, not the ledger's.
 const MIRROR_EVERY: Duration = Duration::from_secs(60);
 const POLL: Duration = Duration::from_secs(1);
+/// Blockers looked up per read, this repo's first: a body is anyone's
+/// text, and past this they stay blocked unread.
+const GETS: usize = 50;
+/// Blockers kept per issue; past this the issue is blocked by "more".
+const PER_ISSUE: usize = 10;
 
 /// One backlog row. Ready when `blocked_by` is empty.
 pub struct Row {
@@ -136,6 +141,7 @@ fn rows(
         .map(|s| s.linear_key.to_lowercase())
         .collect();
     let repo = slug.to_lowercase();
+    let here = format!("{repo}#");
     let mut rows = Vec::new();
     for issue in &mirror.issues {
         let key = format!("{repo}#{}", issue.number);
@@ -149,7 +155,10 @@ fn rows(
             .filter(|b| lanes.get(*b) != Some(&true))
             .filter(|b| !mirror.closed.contains(*b))
             .map(|b| {
-                let name = b.strip_prefix(&repo).unwrap_or(b);
+                let name = match b.strip_prefix(&here) {
+                    Some(n) => format!("#{n}"),
+                    None => b.clone(),
+                };
                 match mirror.missing.contains(b) {
                     true => format!("{name} (not in mirror)"),
                     false => name.to_string(),
@@ -218,12 +227,17 @@ fn read_mirror(slug: &str) -> Result<Mirror, String> {
         .map(|i| format!("{repo}#{}", i.number))
         .collect();
     let (mut closed, mut missing) = (BTreeSet::new(), BTreeSet::new());
-    let others: BTreeSet<&String> = issues
+    let others: BTreeSet<(bool, &String)> = issues
         .iter()
         .flat_map(|i| &i.blockers)
         .filter(|b| !open.contains(*b))
+        .map(|b| (!b.starts_with(&format!("{repo}#")), b))
         .collect();
-    for key in others {
+    for (n, (_, key)) in others.into_iter().enumerate() {
+        if n >= GETS {
+            missing.insert(key.clone());
+            continue;
+        }
         // A body is anyone's text: only `owner/name#N` reaches daisy's argv.
         let shaped = key.split_once('/').is_some_and(|(owner, rest)| {
             let name = |s: &str| {
@@ -292,6 +306,10 @@ fn blocked_by(body: &str, repo: &str) -> Vec<String> {
             };
             let key = format!("{owner_repo}#{n}").to_lowercase();
             if !keys.contains(&key) {
+                if keys.len() == PER_ISSUE {
+                    keys.push("more".into());
+                    return keys;
+                }
                 keys.push(key);
             }
         }
