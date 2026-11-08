@@ -579,17 +579,6 @@ fn change_graph(
     a: Option<&Areas>,
     g: Option<&LaneGraph>,
 ) {
-    let snap = match g.map(|g| &g.read) {
-        None => {
-            ui.label("Reading the change graph...");
-            return;
-        }
-        Some(Err(why)) => {
-            ui.label(why);
-            return;
-        }
-        Some(Ok(s)) => s,
-    };
     let done = a.filter(|a| declared.is_some_and(|d| a.is_for(d)));
     let mut opts = graph::Opts {
         paths: true,
@@ -605,6 +594,21 @@ fn change_graph(
             .extend(x.unmapped.iter().map(String::as_str));
         not_ringed += x.unmapped_omitted;
     }
+    let snap = match g.map(|g| &g.read) {
+        None => {
+            ui.label("Reading the change graph...");
+            return;
+        }
+        Some(Err(why)) => {
+            ui.label(why);
+            // No graph (nothing committed yet): the areas' files still show.
+            for p in &opts.out_of_scope {
+                ui.colored_label(ui.visuals().error_fg_color, format!("out of scope: {p}"));
+            }
+            return;
+        }
+        Some(Ok(s)) => s,
+    };
     let layout = &snap.layout;
     opts.extra = opts
         .out_of_scope
