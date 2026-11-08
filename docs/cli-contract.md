@@ -115,7 +115,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec update` | `<spec> --file <path\|-> --reason <r> [--expected-version <n>]` | write |
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
-| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
+| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -276,11 +276,17 @@ Each command is one transaction that appends one event (events.md, write rules).
 A gated command on a lane with no stamp (never claimed) is denied with gate `stamp_ok` and fact path `lane.pipeline_hash`. It is never ungated and never falls back to the latest pipeline. A gated command whose route has no matching transition is denied the same way, never passed.
 
 `handoff` is the M1 gated transition. Its requires list is per route in
-`pipelines/v17.1.toml` (#34; lanes stamped `v17` keep `pipelines/v17.toml`, #12). A
-handoff with `ready: true` on `code_pr` or `direct` needs a `plan_check`, a
-`quality_gate`, and a `merge_verdict` with decision `yes` on the handed-off sha
-(`handoff.commit`, or for `update --status done` the commit of the lane's latest
-handoff). The two shas match when the shorter, at least 7 hex characters, is a prefix of
+`pipelines/v19.toml` (#105; lanes stamped `v17.1` keep `pipelines/v17.1.toml`, #34, and
+lanes stamped `v17` keep `pipelines/v17.toml`, #12). A handoff with `ready: true` on
+`code_pr` or `direct` needs a `plan_check`, a `quality_gate`, a `merge_verdict` with
+decision `yes` on the handed-off sha, and from v19: on a `code` lane a `smoke` and a
+`kept_tests` check recorded (ran, or skipped with an allowed reason; denied as
+`smoke_ok`, `kept_tests_ok`), and at most 3 review rounds, `local_review`s that ran plus
+`review_round`s (denied as `rounds_at_most`). These v19 gates are on ready only: the
+done handoff below is unchanged, so they do not bind a lane that goes to done, nor a
+`no_pr` code lane, which has no ready row. No gate reads CI. The handed-off sha is
+`handoff.commit`, or for `update --status done` the commit of the lane's latest
+handoff. The two shas match when the shorter, at least 7 hex characters, is a prefix of
 the longer, whichever side it is on (v17: the verdict's sha must be the prefix). A
 handoff to `done` or `update --status done`, on every route, needs the plan check and
 quality gate (a lane that changes no code may skip them with an allowed reason), and on

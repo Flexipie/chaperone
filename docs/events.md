@@ -256,6 +256,7 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 | `merge_verdict` | session | `ran` only. `decision` `yes` or `no`. The verdict sha is `head_sha`, from `--head`, never the model's prose. |
 | `smoke` | session | `ran`, or `skipped` with `reason` `nothing_runs` or `attempt_failed`. |
 | `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
+| `review_round` | session | `ran` only. One review round daisy did not run (a review agent's, `ship-wait round`). It adds a round and nothing else: no `review.local_head`, no findings, no `daisy_review.state`. |
 | `local_review` | daisy_worker | `job`, `round`, `score`, `verdict`, `findings[]` of `finding_key`, `severity` (`blocker`, `convention`, `risk`, `nit`, `question`), `path`, `line`, `title`, `body`, `verified`, `lenses`, `body_truncated`; `review` |
 | `pr_review` | daisy_worker | Same as `local_review`, without `round`, plus `pr`. |
 | `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. `review`. No score or findings. It sets no `review.local_head`, adds no round, and projects `daisy_review.state` as `failed`, which no gate accepts. |
@@ -281,7 +282,7 @@ reasons) are reserved for a `--file` input after M1.
 
 R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` and `pipeline_version`, and its `findings.review_event_id` name are replaced by the ones above.
 
-**Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr`, `direct` or `none`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `no_pr` if the flow is `none`, else `direct` if the flow is `direct`, else `code_pr`. The first claim also stamps the newest pipeline (`v17.1`); a lane keeps the stamp it has, so a lane stamped `v17` stays on `v17`. Until `diff_measured` exists, `lane.changes_code` is true exactly when the kind is `code`. Skip reasons are checked by list membership: when `changes_code` is false, any reason the check lists is accepted, and when it is true, `skipped` fails the gate. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with an allowed reason, and a `code` lane may not. No M1 input marks a lane test-only, so a test-only lane is `code` and runs both checks; the `tests` reason waits for that input.
+**Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr`, `direct` or `none`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `no_pr` if the flow is `none`, else `direct` if the flow is `direct`, else `code_pr`. The first claim also stamps the newest pipeline (`v19`); a lane keeps the stamp it has, so a lane stamped `v17` or `v17.1` stays on it. Until `diff_measured` exists, `lane.changes_code` is true exactly when the kind is `code`. Skip reasons are checked by list membership: when `changes_code` is false, any reason the check lists is accepted, and when it is true, `skipped` fails the gate. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with an allowed reason, and a `code` lane may not. No M1 input marks a lane test-only, so a test-only lane is `code` and runs both checks; the `tests` reason waits for that input.
 
 **Facts in M1.** The projection reads the lane row's stamp and kind and the lane's
 events, never prose. `commit.sha` is the head the gated command names (the handoff's
@@ -292,7 +293,8 @@ of that check, and `verdict.*` from the latest `merge_verdict` that ran.
 and reason, so recording the same result again after the PR does not fail
 `quality_gate_before_pr`, and a skip before the PR does not time a gate that ran after
 it. `smoke.recorded` and `kept_tests.recorded` are true once any such check is recorded.
-`review.local_rounds` counts `ran` local reviews, `review.local_head` is the newest
+`review.local_rounds` counts `ran` local reviews and `review_round` checks, so the cap
+binds only rounds that were recorded; `review.local_head` is the newest
 one's sha, and `review.previous_round_closed` holds when that round has no `open`
 finding. `daisy_review.state` is `running` while a requested job (or a request with no
 job) has no finish, else the latest finished review's (`finished`, or `failed` when
@@ -300,7 +302,8 @@ skipped), else `absent`. A finish recorded after a newer job's finish of the sam
 closes its request and counts its round, but leaves the state, head and newest round on
 the newer job (daisy's job ids only go up). Facts whose producer is reserved stay absent, so a gate that
 reads one denies: `kept_tests.bar_ok`, `verification.unexplained_failures`,
-`brief.oversize`, `review.code_changed_since`, `diff.code_lines`, `ci.state`,
+`brief.oversize`, `review.code_changed_since`, `diff.code_lines`, `ci.state` (no v19
+gate reads it: CI is shown, never a gate),
 `threads.human_open`, `pr.is_draft`, `pr.conflicting`, `human.merge_yes`,
 `handoff.decisions`.
 
