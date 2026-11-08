@@ -3,6 +3,8 @@
 //! Clicking a lane shows its detail and its worktree's diff. Above it, the
 //! R11 numbers of the lanes merged since a date. Each lane names the
 //! lanes it shares files with (`chaperone overlap`).
+//! Clicking a lane shows its detail and its worktree's diff; the change
+//! graph tab shows what each lane's commits change and reach.
 
 mod areas;
 mod board;

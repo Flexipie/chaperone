@@ -16,8 +16,11 @@ milestone 1. To build and test, see [CONTRIBUTING.md](CONTRIBUTING.md) "Setup".
 redraws when the ledger changes: `cargo run --release -p chaperone-ui -- [--db PATH]`.
 Clicking a lane shows its issue, spec slice and decisions, handoffs, checks, review
 findings and its worktree's diff against the base; a feed shows the questions, answers and
-decisions between lanes.
-It opens the ledger read-only and never writes it. CI shows "not recorded" until the
+decisions between lanes. The change graph tab draws each lane's changed files in its
+colour, the files that depend on them by depth and the entry points they reach
+(`overlap` and `impact`), with files two lanes share ringed.
+It opens the ledger read-only and never writes it; the graph writes only the code graph's
+own cache. CI shows "not recorded" until the
 ledger has a CI record.
 
 Planning artifacts:
