@@ -136,11 +136,6 @@ fn rows(
         .map(|s| s.linear_key.to_lowercase())
         .collect();
     let repo = slug.to_lowercase();
-    let open: BTreeSet<String> = mirror
-        .issues
-        .iter()
-        .map(|i| format!("{repo}#{}", i.number))
-        .collect();
     let mut rows = Vec::new();
     for issue in &mirror.issues {
         let key = format!("{repo}#{}", issue.number);
@@ -152,7 +147,7 @@ fn rows(
             .blockers
             .iter()
             .filter(|b| lanes.get(*b) != Some(&true))
-            .filter(|b| open.contains(*b) || !mirror.closed.contains(*b))
+            .filter(|b| !mirror.closed.contains(*b))
             .map(|b| {
                 let name = b.strip_prefix(&repo).unwrap_or(b);
                 match mirror.missing.contains(b) {
@@ -229,10 +224,14 @@ fn read_mirror(slug: &str) -> Result<Mirror, String> {
     for key in others {
         match daisy(&["github", "get", key]) {
             Ok(env) if env["data"]["item"]["state"] == "open" => {}
-            Ok(_) => {
+            Ok(env) if env["data"]["item"]["state"] == "closed" => {
                 closed.insert(key.clone());
             }
-            // daisy answers an item it has not synced with `invalid_input`.
+            // daisy answers an item it has not synced with `invalid_input`;
+            // an answer with no state proves nothing either.
+            Ok(_) => {
+                missing.insert(key.clone());
+            }
             Err(e) if e.starts_with("not_found") || e.starts_with("invalid_input") => {
                 missing.insert(key.clone());
             }
