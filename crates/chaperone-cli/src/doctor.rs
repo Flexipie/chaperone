@@ -35,14 +35,7 @@ const LISTED: usize = 20;
 const CODE: [&str; 4] = ["crates", "pipelines", "Cargo.toml", "Cargo.lock"];
 /// How a file names the binary before its argv. `chaperone ` alone also
 /// counts, after a path or a space (see `markers`).
-const MARKERS: [&str; 6] = [
-    "\"$L\" ",
-    "${L} ",
-    "$L ",
-    "\"$chaperone\" ",
-    "${chaperone} ",
-    "$chaperone ",
-];
+const MARKERS: [&str; 4] = ["\"$L\" ", "$L ", "\"$chaperone\" ", "$chaperone "];
 
 #[derive(Clone, Copy)]
 enum Lang {
@@ -51,11 +44,11 @@ enum Lang {
     Python,
 }
 
-#[derive(Default)]
 struct Scan {
     findings: Vec<Value>,
-    /// Each `pipeline vX` a file names: (file, line, id).
-    versions: Vec<(PathBuf, usize, String)>,
+    /// The engine's pipeline id, which every version a file names must be.
+    current: &'static str,
+    names_version: bool,
     reads_current: bool,
 }
 
@@ -71,7 +64,13 @@ pub fn run(
     repo: Option<&Path>,
     profile: Option<PathBuf>,
 ) -> Result<Outcome, CliError> {
-    let mut scan = Scan::default();
+    let current = pipeline::current();
+    let mut scan = Scan {
+        findings: Vec::new(),
+        current: &current.id,
+        names_version: false,
+        reads_current: false,
+    };
     let top: BTreeSet<String> = Cli::command()
         .get_subcommands()
         .map(|c| c.get_name().to_string())
@@ -119,8 +118,17 @@ pub fn run(
             "no chaperone call in any file".into(),
         );
     }
-    let current = pipeline::current();
-    versions(&mut scan, &current.id, dirs);
+    // Files that name no version must read it, or nothing ties them.
+    if !scan.names_version
+        && !scan.reads_current
+        && let Some(d) = dirs.first()
+    {
+        let msg = format!(
+            "no file names pipeline {} or reads `chaperone pipeline current`",
+            current.id
+        );
+        scan.add(d, None, "pipeline_version", msg);
+    }
     let mut data = json!({
         "pipeline": { "id": current.id, "hash": current.hash },
         "build": env!("CHAPERONE_GIT_SHA"),
@@ -165,12 +173,14 @@ fn collect(path: &Path, out: &mut Vec<(PathBuf, Lang)>, scan: &mut Scan) {
 fn lang(path: &Path) -> Option<Lang> {
     match path.extension().and_then(|e| e.to_str()) {
         Some("md") => Some(Lang::Markdown),
-        Some("sh" | "bash" | "zsh") => Some(Lang::Shell),
+        Some("sh") => Some(Lang::Shell),
         Some("py") => Some(Lang::Python),
         Some(_) => None,
         None => {
-            let head = std::fs::read(path).ok()?;
-            let first = head.split(|b| *b == b'\n').next()?;
+            // The shebang only: `~/.local/bin` also holds large binaries.
+            let mut head = [0; 128];
+            let n = std::io::Read::read(&mut std::fs::File::open(path).ok()?, &mut head).ok()?;
+            let first = head[..n].split(|b| *b == b'\n').next()?;
             let first = std::str::from_utf8(first.strip_prefix(b"#!")?).ok()?;
             if first.contains("python") {
                 Some(Lang::Python)
@@ -191,9 +201,11 @@ fn markdown(path: &Path, text: &str, top: &BTreeSet<String>, scan: &mut Scan) ->
     let mut n = 0;
     // The paragraph so far, and the offset each of its lines starts at.
     let (mut para, mut starts) = (String::new(), Vec::new());
+    for (i, l) in lines.iter().enumerate() {
+        version_literals(path, i + 1, l, scan);
+    }
     let mut i = 0;
     while i < lines.len() {
-        version_literals(path, i + 1, lines[i], scan);
         let fence = lines[i].trim_start().strip_prefix("```");
         if fence.is_some() || lines[i].trim().is_empty() {
             n += spans(path, &para, &starts, top, scan);
@@ -204,9 +216,6 @@ fn markdown(path: &Path, text: &str, top: &BTreeSet<String>, scan: &mut Scan) ->
                 .find(|&j| lines[j].trim_start().starts_with("```"))
                 .unwrap_or(lines.len());
             let body = &lines[i + 1..end];
-            for (k, l) in body.iter().enumerate() {
-                version_literals(path, i + 2 + k, l, scan);
-            }
             if info.trim() == "json" {
                 handoff(path, i + 2, body, scan);
             } else {
@@ -412,19 +421,19 @@ fn check_argv(path: &Path, line: usize, toks: &[Option<String>], scan: &mut Scan
     match words.get(..2) {
         Some(["work", "update" | "list"]) => {
             if let Some(s) = flag("--status")
-                && let Some(bad) = s.split(',').find(|s| !STATUSES.contains(s))
+                && !STATUSES.contains(s)
             {
-                let msg = format!("--status {bad}: not one of {}", STATUSES.join(", "));
+                let msg = format!("--status {s}: not one of {}", STATUSES.join(", "));
                 scan.add(path, Some(line), "value", msg);
             }
         }
         Some(["check", "record"]) => {
             if let (Some(check), Some(reason)) = (flag("--check"), flag("--reason"))
                 && let Some((_, reasons)) = CHECKS.iter().find(|(c, _)| c == check)
-                && let Some(bad) = reason.split('|').find(|r| !reasons.contains(r))
+                && !reasons.contains(reason)
             {
                 let msg = format!(
-                    "--reason {bad}: {check} skips only for {}",
+                    "--reason {reason}: {check} skips only for {}",
                     reasons.join(", ")
                 );
                 scan.add(path, Some(line), "value", msg);
@@ -523,7 +532,8 @@ fn elements(cs: &[char], mut at: usize) -> (Vec<Option<String>>, usize) {
     }
 }
 
-/// Each `pipeline vX` / `Pipeline version: **vX**` on a line.
+/// Each `pipeline vX` / `Pipeline version: **vX**` on a line must be
+/// the engine's.
 fn version_literals(path: &Path, line: usize, text: &str, scan: &mut Scan) {
     let lower = text.to_lowercase();
     for (i, _) in lower.match_indices("pipeline ") {
@@ -537,29 +547,14 @@ fn version_literals(path: &Path, line: usize, text: &str, scan: &mut Scan) {
             .take_while(|c| c.is_ascii_digit() || *c == '.')
             .collect();
         let id = id.trim_end_matches('.');
-        if id.starts_with(|c: char| c.is_ascii_digit()) {
-            scan.versions
-                .push((path.to_path_buf(), line, format!("v{id}")));
+        if !id.starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
         }
-    }
-}
-
-/// Every version a file names is the engine's; a set of files that names
-/// none must read `chaperone pipeline current`, or nothing ties them.
-fn versions(scan: &mut Scan, current: &str, dirs: &[PathBuf]) {
-    let found = std::mem::take(&mut scan.versions);
-    for (file, line, id) in &found {
-        if id != current {
-            let msg = format!("names pipeline {id}; the engine runs {current}");
-            scan.add(file, Some(*line), "pipeline_version", msg);
+        scan.names_version = true;
+        if scan.current.strip_prefix('v') != Some(id) {
+            let msg = format!("names pipeline v{id}; the engine runs {}", scan.current);
+            scan.add(path, Some(line), "pipeline_version", msg);
         }
-    }
-    if found.is_empty()
-        && !scan.reads_current
-        && let Some(d) = dirs.first()
-    {
-        let msg = format!("no file names pipeline {current} or reads `chaperone pipeline current`");
-        scan.add(d, None, "pipeline_version", msg);
     }
 }
 
