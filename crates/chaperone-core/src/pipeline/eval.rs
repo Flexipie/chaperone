@@ -53,7 +53,8 @@ impl Pipeline {
         to: Phase,
         facts: &FactBundle,
     ) -> Result<Vec<(String, bool)>, Denied> {
-        self.row(transition, route, to, facts).map(|(gates, _)| gates)
+        self.row(transition, route, to, facts)
+            .map(|(gates, _)| gates)
     }
 
     fn row<'a>(

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use chaperone_core::git::{BASES, Failure, git, git_bin};
+use chaperone_core::git::{changed_files, git_bin};
 use chaperone_core::work::BoardLane;
 use chaperone_graph::{Error, profile_file};
 
@@ -132,7 +132,7 @@ fn set(shown: &Mutex<Shown>, id: i64, key: &Key, state: State, changed: &impl Fn
 }
 
 /// The lane's changed files against the first base this clone has (the
-/// diff panel's), then `impact` on them.
+/// diff panel's, and the lane page's set), then `impact` on them.
 fn read(bin: &Path, key: &Key) -> State {
     let Some(wt) = key.worktree.as_deref().map(Path::new) else {
         return State::Failed("no worktree recorded".into());
@@ -141,63 +141,10 @@ fn read(bin: &Path, key: &Key) -> State {
         return State::Failed(format!("worktree missing: {}", wt.display()));
     }
     let deadline = Instant::now() + DEADLINE;
-    let run = |args: &[&str]| match git(bin, wt, args, deadline, OUT_BYTES) {
-        Ok((_, true)) => Err(format!("git {}: past {OUT_BYTES} bytes", args[0])),
-        Ok((out, false)) => Ok(Some(out)),
-        // A base this clone lacks: try the next one.
-        Err(Failure::BadRevision) => Ok(None),
-        Err(Failure::TimedOut) => Err(format!("git {}: timed out", args[0])),
-        Err(Failure::Other(e)) => Err(e),
-    };
-    let mut names = None;
-    for base in BASES.iter().copied().chain(key.base_sha.as_deref()) {
-        // `--end-of-options`: a claimed base_sha is not checked as hex.
-        let args = [
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--name-only",
-            "-z",
-            // Both sides of a move: the old path's area changes too.
-            "--no-renames",
-            "--merge-base",
-            "--end-of-options",
-            base,
-            "--",
-        ];
-        match run(&args) {
-            Ok(Some(out)) => {
-                names = Some(out);
-                break;
-            }
-            Ok(None) => {}
-            Err(e) => return State::Failed(e),
-        }
-    }
-    let Some(mut names) = names else {
-        return State::Failed(format!(
-            "no base: none of {} or the claimed base_sha is in this clone",
-            BASES.join(", ")
-        ));
-    };
-    let args = [
-        "ls-files",
-        "-z",
-        "-o",
-        "--exclude-standard",
-        "--full-name",
-        "--",
-        ":/",
-    ];
-    match run(&args) {
-        Ok(out) => names.extend(out.unwrap_or_default()),
+    let paths = match changed_files(bin, wt, key.base_sha.as_deref(), deadline, OUT_BYTES) {
+        Ok((_, files)) => files.into_iter().map(|f| f.path).collect(),
         Err(e) => return State::Failed(e),
-    }
-    let paths: Vec<String> = names
-        .split(|b| *b == 0)
-        .filter(|p| !p.is_empty())
-        .map(|p| String::from_utf8_lossy(p).to_string())
-        .collect();
+    };
     let declared = Some(key.declared.clone());
     match chaperone_graph::impact_in(wt, paths, None, true, None, declared) {
         Ok(i) => i

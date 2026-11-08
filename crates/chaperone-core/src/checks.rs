@@ -8,11 +8,11 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::ledger::projection::project;
 use crate::ledger::{
     Actor, Applied, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation, Payload,
     Refusal, canonical_at, exists,
 };
-use crate::ledger::projection::project;
 use crate::pipeline::{Fact, canonical_string};
 
 const ENTITY: &str = "work item";

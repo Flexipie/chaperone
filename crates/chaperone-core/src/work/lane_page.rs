@@ -2,18 +2,20 @@
 //! detail, its timeline, its decisions with who made them, its review
 //! rounds and the gates its next gated step requires, in one read
 //! transaction. Its files are git's, not the ledger's
-//! (`git::lane_files`), and its repo's median claim to merge is read with
-//! the board's stats (`BoardStats::repo_median_h`): neither belongs on a
-//! read that reruns at every commit.
+//! (`git::lane_files`), and its repo's median claim to merge
+//! ([`Ledger::repo_median_h`]) folds every lane the repo merged in 30 days:
+//! neither belongs on a read that reruns at every commit.
 
-use rusqlite::{Transaction, TransactionBehavior};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
+use serde_json::Value;
 
 use super::DETAIL_ROWS;
 use super::lane_detail::LaneDetail;
 use crate::ledger::{Ledger, LedgerError, check_schema};
 use crate::pipeline::{Fact, Phase, Route, by_stamp};
 use crate::spec::parse::parse_decision;
+use crate::stats::Cohort;
 
 #[derive(Debug, Serialize)]
 pub struct LanePage {
@@ -167,36 +169,41 @@ impl Ledger {
             decisions.push(a?);
         }
 
-        let head = detail.handoffs.first().and_then(|h| h.handoff.commit.clone());
-        let facts = self.project(id, head.as_deref())?;
-        let review_rounds = match facts.get("review.local_rounds") {
-            Fact::Int(n) => *n,
-            _ => 0,
-        };
+        let head = detail
+            .handoffs
+            .first()
+            .and_then(|h| h.handoff.commit.clone());
         let stamp: Option<(Option<String>, Option<String>, Option<String>)> = tx
             .query_row(
                 "SELECT pipeline_id, pipeline_hash, route FROM lanes WHERE id = ?1",
                 [id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .ok();
-        let gates = stamp.and_then(|(pid, hash, route)| {
-            let doc = by_stamp(pid.as_deref()?, hash.as_deref()?)?;
-            let route: Route = serde_json::from_value(route?.into()).ok()?;
-            let to = match route {
-                Route::CodePr | Route::Direct => Phase::Ready,
-                Route::NoPr | Route::Investigation => Phase::Done,
-            };
-            let gates = doc.gates("handoff", route, to, &facts).ok()?;
-            Some(Gates {
-                to,
-                head: head.clone(),
-                gates: gates
-                    .into_iter()
-                    .map(|(gate, passed)| GateRow { gate, passed })
-                    .collect(),
-            })
-        });
+            .optional()?;
+        let (mut review_rounds, mut gates) = (0, None);
+        if let Some((pid, hash, route)) = stamp {
+            let facts = self.project(id, head.as_deref())?;
+            if let Fact::Int(n) = facts.get("review.local_rounds") {
+                review_rounds = *n;
+            }
+            gates = (|| {
+                let doc = by_stamp(pid.as_deref()?, hash.as_deref()?)?;
+                let route: Route = serde_json::from_value(route?.into()).ok()?;
+                let to = match route {
+                    Route::CodePr | Route::Direct => Phase::Ready,
+                    Route::NoPr | Route::Investigation => Phase::Done,
+                };
+                let gates = doc.gates("handoff", route, to, &facts).ok()?;
+                Some(Gates {
+                    to,
+                    head: head.clone(),
+                    gates: gates
+                        .into_iter()
+                        .map(|(gate, passed)| GateRow { gate, passed })
+                        .collect(),
+                })
+            })();
+        }
         Ok(LanePage {
             detail,
             timeline,
@@ -204,5 +211,24 @@ impl Ledger {
             review_rounds,
             gates,
         })
+    }
+
+    /// `stats`'s `claim_to_merge_h_median` over `repo`'s lanes (any case)
+    /// with a `pr.merged` in the last 30 days; null when none has merged.
+    pub fn repo_median_h(&self, repo: &str) -> Result<Value, LedgerError> {
+        let mut stmt = self.conn().prepare(
+            "SELECT DISTINCT e.lane_id FROM events e JOIN lanes l ON l.id = e.lane_id
+              WHERE e.kind = 'pr.merged' AND l.repo_slug = ?1 COLLATE NOCASE
+                AND json_extract(e.payload_json, '$.merged_at')
+                    >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')",
+        )?;
+        let ids = stmt
+            .query_map([repo], |r| r.get(0))?
+            .collect::<Result<Vec<i64>, _>>()?;
+        // The ids were just read, so none is refused.
+        match self.stats(&Cohort::Work(ids))? {
+            Ok(mut v) => Ok(v["cohort"]["claim_to_merge_h_median"].take()),
+            Err(r) => Err(std::io::Error::other(format!("stats: {r:?}")).into()),
+        }
     }
 }
