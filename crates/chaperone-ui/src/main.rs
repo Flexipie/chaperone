@@ -135,7 +135,7 @@ impl eframe::App for App {
                 let now = lane
                     .filter(|l| {
                         let slug = l.board.item.repo_slug.as_deref();
-                        self.view.shows(slug.unwrap_or("(no repo)"))
+                        self.view.shows(board::slug(slug))
                     })
                     .map(|l| Selected::of(&l.board.item));
                 (now.as_ref() != Some(sel)).then_some(now)

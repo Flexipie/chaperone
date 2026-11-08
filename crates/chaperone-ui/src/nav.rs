@@ -30,7 +30,7 @@ impl View {
 
 /// Draws the nav and switches `view` on a click. A repo with no open lane
 /// and no recent merge has no entry, so its view falls back to All, once
-/// the stats are read for the board's ledger: a merge-only repo's entry
+/// stats at least as new as the board are read: a merge-only repo's entry
 /// comes from them.
 pub fn draw(
     ui: &mut egui::Ui,
@@ -42,7 +42,7 @@ pub fn draw(
     let repos = repo::repos(board, stats);
     let caught_up = board
         .zip(stats)
-        .is_some_and(|(b, s)| b.data_version == s.data_version);
+        .is_some_and(|(b, s)| s.data_version >= b.data_version);
     if let View::Repo(r) = view
         && caught_up
         && !repos.iter().any(|slug| slug.eq_ignore_ascii_case(r))
