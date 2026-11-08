@@ -48,8 +48,6 @@ struct Scan {
     findings: Vec<Value>,
     /// The engine's pipeline id, which every version a file names must be.
     current: &'static str,
-    names_version: bool,
-    reads_current: bool,
 }
 
 impl Scan {
@@ -68,8 +66,6 @@ pub fn run(
     let mut scan = Scan {
         findings: Vec::new(),
         current: &current.id,
-        names_version: false,
-        reads_current: false,
     };
     let top: BTreeSet<String> = Cli::command()
         .get_subcommands()
@@ -98,7 +94,6 @@ pub fn run(
                 continue;
             }
         };
-        scan.reads_current |= text.contains("pipeline current");
         let n = match lang {
             Lang::Markdown => markdown(path, &text, &top, &mut scan),
             Lang::Shell => shell(path, 1, &text.lines().collect::<Vec<_>>(), &top, &mut scan),
@@ -117,17 +112,6 @@ pub fn run(
             "no_invocations",
             "no chaperone call in any file".into(),
         );
-    }
-    // Files that name no version must read it, or nothing ties them.
-    if !scan.names_version
-        && !scan.reads_current
-        && let Some(d) = dirs.first()
-    {
-        let msg = format!(
-            "no file names pipeline {} or reads `chaperone pipeline current`",
-            current.id
-        );
-        scan.add(d, None, "pipeline_version", msg);
     }
     let mut data = json!({
         "pipeline": { "id": current.id, "hash": current.hash },
@@ -570,7 +554,6 @@ fn version_literals(path: &Path, line: usize, text: &str, scan: &mut Scan) {
         if !id.starts_with(|c: char| c.is_ascii_digit()) {
             continue;
         }
-        scan.names_version = true;
         if scan.current.strip_prefix('v') != Some(id) {
             let msg = format!("names pipeline v{id}; the engine runs {}", scan.current);
             scan.add(path, Some(line), "pipeline_version", msg);
