@@ -555,7 +555,7 @@ pub enum SpecCmd {
 }
 
 /// Check results a fresh session records for a lane: plan check, quality
-/// gate, merge verdict, smoke and kept tests
+/// gate, merge verdict, smoke, kept tests and review rounds
 #[derive(Subcommand, Debug)]
 pub enum CheckCmd {
     /// Record one check result on a work item. Refused from any session

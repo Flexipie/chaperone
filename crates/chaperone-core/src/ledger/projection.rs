@@ -86,6 +86,9 @@ pub(crate) fn project(
                     }
                     "smoke" => smoke = true,
                     "kept_tests" => kept = true,
+                    // A review round daisy did not run (a review agent's): it
+                    // counts toward the cap and nothing else.
+                    "review_round" => rounds += 1,
                     "local_review" | "pr_review" => {
                         if job.is_some() {
                             finished.insert(job);

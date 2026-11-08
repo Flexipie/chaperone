@@ -1,4 +1,4 @@
-Check results a fresh session records for a lane: plan check, quality gate, merge verdict, smoke and kept tests
+Check results a fresh session records for a lane: plan check, quality gate, merge verdict, smoke, kept tests and review rounds
 
 Usage: chaperone check [OPTIONS] <COMMAND>
 
