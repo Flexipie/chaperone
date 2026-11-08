@@ -15,6 +15,7 @@ use chaperone_core::work::{LaneBoard, LaneDetail, WorkItem};
 
 use crate::areas::Areas;
 use crate::diff::Diff;
+use crate::graph::Repos;
 use crate::overlap::Markers;
 
 /// A poll is one pragma on an open connection, so idle costs next to
@@ -42,6 +43,10 @@ pub struct Shown {
     pub since: Option<String>,
     pub stats: Option<BoardStats>,
     pub overlap: Option<Markers>,
+    /// Set by the window: the graph is read only while it is shown.
+    pub graph_open: bool,
+    /// Each repo's change graph with its slug, or why there is none.
+    pub graph: Option<Result<Repos, String>>,
 }
 
 /// One lane's detail as read at `version`, or why it could not be. A

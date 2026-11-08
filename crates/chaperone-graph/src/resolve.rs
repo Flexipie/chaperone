@@ -198,6 +198,10 @@ impl Graph {
 
 fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<Krate> {
     let mut out = Vec::new();
+    // Sorted: a file two targets reach is labelled by the first, the same
+    // one on every run.
+    let mut paths: Vec<&str> = index.keys().copied().collect();
+    paths.sort_unstable();
     for (package, (dir, text)) in manifests.iter().enumerate() {
         let Ok(table) = text.parse::<toml::Table>() else {
             continue;
@@ -264,7 +268,7 @@ fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<K
             at("examples/"),
             at("benches/"),
         ];
-        for (path, _) in index.iter() {
+        for &path in &paths {
             for (i, prefix) in prefixes.iter().enumerate() {
                 let Some(rest) = path.strip_prefix(prefix.as_str()) else {
                     continue;
@@ -405,5 +409,37 @@ impl Cx<'_> {
                 child.push(name.to_string());
                 self.is_mod(*k, &child)
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse;
+
+    /// #100: a helper every integration test declares is labelled by the
+    /// first test by path, on every run (crate order came from a HashMap).
+    #[test]
+    fn shared_test_module_has_one_label() {
+        let tests = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        let mut paths: Vec<String> = tests.iter().map(|t| format!("tests/{t}.rs")).collect();
+        paths.push("tests/common/mod.rs".into());
+        let mut parser = parse::parser();
+        let facts: Vec<Option<Facts>> = paths
+            .iter()
+            .map(|p| {
+                let src: &[u8] = if p.ends_with("mod.rs") {
+                    b""
+                } else {
+                    b"mod common;"
+                };
+                Some(parse::facts(&mut parser, src))
+            })
+            .collect();
+        let manifests = [(String::new(), "[package]\nname = \"p\"\n".into())];
+        for _ in 0..10 {
+            let g = build(&paths, &facts, &manifests);
+            assert_eq!(g.module[paths.len() - 1].as_deref(), Some("a::common"));
+        }
     }
 }

@@ -2,12 +2,15 @@
 //! read-only and redraws when the ledger changes; herdr stays where you type.
 //! Clicking a lane shows its detail and its worktree's diff. Above it, the
 //! R11 numbers of the lanes merged since a date. Each lane names the
-//! lanes it shares files with (`chaperone overlap`).
+//! lanes it shares files with (`chaperone overlap`). The change graph tab
+//! shows what each lane's commits change and reach.
 
 mod areas;
 mod board;
+mod changes;
 mod detail;
 mod diff;
+mod graph;
 mod numbers;
 mod overlap;
 mod watch;
@@ -55,15 +58,18 @@ fn main() -> eframe::Result {
             let ctx = cc.egui_ctx.clone();
             watch::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
-            overlap::spawn(path, shown.clone(), move || ctx.request_repaint());
+            overlap::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
             diff::spawn(shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
             areas::spawn(shown.clone(), move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            changes::spawn(path, shown.clone(), move || ctx.request_repaint());
             Ok(Box::new(App {
                 shown,
                 first_frame: args.first_frame,
                 since: numbers::Since::default(),
+                graph: false,
             }))
         }),
     )
@@ -73,6 +79,8 @@ struct App {
     shown: Arc<Mutex<Shown>>,
     first_frame: bool,
     since: numbers::Since,
+    /// The change graph in place of the board.
+    graph: bool,
 }
 
 impl eframe::App for App {
@@ -127,6 +135,23 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(error) = &shown.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.graph, false, "Board");
+                ui.selectable_value(&mut self.graph, true, "Change graph");
+            });
+            shown.graph_open = self.graph;
+            if self.graph {
+                match &shown.graph {
+                    Some(Ok(repos)) => graph::draw(ui, repos),
+                    Some(Err(e)) => {
+                        ui.colored_label(ui.visuals().error_fg_color, e);
+                    }
+                    None => {
+                        ui.label("Reading the change graph...");
+                    }
+                }
+                return;
             }
             match &shown.board {
                 Some(board) => picked = draw(ui, &shown, board, now),
