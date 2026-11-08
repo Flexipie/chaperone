@@ -100,12 +100,26 @@ impl eframe::App for App {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         let mut shown = self.shown.lock().unwrap();
+        egui::Panel::left("nav")
+            .frame(theme::glass())
+            .show_separator_line(false)
+            .resizable(false)
+            .exact_size(220.0)
+            .show(ui, |ui| {
+                nav::draw(ui, shown.board.as_ref(), now, &mut self.view)
+            });
         // A claim or update since the click moves the worktree or base; a
-        // lane done or cancelled since leaves the board, and its panel closes.
+        // lane done or cancelled since leaves the board, or one the view
+        // does not show, and its panel closes.
         let fresh = match (&shown.selected, &shown.board) {
             (Some(sel), Some(board)) => {
                 let lane = board.lanes.iter().find(|l| l.board.item.id == sel.id);
-                let now = lane.map(|l| Selected::of(&l.board.item));
+                let now = lane
+                    .filter(|l| {
+                        let slug = l.board.item.repo_slug.as_deref();
+                        self.view.shows(slug.unwrap_or("(no repo)"))
+                    })
+                    .map(|l| Selected::of(&l.board.item));
                 (now.as_ref() != Some(sel)).then_some(now)
             }
             _ => None,
@@ -116,14 +130,6 @@ impl eframe::App for App {
         let mut picked = None;
         let mut refresh = false;
         let mut since = None;
-        egui::Panel::left("nav")
-            .frame(theme::glass())
-            .show_separator_line(false)
-            .resizable(false)
-            .exact_size(220.0)
-            .show(ui, |ui| {
-                nav::draw(ui, shown.board.as_ref(), now, &mut self.view)
-            });
         egui::Panel::top("cohort")
             .frame(theme::glass())
             .show_separator_line(false)
