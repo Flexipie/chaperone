@@ -1,68 +1,19 @@
-//! The selected lane's panel (issue, spec slice, handoffs, checks,
-//! findings, areas, diff) and the board's feed of decisions and questions.
+//! The lane page's lists from the #41 panel (issue, handoffs, findings,
+//! areas, diff) and the board's feed of decisions and questions.
 
-use chaperone_core::work::{BoardLane, DETAIL_ROWS, LaneBoard, LaneDetail};
+use chaperone_core::work::{DETAIL_ROWS, LaneBoard, LaneDetail};
 use eframe::egui::{self, Color32, RichText, TextStyle};
 
 use crate::areas::{self, State as AreasState};
 use crate::board;
 use crate::diff::{Diff, OUT_BYTES, State};
-use crate::watch::{Detail, Selected};
 
-/// Lines of diff shown before the panel scrolls them.
+/// Lines of diff shown before the page scrolls them.
 const DIFF_HEIGHT: f32 = 420.0;
-
-/// The lane's panel; true when Refresh was clicked.
-pub fn draw(
-    ui: &mut egui::Ui,
-    sel: &Selected,
-    lane: Option<&BoardLane>,
-    detail: Option<&Detail>,
-    diff: Option<&Diff>,
-    areas: Option<&areas::Areas>,
-) -> bool {
-    let mut refresh = false;
-    egui::ScrollArea::vertical()
-        .id_salt("detail")
-        .show(ui, |ui| {
-            if let Some(lane) = lane {
-                ui.heading(&lane.board.item.title);
-            }
-            issue(ui, sel.key.as_deref());
-            // The diff is its own read: it shows whatever the detail's is.
-            match detail.map(|d| &d.read) {
-                None => {
-                    ui.label("Reading the lane...");
-                }
-                Some(Err(e)) => {
-                    ui.colored_label(ui.visuals().error_fg_color, e);
-                }
-                Some(Ok(d)) => {
-                    section(ui, "Spec slice", |ui| slice(ui, d));
-                    section(ui, "Handoffs", |ui| handoffs(ui, d));
-                    section(ui, "Checks", |ui| checks(ui, d));
-                    section(ui, "Review findings", |ui| findings(ui, d));
-                }
-            }
-            let declared = lane.and_then(areas::declared);
-            section(ui, "Areas", |ui| draw_areas(ui, declared, areas));
-            section(ui, "Diff against the base", |ui| {
-                refresh = ui.button("Refresh").clicked();
-                draw_diff(ui, diff);
-            });
-        });
-    refresh
-}
-
-fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(title)
-        .default_open(true)
-        .show(ui, body);
-}
 
 /// The key, linked when it names a GitHub issue. The body stays in the
 /// tracker (ADR 0007); a Linear key has no URL in the ledger.
-fn issue(ui: &mut egui::Ui, key: Option<&str>) {
+pub fn issue(ui: &mut egui::Ui, key: Option<&str>) {
     let Some(key) = key else {
         ui.label("No tracker key.");
         return;
@@ -77,32 +28,7 @@ fn issue(ui: &mut egui::Ui, key: Option<&str>) {
     }
 }
 
-fn slice(ui: &mut egui::Ui, d: &LaneDetail) {
-    let Some(slice) = &d.slice else {
-        ui.label("No tracker key to find a slice by.");
-        return;
-    };
-    if let Some(i) = &slice.in_spec {
-        let n = i.n.map_or(String::new(), |n| format!("slice {n}: "));
-        ui.strong(format!("{n}{}", i.title));
-        ui.label(format!(
-            "{} {} (v{})",
-            i.parent_key, i.parent_title, i.version
-        ));
-        if i.decisions.is_empty() {
-            ui.label("No decisions.");
-        }
-        lines(ui, &i.decisions);
-    } else {
-        ui.label("Not a slice of a spec.");
-    }
-    // The dossier keeps the newest 20.
-    if let Some(n) = slice.omitted.get("slice_decisions") {
-        ui.label(format!("Left out: the {n} oldest decisions."));
-    }
-}
-
-fn handoffs(ui: &mut egui::Ui, d: &LaneDetail) {
+pub fn handoffs(ui: &mut egui::Ui, d: &LaneDetail) {
     if d.handoffs.is_empty() {
         ui.label("No handoffs.");
     }
@@ -130,30 +56,13 @@ fn handoffs(ui: &mut egui::Ui, d: &LaneDetail) {
 }
 
 /// Says so when a list stopped at the read's cap.
-fn capped(ui: &mut egui::Ui, n: usize) {
+pub fn capped(ui: &mut egui::Ui, n: usize) {
     if n as i64 == DETAIL_ROWS {
         ui.label(format!("The newest {DETAIL_ROWS} shown."));
     }
 }
 
-fn checks(ui: &mut egui::Ui, d: &LaneDetail) {
-    if d.checks.is_empty() {
-        ui.label("No checks recorded.");
-        return;
-    }
-    capped(ui, d.checks.len());
-    egui::Grid::new("checks").striped(true).show(ui, |ui| {
-        for c in &d.checks {
-            ui.label(&c.check);
-            ui.monospace(board::short(&c.head_sha));
-            ui.label(&c.outcome);
-            ui.label(&c.at);
-            ui.end_row();
-        }
-    });
-}
-
-fn findings(ui: &mut egui::Ui, d: &LaneDetail) {
+pub fn findings(ui: &mut egui::Ui, d: &LaneDetail) {
     if d.findings.is_empty() {
         ui.label("No review findings recorded.");
         return;
@@ -171,7 +80,7 @@ fn findings(ui: &mut egui::Ui, d: &LaneDetail) {
 
 /// The newest handoff's declared areas against the diff's; never an empty
 /// section that would read as in scope.
-fn draw_areas(ui: &mut egui::Ui, declared: Option<&[String]>, areas: Option<&areas::Areas>) {
+pub fn draw_areas(ui: &mut egui::Ui, declared: Option<&[String]>, areas: Option<&areas::Areas>) {
     let Some(declared) = declared else {
         ui.label("Not declared: the newest handoff names no areas.");
         return;
@@ -234,7 +143,7 @@ fn draw_areas(ui: &mut egui::Ui, declared: Option<&[String]>, areas: Option<&are
     }
 }
 
-fn draw_diff(ui: &mut egui::Ui, diff: Option<&Diff>) {
+pub fn draw_diff(ui: &mut egui::Ui, diff: Option<&Diff>) {
     let (base, lines, cut) = match diff.map(|d| &d.state) {
         None | Some(State::Running) => {
             ui.label("Reading the diff...");

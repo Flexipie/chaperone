@@ -3,7 +3,8 @@
 //! read again when the worktree commits or the viewer asks. Locks are off
 //! and text conversion and external diff drivers are not run; a clean
 //! filter set in `.gitattributes` (git-lfs) still runs for a modified
-//! file, and git has no switch for that.
+//! file, and git has no switch for that. The lane page's files (area and
+//! +/-, untracked included) are read with it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use chaperone_core::git::{BASES, Failure, git, git_bin};
+use chaperone_core::git::{BASES, ChangedFile, Failure, git, git_bin, lane_files};
+use chaperone_graph::{Error, profile_file, rules};
 
 use crate::watch::{Selected, Shown};
 
@@ -20,10 +22,19 @@ const POLL: Duration = Duration::from_millis(250);
 pub const DEADLINE: Duration = Duration::from_secs(5);
 pub const OUT_BYTES: usize = 1024 * 1024;
 
-/// One lane's diff, or why there is none.
+/// One lane's diff and files, or why there are none.
 pub struct Diff {
     pub lane: i64,
     pub state: State,
+    /// None while the diff is read.
+    pub files: Option<Result<Files, String>>,
+}
+
+/// The lane's files against `base`, and why they have no areas, if so.
+pub struct Files {
+    pub base: String,
+    pub files: Vec<ChangedFile>,
+    pub no_areas: Option<String>,
 }
 
 pub enum State {
@@ -63,10 +74,35 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
                     refresh,
                 };
                 // A diff for a lane no longer selected is dropped, so it is
-                // read again if the lane comes back.
+                // read again if the lane comes back. The diff shows before
+                // the files are read.
+                let id = read.lane.id;
                 if done.as_ref() != Some(&read)
-                    && set(&shown, &read, State::Running, &changed)
-                    && set(&shown, &read, diff(&bin, &read.lane), &changed)
+                    && set(&shown, &read, &changed, |d| {
+                        *d = Some(Diff {
+                            lane: id,
+                            state: State::Running,
+                            files: kept(d, id),
+                        })
+                    })
+                    && set(&shown, &read, &changed, {
+                        let state = diff(&bin, &read.lane);
+                        move |d| {
+                            *d = Some(Diff {
+                                lane: id,
+                                state,
+                                files: kept(d, id),
+                            })
+                        }
+                    })
+                    && set(&shown, &read, &changed, {
+                        let files = files(&bin, &read.lane);
+                        move |d| {
+                            if let Some(d) = d {
+                                d.files = Some(files);
+                            }
+                        }
+                    })
                 {
                     done = Some(read);
                 }
@@ -76,19 +112,26 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
     });
 }
 
-/// Shows `state` if the viewer still wants what `read` read.
-fn set(shown: &Mutex<Shown>, read: &Read, state: State, changed: &impl Fn()) -> bool {
+/// Writes `shown.diff` if the viewer still wants what `read` read.
+fn set(
+    shown: &Mutex<Shown>,
+    read: &Read,
+    changed: &impl Fn(),
+    write: impl FnOnce(&mut Option<Diff>),
+) -> bool {
     let mut s = shown.lock().unwrap();
     if s.selected.as_ref() != Some(&read.lane) || s.refresh != read.refresh {
         return false;
     }
-    s.diff = Some(Diff {
-        lane: read.lane.id,
-        state,
-    });
+    write(&mut s.diff);
     drop(s);
     changed();
     true
+}
+
+/// The files the lane showed, kept until the new ones are read.
+fn kept(d: &mut Option<Diff>, lane: i64) -> Option<Result<Files, String>> {
+    d.take().filter(|d| d.lane == lane).and_then(|d| d.files)
 }
 
 /// Against the first base this clone has. The last, the lane's `base_sha`,
@@ -112,6 +155,30 @@ fn diff(bin: &Path, lane: &Selected) -> State {
         },
         Err(e) => State::Failed(e),
     }
+}
+
+/// The lane's changed files with their area in the repo's profile; no
+/// profile, or one that does not parse, is said, never areas left blank.
+fn files(bin: &Path, lane: &Selected) -> Result<Files, String> {
+    let wt = lane.worktree.as_deref().map(Path::new);
+    let wt = wt.filter(|w| w.is_dir()).ok_or("no worktree to read")?;
+    let profile = lane.repo.as_deref().and_then(profile_file);
+    let (rules, no_areas) = match rules(profile, None) {
+        Ok(r) => (Some(r), None),
+        Err(Error::Invalid(e) | Error::Internal(e)) => (None, Some(e)),
+    };
+    let area = |path: &str| {
+        let a = rules.as_ref()?.area(path);
+        (!a.is_empty()).then(|| a.to_string())
+    };
+    let deadline = Instant::now() + DEADLINE;
+    let base = lane.base_sha.as_deref();
+    let (base, files) = lane_files(bin, wt, base, deadline, OUT_BYTES, area)?;
+    Ok(Files {
+        base,
+        files,
+        no_areas,
+    })
 }
 
 /// `git <pre> --merge-base <base> <post> --` in `wt` against the first base

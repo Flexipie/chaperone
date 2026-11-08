@@ -1,7 +1,7 @@
 //! The lane page's ledger data (`chaperone-ui` draws it): the lane's
-//! detail, its timeline, its decisions with who made them, its review
-//! rounds and the gates its next gated step requires, in one read
-//! transaction. Its files are git's, not the ledger's
+//! detail, its timeline, its decisions with who made them, its local
+//! reviews and rounds and the gates its next gated step requires, in one
+//! read transaction. Its files are git's, not the ledger's
 //! (`git::lane_files`), and its repo's median claim to merge
 //! ([`Ledger::repo_median`]) folds every lane the repo merged in 30 days:
 //! neither belongs on a read that reruns at every commit.
@@ -27,6 +27,11 @@ pub struct LanePage {
     pub decisions: Vec<DecisionRow>,
     /// `review.local_rounds`: the engine's count, the one the gates read.
     pub review_rounds: i64,
+    /// `review.local_head`: the head of the newest local review that ran,
+    /// as the engine picks it (by job, not by when it was recorded).
+    pub review_head: Option<String>,
+    /// The lane's local reviews, newest job first.
+    pub reviews: Vec<ReviewRow>,
     /// None when this binary has no document for the lane's stamp, or the
     /// document no row for its route: unstamped, never "0 of 0 passed".
     pub gates: Option<Gates>,
@@ -58,6 +63,13 @@ pub struct DecisionRow {
     pub text: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ReviewRow {
+    /// ran, or skipped for a failed or cancelled job (no score).
+    pub outcome: String,
+    pub score: Option<f64>,
+}
+
 /// The `handoff` transition to ready (to done on a route without one)
 /// on the lane's own document.
 #[derive(Debug, Serialize)]
@@ -80,7 +92,7 @@ const QUIET: &str = "('usage.reported', 'lane.renewed', 'check.requested', 'find
 
 impl Ledger {
     /// Lane `id`'s page as of one snapshot, its schema re-checked inside
-    /// it; `key` is its tracker key as for [`Ledger::lane_detail`]. An
+    /// it; `key` is its tracker key (the board's `source_key`). An
     /// unknown lane has an empty timeline and no gates.
     pub fn lane_page(&self, id: i64, key: Option<&str>) -> Result<LanePage, LedgerError> {
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
@@ -176,6 +188,25 @@ impl Ledger {
             decisions.push(a?);
         }
 
+        let mut stmt = tx.prepare(&format!(
+            "SELECT {}, {} FROM events e
+              WHERE e.lane_id = ?1 AND e.kind = 'check.finished' AND {} = 'local_review'
+              ORDER BY {} IS NULL, {} DESC, e.id DESC LIMIT ?2",
+            j("outcome"),
+            j("score"),
+            j("check"),
+            j("job"),
+            j("job"),
+        ))?;
+        let reviews = stmt
+            .query_map((id, DETAIL_ROWS), |r| {
+                Ok(ReviewRow {
+                    outcome: r.get(0)?,
+                    score: r.get(1)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+
         let head = detail
             .handoffs
             .first()
@@ -187,11 +218,14 @@ impl Ledger {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        let (mut review_rounds, mut gates) = (0, None);
+        let (mut review_rounds, mut review_head, mut gates) = (0, None, None);
         if let Some((pid, hash, route)) = stamp {
             let facts = self.project(id, head.as_deref())?;
             if let Fact::Int(n) = facts.get("review.local_rounds") {
                 review_rounds = *n;
+            }
+            if let Fact::Str(h) = facts.get("review.local_head") {
+                review_head = Some(h.clone());
             }
             gates = (|| {
                 let doc = by_stamp(pid.as_deref()?, hash.as_deref()?)?;
@@ -216,6 +250,8 @@ impl Ledger {
             timeline,
             decisions,
             review_rounds,
+            review_head,
+            reviews,
             gates,
         })
     }

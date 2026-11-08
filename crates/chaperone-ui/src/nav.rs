@@ -28,17 +28,17 @@ impl View {
     }
 }
 
-/// Draws the nav and switches `view` on a click. A repo with no open lane
-/// and no recent merge has no entry, so its view falls back to All, once
-/// stats at least as new as the board are read: a merge-only repo's entry
-/// comes from them.
+/// Draws the nav and switches `view` on a click; true on any click, the
+/// highlighted entry too. A repo with no open lane and no recent merge has
+/// no entry, so its view falls back to All, once stats at least as new as
+/// the board are read: a merge-only repo's entry comes from them.
 pub fn draw(
     ui: &mut egui::Ui,
     board: Option<&LaneBoard>,
     stats: Option<&BoardStats>,
     now: i64,
     view: &mut View,
-) {
+) -> bool {
     let repos = repo::repos(board, stats);
     let caught_up = board
         .zip(stats)
@@ -52,22 +52,26 @@ pub fn draw(
     ui.label(RichText::new("Chaperone").heading().strong());
     ui.add_space(10.0);
     let all = board.map_or(0, |b| needs::count(&b.lanes, now));
-    entry(ui, view, View::All, "All repos", all);
+    let mut clicked = entry(ui, view, View::All, "All repos", all);
     ui.add_space(6.0);
     ui.label(RichText::new("REPOS").small().weak());
     for slug in repos {
         let n = board.map_or(0, |b| needs::count(repo::lanes_of(b, slug), now));
-        entry(ui, view, View::Repo(slug.to_lowercase()), slug, n);
+        clicked |= entry(ui, view, View::Repo(slug.to_lowercase()), slug, n);
     }
     ui.add_space(6.0);
-    entry(ui, view, View::Pipeline, "Pipeline", 0);
+    clicked |= entry(ui, view, View::Pipeline, "Pipeline", 0);
+    clicked
 }
 
-fn entry(ui: &mut egui::Ui, view: &mut View, to: View, name: &str, needs: usize) {
+fn entry(ui: &mut egui::Ui, view: &mut View, to: View, name: &str, needs: usize) -> bool {
     ui.horizontal(|ui| {
-        if ui.selectable_label(*view == to, name).clicked() {
+        let clicked = ui.selectable_label(*view == to, name).clicked();
+        if clicked {
             *view = to;
         }
         theme::badge(ui, needs);
-    });
+        clicked
+    })
+    .inner
 }

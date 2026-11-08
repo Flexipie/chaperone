@@ -71,41 +71,49 @@ pub fn rows<'a>(
     now: i64,
 ) -> Vec<RepoLaneRow<'a>> {
     let mut rows: Vec<RepoLaneRow> = lanes_of(board, slug)
-        .map(|lane| {
-            let item = &lane.board.item;
-            let why = needs::why(lane, now);
-            let state = match (why, item.status.as_str()) {
-                (Some(w), _) => w.words(),
-                (None, "queued") => "waiting to start",
-                (None, "claimed") => "starting",
-                (None, "active") => "working",
-                (None, "review") => "in review",
-                (None, _) => "open",
-            };
-            let blocker = item.blocker.as_deref().filter(|_| item.status == "blocked");
-            let row = numbers::lane(stats, item.id);
-            let [io, cache] = numbers::tokens(row);
-            let tokens = match cache.as_str() {
-                _ if row.is_some_and(|r| r["tokens"].is_null()) => "none recorded".into(),
-                "-" | "..." => io,
-                c => format!("{io}, {c} cached"),
-            };
-            RepoLaneRow {
-                lane,
-                label: board::label(item),
-                why,
-                state,
-                next: blocker.or(item.next_action.as_deref()).unwrap_or("-"),
-                running: lane
-                    .claimed_secs
-                    .map_or("not started".into(), |c| board::age(c, now)),
-                tokens,
-                in_scope: areas::card(areas::declared(lane), areas.get(&item.id)),
-            }
-        })
+        .map(|lane| row(lane, stats, areas, now))
         .collect();
     rows.sort_by_key(|r| r.why.is_none());
     rows
+}
+
+/// One lane in plain words: the repo page's row, and the lane page's.
+pub fn row<'a>(
+    lane: &'a BoardLane,
+    stats: Option<&BoardStats>,
+    areas: &HashMap<i64, Areas>,
+    now: i64,
+) -> RepoLaneRow<'a> {
+    let item = &lane.board.item;
+    let why = needs::why(lane, now);
+    let state = match (why, item.status.as_str()) {
+        (Some(w), _) => w.words(),
+        (None, "queued") => "waiting to start",
+        (None, "claimed") => "starting",
+        (None, "active") => "working",
+        (None, "review") => "in review",
+        (None, _) => "open",
+    };
+    let blocker = item.blocker.as_deref().filter(|_| item.status == "blocked");
+    let row = numbers::lane(stats, item.id);
+    let [io, cache] = numbers::tokens(row);
+    let tokens = match cache.as_str() {
+        _ if row.is_some_and(|r| r["tokens"].is_null()) => "none recorded".into(),
+        "-" | "..." => io,
+        c => format!("{io}, {c} cached"),
+    };
+    RepoLaneRow {
+        lane,
+        label: board::label(item),
+        why,
+        state,
+        next: blocker.or(item.next_action.as_deref()).unwrap_or("-"),
+        running: lane
+            .claimed_secs
+            .map_or("not started".into(), |c| board::age(c, now)),
+        tokens,
+        in_scope: areas::card(areas::declared(lane), areas.get(&item.id)),
+    }
 }
 
 /// A merged lane in one sentence: its brief's goal, first line, else its
@@ -129,7 +137,6 @@ pub fn page(
     ui: &mut egui::Ui,
     rows: &[RepoLaneRow],
     merged: Option<(&BoardStats, &str)>,
-    selected: Option<&Selected>,
     now: i64,
 ) -> Option<Selected> {
     let mut picked = None;
@@ -155,8 +162,7 @@ pub fn page(
                 ui.end_row();
                 for r in rows {
                     let item = &r.lane.board.item;
-                    let on = selected.is_some_and(|s| s.id == item.id);
-                    if ui.selectable_label(on, &r.label).clicked() {
+                    if ui.selectable_label(false, &r.label).clicked() {
                         picked = Some(Selected::of(item));
                     }
                     ui.label(&item.title);

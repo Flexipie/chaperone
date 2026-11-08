@@ -1,7 +1,8 @@
 //! The watcher thread: its own read-only ledger, polled for
 //! `PRAGMA data_version`, and a new board only when that changes; the
-//! selected lane's detail too when it changes or another lane is picked,
-//! then the board's stats, after the board is shown.
+//! selected lane's page too when it changes or another lane is picked,
+//! then the board's stats and the lane's repo median, after the board is
+//! shown.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use chaperone_core::ledger::{Ledger, LedgerError};
 use chaperone_core::stats::BoardStats;
-use chaperone_core::work::{LaneBoard, LaneDetail, WorkItem};
+use chaperone_core::work::{LaneBoard, LanePage, WorkItem};
+use serde_json::Value;
 
 use crate::areas::Areas;
 use crate::backlog;
@@ -25,10 +27,14 @@ const POLL: Duration = Duration::from_millis(100);
 /// Stats replay every open lane's events (68 ms at R14's U2 size), so a
 /// ledger written every poll reads them at most this often.
 const STATS_EVERY: Duration = Duration::from_secs(1);
+/// The repo median folds 30 days of merges: read again for a new repo
+/// at once, for new writes at most this often.
+const MEDIAN_EVERY: Duration = Duration::from_secs(60);
 
 /// What the window draws: the newest board, or why there is none, and
-/// the selected lane's detail and diff. The window sets `selected` and
-/// `refresh`; a detail or diff is drawn only for the lane it was read for.
+/// the selected lane's page, diff, files and repo median. The window sets
+/// `selected` and `refresh`; each is drawn only for the lane (or repo) it
+/// was read for.
 #[derive(Default)]
 pub struct Shown {
     pub board: Option<LaneBoard>,
@@ -43,6 +49,8 @@ pub struct Shown {
     /// The cohort's date the window asks for; None is the default.
     pub since: Option<String>,
     pub stats: Option<BoardStats>,
+    /// The selected lane's repo median (`repo_median`), or why there is none.
+    pub median: Option<Median>,
     pub overlap: Option<Markers>,
     /// Set by the window: the graph is read only while it is shown.
     pub graph_open: bool,
@@ -54,22 +62,30 @@ pub struct Shown {
     pub backlog: Option<backlog::Read>,
 }
 
-/// One lane's detail as read at `version`, or why it could not be. A
-/// failed read shows in the panel and is tried again on the next change,
+/// One lane's page as read at `version`, or why it could not be. A
+/// failed read shows on the page and is tried again on the next change,
 /// never every poll.
 pub struct Detail {
     pub lane: i64,
     version: i64,
-    pub read: Result<LaneDetail, String>,
+    pub read: Result<LanePage, String>,
 }
 
-/// The lane picked on the board, with what its detail and diff read.
+/// A repo's median claim to merge as read at `version`.
+pub struct Median {
+    pub repo: String,
+    version: i64,
+    pub read: Result<Value, String>,
+}
+
+/// The lane picked, with what its page, diff, files and median read.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selected {
     pub id: i64,
     pub key: Option<String>,
     pub worktree: Option<String>,
     pub base_sha: Option<String>,
+    pub repo: Option<String>,
 }
 
 impl Selected {
@@ -79,6 +95,7 @@ impl Selected {
             key: item.source_key.clone(),
             worktree: item.worktree_path.clone(),
             base_sha: item.base_sha.clone(),
+            repo: item.repo_slug.clone(),
         }
     }
 }
@@ -93,6 +110,7 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
         // The (data_version, since asked) of the stats shown, and when.
         let mut counted: Option<(i64, Option<String>)> = None;
         let mut counted_at: Option<Instant> = None;
+        let mut median_at: Option<Instant> = None;
         loop {
             let start = Instant::now();
             let (want, since) = {
@@ -114,6 +132,28 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     counted = Some((stats.data_version, since));
                     counted_at = Some(Instant::now());
                     shown.lock().unwrap().stats = Some(stats);
+                    changed();
+                }
+                let repo = want.and_then(|l| l.repo);
+                let stale = {
+                    let s = shown.lock().unwrap();
+                    match (&repo, &s.median) {
+                        (None, _) => false,
+                        (Some(r), Some(m)) if &m.repo == r => {
+                            m.version != version
+                                && median_at.is_none_or(|t| t.elapsed() >= MEDIAN_EVERY)
+                        }
+                        _ => true,
+                    }
+                };
+                if let (true, Some(repo)) = (stale, repo) {
+                    let read = ledger.repo_median(&repo).map_err(|e| e.to_string());
+                    median_at = Some(Instant::now());
+                    shown.lock().unwrap().median = Some(Median {
+                        repo,
+                        version,
+                        read,
+                    });
                     changed();
                 }
                 Ok(())
@@ -191,10 +231,10 @@ fn poll(
     };
     let detail = match want {
         Some(l) if loaded != Some((version, l.id)) => {
-            let read = ledger.lane_detail(l.id, l.key.as_deref());
+            let read = ledger.lane_page(l.id, l.key.as_deref());
             Some(Detail {
                 lane: l.id,
-                version: read.as_ref().map_or(version, |d| d.data_version),
+                version: read.as_ref().map_or(version, |d| d.detail.data_version),
                 read: read.map_err(|e| e.to_string()),
             })
         }
@@ -210,7 +250,7 @@ mod tests {
 
     use chaperone_core::checks::{AttentionInput, CheckInput, MergedInput};
     use chaperone_core::ledger::{Actor, EventKind, Mutation, Payload};
-    use chaperone_core::work::{ClaimInput, CreateInput, UpdateInput};
+    use chaperone_core::work::{Brief, ClaimInput, CreateInput, HandoffInput, UpdateInput};
 
     use super::*;
 
@@ -229,7 +269,8 @@ mod tests {
 
     /// R14 U2 and the reload cost, on a busy ledger with a spec of 20
     /// decisions, a question per lane, usage on every lane, every other
-    /// lane merged into the cohort and lane 1 selected. Release only:
+    /// lane merged into the cohort and lane 1 selected, with a handoff and
+    /// local reviews so its page reads them. Release only:
     /// `cargo test --release -p chaperone-ui -- --ignored --nocapture`.
     #[test]
     #[ignore = "release-only budget; run with --ignored"]
@@ -271,9 +312,37 @@ mod tests {
                 ..CreateInput::default()
             };
             rw.work_create(&me, &create, None, false).unwrap().unwrap();
-            rw.work_claim(&me, id, &ClaimInput::default(), None, false)
+            let claim = ClaimInput {
+                branch: Some(format!("b{id}")),
+                ..ClaimInput::default()
+            };
+            rw.work_claim(&me, id, &claim, None, false)
                 .unwrap()
                 .unwrap();
+            if id == 1 {
+                for job in 1..=5 {
+                    let view = serde_json::json!({
+                        "job_id": job, "source": "local", "status": "reviewed",
+                        "phase": "done", "done": true, "repo": "Flexipie/repo1",
+                        "branch": "b1", "head_sha": "abc1234", "score": job,
+                        "verdict": "safe", "summary": "s", "findings": [],
+                    });
+                    rw.review_record(&checker, id, job, &view).unwrap().unwrap();
+                }
+                let handoff = HandoffInput {
+                    summary: "built".into(),
+                    commit: Some("abc1234".into()),
+                    brief: Some(Brief {
+                        goal: "a goal".into(),
+                        check_by_hand: vec!["the look".into()],
+                        ..Brief::default()
+                    }),
+                    ..HandoffInput::default()
+                };
+                rw.work_handoff(&me, id, &handoff, None, false)
+                    .unwrap()
+                    .unwrap();
+            }
             for n in 0..EVENTS {
                 let update = UpdateInput {
                     next_action: Some(format!("step {n}")),
@@ -349,7 +418,8 @@ mod tests {
             .map(|_| {
                 let start = Instant::now();
                 assert_eq!(ro.lane_board(&now).unwrap().lanes.len(), LANES as usize);
-                ro.lane_detail(1, Some("Flexipie/repo0#2")).unwrap();
+                let page = ro.lane_page(1, Some("Flexipie/repo0#2")).unwrap();
+                assert_eq!(page.reviews.len(), 5);
                 start.elapsed()
             })
             .collect();
