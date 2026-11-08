@@ -3,12 +3,12 @@
 //! rounds and the gates its next gated step requires, in one read
 //! transaction. Its files are git's, not the ledger's
 //! (`git::lane_files`), and its repo's median claim to merge
-//! ([`Ledger::repo_median_h`]) folds every lane the repo merged in 30 days:
+//! ([`Ledger::repo_median`]) folds every lane the repo merged in 30 days:
 //! neither belongs on a read that reruns at every commit.
 
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::DETAIL_ROWS;
 use super::lane_detail::LaneDetail;
@@ -36,7 +36,7 @@ pub struct LanePage {
 pub struct TimelineRow {
     pub at: String,
     /// Since the lane's first claim (its first `lane.claimed`, as stats
-    /// counts it); None while it has none.
+    /// counts it); None before it, and while it has none.
     pub minutes: Option<i64>,
     /// The event kind (events.md).
     pub kind: String,
@@ -88,11 +88,11 @@ impl Ledger {
         let detail = self.detail_in(&tx, id, key)?;
         let j = |k: &str| format!("json_extract(e.payload_json, '$.{k}')");
         let mut stmt = tx.prepare(&format!(
-            "SELECT e.at, CAST(round((julianday(e.at) - julianday(
-                        (SELECT min(at) FROM events WHERE lane_id = ?1 AND kind = 'lane.claimed')
-                    )) * 1440) AS INTEGER),
+            "WITH c AS (SELECT min(at) AS at FROM events WHERE lane_id = ?1 AND kind = 'lane.claimed')
+             SELECT e.at, CASE WHEN e.at >= c.at
+                        THEN CAST(round((julianday(e.at) - julianday(c.at)) * 1440) AS INTEGER) END,
                     e.kind, e.actor_agent, {}, {}, {}, {}, {}, {}, {}, {}
-               FROM events e
+               FROM events e, c
               WHERE e.lane_id = ?1 AND e.kind NOT IN {QUIET}
               ORDER BY e.id DESC LIMIT ?2",
             j("to"),
@@ -211,9 +211,10 @@ impl Ledger {
         })
     }
 
-    /// `stats`'s `claim_to_merge_h_median` over `repo`'s lanes (any case)
-    /// with a `pr.merged` in the last 30 days; null when none has merged.
-    pub fn repo_median_h(&self, repo: &str) -> Result<Value, LedgerError> {
+    /// `stats`'s cohort over `repo`'s lanes (any case) with a `pr.merged`
+    /// in the last 30 days: `claim_to_merge_h_median` (null when none has
+    /// merged), `lanes` and `too_few_lanes` (R11: flagged, not scored).
+    pub fn repo_median(&self, repo: &str) -> Result<Value, LedgerError> {
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
         check_schema(&tx)?;
         let mut stmt = tx.prepare(
@@ -227,7 +228,14 @@ impl Ledger {
             .collect::<Result<Vec<i64>, _>>()?;
         // The ids were just read, so none is refused.
         match self.stats(&Cohort::Work(ids))? {
-            Ok(mut v) => Ok(v["cohort"]["claim_to_merge_h_median"].take()),
+            Ok(mut v) => {
+                let c = &mut v["cohort"];
+                Ok(json!({
+                    "claim_to_merge_h_median": c["claim_to_merge_h_median"].take(),
+                    "lanes": c["lanes"].take(),
+                    "too_few_lanes": c["too_few_lanes"].take(),
+                }))
+            }
             Err(r) => Err(std::io::Error::other(format!("stats: {r:?}")).into()),
         }
     }

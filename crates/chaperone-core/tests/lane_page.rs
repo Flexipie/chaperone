@@ -1,6 +1,6 @@
 //! The lane page's data (#111): `lane_page` (timeline, decisions with who
 //! made them, review rounds, gates required vs passed), the per-repo
-//! median (`repo_median_h`), and `git::lane_files` on a temp repo.
+//! median (`repo_median`), and `git::lane_files` on a temp repo.
 
 mod common;
 
@@ -17,10 +17,11 @@ use common::actor;
 use serde_json::{Value, json};
 
 const OLD: &str = "2026-01-01T00:00:00.000Z";
+const PRE: &str = "2025-12-31T00:00:00.000Z";
 
-/// A claimed lane on `repo` holding PR `<repo>#<id>`, created and claimed
-/// at `at` (None: now).
-fn lane(ledger: &Ledger, repo: &str, at: Option<&str>) -> i64 {
+/// A claimed lane on `repo` holding PR `<repo>#<id>`, created at `created`
+/// and claimed at `at` (None: now).
+fn lane(ledger: &Ledger, repo: &str, created: Option<&str>, at: Option<&str>) -> i64 {
     let a = actor("1");
     let input = CreateInput {
         title: "t".into(),
@@ -30,7 +31,7 @@ fn lane(ledger: &Ledger, repo: &str, at: Option<&str>) -> i64 {
         ..CreateInput::default()
     };
     let id = ledger
-        .work_create(&a, &input, at, false)
+        .work_create(&a, &input, created, false)
         .unwrap()
         .unwrap()
         .id;
@@ -103,7 +104,8 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
         .unwrap();
     // Claimed in January, its lease renewed now: minutes count from the
     // first claim, not from the renewal.
-    let id = lane(&ledger, "o/r", Some(OLD));
+    // Created the day before it is claimed: that row has no minutes.
+    let id = lane(&ledger, "o/r", Some(PRE), Some(OLD));
     ledger
         .work_claim(&actor("1"), id, &ClaimInput::default(), None, false)
         .unwrap()
@@ -152,11 +154,13 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
             ("lane.created", None),
         ]
     );
-    assert!(
-        page.timeline
-            .iter()
-            .all(|t| t.minutes.is_some_and(|m| m >= 0))
-    );
+    for t in &page.timeline {
+        let before_claim = t.kind == "lane.created";
+        assert!(
+            t.minutes.is_none() == before_claim && t.minutes.is_none_or(|m| m >= 0),
+            "{t:?}"
+        );
+    }
     let claimed = page.timeline.iter().find(|t| t.kind == "lane.claimed");
     assert_eq!(claimed.unwrap().minutes, Some(0));
 
@@ -220,20 +224,27 @@ fn merged(ledger: &Ledger, work: i64, repo: &str, merged_at: &str) {
 fn repo_median_is_per_repo_over_30_days() {
     let (_dir, _path, ledger) = common::ledger();
     let now = ledger.now().unwrap();
-    let fast = lane(&ledger, "O/R", None);
+    let fast = lane(&ledger, "O/R", None, None);
     merged(&ledger, fast, "O/R", &now);
     // Claimed in January and merged now: hundreds of hours, another repo.
-    let slow = lane(&ledger, "x/y", Some(OLD));
+    let slow = lane(&ledger, "x/y", Some(OLD), Some(OLD));
     merged(&ledger, slow, "x/y", &now);
     // Merged before the window.
-    let old = lane(&ledger, "o/r", Some(OLD));
+    let old = lane(&ledger, "o/r", Some(OLD), Some(OLD));
     merged(&ledger, old, "o/r", "2026-01-02T00:00:00.000Z");
-    lane(&ledger, "z/w", None);
+    lane(&ledger, "z/w", None, None);
 
-    let median = |repo: &str| ledger.repo_median_h(repo).unwrap();
-    assert_eq!(median("o/r"), json!(0.0));
-    assert!(median("x/y").as_f64().is_some_and(|h| h > 24.0));
-    assert_eq!(median("Z/W"), Value::Null);
+    let median = |repo: &str| ledger.repo_median(repo).unwrap();
+    assert_eq!(
+        median("o/r"),
+        json!({"claim_to_merge_h_median": 0.0, "lanes": 1, "too_few_lanes": true})
+    );
+    assert!(
+        median("x/y")["claim_to_merge_h_median"]
+            .as_f64()
+            .is_some_and(|h| h > 24.0)
+    );
+    assert_eq!(median("Z/W")["claim_to_merge_h_median"], Value::Null);
 }
 
 fn git(dir: &Path, args: &[&str]) {
