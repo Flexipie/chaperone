@@ -279,14 +279,15 @@ fn calls(
 ) -> usize {
     let mut n = 0;
     for (at, bare) in markers(s) {
-        let toks = tokens(&s[at..]);
+        let (toks, spread) = tokens(&s[at..]);
         // The bare word is prose ("the chaperone ledger") unless a command
         // follows it.
         if toks.is_empty() || bare && !toks[0].as_ref().is_some_and(|w| top.contains(w)) {
             continue;
         }
         n += 1;
-        check_argv(path, line, &toks, whole, scan);
+        // `"$@"` may be any number of words: what looks missing may be in it.
+        check_argv(path, line, &toks, whole && !spread, scan);
     }
     n
 }
@@ -311,17 +312,24 @@ fn markers(s: &str) -> Vec<(usize, bool)> {
 }
 
 /// Shell words up to the end of the command; `None` is a placeholder
-/// (`<id>`, `"$PR"`, `$(…)`).
-fn tokens(s: &str) -> Vec<Option<String>> {
+/// (`<id>`, `"$PR"`, `$(…)`), and `--flag=<placeholder>` keeps its flag.
+/// True when a word may expand to several (`"$@"`, `$*`, `"${a[@]}"`,
+/// an unquoted `$x`).
+fn tokens(s: &str) -> (Vec<Option<String>>, bool) {
     let cs: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
     let mut cur = String::new();
-    let (mut started, mut ph) = (false, false);
+    let (mut started, mut ph, mut spread) = (false, false, false);
     let flush =
         |out: &mut Vec<Option<String>>, cur: &mut String, started: &mut bool, ph: &mut bool| {
             if *started {
                 let placeholder = *ph || cur.contains("...") || cur.contains('…');
-                out.push((!placeholder).then(|| cur.clone()));
+                out.push(match cur.split_once('=') {
+                    Some((flag, _)) if placeholder && flag.starts_with("--") => {
+                        Some(format!("{flag}={DUMMY}"))
+                    }
+                    _ => (!placeholder).then(|| cur.clone()),
+                });
             }
             cur.clear();
             (*started, *ph) = (false, false);
@@ -334,15 +342,19 @@ fn tokens(s: &str) -> Vec<Option<String>> {
             ' ' | '\t' => flush(&mut out, &mut cur, &mut started, &mut ph),
             '\'' | '"' => {
                 started = true;
+                let from = cur.len();
                 while i < cs.len() && cs[i] != c {
                     ph |= c == '"' && matches!(cs[i], '$' | '`');
                     cur.push(cs[i]);
                     i += 1;
                 }
                 i += 1;
+                let q = &cur[from..];
+                spread |= c == '"' && ["$@", "[@]"].iter().any(|m| q.contains(m));
             }
             '$' | '<' => {
                 let (open, close) = if c == '<' { ('<', '>') } else { ('(', ')') };
+                spread |= c == '$' && cs.get(i) != Some(&'(');
                 if c == '<' || cs.get(i) == Some(&'(') {
                     let mut depth = usize::from(c == '<');
                     while i < cs.len() {
@@ -372,7 +384,7 @@ fn tokens(s: &str) -> Vec<Option<String>> {
         }
     }
     flush(&mut out, &mut cur, &mut started, &mut ph);
-    out
+    (out, spread)
 }
 
 /// One call through clap's own parser, then the values core checks
@@ -386,7 +398,9 @@ fn check_argv(path: &Path, line: usize, toks: &[Option<String>], whole: bool, sc
             ErrorKind::InvalidSubcommand => Some(("command", ContextKind::InvalidSubcommand)),
             ErrorKind::UnknownArgument => Some(("flag", ContextKind::InvalidArg)),
             ErrorKind::InvalidValue => Some(("value", ContextKind::InvalidValue)),
-            ErrorKind::MissingRequiredArgument if whole => Some(("flag", ContextKind::InvalidArg)),
+            ErrorKind::MissingRequiredArgument if whole => {
+                Some(("argument", ContextKind::InvalidArg))
+            }
             ErrorKind::ValueValidation if whole => Some(("value", ContextKind::InvalidValue)),
             // A fragment (`$L work get` without its id), or a span or a
             // python list that may continue elsewhere: not drift.
@@ -421,7 +435,7 @@ fn check_argv(path: &Path, line: usize, toks: &[Option<String>], whole: bool, sc
                 "" => words.get(i + 1).copied(),
                 v => v.strip_prefix('='),
             })
-            .filter(|v| !v.is_empty())
+            .filter(|v| !v.is_empty() && *v != DUMMY)
     };
     match words.get(..2) {
         Some(["work", "update" | "list"]) => {
