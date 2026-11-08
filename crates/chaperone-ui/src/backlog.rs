@@ -333,15 +333,25 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str) {
             return;
         }
     };
-    if let Some(status) = &backlog.stale {
-        let line = format!("daisy's GitHub mirror is {status}: this may be out of date.");
-        ui.colored_label(ui.visuals().warn_fg_color, line);
-    }
-    if backlog.open == 0 {
-        ui.label(format!(
-            "daisy's GitHub mirror has no open issues for {slug}."
-        ));
-        return;
+    let warn = ui.visuals().warn_fg_color;
+    match (&backlog.stale, backlog.open) {
+        (Some(status), 0) => {
+            let line =
+                format!("daisy's GitHub mirror is {status}: no open issues read for {slug}.");
+            ui.colored_label(warn, line);
+            return;
+        }
+        (None, 0) => {
+            ui.label(format!(
+                "daisy's GitHub mirror has no open issues for {slug}."
+            ));
+            return;
+        }
+        (Some(status), _) => {
+            let line = format!("daisy's GitHub mirror is {status}: this may be out of date.");
+            ui.colored_label(warn, line);
+        }
+        (None, _) => {}
     }
     if backlog.rows.is_empty() {
         ui.label(format!("All {} open issues are in a lane.", backlog.open));
