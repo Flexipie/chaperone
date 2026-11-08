@@ -1,7 +1,8 @@
 //! The lane page (#109 slice 4): what the lane is, how it is doing against
 //! its repo and what it changed. A header, six tiles, the timeline, the
 //! decisions, what to check by hand and the files, then the #41 panel's
-//! handoffs, findings, areas and diff, folded.
+//! handoffs, findings, areas and diff, folded. On a lane that needs you,
+//! the owner answers it, sends it back or opens it in herdr (`writer`).
 
 use std::collections::HashMap;
 
@@ -12,7 +13,8 @@ use eframe::egui::{self, RichText};
 use crate::areas::{self, Areas};
 use crate::diff::{Diff, Files};
 use crate::watch::{Detail, Median, Selected};
-use crate::{board, detail, numbers, repo, theme};
+use crate::writer::{Act, Confirm, Lane, NOTE_CHARS};
+use crate::{board, detail, needs, numbers, repo, theme};
 
 /// What the viewer asked for on the page.
 #[derive(Default)]
@@ -20,6 +22,16 @@ pub struct Asked {
     pub back: bool,
     /// The diff's Refresh.
     pub refresh: bool,
+    /// A write for the writer.
+    pub act: Option<Act>,
+}
+
+/// What the owner has typed on the page, for lane `lane` only.
+#[derive(Default)]
+pub struct Typed {
+    pub lane: i64,
+    pub answer: String,
+    pub reason: String,
 }
 
 /// What the page reads, each for the selected lane only.
@@ -30,10 +42,19 @@ pub struct Reads<'a> {
     pub areas: &'a HashMap<i64, Areas>,
     pub stats: Option<&'a BoardStats>,
     pub median: Option<&'a Median>,
+    /// The writer is busy with an act.
+    pub writing: bool,
+    pub wrote: Option<&'a Result<String, String>>,
 }
 
-pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, now: i64) -> Asked {
+pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, typed: &mut Typed, now: i64) -> Asked {
     let mut asked = Asked::default();
+    if typed.lane != sel.id {
+        *typed = Typed {
+            lane: sel.id,
+            ..Typed::default()
+        };
+    }
     // Each lane keeps its own scroll offset.
     let salt = ("lane", sel.id);
     egui::ScrollArea::vertical().id_salt(salt).show(ui, |ui| {
@@ -57,6 +78,11 @@ pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, now: i64) -> Asked {
             }
             return;
         };
+        if needs::why(lane, now).is_some() {
+            card(ui, "Needs you", |ui| {
+                asked.act = actions(ui, lane, page, r, typed)
+            });
+        }
         tiles(ui, lane, page, r, now);
         card(ui, "Timeline", |ui| timeline(ui, page));
         card(ui, "Decisions", |ui| decisions(ui, page));
@@ -131,6 +157,127 @@ fn header(
             ui.label(v);
         }
     });
+}
+
+/// Answer, send back and open in herdr, each one act; a button waits
+/// while the writer is busy.
+fn actions(
+    ui: &mut egui::Ui,
+    lane: &BoardLane,
+    page: &LanePage,
+    r: &Reads,
+    typed: &mut Typed,
+) -> Option<Act> {
+    let item = &lane.board.item;
+    let mut act = None;
+    let free = !r.writing;
+    // What the lane asks: its open questions, else its blocker or next
+    // step, which an answer records as the question.
+    let blocker = item.blocker.clone().or_else(|| item.next_action.clone());
+    for q in &page.questions {
+        ui.label(format!(
+            "Asks: {}",
+            q.note.as_deref().unwrap_or("(no text)")
+        ));
+    }
+    if page.questions.is_empty()
+        && let Some(b) = &blocker
+    {
+        ui.label(format!("Says: {b}"));
+    }
+    let Some(agent) = item.agent.clone() else {
+        ui.label("No herdr agent recorded for the lane: it cannot be answered from here.");
+        return None;
+    };
+    let target = Lane {
+        work: item.id,
+        agent,
+        key: item
+            .source_key
+            .clone()
+            .unwrap_or_else(|| board::label(item)),
+    };
+    // Answers the oldest open question, else records one first.
+    let answer = |text: String, confirm| Act::Answer {
+        lane: target.clone(),
+        asks: page.questions.first().map(|q| q.id),
+        blocker: blocker
+            .clone()
+            .unwrap_or_else(|| "the lane needs you".into()),
+        text,
+        confirm,
+    };
+    let in_spec = page.detail.slice.as_ref().and_then(|s| s.in_spec.as_ref());
+    for d in &page.provisional {
+        let (Some(q), Some(a), Some(spec)) = (&d.question, &d.answer, in_spec) else {
+            continue;
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("Provisional: {q} -> {a}"));
+            if ui.add_enabled(free, egui::Button::new("Accept")).clicked() {
+                let confirm = Confirm {
+                    spec: spec.parent_key.clone(),
+                    slice: spec.n,
+                    question: q.clone(),
+                    answer: a.clone(),
+                };
+                act = Some(answer(format!("confirmed: {q} -> {a}"), Some(confirm)));
+            }
+        });
+    }
+    if page.questions.len() > 1 {
+        ui.label(RichText::new("An answer goes to the oldest question.").small());
+    }
+    let line = |ui: &mut egui::Ui, text: &mut String, hint: &str, button: &str| {
+        ui.horizontal(|ui| {
+            let edit = egui::TextEdit::singleline(text)
+                .hint_text(hint)
+                .char_limit(NOTE_CHARS)
+                .desired_width(420.0);
+            ui.add(edit);
+            let ok = free && !text.trim().is_empty();
+            ui.add_enabled(ok, egui::Button::new(button)).clicked()
+        })
+        .inner
+    };
+    if line(ui, &mut typed.answer, "Your answer", "Answer") {
+        act = Some(answer(std::mem::take(&mut typed.answer), None));
+    }
+    if line(ui, &mut typed.reason, "Why it goes back", "Send back") {
+        act = Some(Act::SendBack {
+            lane: target.clone(),
+            round: page.sent_back as u64 + 1,
+            reason: std::mem::take(&mut typed.reason),
+        });
+    }
+    match &item.session {
+        Some(ws) => {
+            if ui
+                .add_enabled(free, egui::Button::new("Open in herdr"))
+                .clicked()
+            {
+                act = Some(Act::Focus {
+                    workspace: ws.clone(),
+                });
+            }
+        }
+        None => {
+            ui.label("No herdr workspace recorded for the lane.");
+        }
+    }
+    match (r.writing, r.wrote) {
+        (true, _) => {
+            ui.label("Working...");
+        }
+        (false, Some(Ok(m))) => {
+            ui.label(m);
+        }
+        (false, Some(Err(e))) => {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+        }
+        (false, None) => {}
+    }
+    act
 }
 
 /// One stat: a name, a value and a line under it.

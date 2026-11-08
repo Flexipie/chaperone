@@ -16,7 +16,7 @@ use crate::ledger::{
     redact_payload,
 };
 use crate::pipeline::canonical_string;
-use crate::spec::parse::{Decision, parse_decisions, parse_spec_sections};
+use crate::spec::parse::{Decision, parse_decisions, parse_spec_sections, standing_provisional};
 use crate::spec::slice::{KEY_LANES, section_for, spec_for_key};
 use crate::spec::{Spec, normalize_key, read as read_spec};
 use crate::work::{HandoffInput, IS_HANDOFF, SPEC_BY_KEY, commit_ok, pr_ref_ok};
@@ -344,6 +344,21 @@ fn decision_lines(mut d: Vec<Decision>, name: &'static str, omitted: &mut Omitte
     d.into_iter()
         .map(|d| cut(d.text, TEXT_CHARS, omitted))
         .collect()
+}
+
+/// The standing provisional decisions of `raw`'s slice and spec-wide,
+/// whole (the dossier cuts its lines). Empty when the key does not parse
+/// or no spec has it.
+pub(crate) fn provisional_of(conn: &Connection, raw: &str) -> Result<Vec<Decision>, LedgerError> {
+    let Ok(key) = key_of(raw) else {
+        return Ok(Vec::new());
+    };
+    let Some(s) = spec_for_key(conn, &key)?.map_or(Ok(None), |id| read_spec(conn, id, None))?
+    else {
+        return Ok(Vec::new());
+    };
+    let decisions = section_for(&s.body, &key).map(|(_, d)| d);
+    Ok(standing_provisional(decisions.unwrap_or_default()))
 }
 
 /// The slice section alone (`chaperone-ui`'s lane page), in the caller's

@@ -60,6 +60,11 @@ pub struct Shown {
     /// spells it; daisy's mirror is read only then.
     pub backlog_for: Option<String>,
     pub backlog: Option<backlog::Read>,
+    /// Set by the window when it hands the writer an act, cleared by the
+    /// writer when it is done; the buttons wait for it.
+    pub writing: bool,
+    /// The newest act's outcome, in a line.
+    pub wrote: Option<Result<String, String>>,
 }
 
 /// One lane's page as read at `version`, or why it could not be. A

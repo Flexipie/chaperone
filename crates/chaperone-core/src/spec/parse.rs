@@ -227,3 +227,31 @@ pub fn parse_decisions(md: &str) -> Vec<Decision> {
     }
     items.iter().map(|t| parse_decision(t)).collect()
 }
+
+/// The decisions whose newest line for their question is still agreed
+/// `provisional ...`: what the owner has yet to confirm. `ship-handoff`'s
+/// rule, but two questions are one only when equal once case and
+/// punctuation go, not on a light rewording.
+pub fn standing_provisional(decisions: Vec<Decision>) -> Vec<Decision> {
+    let q = |d: &Decision| {
+        let t = d.question.as_deref().unwrap_or(&d.text).to_lowercase();
+        let words: Vec<&str> = t
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+        words.join(" ")
+    };
+    let mut newest: Vec<Decision> = Vec::new();
+    for d in decisions {
+        let k = q(&d);
+        newest.retain(|n| q(n) != k);
+        newest.push(d);
+    }
+    newest.retain(|d| {
+        d.answer.is_some()
+            && d.agreed
+                .as_deref()
+                .is_some_and(|a| a.starts_with("provisional"))
+    });
+    newest
+}
