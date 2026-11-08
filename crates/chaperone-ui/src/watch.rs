@@ -14,6 +14,7 @@ use chaperone_core::stats::BoardStats;
 use chaperone_core::work::{LaneBoard, LaneDetail, WorkItem};
 
 use crate::areas::Areas;
+use crate::backlog;
 use crate::diff::Diff;
 use crate::graph::Repos;
 use crate::overlap::Markers;
@@ -47,6 +48,10 @@ pub struct Shown {
     pub graph_open: bool,
     /// Each repo's change graph with its slug, or why there is none.
     pub graph: Option<Result<Repos, String>>,
+    /// Set by the window: the repo whose Backlog is shown, as the board
+    /// spells it; daisy's mirror is read only then.
+    pub backlog_for: Option<String>,
+    pub backlog: Option<backlog::Read>,
 }
 
 /// One lane's detail as read at `version`, or why it could not be. A

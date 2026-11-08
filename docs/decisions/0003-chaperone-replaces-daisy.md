@@ -22,7 +22,10 @@ daisy's review worker.
 2. `chaperone` keeps `daisy-cli`'s argv, envelope and exit codes
    ([cli-contract.md](../cli-contract.md)), so a skill switches by changing the binary
    path, not by a router.
-3. Chaperone's only daisy call is `daisy-cli reviews get <job>`, from `reviews record`.
+3. Chaperone's only daisy calls are `daisy-cli reviews get <job>`, from `reviews record`,
+   and one read-only exception agreed in #109: chaperone-ui's Backlog tab reads daisy's
+   GitHub mirror (`daisy-cli github list --issues --state open --repo <slug>` and
+   `github get <key>` for blockers), so it adds no GitHub load. Neither writes to daisy.
 4. Superseded from R15: the router, the marker, the id floor, merged reads, and daisy
    reading ledger views. The `reader_contract` version axis is dropped.
 

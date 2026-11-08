@@ -231,8 +231,8 @@ lane (events.md, producer). `--head` is 7 to
 check. `--findings <n>` is required for a `plan_check` or `quality_gate` that ran and
 refused elsewhere. It prints `{event_id, work_id, kind, replayed, at, payload}`.
 
-`reviews record` reads `daisy-cli reviews get <job>`. That is Chaperone's only call into
-daisy. A job that is not done (`data.done` false, status `queued` or `running`) appends
+`reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
+daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends
 `check.requested`. A done job with status `reviewed` or `posted` appends `check.finished`
 `ran` with `producer {kind: daisy_worker, job}`. A done job with status `failed` or
 `cancelled` appends `check.finished` `skipped` with `reason` that status. It projects

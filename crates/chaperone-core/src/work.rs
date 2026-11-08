@@ -969,6 +969,18 @@ impl Ledger {
             vec![json!(w.updated_at), json!(w.id)]
         })))
     }
+
+    /// Each issue key with a lane that is not cancelled, lowercased, and
+    /// whether one of its lanes is done: the UI's backlog leaves these out.
+    pub fn issue_lanes(&self) -> Result<BTreeMap<String, bool>, LedgerError> {
+        let mut stmt = self.conn().prepare(
+            "SELECT lower(source_id), max(status = 'done') FROM lanes
+              WHERE source IN ('linear', 'issue', 'github') AND source_id IS NOT NULL
+                AND status != 'cancelled' GROUP BY lower(source_id)",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
 }
 
 /// A handoff event read from columns `base..base + 6` (id, lane, agent,
