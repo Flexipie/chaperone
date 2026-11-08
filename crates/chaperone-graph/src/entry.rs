@@ -58,10 +58,14 @@ impl Rules {
     /// The one area `path` is in; `check` has refused a tree where an
     /// entry point is in none or several.
     pub fn area(&self, path: &str) -> &str {
+        self.areas(path).next().unwrap_or_default()
+    }
+
+    fn areas<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a str> {
         self.areas
             .iter()
-            .find(|(_, globs)| globs.iter().any(|g| glob(g, path)))
-            .map_or("", |(name, _)| name.as_str())
+            .filter(move |(_, globs)| globs.iter().any(|g| glob(g, path)))
+            .map(|(name, _)| name.as_str())
     }
 
     /// Against every file of the tree: each entry point is in exactly one
@@ -81,12 +85,7 @@ impl Rules {
             if !hit {
                 continue;
             }
-            let areas: Vec<&str> = self
-                .areas
-                .iter()
-                .filter(|(_, globs)| globs.iter().any(|g| glob(g, path)))
-                .map(|(name, _)| name.as_str())
-                .collect();
+            let areas: Vec<&str> = self.areas(path).collect();
             match areas.len() {
                 0 => errors.push(format!("{path}: an entry point in no area")),
                 1 => {}
@@ -110,7 +109,7 @@ impl Rules {
 
 /// `pattern` names `path`: `*` is any run within a segment, a `**`
 /// segment any number of segments.
-pub fn glob(pattern: &str, path: &str) -> bool {
+fn glob(pattern: &str, path: &str) -> bool {
     let p: Vec<&str> = pattern.split('/').collect();
     let s: Vec<&str> = path.split('/').collect();
     segs(&p, &s)
