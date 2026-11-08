@@ -1,6 +1,7 @@
 //! `chaperone impact <files>`: the files that depend on them, nearest
-//! first, from the code graph (`chaperone-graph`). Reads the worktree and
-//! git, never the ledger.
+//! first, from the code graph (`chaperone-graph`), and with
+//! `--entry-points` the entry points they reach, from the pipeline
+//! profile. Reads the worktree and git, never the ledger.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -8,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use chaperone_core::git::{Failure, git, git_bin};
 use chaperone_core::ledger::Refusal;
-use chaperone_graph::File;
+use chaperone_graph::{File, Rules};
 
 use crate::cli::Format;
 use crate::output::{self, CliError, Meta, Outcome};
@@ -24,6 +25,8 @@ const LIMIT: usize = 500;
 pub fn run(
     targets: Vec<String>,
     cache: Option<PathBuf>,
+    entry_points: bool,
+    profile: Option<PathBuf>,
     meta: &Meta,
     format: Format,
 ) -> Result<Outcome, CliError> {
@@ -46,7 +49,7 @@ pub fn run(
         h.join()
             .unwrap_or_else(|_| Err(CliError::Internal("git thread panicked".into())))
     };
-    let (out, origin, status, staged) = std::thread::scope(|s| {
+    let (out, origin, head, status, staged) = std::thread::scope(|s| {
         let rev = s.spawn(|| {
             call(&[
                 "rev-parse",
@@ -56,8 +59,13 @@ pub fn run(
             ])
         });
         let origin = s.spawn(|| match cache {
-            Some(_) => Ok(Vec::new()),
-            None => call(&["config", "--get", "remote.origin.url"]),
+            Some(_) if profile.is_some() || !entry_points => Ok(Vec::new()),
+            _ => call(&["config", "--get", "remote.origin.url"]),
+        });
+        // Its own call: `HEAD` fails in a repo with no commits yet.
+        let head = s.spawn(|| match entry_points {
+            true => call(&["rev-parse", "HEAD"]),
+            false => Ok(Vec::new()),
         });
         let status = s.spawn(|| {
             call(&[
@@ -74,7 +82,13 @@ pub fn run(
             ])
         });
         let staged = call(&["ls-files", "-z", "-s", "--full-name", "--", ":/"]);
-        (joined(rev), joined(origin), joined(status), staged)
+        (
+            joined(rev),
+            joined(origin),
+            joined(head),
+            joined(status),
+            staged,
+        )
     });
     let out = out?;
     let out = String::from_utf8_lossy(&out);
@@ -89,20 +103,26 @@ pub fn run(
         .map(|t| repo_path(t, &top, &prefix))
         .collect();
 
+    let origin = origin
+        .map(|o| String::from_utf8_lossy(&o).trim().to_string())
+        .ok()
+        .filter(|o| !o.is_empty());
+    let rules = match entry_points {
+        true => Some(rules(profile, origin.as_deref())?),
+        false => None,
+    };
+    let head = String::from_utf8_lossy(&head?).trim().to_string();
+
     // One cache per origin, so every worktree and clone of it shares one.
     let given = cache.is_some();
     let cache = match cache {
         Some(c) => Some(c),
         None => {
-            let origin = origin
-                .map(|o| String::from_utf8_lossy(&o).trim().to_string())
-                .ok()
-                .filter(|o| !o.is_empty())
-                .or_else(|| {
-                    std::fs::canonicalize(Path::new(&common))
-                        .ok()
-                        .map(|p| p.display().to_string())
-                });
+            let origin = origin.or_else(|| {
+                std::fs::canonicalize(Path::new(&common))
+                    .ok()
+                    .map(|p| p.display().to_string())
+            });
             dirs::cache_dir()
                 .zip(origin)
                 .map(|(d, o)| chaperone_graph::cache_file(&d.join("chaperone").join("graph"), &o))
@@ -113,9 +133,14 @@ pub fn run(
     // untracked ones are hashed from the worktree.
     let (mut changed, mut deleted) = (HashSet::new(), HashSet::new());
     let mut files = Vec::new();
+    // Every file of the tree, for `Rules::check`.
+    let mut tree = HashSet::new();
     let out = status?;
     for e in out.split(|b| *b == 0).filter(|e| e.len() > 2) {
         let path = String::from_utf8_lossy(&e[2..]).to_string();
+        if rules.is_some() && e[0] == b'?' {
+            tree.insert(path.clone());
+        }
         match e[0] {
             b'R' => {
                 deleted.insert(path);
@@ -142,6 +167,9 @@ pub fn run(
         };
         let mut f = head.split(' ');
         let (blob, stage) = (f.nth(1), f.next());
+        if rules.is_some() && !deleted.contains(&path) {
+            tree.insert(path.clone());
+        }
         if wanted(&path) && !changed.contains(&path) && stage == Some("0") {
             files.push(File {
                 path,
@@ -169,8 +197,68 @@ pub fn run(
         }
         out
     };
-    let data = chaperone_graph::impact(&files, read, ids, cache.as_deref(), given, &targets, LIMIT);
+    if let Some(rules) = &rules {
+        rules
+            .check(tree.iter().map(String::as_str))
+            .map_err(|e| Refusal::InvalidInput(format!("entry points: {e}")))?;
+    }
+    let entries = rules.as_ref().map(|r| (r, head));
+    let data = chaperone_graph::impact(
+        &files,
+        read,
+        ids,
+        cache.as_deref(),
+        given,
+        &targets,
+        LIMIT,
+        entries,
+    );
     output::write_one(&data, meta, format)
+}
+
+/// The entry rules: from `profile`, or the origin's pipeline profile,
+/// found the way `pipeline-profile` finds it. No rules is a refusal, never
+/// an empty answer.
+fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, CliError> {
+    let refuse = |e: String| CliError::from(Refusal::InvalidInput(e));
+    let (path, slug) = match profile {
+        Some(p) => (p, None),
+        None => {
+            let slug = origin.and_then(slug).ok_or_else(|| {
+                refuse(
+                    "entry points: no GitHub origin to find the profile by; pass --profile".into(),
+                )
+            })?;
+            let file = format!("{}.md", slug.replace('/', "-").to_lowercase());
+            let dir =
+                dirs::home_dir().ok_or_else(|| refuse("entry points: no home directory".into()))?;
+            (
+                dir.join("dotfiles/claude/pipeline/profiles").join(file),
+                Some(slug),
+            )
+        }
+    };
+    let at = path.display();
+    let text = std::fs::read_to_string(&path).map_err(|e| refuse(format!("profile {at}: {e}")))?;
+    let rules = Rules::from_profile(&text).map_err(|e| refuse(format!("profile {at}: {e}")))?;
+    if let Some(slug) = slug
+        && rules.slug.as_deref().map(str::to_lowercase) != Some(slug.to_lowercase())
+    {
+        return Err(refuse(format!(
+            "profile {at} says slug {:?}, the origin is {slug}",
+            rules.slug.as_deref().unwrap_or_default()
+        )));
+    }
+    Ok(rules)
+}
+
+/// `owner/repo` of a GitHub remote URL, ssh or https, `.git` dropped.
+fn slug(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("github.com")?;
+    let rest = rest.strip_prefix([':', '/'])?.trim_end_matches('/');
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let (owner, repo) = rest.split_once('/')?;
+    (!owner.is_empty() && !repo.is_empty()).then(|| format!("{owner}/{repo}"))
 }
 
 /// The files the graph reads: Rust sources and the manifests that name

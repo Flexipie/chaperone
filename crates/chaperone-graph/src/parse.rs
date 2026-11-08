@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 /// Bump when what `facts` extracts changes, or the grammar does: cached
 /// facts of another version are never read (`cache.rs` names its table
 /// with it).
-pub const FACTS_VERSION: u32 = 3;
+pub const FACTS_VERSION: u32 = 4;
 /// Tree depth read; every walk below recurses along the tree, so a deeper
 /// file could overflow the stack and is not read.
 const MAX_DEPTH: u32 = 256;
@@ -19,10 +19,11 @@ pub struct Facts {
     pub refs: Vec<Ref>,
     /// The self type of each `impl`, as written.
     pub impls: Vec<Ref>,
-    /// `macro_rules!` names defined here, with whether `#[macro_export]`.
-    pub macros: Vec<(String, bool)>,
-    /// Bare macro names invoked here (`name!`).
-    pub bangs: Vec<String>,
+    /// `macro_rules!` names defined here, with whether `#[macro_export]`
+    /// and the line.
+    pub macros: Vec<(String, bool, u32)>,
+    /// Bare macro names invoked here (`name!`), with the first line.
+    pub bangs: Vec<(String, u32)>,
     /// Why some of this file's references could not be read: a parse
     /// error, `#[path]`, `include!`, or nesting past `MAX_DEPTH`.
     pub inexact: Option<String>,
@@ -35,6 +36,8 @@ pub struct Ref {
     pub path: Vec<String>,
     /// For a `use`: the name it brings in, `*` for a glob.
     pub alias: Option<String>,
+    /// Where it is written, from 1.
+    pub line: u32,
 }
 
 /// A Rust parser, made once per call and reused for every file.
@@ -113,6 +116,7 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
                     scope: scope.clone(),
                     path,
                     alias: None,
+                    line: line(node),
                 });
             }
         }
@@ -122,6 +126,7 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
                     scope: scope.clone(),
                     path,
                     alias: None,
+                    line: line(node),
                 });
                 // `Vec::<crate::a::Bar>::new`: type arguments inside the path.
                 let mut at = node.child_by_field_name("path");
@@ -139,7 +144,7 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
         "macro_definition" => {
             if let Some(name) = node.child_by_field_name("name") {
                 let export = has_attr(node, src, "#[macro_export");
-                f.macros.push((text(name, src), export));
+                f.macros.push((text(name, src), export, line(node)));
             }
         }
         "macro_invocation" => {
@@ -151,7 +156,7 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
                 if name == "include" {
                     f.inexact.get_or_insert_with(|| "include".into());
                 }
-                bang(f, name);
+                bang(f, name, line(m));
             }
         }
         // Macro arguments are tokens, not expressions: `a::b` in them is
@@ -168,10 +173,14 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
     }
 }
 
-fn bang(f: &mut Facts, name: String) {
-    if !f.bangs.contains(&name) {
-        f.bangs.push(name);
+fn bang(f: &mut Facts, name: String, line: u32) {
+    if !f.bangs.iter().any(|(n, _)| *n == name) {
+        f.bangs.push((name, line));
     }
+}
+
+fn line(node: Node) -> u32 {
+    node.start_position().row as u32 + 1
 }
 
 fn has_attr(node: Node, src: &[u8], prefix: &str) -> bool {
@@ -187,11 +196,13 @@ fn has_attr(node: Node, src: &[u8], prefix: &str) -> bool {
 
 /// Each path a `use` tree names, with the name it brings in.
 fn use_tree(node: Node, src: &[u8], prefix: &[String], scope: &[String], f: &mut Facts) {
+    let at = line(node);
     let mut push = |path: Vec<String>, alias: String| {
         f.refs.push(Ref {
             scope: scope.to_vec(),
             path,
             alias: Some(alias),
+            line: at,
         })
     };
     let join = |n: Node| segs(n, src).map(|s| [prefix, &s].concat());
@@ -259,13 +270,16 @@ fn segs(node: Node, src: &[u8]) -> Option<Vec<String>> {
 /// included, `$crate` as `crate`, strings that are such a path
 /// (`#[serde(default = "crate::a::f")]`), and `name!`.
 fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
-    let push = |f: &mut Facts, path| {
+    let push = |f: &mut Facts, path, line| {
         f.refs.push(Ref {
             scope: scope.to_vec(),
             path,
             alias: None,
+            line,
         })
     };
+    // The run's first token's line.
+    let mut at = 0;
     let mut run: Vec<String> = Vec::new();
     let mut joined = false;
     let mut cursor = node.walk();
@@ -277,10 +291,11 @@ fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
         match kind {
             "identifier" | "crate" | "self" | "super" => {
                 if !joined && run.len() > 1 {
-                    push(f, std::mem::take(&mut run));
+                    push(f, std::mem::take(&mut run), at);
                 }
                 if !joined {
                     run.clear();
+                    at = line(child);
                 }
                 run.push(match kind {
                     "crate" => kind.into(),
@@ -291,10 +306,10 @@ fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
             "::" => joined = true,
             kind => {
                 if kind == "!" && run.len() == 1 {
-                    bang(f, run[0].clone());
+                    bang(f, run[0].clone(), at);
                 }
                 if run.len() > 1 {
-                    push(f, std::mem::take(&mut run));
+                    push(f, std::mem::take(&mut run), at);
                 }
                 run.clear();
                 joined = false;
@@ -304,13 +319,13 @@ fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
                     .then(|| str_path(&text(child, src)))
                     .flatten()
                 {
-                    push(f, path);
+                    push(f, path, line(child));
                 }
             }
         }
     }
     if run.len() > 1 {
-        push(f, run);
+        push(f, run, at);
     }
 }
 
