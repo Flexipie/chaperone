@@ -431,14 +431,17 @@ fn check_argv(path: &Path, line: usize, toks: &[Option<String>], whole: bool, sc
     let flag = |name: &str| {
         words
             .iter()
-            .position(|w| *w == name)
-            .and_then(|i| words.get(i + 1))
+            .enumerate()
+            .find_map(|(i, w)| match w.strip_prefix(name)? {
+                "" => words.get(i + 1).copied(),
+                v => v.strip_prefix('='),
+            })
             .filter(|v| !v.is_empty())
     };
     match words.get(..2) {
         Some(["work", "update" | "list"]) => {
             if let Some(s) = flag("--status")
-                && !STATUSES.contains(s)
+                && !STATUSES.contains(&s)
             {
                 let msg = format!("--status {s}: not one of {}", STATUSES.join(", "));
                 scan.add(path, Some(line), "value", msg);
@@ -446,8 +449,8 @@ fn check_argv(path: &Path, line: usize, toks: &[Option<String>], whole: bool, sc
         }
         Some(["check", "record"]) => {
             if let (Some(check), Some(reason)) = (flag("--check"), flag("--reason"))
-                && let Some((_, reasons)) = CHECKS.iter().find(|(c, _)| c == check)
-                && !reasons.contains(reason)
+                && let Some((_, reasons)) = CHECKS.iter().find(|(c, _)| *c == check)
+                && !reasons.contains(&reason)
             {
                 let msg = format!(
                     "--reason {reason}: {check} skips only for {}",
