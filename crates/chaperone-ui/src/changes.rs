@@ -2,10 +2,11 @@
 //! open lane's files) when the ledger changes or a lane's worktree commits,
 //! then `impact` and lines changed for each lane whose files or head moved
 //! since its last read, one lane at a time. A repo's layout is built again
-//! only when one of its lanes was. Reads the ledger read-only; `impact`
-//! writes the code graph's own cache (ADR 0043), never the ledger.
+//! only when one of its lanes was or overlap's notes changed. Reads the
+//! ledger read-only; `impact` writes the code graph's own cache (ADR 0043),
+//! never the ledger.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -26,8 +27,12 @@ const POLL: Duration = Duration::from_millis(250);
 /// What a lane's part was read from: its head and its files.
 type Key = (String, Vec<String>);
 
-/// The lane keys a repo's layout was built from, and the layout.
-type Built = (Vec<(i64, Key)>, Arc<Layout>);
+/// A lane in a repo's layout: its id, key and overlap notes.
+type Part = (i64, Key, Vec<String>);
+
+/// The lanes a repo's layout was built from, overlap's files left out,
+/// and the layout.
+type Built = (Vec<Part>, usize, Arc<Layout>);
 
 /// One board lane, as the thread needs it.
 struct Want {
@@ -84,9 +89,15 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
             let over = match read {
                 Ok(o) => o,
                 Err(e) => {
-                    // Reopened and read again next poll.
+                    // Reopened and read again next poll; shown once.
                     ledger = None;
-                    publish(&shown, Err(e.to_string()), &changed);
+                    let text = e.to_string();
+                    let mut s = shown.lock().unwrap();
+                    if !matches!(&s.graph, Some(Err(t)) if *t == text) {
+                        s.graph = Some(Err(text));
+                        drop(s);
+                        changed();
+                    }
                     continue;
                 }
             };
@@ -96,7 +107,11 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
             let mut heads: BTreeMap<i64, String> = BTreeMap::new();
             for row in &over.files {
                 for e in &row.lanes {
-                    files.entry(e.id).or_default().push(row.path.clone());
+                    // A lane's handoff and worktree evidence are adjacent.
+                    let f = files.entry(e.id).or_default();
+                    if f.last() != Some(&row.path) {
+                        f.push(row.path.clone());
+                    }
                     if e.source == "worktree"
                         && let Some(c) = &e.commit
                     {
@@ -105,9 +120,12 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 }
             }
             let mut notes: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+            // Lanes whose worktree git could not read.
+            let mut unread = BTreeSet::new();
             for t in &over.lanes {
                 let n = notes.entry(t.id).or_default();
                 if t.worktree != "ok" {
+                    unread.insert(t.id);
                     let why = t
                         .error
                         .as_deref()
@@ -120,7 +138,7 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
             }
 
             lanes.retain(|id, _| want.iter().any(|w| w.id == *id));
-            let mut by_repo: BTreeMap<String, (String, Vec<i64>)> = BTreeMap::new();
+            let mut by_repo: BTreeMap<String, (String, Vec<Part>)> = BTreeMap::new();
             for w in &want {
                 let paths = files.remove(&w.id).unwrap_or_default();
                 let note = notes.remove(&w.id).unwrap_or_default();
@@ -128,36 +146,39 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     lanes.remove(&w.id);
                     continue;
                 }
+                let key = (heads.get(&w.id).cloned().unwrap_or_default(), paths);
+                // An unread worktree keeps the part last read from it.
+                let fresh = lanes
+                    .get(&w.id)
+                    .is_some_and(|(k, _)| *k == key || unread.contains(&w.id));
+                if !fresh {
+                    let lane = read_lane(w, &key);
+                    lanes.insert(w.id, (key, lane));
+                }
                 by_repo
                     .entry(w.slug.to_lowercase())
                     .or_insert_with(|| (w.slug.clone(), Vec::new()))
                     .1
-                    .push(w.id);
-                let key = (heads.get(&w.id).cloned().unwrap_or_default(), paths);
-                match lanes.get_mut(&w.id) {
-                    Some((k, lane)) if *k == key => lane.notes = note,
-                    _ => {
-                        let lane = read_lane(w, &key, note);
-                        lanes.insert(w.id, (key, lane));
-                    }
-                }
+                    .push((w.id, lanes[&w.id].0.clone(), note));
             }
 
+            repos.retain(|r, _| by_repo.contains_key(r));
             let mut out = Vec::new();
-            for (repo, (slug, ids)) in by_repo {
-                let keys: Vec<(i64, Key)> =
-                    ids.iter().map(|id| (*id, lanes[id].0.clone())).collect();
+            for (repo, (slug, keys)) in by_repo {
                 let built = match repos.get(&repo) {
-                    Some((k, l)) if *k == keys => l.clone(),
+                    Some((k, n, l)) if *k == keys && *n == over.files_omitted => l.clone(),
                     _ => {
-                        let part: Vec<&Lane> = ids.iter().map(|id| &lanes[id].1).collect();
+                        let part: Vec<&Lane> = keys.iter().map(|(id, ..)| &lanes[id].1).collect();
                         let mut l = layout(&part);
+                        for (id, _, n) in keys.iter().filter(|(.., n)| !n.is_empty()) {
+                            l.notes.push(format!("#{id}: {}", n.join("; ")));
+                        }
                         if over.files_omitted > 0 {
                             l.notes
                                 .push(format!("overlap left out {} files", over.files_omitted));
                         }
                         let l = Arc::new(l);
-                        repos.insert(repo, (keys, l.clone()));
+                        repos.insert(repo, (keys, over.files_omitted, l.clone()));
                         l
                     }
                 };
@@ -174,8 +195,9 @@ fn publish(shown: &Mutex<Shown>, graph: Result<Repos, String>, changed: &impl Fn
 }
 
 /// One lane's impact and lines changed, read at `key`.
-fn read_lane(w: &Want, key: &Key, mut notes: Vec<String>) -> Lane {
+fn read_lane(w: &Want, key: &Key) -> Lane {
     let (head, paths) = key;
+    let mut notes = Vec::new();
     let Some(wt) = w.worktree.as_deref().map(Path::new).filter(|p| p.is_dir()) else {
         return Lane {
             id: w.id,
