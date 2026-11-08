@@ -26,13 +26,13 @@ impl Why {
 }
 
 /// Why `lane` needs the owner at `now` (seconds since the epoch), if it does.
+/// Ready for you is a ready lane, or one whose `next_action` (set by handoffs
+/// and `work update`) starts "needs you".
 pub fn why(lane: &BoardLane, now: i64) -> Option<Why> {
     let item = &lane.board.item;
-    let says = lane
-        .board
-        .handoff
-        .as_ref()
-        .and_then(|h| h.handoff.next_action.as_deref())
+    let says = item
+        .next_action
+        .as_deref()
         .is_some_and(|n| n.trim_start().to_lowercase().starts_with("needs you"));
     if item.status == "blocked" {
         Some(Why::Blocked)
