@@ -196,7 +196,8 @@ pub fn changed_files(
 }
 
 /// [`changed_files`] with each file's area from `area`, and an untracked
-/// text file's lines as added: the lane page's files.
+/// text file's lines as added (none once `deadline` has passed): the lane
+/// page's files.
 pub fn lane_files(
     bin: &Path,
     wt: &Path,
@@ -208,7 +209,7 @@ pub fn lane_files(
     let (base, mut files) = changed_files(bin, wt, base_sha, deadline, cap)?;
     for f in &mut files {
         f.area = area(&f.path);
-        if f.untracked {
+        if f.untracked && Instant::now() < deadline {
             f.added = lines(&wt.join(&f.path));
             f.removed = f.added.map(|_| 0);
         }
@@ -223,8 +224,12 @@ fn split_z(out: &[u8]) -> impl Iterator<Item = String> + '_ {
 }
 
 /// A text file's lines (a last line without a newline counts), None when
-/// it is binary (has a NUL), past [`COUNT_BYTES`] or unreadable.
+/// it is not a regular file (a symlink, a FIFO), binary (has a NUL), past
+/// [`COUNT_BYTES`] or unreadable.
 fn lines(path: &Path) -> Option<u64> {
+    if !std::fs::symlink_metadata(path).ok()?.is_file() {
+        return None;
+    }
     let mut bytes = Vec::new();
     let read = File::open(path)
         .ok()?
