@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chaperone_core::work::{BoardLane, LaneBoard, SpecTitle};
+use chaperone_core::work::{BoardLane, LaneBoard, SpecTitle, WorkItem};
 
 pub struct Repo<'a> {
     pub slug: &'a str,
@@ -46,6 +46,15 @@ pub fn group(board: &LaneBoard) -> Vec<Repo<'_>> {
                 .collect(),
         })
         .collect()
+}
+
+/// A lane's name on the board: its lane key and position, else its id.
+pub fn label(item: &WorkItem) -> String {
+    match (&item.lane_key, item.lane_pos) {
+        (Some(key), Some(pos)) => format!("{key} {pos}"),
+        (Some(key), None) => key.clone(),
+        _ => format!("#{}", item.id),
+    }
 }
 
 /// A commit's first 7 characters.

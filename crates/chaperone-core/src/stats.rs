@@ -4,10 +4,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rusqlite::{Transaction, TransactionBehavior};
 use serde_json::{Map, Value, json};
 
 use crate::checks::ATTENTION_TYPES;
-use crate::ledger::{Checked, Ledger, Refusal, canonical_at};
+use crate::ledger::{Checked, Ledger, LedgerError, Refusal, canonical_at, check_schema};
 use crate::pipeline::sha_prefix_eq;
 use crate::work::IS_HANDOFF;
 
@@ -22,7 +23,7 @@ pub enum Cohort {
 }
 
 /// R11: a cohort under 25 lanes is flagged, not scored.
-const TOO_FEW_LANES: usize = 25;
+pub const TOO_FEW_LANES: usize = 25;
 /// R11's `lanes_peak_over_500k`.
 const PEAK_OVER: i64 = 500_000;
 const TOKENS: [&str; 4] = ["input_total", "cache_read", "cache_write", "output_total"];
@@ -460,6 +461,56 @@ impl Ledger {
             }));
         }
         Ok(Ok(summarize(&lanes)))
+    }
+}
+
+/// What `chaperone-ui` draws beside the board: `stats` for every open
+/// lane and for the cohort merged since `since`.
+#[derive(Clone, Debug)]
+pub struct BoardStats {
+    /// The ledger's `data_version` these were read at.
+    pub data_version: i64,
+    /// The cohort's date as asked, or the default: 7 days ago (UTC).
+    pub since: String,
+    /// `stats --work <open lanes>`'s `lanes`.
+    pub lanes: Vec<Value>,
+    /// `stats --merged-since <since>`, or why it was refused.
+    pub cohort: Result<Value, Refusal>,
+}
+
+impl Ledger {
+    /// [`BoardStats`] as of one snapshot, its schema re-checked inside it,
+    /// as `lane_board` does.
+    pub fn board_stats(&self, since: Option<&str>) -> Result<BoardStats, LedgerError> {
+        let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
+        check_schema(&tx)?;
+        let data_version = self.data_version()?;
+        let since = match since {
+            Some(s) => s.to_string(),
+            None => tx.query_row("SELECT date('now', '-7 days')", [], |r| r.get(0))?,
+        };
+        let mut stmt =
+            tx.prepare("SELECT id FROM lanes WHERE status NOT IN ('done', 'cancelled')")?;
+        let ids = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<i64>, _>>()?;
+        // Every lane has its lane.created, so no open lane is refused.
+        let lanes = match self.stats(&Cohort::Work(ids))? {
+            Ok(mut v) => {
+                let Value::Array(lanes) = v["lanes"].take() else {
+                    unreachable!("summarize prints lanes as an array")
+                };
+                lanes
+            }
+            Err(r) => return Err(std::io::Error::other(format!("stats: {r:?}")).into()),
+        };
+        let cohort = self.stats(&Cohort::MergedSince(since.clone()))?;
+        Ok(BoardStats {
+            data_version,
+            since,
+            lanes,
+            cohort,
+        })
     }
 }
 

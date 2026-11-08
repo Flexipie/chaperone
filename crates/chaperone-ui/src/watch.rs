@@ -1,22 +1,28 @@
 //! The watcher thread: its own read-only ledger, polled for
 //! `PRAGMA data_version`, and a new board only when that changes; the
-//! selected lane's detail too when it changes or another lane is picked.
+//! selected lane's detail too when it changes or another lane is picked,
+//! then the board's stats, after the board is shown.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chaperone_core::ledger::{Ledger, LedgerError};
+use chaperone_core::stats::BoardStats;
 use chaperone_core::work::{LaneBoard, LaneDetail, WorkItem};
 
 use crate::areas::Areas;
 use crate::diff::Diff;
+use crate::overlap::Markers;
 
 /// A poll is one pragma on an open connection, so idle costs next to
 /// nothing; a commit shows within this.
 const POLL: Duration = Duration::from_millis(100);
+/// Stats replay every open lane's events (68 ms at R14's U2 size), so a
+/// ledger written every poll reads them at most this often.
+const STATS_EVERY: Duration = Duration::from_secs(1);
 
 /// What the window draws: the newest board, or why there is none, and
 /// the selected lane's detail and diff. The window sets `selected` and
@@ -32,6 +38,10 @@ pub struct Shown {
     pub diff: Option<Diff>,
     /// Each declaring lane's areas against its diff, by lane id.
     pub areas: HashMap<i64, Areas>,
+    /// The cohort's date the window asks for; None is the default.
+    pub since: Option<String>,
+    pub stats: Option<BoardStats>,
+    pub overlap: Option<Markers>,
 }
 
 /// One lane's detail as read at `version`, or why it could not be. A
@@ -70,32 +80,42 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
         let mut seen = None;
         // The (data_version, lane) of the detail shown.
         let mut loaded = None;
+        // The (data_version, since asked) of the stats shown, and when.
+        let mut counted: Option<(i64, Option<String>)> = None;
+        let mut counted_at: Option<Instant> = None;
         loop {
-            let want = shown.lock().unwrap().selected.clone();
-            match poll(&path, &mut ledger, seen, loaded, want.as_ref()) {
-                Ok((None, None)) => {}
-                Ok((board, detail)) => {
-                    let mut s = shown.lock().unwrap();
-                    if let Some(board) = board {
-                        seen = Some(board.data_version);
-                        s.board = Some(board);
-                    }
-                    // Dropped if another lane was picked meanwhile.
-                    if let Some(d) = detail
-                        && s.selected.as_ref().map(|l| l.id) == Some(d.lane)
-                    {
-                        loaded = Some((d.version, d.lane));
-                        s.detail = Some(d);
-                    }
-                    s.error = None;
-                    drop(s);
+            let start = Instant::now();
+            let (want, since) = {
+                let s = shown.lock().unwrap();
+                (s.selected.clone(), s.since.clone())
+            };
+            // Stats are read after the board is drawn: they replay every
+            // open lane's events, and the board should not wait for that.
+            let polled = poll(&path, &mut ledger, seen, loaded, want.as_ref()).and_then(|got| {
+                publish(&shown, &mut seen, &mut loaded, got, &changed);
+                let ledger = ledger.as_ref().expect("poll opened it");
+                let version = ledger.data_version()?;
+                // The throttle is for writes: a new date reads at once.
+                let new_date = counted.as_ref().map(|c| &c.1) != Some(&since);
+                if counted.as_ref() != Some(&(version, since.clone()))
+                    && (new_date || counted_at.is_none_or(|t| t.elapsed() >= STATS_EVERY))
+                {
+                    let stats = ledger.board_stats(since.as_deref())?;
+                    counted = Some((stats.data_version, since));
+                    counted_at = Some(Instant::now());
+                    shown.lock().unwrap().stats = Some(stats);
                     changed();
                 }
+                Ok(())
+            });
+            match polled {
+                Ok(()) => {}
                 Err(e) => {
                     // Reopened next tick: the file may be migrated or created.
                     ledger = None;
                     seen = None;
                     loaded = None;
+                    counted = None;
                     let text = e.to_string();
                     let mut s = shown.lock().unwrap();
                     if s.error.as_deref() != Some(text.as_str()) {
@@ -105,9 +125,39 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     }
                 }
             }
-            thread::sleep(POLL);
+            // A commit during a stats read waits for that read, not a
+            // whole poll more.
+            thread::sleep(POLL.saturating_sub(start.elapsed()));
         }
     });
+}
+
+/// Shows what `poll` read, if anything.
+fn publish(
+    shown: &Mutex<Shown>,
+    seen: &mut Option<i64>,
+    loaded: &mut Option<(i64, i64)>,
+    (board, detail): (Option<LaneBoard>, Option<Detail>),
+    changed: &impl Fn(),
+) {
+    if board.is_none() && detail.is_none() {
+        return;
+    }
+    let mut s = shown.lock().unwrap();
+    if let Some(board) = board {
+        *seen = Some(board.data_version);
+        s.board = Some(board);
+    }
+    // Dropped if another lane was picked meanwhile.
+    if let Some(d) = detail
+        && s.selected.as_ref().map(|l| l.id) == Some(d.lane)
+    {
+        *loaded = Some((d.version, d.lane));
+        s.detail = Some(d);
+    }
+    s.error = None;
+    drop(s);
+    changed();
 }
 
 /// A new board when the ledger changed since `seen`, and `want`'s detail
@@ -148,8 +198,8 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
-    use chaperone_core::checks::{AttentionInput, CheckInput};
-    use chaperone_core::ledger::Actor;
+    use chaperone_core::checks::{AttentionInput, CheckInput, MergedInput};
+    use chaperone_core::ledger::{Actor, EventKind, Mutation, Payload};
     use chaperone_core::work::{ClaimInput, CreateInput, UpdateInput};
 
     use super::*;
@@ -158,6 +208,8 @@ mod tests {
     /// Per lane: this many updates and as many checks, so a reload replays
     /// a few hundred events for each lane's stamps.
     const EVENTS: u64 = 100;
+    /// Per lane, `usage.reported` events: the bulk of a real ledger.
+    const USAGE: u64 = 300;
     const SAMPLES: usize = 50;
 
     fn p(times: &mut [Duration], q: usize) -> Duration {
@@ -166,7 +218,8 @@ mod tests {
     }
 
     /// R14 U2 and the reload cost, on a busy ledger with a spec of 20
-    /// decisions, a question per lane and lane 1 selected. Release only:
+    /// decisions, a question per lane, usage on every lane, every other
+    /// lane merged into the cohort and lane 1 selected. Release only:
     /// `cargo test --release -p chaperone-ui -- --ignored --nocapture`.
     #[test]
     #[ignore = "release-only budget; run with --ignored"]
@@ -238,6 +291,46 @@ mod tests {
                 ..AttentionInput::default()
             };
             rw.attention_record(&checker, &ask).unwrap().unwrap();
+            let at = rw.now().unwrap();
+            for n in 0..USAGE {
+                let payload = Payload {
+                    source: Some(if n % 3 == 0 { "subagent" } else { "parent" }.into()),
+                    rest: serde_json::json!({
+                        "message_id": format!("m{n}"), "input_total": 1000 * n as i64,
+                        "cache_read": 900 * n as i64, "cache_write": 50, "output_total": 40,
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                    ..Payload::default()
+                };
+                let event = Mutation::Event {
+                    kind: EventKind::UsageReported,
+                    lane_id: Some(id),
+                    spec_id: None,
+                    payload,
+                };
+                let key = format!("usage:{id}:m{n}");
+                rw.apply(&checker, Some(&key), &at, event).unwrap();
+            }
+            if id % 2 == 0 {
+                let pr = UpdateInput {
+                    pr_ref: Some(format!("Flexipie/repo0#{}", 100 + id)),
+                    ..UpdateInput::default()
+                };
+                rw.work_update(&me, id, &pr, None, None, false)
+                    .unwrap()
+                    .unwrap();
+                let merged = MergedInput {
+                    work: id,
+                    pr: format!("Flexipie/repo0#{}", 100 + id),
+                    merge_sha: "fedcba9".into(),
+                    head: "abc1234".into(),
+                    merged_at: at,
+                    patch_id: None,
+                };
+                rw.work_merged(&checker, &merged).unwrap().unwrap();
+            }
         }
 
         let ro = Ledger::open_read_only(&path).unwrap();
@@ -251,8 +344,20 @@ mod tests {
             })
             .collect();
         let reload = p(&mut reloads, 50);
+        let mut counts: Vec<Duration> = (0..20)
+            .map(|_| {
+                let start = Instant::now();
+                let stats = ro.board_stats(None).unwrap();
+                assert_eq!(stats.lanes.len(), LANES as usize);
+                let cohort = stats.cohort.unwrap();
+                assert_eq!(cohort["cohort"]["lanes"], LANES / 2);
+                start.elapsed()
+            })
+            .collect();
+        let count = p(&mut counts, 50);
         eprintln!(
-            "reload ({LANES} lanes, {} events each): p50 {reload:?}",
+            "reload ({LANES} lanes, {} events and {USAGE} usage each): board p50 {reload:?}, \
+             stats p50 {count:?}",
             2 * EVENTS
         );
 
@@ -265,23 +370,41 @@ mod tests {
         spawn(path, shown.clone(), move || {
             tx.send(Instant::now()).unwrap()
         });
+        // The first board, then its stats.
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let mut seen = shown.lock().unwrap().board.as_ref().unwrap().data_version;
         let mut lags = Vec::with_capacity(SAMPLES);
+        // Each commit follows the last board at once, never waiting for the
+        // stats, so some land during a stats read.
         for i in 0..SAMPLES {
             let id = i as i64 % LANES + 1;
             let start = Instant::now();
             rw.work_heartbeat(&lane(&format!("s{id}")), id, None, false)
                 .unwrap()
                 .unwrap();
-            let drawn = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            // A stats repaint may come first: the board's is the one that
+            // brings a new version.
+            let drawn = loop {
+                let at = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let version = shown.lock().unwrap().board.as_ref().unwrap().data_version;
+                if version != seen {
+                    seen = version;
+                    break at;
+                }
+            };
             lags.push(drawn - start);
-            let version = shown.lock().unwrap().board.as_ref().unwrap().data_version;
-            assert_ne!(version, seen, "a commit must bring a new board");
-            seen = version;
         }
         let (p50, p99) = (p(&mut lags, 50), p(&mut lags, 99));
         eprintln!("U2 commit to repaint request: p50 {p50:?}, p99 {p99:?}");
+        // The stats catch up with the last commit within STATS_EVERY.
+        let start = Instant::now();
+        while shown.lock().unwrap().stats.as_ref().unwrap().data_version != seen {
+            rx.recv_timeout(STATS_EVERY * 2)
+                .expect("stats never caught up");
+        }
+        eprintln!("last commit's board to its stats: {:?}", start.elapsed());
+        while rx.try_recv().is_ok() {}
         // Quiet ledger: no new board.
         assert!(rx.recv_timeout(POLL * 5).is_err(), "redrew with no change");
         assert!(p99 <= Duration::from_millis(150), "U2: {p99:?}");
