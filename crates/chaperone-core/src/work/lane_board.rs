@@ -56,6 +56,11 @@ pub struct BoardLane {
     pub board: BoardItem,
     /// `updated_at` in seconds since the epoch, for a viewer's clock.
     pub updated_secs: i64,
+    /// `lease_expires_at` the same way, so a viewer sees a lease expire
+    /// while the ledger is quiet.
+    pub lease_expires_secs: Option<i64>,
+    /// Questions asked of the owner with no answer recorded.
+    pub open_questions: i64,
     pub stamps: Stamps,
 }
 
@@ -89,10 +94,25 @@ impl Ledger {
             .into_iter()
             .map(|board| {
                 let facts = self.project(board.item.id, None)?;
-                let updated_secs =
-                    tx.query_row("SELECT unixepoch(?1)", [&board.item.updated_at], |r| {
-                        r.get(0)
-                    })?;
+                let item = &board.item;
+                let (updated_secs, lease_expires_secs) = tx.query_row(
+                    "SELECT unixepoch(?1), unixepoch(?2)",
+                    rusqlite::params![item.updated_at, item.lease_expires_at],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                // On events_lane: an answer is on its question's lane.
+                let open_questions = tx.query_row(
+                    "SELECT count(*) FROM events a
+                      WHERE a.lane_id = ?1 AND a.kind = 'attention.recorded'
+                        AND json_extract(a.payload_json, '$.type') = 'asked'
+                        AND json_extract(a.payload_json, '$.by') = 'owner'
+                        AND NOT EXISTS (SELECT 1 FROM events b
+                              WHERE b.lane_id = a.lane_id AND b.id > a.id
+                                AND b.kind = 'attention.recorded'
+                                AND json_extract(b.payload_json, '$.answers') = a.id)",
+                    [item.id],
+                    |r| r.get(0),
+                )?;
                 let text = |path: &str| match facts.get(path) {
                     Fact::Str(s) => Some(s.clone()),
                     _ => None,
@@ -106,6 +126,8 @@ impl Ledger {
                 Ok(BoardLane {
                     board,
                     updated_secs,
+                    lease_expires_secs,
+                    open_questions,
                     stamps,
                 })
             })

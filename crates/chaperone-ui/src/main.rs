@@ -3,7 +3,8 @@
 //! Clicking a lane shows its detail and its worktree's diff. Above it, the
 //! R11 numbers of the lanes merged since a date. Each lane names the
 //! lanes it shares files with (`chaperone overlap`). The change graph tab
-//! shows what each lane's commits change and reach.
+//! shows what each lane's commits change and reach. A left nav picks all
+//! repos, one repo or the pipeline, each with how many lanes need you.
 
 mod areas;
 mod board;
@@ -11,8 +12,11 @@ mod changes;
 mod detail;
 mod diff;
 mod graph;
+mod nav;
+mod needs;
 mod numbers;
 mod overlap;
+mod theme;
 mod watch;
 
 use std::path::PathBuf;
@@ -55,6 +59,7 @@ fn main() -> eframe::Result {
         "Chaperone",
         eframe::NativeOptions::default(),
         Box::new(move |cc| {
+            theme::apply(&cc.egui_ctx);
             let ctx = cc.egui_ctx.clone();
             watch::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
@@ -70,6 +75,7 @@ fn main() -> eframe::Result {
                 first_frame: args.first_frame,
                 since: numbers::Since::default(),
                 graph: false,
+                view: nav::View::default(),
             }))
         }),
     )
@@ -81,9 +87,14 @@ struct App {
     since: numbers::Since,
     /// The change graph in place of the board.
     graph: bool,
+    view: nav::View,
 }
 
 impl eframe::App for App {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::ground_rgba()
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -105,14 +116,28 @@ impl eframe::App for App {
         let mut picked = None;
         let mut refresh = false;
         let mut since = None;
-        egui::Panel::top("cohort").resizable(true).show(ui, |ui| {
-            since = numbers::cohort(ui, shown.stats.as_ref(), &mut self.since)
-        });
+        egui::Panel::left("nav")
+            .frame(theme::glass())
+            .show_separator_line(false)
+            .resizable(false)
+            .exact_size(220.0)
+            .show(ui, |ui| {
+                nav::draw(ui, shown.board.as_ref(), now, &mut self.view)
+            });
+        egui::Panel::top("cohort")
+            .frame(theme::glass())
+            .show_separator_line(false)
+            .resizable(true)
+            .show(ui, |ui| {
+                since = numbers::cohort(ui, shown.stats.as_ref(), &mut self.since)
+            });
         if since.is_some() {
             shown.since = since;
         }
         if let Some(board) = &shown.board {
             egui::Panel::bottom("feed")
+                .frame(theme::glass())
+                .show_separator_line(false)
                 .resizable(true)
                 .default_size(180.0)
                 .show(ui, |ui| detail::feed(ui, board));
@@ -126,40 +151,58 @@ impl eframe::App for App {
             let diff = shown.diff.as_ref().filter(|d| d.lane == sel.id);
             let areas = shown.areas.get(&sel.id);
             egui::Panel::right("detail")
+                .frame(theme::glass())
+                .show_separator_line(false)
                 .resizable(true)
                 .default_size(560.0)
                 .show(ui, |ui| {
                     refresh = detail::draw(ui, sel, lane, detail, diff, areas)
                 });
         }
-        egui::CentralPanel::default().show(ui, |ui| {
-            if let Some(error) = &shown.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.graph, false, "Board");
-                ui.selectable_value(&mut self.graph, true, "Change graph");
-            });
-            shown.graph_open = self.graph;
-            if self.graph {
-                match &shown.graph {
-                    Some(Ok(repos)) => graph::draw(ui, repos),
-                    Some(Err(e)) => {
-                        ui.colored_label(ui.visuals().error_fg_color, e);
+        let view = &self.view;
+        egui::CentralPanel::default()
+            .frame(theme::ground())
+            .show(ui, |ui| {
+                if let Some(error) = &shown.error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                if *view == nav::View::Pipeline {
+                    ui.heading("Pipeline");
+                    ui.label("The pipeline page is not built yet (#109, slice 11).");
+                    shown.graph_open = false;
+                    return;
+                }
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.graph, false, "Board");
+                    ui.selectable_value(&mut self.graph, true, "Change graph");
+                });
+                shown.graph_open = self.graph;
+                if self.graph {
+                    match &shown.graph {
+                        Some(Ok(repos)) => {
+                            let repos: graph::Repos = repos
+                                .iter()
+                                .filter(|(s, _)| view.shows(s))
+                                .cloned()
+                                .collect();
+                            graph::draw(ui, &repos)
+                        }
+                        Some(Err(e)) => {
+                            ui.colored_label(ui.visuals().error_fg_color, e);
+                        }
+                        None => {
+                            ui.label("Reading the change graph...");
+                        }
                     }
+                    return;
+                }
+                match &shown.board {
+                    Some(board) => picked = draw(ui, &shown, board, view, now),
                     None => {
-                        ui.label("Reading the change graph...");
+                        ui.label("Reading the ledger...");
                     }
                 }
-                return;
-            }
-            match &shown.board {
-                Some(board) => picked = draw(ui, &shown, board, now),
-                None => {
-                    ui.label("Reading the ledger...");
-                }
-            }
-        });
+            });
         if let Some(pick) = picked {
             // Clicking the selected lane again closes its detail.
             shown.selected = (shown.selected.as_ref() != Some(&pick)).then_some(pick);
@@ -172,13 +215,14 @@ impl eframe::App for App {
     }
 }
 
-const COLUMNS: [&str; 18] = [
+const COLUMNS: [&str; 19] = [
     "lane",
     "issue",
     "title",
     "branch",
     "agent",
     "status",
+    "needs you",
     "updated",
     "PR",
     "CI",
@@ -194,15 +238,25 @@ const COLUMNS: [&str; 18] = [
 ];
 
 /// The board; returns the lane clicked, if any.
-fn draw(ui: &mut egui::Ui, shown: &Shown, board: &LaneBoard, now: i64) -> Option<Selected> {
+fn draw(
+    ui: &mut egui::Ui,
+    shown: &Shown,
+    board: &LaneBoard,
+    view: &nav::View,
+    now: i64,
+) -> Option<Selected> {
     let selected = shown.selected.as_ref();
-    if board.lanes.is_empty() {
+    let repos: Vec<_> = board::group(board)
+        .into_iter()
+        .filter(|r| view.shows(r.slug))
+        .collect();
+    if repos.is_empty() {
         ui.label("No open lanes.");
         return None;
     }
     let mut picked = None;
     egui::ScrollArea::both().show(ui, |ui| {
-        for repo in board::group(board) {
+        for repo in repos {
             ui.heading(repo.slug);
             for spec in repo.specs {
                 let title = match spec.spec {
@@ -250,7 +304,7 @@ fn cells(
     areas: Option<&areas::Areas>,
     stats: Option<&BoardStats>,
     now: i64,
-) -> [String; 17] {
+) -> [String; 18] {
     let item = &lane.board.item;
     let s = &lane.stamps;
     let text = |v: &Option<String>| v.clone().unwrap_or_else(|| "-".into());
@@ -267,6 +321,7 @@ fn cells(
         text(&item.branch),
         text(&item.agent),
         item.status.clone(),
+        needs::why(lane, now).map_or("-", needs::Why::words).into(),
         board::age(lane.updated_secs, now),
         text(&item.pr_ref),
         // No ledger record carries CI yet (ci_snapshot is reserved).
