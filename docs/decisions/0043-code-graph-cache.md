@@ -25,7 +25,7 @@ shared by worktrees.
    `WITHOUT ROWID`. The key is git's blob id for a clean tracked file (from
    `git ls-files -s`; on a miss, only if the bytes read still hash to it) and
    `sha256:<hex>` of the bytes for a changed or untracked one. `facts` is what the file
-   says (its `mod` declarations, paths, `use` names, `impl` self types), never the resolved
+   says (its `mod` declarations, paths, `use` names, `impl` self types, each with its line), never the resolved
    edges: those depend on the whole tree, so they are rebuilt in memory on each call.
 3. **Versioned by table name.** `N` is `FACTS_VERSION` in `crates/chaperone-graph`,
    bumped when the extractor or the grammar changes. A binary never reads another
