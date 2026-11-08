@@ -165,8 +165,7 @@ fn item_text(line: &str) -> Option<&str> {
         .map(str::trim)
 }
 
-/// One `## decisions` line, without its list marker.
-pub fn parse_decision(text: &str) -> Decision {
+fn parse_decision(text: &str) -> Decision {
     let mut rest = text.trim();
     let mut slice = None;
     if let Some((tag, after)) = rest.strip_prefix('[').and_then(|r| r.split_once(']'))

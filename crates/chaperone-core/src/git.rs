@@ -112,7 +112,7 @@ pub struct ChangedFile {
 }
 
 /// An untracked file's lines are counted up to this size.
-pub const COUNT_BYTES: u64 = 1024 * 1024;
+const COUNT_BYTES: u64 = 1024 * 1024;
 
 /// Every file the worktree `wt` changes against the first base this clone
 /// has ([`BASES`], then the claimed `base_sha`): committed and uncommitted

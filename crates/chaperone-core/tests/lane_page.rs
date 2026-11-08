@@ -153,21 +153,17 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
             .all(|t| t.minutes.is_some_and(|m| m <= 1))
     );
 
-    let who: Vec<(Option<&str>, Option<&str>, &str)> = page
+    let who: Vec<(Option<&str>, &str)> = page
         .decisions
         .iter()
-        .map(|d| (d.by.as_deref(), d.agreed.as_deref(), d.text.as_str()))
+        .map(|d| (d.by.as_deref(), d.text.as_str()))
         .collect();
     assert_eq!(
         who,
         [
-            (
-                None,
-                Some("in chat, 2026-11-08"),
-                "[slice 1] Q: a? A: b. (agreed: in chat, 2026-11-08)"
-            ),
-            (Some("a1"), None, "files are their own call"),
-            (Some("owner"), None, "the left one"),
+            (None, "[slice 1] Q: a? A: b. (agreed: in chat, 2026-11-08)"),
+            (Some("a1"), "files are their own call"),
+            (Some("owner"), "the left one"),
         ]
     );
 
@@ -217,14 +213,14 @@ fn merged(ledger: &Ledger, work: i64, repo: &str, merged_at: &str) {
 fn repo_median_is_per_repo_over_30_days() {
     let (_dir, _path, ledger) = common::ledger();
     let now = ledger.now().unwrap();
-    let fast = lane(&ledger, "o/r", None);
-    merged(&ledger, fast, "o/r", &now);
+    let fast = lane(&ledger, "O/R", None);
+    merged(&ledger, fast, "O/R", &now);
     // Claimed in January and merged now: hundreds of hours, another repo.
     let slow = lane(&ledger, "x/y", Some(OLD));
     merged(&ledger, slow, "x/y", &now);
     // Merged before the window.
-    let old = lane(&ledger, "O/R", Some(OLD));
-    merged(&ledger, old, "O/R", "2026-01-02T00:00:00.000Z");
+    let old = lane(&ledger, "o/r", Some(OLD));
+    merged(&ledger, old, "o/r", "2026-01-02T00:00:00.000Z");
     lane(&ledger, "z/w", None);
 
     let median = |repo: &str| ledger.repo_median_h(repo).unwrap();

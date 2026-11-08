@@ -14,7 +14,6 @@ use super::DETAIL_ROWS;
 use super::lane_detail::LaneDetail;
 use crate::ledger::{Ledger, LedgerError, check_schema};
 use crate::pipeline::{Fact, Phase, Route, by_stamp};
-use crate::spec::parse::parse_decision;
 use crate::stats::Cohort;
 
 #[derive(Debug, Serialize)]
@@ -50,10 +49,9 @@ pub struct TimelineRow {
 #[derive(Debug, Serialize)]
 pub struct DecisionRow {
     /// The lane agent for a brief's decision, `owner` or `orchestrator`
-    /// for an answer; None for a spec line, which records no who.
+    /// for an answer; None for a spec line, which records no who (its
+    /// "agreed:" where and when is in its text).
     pub by: Option<String>,
-    /// A spec line's "agreed:" (where and when, as written).
-    pub agreed: Option<String>,
     /// When it was recorded; None for a spec line.
     pub at: Option<String>,
     pub text: String,
@@ -137,7 +135,6 @@ impl Ledger {
             .flat_map(|s| &s.decisions)
             .map(|line| DecisionRow {
                 by: None,
-                agreed: parse_decision(line).agreed,
                 at: None,
                 text: line.clone(),
             })
@@ -146,7 +143,6 @@ impl Ledger {
             let brief = h.handoff.brief.iter().flat_map(|b| &b.decisions);
             decisions.extend(brief.map(|d| DecisionRow {
                 by: h.agent.clone(),
-                agreed: None,
                 at: Some(h.created_at.clone()),
                 text: d.clone(),
             }));
@@ -160,7 +156,6 @@ impl Ledger {
         let answers = stmt.query_map((id, DETAIL_ROWS), |r| {
             Ok(DecisionRow {
                 by: r.get(0)?,
-                agreed: None,
                 at: r.get(1)?,
                 text: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
             })
