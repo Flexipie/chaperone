@@ -47,16 +47,12 @@ pub fn repos<'a>(board: Option<&'a LaneBoard>, stats: Option<&'a BoardStats>) ->
     out
 }
 
-fn slug_of(lane: &BoardLane) -> &str {
-    board::slug(lane.board.item.repo_slug.as_deref())
-}
-
 /// The board's lanes in `slug`, any case.
 pub fn lanes_of<'a>(board: &'a LaneBoard, slug: &'a str) -> impl Iterator<Item = &'a BoardLane> {
     board
         .lanes
         .iter()
-        .filter(move |l| slug_of(l).eq_ignore_ascii_case(slug))
+        .filter(move |l| board::slug(l.board.item.repo_slug.as_deref()).eq_ignore_ascii_case(slug))
 }
 
 fn merged_of<'a>(stats: &'a BoardStats, slug: &'a str) -> impl Iterator<Item = &'a MergedLane> {
@@ -208,12 +204,18 @@ pub fn cards(
     stats: Option<&BoardStats>,
     now: i64,
 ) -> Option<View> {
+    let repos = repos(Some(board), stats);
+    if repos.is_empty() {
+        ui.label(format!(
+            "No open lanes and nothing merged in the last {MERGED_DAYS} days."
+        ));
+    }
     let mut to = None;
     egui::ScrollArea::vertical()
         .id_salt("cards")
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                for slug in repos(Some(board), stats) {
+                for slug in repos {
                     let running = lanes_of(board, slug)
                         .filter(|l| l.board.item.status != "queued")
                         .count();
@@ -243,11 +245,13 @@ pub fn cards(
                             ui.end_row();
                         });
                     });
-                    let click = ui.interact(
-                        card.response.rect,
-                        ui.scope_id().with(("card", slug)),
-                        Sense::click(),
-                    );
+                    let click = ui
+                        .interact(
+                            card.response.rect,
+                            ui.scope_id().with(("card", slug)),
+                            Sense::click(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
                     if click.clicked() {
                         to = Some(View::Repo(slug.to_lowercase()));
                     }
