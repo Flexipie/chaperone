@@ -101,7 +101,13 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
         .spec_create(&actor("1"), "o/r#1", None, body, common::AT, false)
         .unwrap()
         .unwrap();
-    let id = lane(&ledger, "o/r", None);
+    // Claimed in January, its lease renewed now: minutes count from the
+    // first claim, not from the renewal.
+    let id = lane(&ledger, "o/r", Some(OLD));
+    ledger
+        .work_claim(&actor("1"), id, &ClaimInput::default(), None, false)
+        .unwrap()
+        .unwrap();
     check(&ledger, id, "plan_check");
     check(&ledger, id, "review_round");
     let asked = attention(&ledger, id, "asked", "owner", None, "which way?");
@@ -146,12 +152,13 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
             ("lane.created", None),
         ]
     );
-    // Claimed just now; nothing before the claim has minutes past zero.
     assert!(
         page.timeline
             .iter()
-            .all(|t| t.minutes.is_some_and(|m| m <= 1))
+            .all(|t| t.minutes.is_some_and(|m| m >= 0))
     );
+    let claimed = page.timeline.iter().find(|t| t.kind == "lane.claimed");
+    assert_eq!(claimed.unwrap().minutes, Some(0));
 
     let who: Vec<(Option<&str>, &str)> = page
         .decisions

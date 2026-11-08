@@ -19,8 +19,8 @@ use crate::stats::Cohort;
 #[derive(Debug, Serialize)]
 pub struct LanePage {
     pub detail: LaneDetail,
-    /// Newest first: every lane event but usage, lease renewals, check
-    /// requests and finding updates.
+    /// The newest [`DETAIL_ROWS`], newest first: every lane event but
+    /// usage, lease renewals, check requests and finding updates.
     pub timeline: Vec<TimelineRow>,
     /// The spec's (this slice's and the spec-wide), the handoff brief's
     /// (newest handoff) and the answers to the lane's questions.
@@ -35,7 +35,8 @@ pub struct LanePage {
 #[derive(Debug, Serialize)]
 pub struct TimelineRow {
     pub at: String,
-    /// Since the lane's `claimed_at`; None before a claim.
+    /// Since the lane's first claim (its first `lane.claimed`, as stats
+    /// counts it); None while it has none.
     pub minutes: Option<i64>,
     /// The event kind (events.md).
     pub kind: String,
@@ -87,9 +88,11 @@ impl Ledger {
         let detail = self.detail_in(&tx, id, key)?;
         let j = |k: &str| format!("json_extract(e.payload_json, '$.{k}')");
         let mut stmt = tx.prepare(&format!(
-            "SELECT e.at, CAST(round((julianday(e.at) - julianday(l.claimed_at)) * 1440) AS INTEGER),
+            "SELECT e.at, CAST(round((julianday(e.at) - julianday(
+                        (SELECT min(at) FROM events WHERE lane_id = ?1 AND kind = 'lane.claimed')
+                    )) * 1440) AS INTEGER),
                     e.kind, e.actor_agent, {}, {}, {}, {}, {}, {}, {}, {}
-               FROM events e JOIN lanes l ON l.id = e.lane_id
+               FROM events e
               WHERE e.lane_id = ?1 AND e.kind NOT IN {QUIET}
               ORDER BY e.id DESC LIMIT ?2",
             j("to"),
@@ -211,7 +214,9 @@ impl Ledger {
     /// `stats`'s `claim_to_merge_h_median` over `repo`'s lanes (any case)
     /// with a `pr.merged` in the last 30 days; null when none has merged.
     pub fn repo_median_h(&self, repo: &str) -> Result<Value, LedgerError> {
-        let mut stmt = self.conn().prepare(
+        let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
+        check_schema(&tx)?;
+        let mut stmt = tx.prepare(
             "SELECT DISTINCT e.lane_id FROM events e JOIN lanes l ON l.id = e.lane_id
               WHERE e.kind = 'pr.merged' AND l.repo_slug = ?1 COLLATE NOCASE
                 AND json_extract(e.payload_json, '$.merged_at')
