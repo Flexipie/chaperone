@@ -33,10 +33,12 @@ shared by worktrees.
    other's work.
 4. **A cache, never a source of truth.** Any SQLite error answers from a fresh parse and
    says so in `cache.skipped`. A SQLite file SQLite calls corrupt or not a database is
-   renamed to `.bad`, never deleted (another process may have it open in WAL mode); any
+   renamed to `.bad` with its `-wal` and `-shm`, never deleted (another process may have it open in WAL mode); any
    other file, an empty file passed as `--cache`, or a SQLite file with a `user_version`
    or tables of its own (the ledger) is never written to, its WAL included: the check
-   reads it immutable, or read-only when it has a WAL, never read-write. An empty file at
+   runs in `BEGIN IMMEDIATE` (a migration in flight is waited for and seen) with
+   checkpoint-on-close off until it passes, so a refusal rolls back and leaves the file
+   and its WAL as they were. An empty file at
    the default path is one a first run left before writing, and is used. Writes are one
    transaction of `INSERT OR IGNORE`, so two worktrees writing at once agree. Rows grow
    with history; past four times the current tree's file count (at least 1,024), a write

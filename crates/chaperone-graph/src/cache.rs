@@ -7,7 +7,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rusqlite::{Connection, ErrorCode, OpenFlags, ffi, params};
+use rusqlite::config::DbConfig;
+use rusqlite::{Connection, ErrorCode, TransactionBehavior, ffi, params};
 
 use crate::parse::{FACTS_VERSION, Facts};
 
@@ -60,52 +61,41 @@ impl Cache {
         // SQLite takes an empty file for an empty database. One passed by
         // hand is someone else's (a lock file); one at Chaperone's own path
         // is a cache a first run left before writing to it.
-        match std::fs::metadata(path) {
-            Ok(m) if m.len() == 0 && given => return Err(not_cache()),
-            Ok(m) if m.len() > 0 => {
-                // `--cache` may name another SQLite file (the ledger), and the
-                // check must not write to it: a read-write connection would
-                // checkpoint its WAL into it on close. Without a WAL, read it
-                // as immutable (a read-only open would still make -wal and
-                // -shm beside it); with one, read-only, so its WAL is seen.
-                let mut wal = path.as_os_str().to_owned();
-                wal.push("-wal");
-                let ro = if Path::new(&wal).exists() {
-                    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
-                } else {
-                    let Some(p) = path.to_str() else {
-                        return Err(not_cache());
-                    };
-                    let uri = format!(
-                        "file:{}?immutable=1",
-                        p.replace('%', "%25")
-                            .replace('?', "%3f")
-                            .replace('#', "%23")
-                    );
-                    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
-                    Connection::open_with_flags(uri, flags)?
-                };
-                ro.busy_timeout(Duration::from_secs(5))?;
-                let foreign: bool = ro.query_row(
-                    "SELECT (SELECT user_version FROM pragma_user_version) != 0 OR EXISTS (
-                    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'facts_v[0-9]*')",
-                    [],
-                    |r| r.get(0),
-                )?;
-                if foreign {
-                    return Err(not_cache());
-                }
-            }
-            _ => {}
+        if given && std::fs::metadata(path).is_ok_and(|m| m.len() == 0) {
+            return Err(not_cache());
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // `--cache` may name another SQLite file (the ledger), and nothing may
+        // write to it, its WAL included. Until the check passes, closing does
+        // not checkpoint, and the check holds the write lock, so a migration
+        // in flight is waited for and seen.
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let foreign: bool = conn.query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version) != 0 OR EXISTS (
+            SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'facts_v[0-9]*')",
+            [],
+            |r| r.get(0),
+        )?;
+        if foreign {
+            let _ = conn.execute_batch("ROLLBACK");
+            // A WAL with no frames (made by this open) is safe to checkpoint:
+            // closing then removes it as any reader's close does.
+            let wal = conn.path().map(|p| format!("{p}-wal"));
+            if wal.is_none_or(|w| std::fs::metadata(w).map_or(true, |m| m.len() == 0)) {
+                let _ = conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false);
+            }
+            return Err(not_cache());
+        }
         conn.execute_batch(&format!(
-            "CREATE TABLE IF NOT EXISTS {} (key TEXT PRIMARY KEY, facts BLOB NOT NULL) WITHOUT ROWID",
+            "CREATE TABLE IF NOT EXISTS {} (key TEXT PRIMARY KEY, facts BLOB NOT NULL) WITHOUT ROWID;
+            COMMIT",
             table()
         ))?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)?;
         Ok(conn)
     }
 
@@ -142,7 +132,8 @@ impl Cache {
         let Some(conn) = &mut self.conn else { return };
         let t = table();
         let result = (|| {
-            let tx = conn.transaction()?;
+            // Immediate: the prune's write must not fail to upgrade a read lock.
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             {
                 let mut ins = tx.prepare(&format!(
                     "INSERT OR IGNORE INTO {t} (key, facts) VALUES (?1, ?2)"
@@ -193,11 +184,57 @@ fn set_aside(path: &Path, e: &rusqlite::Error) -> String {
         .and_then(|mut f| f.read_exact(&mut head))
         .is_ok_and(|_| &head == b"SQLite format 3\0");
     if corrupt && sqlite {
-        let mut aside = path.as_os_str().to_owned();
-        aside.push(".bad");
-        let _ = std::fs::rename(path, aside);
+        // Its WAL and index go with it: a stale WAL beside the next cache
+        // file would be replayed into it.
+        for suffix in ["", "-wal", "-shm"] {
+            let (mut from, mut to) = (path.as_os_str().to_owned(), path.as_os_str().to_owned());
+            from.push(suffix);
+            to.push(format!(".bad{suffix}"));
+            let _ = std::fs::rename(from, to);
+        }
         format!("{e}; set aside as .bad")
     } else {
         e.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #95: refusing the ledger as a cache must leave it and its WAL as they
+    /// were, also through a symlink (a read-write close checkpointed them).
+    #[test]
+    fn ledger_and_its_wal_left_byte_for_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.db");
+        let c = Connection::open(&live).unwrap();
+        c.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;
+             PRAGMA user_version = 4; CREATE TABLE events (x); INSERT INTO events VALUES (1);",
+        )
+        .unwrap();
+        // A copy while the writer is open: the schema is only in its WAL.
+        let ledger = dir.path().join("ledger.db");
+        std::fs::copy(&live, &ledger).unwrap();
+        std::fs::copy(
+            dir.path().join("live.db-wal"),
+            dir.path().join("ledger.db-wal"),
+        )
+        .unwrap();
+        drop(c);
+        let link = dir.path().join("link.db");
+        std::os::unix::fs::symlink(&ledger, &link).unwrap();
+        let bytes = |p: &str| std::fs::read(dir.path().join(p)).unwrap();
+        let before = (bytes("ledger.db"), bytes("ledger.db-wal"));
+        for path in [&ledger, &link] {
+            let cache = Cache::open(Some(path), true);
+            assert!(cache.skipped.is_some());
+            drop(cache);
+            assert!(
+                before == (bytes("ledger.db"), bytes("ledger.db-wal")),
+                "{path:?}"
+            );
+        }
     }
 }
