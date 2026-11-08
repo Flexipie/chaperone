@@ -499,7 +499,7 @@ pub struct BoardStats {
 }
 
 /// How far back [`BoardStats::merged`] reads, and how many it keeps.
-const MERGED_DAYS: i64 = 7;
+pub const MERGED_DAYS: i64 = 7;
 const MERGED_MAX: i64 = 200;
 
 /// A done lane and its newest `pr.merged`.

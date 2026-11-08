@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use chaperone_core::stats::{BoardStats, MergedLane};
+use chaperone_core::stats::{BoardStats, MERGED_DAYS, MergedLane};
 use chaperone_core::work::{BoardLane, LaneBoard};
 use eframe::egui::{self, RichText, Sense};
 
@@ -20,7 +20,6 @@ const SENTENCE_CHARS: usize = 200;
 pub struct RepoLaneRow<'a> {
     pub lane: &'a BoardLane,
     pub label: String,
-    pub title: &'a str,
     pub why: Option<needs::Why>,
     pub state: &'static str,
     pub next: &'a str,
@@ -39,7 +38,7 @@ pub fn repos<'a>(board: Option<&'a LaneBoard>, stats: Option<&'a BoardStats>) ->
         .map(|r| r.slug)
         .collect();
     let merged = stats.iter().flat_map(|s| &s.merged);
-    for slug in merged.map(|m| m.repo_slug.as_deref().unwrap_or("(no repo)")) {
+    for slug in merged.map(|m| board::slug(m.repo_slug.as_deref())) {
         if !out.iter().any(|s| s.eq_ignore_ascii_case(slug)) {
             out.push(slug);
         }
@@ -49,7 +48,7 @@ pub fn repos<'a>(board: Option<&'a LaneBoard>, stats: Option<&'a BoardStats>) ->
 }
 
 fn slug_of(lane: &BoardLane) -> &str {
-    lane.board.item.repo_slug.as_deref().unwrap_or("(no repo)")
+    board::slug(lane.board.item.repo_slug.as_deref())
 }
 
 /// The board's lanes in `slug`, any case.
@@ -61,10 +60,10 @@ pub fn lanes_of<'a>(board: &'a LaneBoard, slug: &'a str) -> impl Iterator<Item =
 }
 
 fn merged_of<'a>(stats: &'a BoardStats, slug: &'a str) -> impl Iterator<Item = &'a MergedLane> {
-    stats.merged.iter().filter(move |m| {
-        let s = m.repo_slug.as_deref().unwrap_or("(no repo)");
-        s.eq_ignore_ascii_case(slug)
-    })
+    stats
+        .merged
+        .iter()
+        .filter(move |m| board::slug(m.repo_slug.as_deref()).eq_ignore_ascii_case(slug))
 }
 
 /// The repo's open lanes, needs-you first, each group in board order.
@@ -98,7 +97,6 @@ pub fn rows<'a>(
             RepoLaneRow {
                 lane,
                 label: board::label(item),
-                title: &item.title,
                 why,
                 state,
                 next: blocker.or(item.next_action.as_deref()).unwrap_or("-"),
@@ -165,7 +163,7 @@ pub fn page(
                     if ui.selectable_label(on, &r.label).clicked() {
                         picked = Some(Selected::of(item));
                     }
-                    ui.label(r.title);
+                    ui.label(&item.title);
                     match r.why {
                         Some(_) => ui.label(theme::alert(r.state)),
                         None => ui.label(r.state),
@@ -188,18 +186,14 @@ pub fn page(
             for m in merged_of(stats, slug) {
                 any = true;
                 ui.horizontal_wrapped(|ui| {
-                    let label = match (&m.lane_key, m.lane_pos) {
-                        (Some(k), Some(p)) => format!("{k} {p}"),
-                        (Some(k), None) => k.clone(),
-                        _ => format!("#{}", m.id),
-                    };
+                    let label = board::name(m.lane_key.as_deref(), m.lane_pos, m.id);
                     ui.label(RichText::new(label).small().weak());
                     let ago = board::age(m.merged_secs, now);
                     ui.label(format!("{ago} ago: {}", sentence(m)));
                 });
             }
             if !any {
-                ui.label("Nothing merged in the last 7 days.");
+                ui.label(format!("Nothing merged in the last {MERGED_DAYS} days."));
             }
         });
     });
@@ -223,7 +217,7 @@ pub fn cards(
                     let running = lanes_of(board, slug)
                         .filter(|l| l.board.item.status != "queued")
                         .count();
-                    let needs = needs::count(lanes_of(board, slug), now);
+                    let waiting = needs::count(lanes_of(board, slug), now);
                     let today = stats.map_or("...".into(), |s| {
                         let from = midnight(now, s.utc_offset_secs);
                         let n = merged_of(s, slug).filter(|m| m.merged_secs >= from);
@@ -233,17 +227,16 @@ pub fn cards(
                         ui.set_width(220.0);
                         ui.strong(slug);
                         ui.add_space(6.0);
-                        let needs = needs.to_string();
-                        let needs = match needs.as_str() {
-                            "0" => RichText::new(needs),
-                            n => theme::alert(n),
+                        let waiting = match waiting {
+                            0 => RichText::new("0"),
+                            n => theme::alert(&n.to_string()),
                         };
                         egui::Grid::new(("card", slug)).show(ui, |ui| {
                             ui.label("running");
                             ui.label(running.to_string());
                             ui.end_row();
                             ui.label("needs you");
-                            ui.label(needs);
+                            ui.label(waiting);
                             ui.end_row();
                             ui.label("merged today");
                             ui.label(today);
