@@ -66,10 +66,14 @@ impl Cache {
             return Err(not_cache());
         }
         // SQLite names the WAL after the path it opened, so a hard link to the
-        // ledger hides the ledger's WAL from the check below. Chaperone's own
-        // cache is never hard-linked.
-        if std::fs::metadata(path).is_ok_and(|m| m.nlink() > 1) {
-            return Err(not_cache());
+        // ledger hides the ledger's WAL from the check below. Only for a path
+        // passed by hand: Chaperone's own file gets a second link only from a
+        // backup (`cp -al`) or a dedup tool.
+        if given && std::fs::metadata(path).is_ok_and(|m| m.nlink() > 1) {
+            return Err(rusqlite::Error::SqliteFailure(
+                ffi::Error::new(ffi::SQLITE_CANTOPEN),
+                Some("cache file has more than one hard link".into()),
+            ));
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
@@ -235,20 +239,22 @@ mod tests {
         std::os::unix::fs::symlink(&ledger, &link).unwrap();
         let bytes = |p: &str| std::fs::read(dir.path().join(p)).unwrap();
         let before = (bytes("ledger.db"), bytes("ledger.db-wal"));
-        let hard = dir.path().join("hard.db");
-        std::fs::hard_link(&ledger, &hard).unwrap();
-        for path in [&ledger, &link, &hard] {
+        let refused = |path: &Path, why: &str| {
             let cache = Cache::open(Some(path), true);
-            assert_eq!(
-                cache.skipped.as_deref(),
-                Some("not a chaperone graph cache")
-            );
+            assert_eq!(cache.skipped.as_deref(), Some(why), "{path:?}");
             drop(cache);
             assert!(
                 before == (bytes("ledger.db"), bytes("ledger.db-wal")),
                 "{path:?}"
             );
-        }
+        };
+        // Through the check on the read-write connection.
+        refused(&ledger, "not a chaperone graph cache");
+        refused(&link, "not a chaperone graph cache");
+        // A hard link would hide the ledger's WAL from that check.
+        let hard = dir.path().join("hard.db");
+        std::fs::hard_link(&ledger, &hard).unwrap();
+        refused(&hard, "cache file has more than one hard link");
         // A cache of its own is still used.
         let own = Cache::open(Some(&dir.path().join("own.db")), true);
         assert!(own.conn.is_some() && own.skipped.is_none());
