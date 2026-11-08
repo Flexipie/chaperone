@@ -265,7 +265,8 @@ is found at `/Applications/daisy.app/Contents/MacOS/daisy-cli`
 is `internal`, with what daisy said in `details`, so daisy's exit codes never take
 Chaperone's meanings.
 `CHAPERONE_DAISY_CLI` is trusted like `--session` (an honor system until adapters): whoever
-runs `reviews record` can point it at any program.
+runs `reviews record` can point it at any program. chaperone-ui's Backlog reads daisy at the
+same path and override, also within 30 s (ADR 0003).
 
 ## Commands and transitions
 

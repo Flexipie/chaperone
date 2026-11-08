@@ -19,7 +19,8 @@ use serde_json::Value;
 
 use crate::watch::Shown;
 
-/// Where `reviews record` calls daisy; `CHAPERONE_DAISY_CLI` overrides it.
+/// daisy-cli, at the same path `reviews record` uses; `CHAPERONE_DAISY_CLI`
+/// overrides it.
 const DAISY_CLI: &str = "/Applications/daisy.app/Contents/MacOS/daisy-cli";
 const DAISY_TIMEOUT: Duration = Duration::from_secs(30);
 /// One page of 500 issues is well under this; past it the read fails.
@@ -231,7 +232,8 @@ fn read_mirror(slug: &str) -> Result<Mirror, String> {
             Ok(_) => {
                 closed.insert(key.clone());
             }
-            Err(e) if e.starts_with("not_found") => {
+            // daisy answers an item it has not synced with `invalid_input`.
+            Err(e) if e.starts_with("not_found") || e.starts_with("invalid_input") => {
                 missing.insert(key.clone());
             }
             Err(e) => return Err(e),
