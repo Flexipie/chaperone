@@ -287,39 +287,44 @@ impl Ledger {
     /// capped (ADR 0007 "Small"). `not_found` when it has no slice, spec,
     /// lane or note.
     pub fn dossier_get(&self, key: &str) -> Checked<Dossier> {
-        let key = match key_of(key) {
-            Ok(k) => k,
-            Err(r) => return Ok(Err(r)),
-        };
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
-        let slice = slice_section(&tx, &key)?;
-        let lanes = lanes_section(&tx, &key)?;
-        let (handoffs, files) = handoff_sections(&tx, &lanes.items)?;
-        let notes = notes_section(&tx, &key.to_lowercase())?;
-        // Checked before the budget cut, when an empty list means the ledger
-        // has none: the caps keep at least one row, and the newest note is
-        // never superseded.
-        if slice.in_spec.is_none()
-            && slice.parent_of.is_none()
-            && lanes.items.is_empty()
-            && notes.items.is_empty()
-        {
-            return Ok(Err(Refusal::NotFoundRef {
-                entity: "dossier",
-                reference: key,
-            }));
-        }
-        let mut d = Dossier {
-            key,
-            slice,
-            lanes,
-            handoffs,
-            files,
-            notes,
-        };
-        fit(&mut d)?;
-        Ok(Ok(d))
+        dossier_read(&tx, key)
     }
+}
+
+/// `dossier get` inside the caller's read transaction.
+pub(crate) fn dossier_read(conn: &Connection, key: &str) -> Checked<Dossier> {
+    let key = match key_of(key) {
+        Ok(k) => k,
+        Err(r) => return Ok(Err(r)),
+    };
+    let slice = slice_section(conn, &key)?;
+    let lanes = lanes_section(conn, &key)?;
+    let (handoffs, files) = handoff_sections(conn, &lanes.items)?;
+    let notes = notes_section(conn, &key.to_lowercase())?;
+    // Checked before the budget cut, when an empty list means the ledger
+    // has none: the caps keep at least one row, and the newest note is
+    // never superseded.
+    if slice.in_spec.is_none()
+        && slice.parent_of.is_none()
+        && lanes.items.is_empty()
+        && notes.items.is_empty()
+    {
+        return Ok(Err(Refusal::NotFoundRef {
+            entity: "dossier",
+            reference: key,
+        }));
+    }
+    let mut d = Dossier {
+        key,
+        slice,
+        lanes,
+        handoffs,
+        files,
+        notes,
+    };
+    fit(&mut d)?;
+    Ok(Ok(d))
 }
 
 /// `s` cut at `max` characters, counting the cut in `omitted.strings`.

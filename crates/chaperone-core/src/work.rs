@@ -4,6 +4,7 @@
 
 mod handoff;
 mod lane_board;
+mod lane_detail;
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -14,7 +15,8 @@ use serde_json::{Value, json};
 
 pub(crate) use self::handoff::commit_ok;
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
-pub use self::lane_board::{BoardLane, LaneBoard, SpecTitle, Stamps};
+pub use self::lane_board::{AttentionRow, BoardLane, LaneBoard, SpecTitle, Stamps};
+pub use self::lane_detail::{CheckRow, FindingRow, LaneDetail};
 use crate::cursor::{self, Cursor, Page};
 use crate::engine;
 use crate::ledger::{

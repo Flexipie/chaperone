@@ -1,6 +1,7 @@
 //! The viewer's ledger: `Ledger::open_read_only` writes nothing and is
-//! refused like `Ledger::open`, and `lane_board` reads one snapshot with
-//! the gate stamps the projection gives.
+//! refused like `Ledger::open`, `lane_board` reads one snapshot with the
+//! gate stamps the projection gives and the feed, and `lane_detail` one
+//! lane's dossier, checks and findings.
 
 mod common;
 
@@ -108,4 +109,102 @@ fn read_only_refuses_other_versions() {
         Ledger::open_read_only(&text),
         Err(LedgerError::NotALedger(_))
     ));
+}
+
+#[test]
+fn detail_and_feed_read_one_lane_and_the_board() {
+    use chaperone_core::checks::AttentionInput;
+    use chaperone_core::work::{ClaimInput, HandoffInput};
+    use serde_json::json;
+
+    let (_dir, path, rw) = common::ledger();
+    let me = pair("lane", "s1");
+    let body = "# P\n\n## slice 1: the slice  (o/r#2)\n\ndone when: x\n\n## decisions\n\n\
+                - [slice 1] Q: a? A: b.\n- Q: c? A: d.\n";
+    rw.spec_create(&me, "o/r#1", None, body, T0, false)
+        .unwrap()
+        .unwrap();
+    let input = CreateInput {
+        source: Some("github".into()),
+        source_id: Some("o/r#2".into()),
+        spec: Some("o/r#1".into()),
+        ..create()
+    };
+    let id = rw.work_create(&me, &input, None, false).unwrap().unwrap().id;
+    rw.work_claim(&me, id, &ClaimInput::default(), None, false)
+        .unwrap()
+        .unwrap();
+    let handoff = HandoffInput {
+        summary: "built it".into(),
+        ..HandoffInput::default()
+    };
+    rw.work_handoff(&me, id, &handoff, None, false)
+        .unwrap()
+        .unwrap();
+    let checker = pair("checker", "s2");
+    let check = CheckInput {
+        work: id,
+        check: "plan_check".into(),
+        head: "abc1234".into(),
+        outcome: "ran".into(),
+        findings: Some(1),
+        ..CheckInput::default()
+    };
+    rw.check_record(&checker, &check).unwrap().unwrap();
+    let view = json!({
+        "job_id": 7, "source": "local", "status": "reviewed", "phase": "done", "done": true,
+        "repo": "Flexipie/chaperone", "branch": "b", "head_sha": "def5678", "score": 8, "verdict": "safe",
+        "findings": [{
+            "id": "f1", "severity": "risk", "title": "a race", "body": "b", "path": "a.rs",
+            "line": 1, "verified": true, "lenses": [], "body_truncated": false,
+        }],
+    });
+    rw.review_record(&checker, id, 7, &view).unwrap().unwrap();
+    let o = pair("orchestrator", "s3");
+    let ask = AttentionInput {
+        work: id,
+        kind: "asked".into(),
+        by: "owner".into(),
+        reason: Some("question.scope".into()),
+        note: Some("split it?".into()),
+        ..AttentionInput::default()
+    };
+    let asked = rw.attention_record(&o, &ask).unwrap().unwrap();
+    let answer = AttentionInput {
+        kind: "answered".into(),
+        reason: None,
+        answers: Some(asked.event_id),
+        note: Some("yes, in two".into()),
+        ..ask
+    };
+    rw.attention_record(&o, &answer).unwrap().unwrap();
+
+    let ro = Ledger::open_read_only(&path).unwrap();
+    let d = ro.lane_detail(id, Some("o/r#2")).unwrap();
+    let dossier = d.dossier.unwrap();
+    let in_spec = dossier.slice.in_spec.unwrap();
+    assert_eq!(in_spec.decisions, ["[slice 1] Q: a? A: b.", "Q: c? A: d."]);
+    assert_eq!(dossier.handoffs.items[0].summary, "built it");
+    let checks: Vec<_> = d.checks.iter().map(|c| c.check.as_str()).collect();
+    assert_eq!(checks, ["local_review", "plan_check"]);
+    assert_eq!(d.findings.len(), 1);
+    assert_eq!(
+        (d.findings[0].title.as_str(), d.findings[0].status.as_str()),
+        ("a race", "open")
+    );
+    // A key with no record, or none at all, still reads the checks.
+    assert!(ro.lane_detail(id, Some("o/r#99")).unwrap().dossier.is_none());
+    assert_eq!(ro.lane_detail(id, None).unwrap().checks.len(), 2);
+
+    let board = ro.lane_board(T0).unwrap();
+    assert_eq!(board.specs[0].decisions, ["Q: c? A: d.", "[slice 1] Q: a? A: b."]);
+    let feed: Vec<_> = board
+        .attention
+        .iter()
+        .map(|a| (a.kind.as_str(), a.note.as_deref()))
+        .collect();
+    assert_eq!(
+        feed,
+        [("answered", Some("yes, in two")), ("asked", Some("split it?"))]
+    );
 }
