@@ -245,7 +245,7 @@ fn spans(
     for pair in ticks.chunks_exact(2) {
         let k = starts.partition_point(|(off, _)| *off <= pair[0]);
         let line = starts[k.saturating_sub(1)].1;
-        n += calls(path, line, &para[pair[0] + 1..pair[1]], top, scan);
+        n += calls(path, line, &para[pair[0] + 1..pair[1]], false, top, scan);
     }
     n
 }
@@ -276,14 +276,22 @@ fn shell(
             joined.push(' ');
         }
         if !joined.trim_start().starts_with('#') {
-            n += calls(path, at, &joined, top, scan);
+            n += calls(path, at, &joined, true, top, scan);
         }
     }
     n
 }
 
-/// Every call of the binary in `s`, each checked.
-fn calls(path: &Path, line: usize, s: &str, top: &BTreeSet<String>, scan: &mut Scan) -> usize {
+/// Every call of the binary in `s`, each checked. `whole`: `s` holds whole
+/// commands (a fenced block, a shell file), not fragments.
+fn calls(
+    path: &Path,
+    line: usize,
+    s: &str,
+    whole: bool,
+    top: &BTreeSet<String>,
+    scan: &mut Scan,
+) -> usize {
     let mut n = 0;
     for (at, bare) in markers(s) {
         let toks = tokens(&s[at..]);
@@ -293,7 +301,7 @@ fn calls(path: &Path, line: usize, s: &str, top: &BTreeSet<String>, scan: &mut S
             continue;
         }
         n += 1;
-        check_argv(path, line, &toks, scan);
+        check_argv(path, line, &toks, whole, scan);
     }
     n
 }
@@ -383,8 +391,9 @@ fn tokens(s: &str) -> Vec<Option<String>> {
 }
 
 /// One call through clap's own parser, then the values core checks
-/// itself (`--status`, `check record --reason`).
-fn check_argv(path: &Path, line: usize, toks: &[Option<String>], scan: &mut Scan) {
+/// itself (`--status`, `check record --reason`). Only a `whole` call can
+/// lack a required flag or hold a bad number.
+fn check_argv(path: &Path, line: usize, toks: &[Option<String>], whole: bool, scan: &mut Scan) {
     let argv =
         std::iter::once("chaperone").chain(toks.iter().map(|t| t.as_deref().unwrap_or(DUMMY)));
     if let Err(e) = Cli::try_parse_from(argv) {
@@ -392,16 +401,24 @@ fn check_argv(path: &Path, line: usize, toks: &[Option<String>], scan: &mut Scan
             ErrorKind::InvalidSubcommand => Some(("command", ContextKind::InvalidSubcommand)),
             ErrorKind::UnknownArgument => Some(("flag", ContextKind::InvalidArg)),
             ErrorKind::InvalidValue => Some(("value", ContextKind::InvalidValue)),
-            // A fragment (`$L work get` without its id) or a placeholder in a
-            // number's place: not drift.
+            ErrorKind::MissingRequiredArgument if whole => Some(("flag", ContextKind::InvalidArg)),
+            ErrorKind::ValueValidation if whole => Some(("value", ContextKind::InvalidValue)),
+            // A fragment (`$L work get` without its id), or a span or a
+            // python list that may continue elsewhere: not drift.
             _ => None,
         };
         // A placeholder's refusal, or a flag whose value the fragment cut.
         if let Some((kind, ctx)) = kind
             && !matches!(e.get(ctx), Some(ContextValue::String(v)) if v == DUMMY || v.is_empty())
         {
+            // The first paragraph: a missing flag's name is on its second line.
             let msg = e.to_string();
-            let first = msg.lines().next().unwrap_or_default();
+            let first: Vec<&str> = msg
+                .lines()
+                .take_while(|l| !l.is_empty())
+                .map(str::trim)
+                .collect();
+            let first = first.join(" ");
             scan.add(
                 path,
                 Some(line),
@@ -469,7 +486,7 @@ fn python(path: &Path, text: &str, top: &BTreeSet<String>, scan: &mut Scan) -> u
                 && toks.get(1).is_some_and(Option::is_some)
             {
                 n += 1;
-                check_argv(path, i + 1, &toks, scan);
+                check_argv(path, i + 1, &toks, false, scan);
             }
         }
     }
