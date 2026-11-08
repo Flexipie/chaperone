@@ -122,7 +122,8 @@ the answer `lower_bound`), which caps the peak near 17 MiB, inside M1's 32 MiB C
 ceiling. R14's M4 row budgets a cold `impact` on this repo at 12 MiB (10.9 MiB measured at the final head, warm 6.9 MiB); a warm call stays under M1's 8 MiB.
 
 `--entry-points` (#44), same method, warm, 50 samples, this repo's 12 command rules: p50 /
-p99 34.5 / 51.3 ms against 34.2 / 37.8 ms without the flag; RSS 7.2 MiB.
+p99 34.4 / 41.7 ms against 33.6 / 38.0 ms without the flag (six git calls with it, four
+without); RSS 7.1 MiB.
 
 ## Next
 
