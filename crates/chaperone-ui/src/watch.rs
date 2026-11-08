@@ -1,5 +1,6 @@
 //! The watcher thread: its own read-only ledger, polled for
-//! `PRAGMA data_version`, and a new board only when that changes.
+//! `PRAGMA data_version`, and a new board only when that changes; the
+//! selected lane's detail too when it changes or another lane is picked.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -7,17 +8,46 @@ use std::thread;
 use std::time::Duration;
 
 use chaperone_core::ledger::{Ledger, LedgerError};
-use chaperone_core::work::LaneBoard;
+use chaperone_core::work::{LaneBoard, LaneDetail, WorkItem};
+
+use crate::diff::Diff;
 
 /// A poll is one pragma on an open connection, so idle costs next to
 /// nothing; a commit shows within this.
 const POLL: Duration = Duration::from_millis(100);
 
-/// What the window draws: the newest board, or why there is none.
+/// What the window draws: the newest board, or why there is none, and
+/// the selected lane's detail and diff. The window sets `selected` and
+/// `refresh`; a detail or diff is drawn only for the lane it was read for.
 #[derive(Default)]
 pub struct Shown {
     pub board: Option<LaneBoard>,
     pub error: Option<String>,
+    pub selected: Option<Selected>,
+    /// Bumped by the diff's Refresh button.
+    pub refresh: u64,
+    pub detail: Option<LaneDetail>,
+    pub diff: Option<Diff>,
+}
+
+/// The lane picked on the board, with what its detail and diff read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Selected {
+    pub id: i64,
+    pub key: Option<String>,
+    pub worktree: Option<String>,
+    pub base_sha: Option<String>,
+}
+
+impl Selected {
+    pub fn of(item: &WorkItem) -> Self {
+        Selected {
+            id: item.id,
+            key: item.source_key.clone(),
+            worktree: item.worktree_path.clone(),
+            base_sha: item.base_sha.clone(),
+        }
+    }
 }
 
 /// Starts the watcher. `changed` runs after each change to `shown`.
@@ -25,13 +55,25 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
     thread::spawn(move || {
         let mut ledger = None;
         let mut seen = None;
+        // The (data_version, lane) of the detail shown.
+        let mut loaded = None;
         loop {
-            match poll(&path, &mut ledger, seen) {
-                Ok(None) => {}
-                Ok(Some(board)) => {
-                    seen = Some(board.data_version);
+            let want = shown.lock().unwrap().selected.clone();
+            match poll(&path, &mut ledger, seen, loaded, want.as_ref()) {
+                Ok((None, None)) => {}
+                Ok((board, detail)) => {
                     let mut s = shown.lock().unwrap();
-                    s.board = Some(board);
+                    if let Some(board) = board {
+                        seen = Some(board.data_version);
+                        s.board = Some(board);
+                    }
+                    // Dropped if another lane was picked meanwhile.
+                    if let Some(d) = detail
+                        && s.selected.as_ref().map(|l| l.id) == Some(d.work_id)
+                    {
+                        loaded = Some((d.data_version, d.work_id));
+                        s.detail = Some(d);
+                    }
                     s.error = None;
                     drop(s);
                     changed();
@@ -40,6 +82,7 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     // Reopened next tick: the file may be migrated or created.
                     ledger = None;
                     seen = None;
+                    loaded = None;
                     let text = e.to_string();
                     let mut s = shown.lock().unwrap();
                     if s.error.as_deref() != Some(text.as_str()) {
@@ -54,21 +97,32 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
     });
 }
 
-/// A new board when the ledger changed since `seen`, else None.
+/// A new board when the ledger changed since `seen`, and `want`'s detail
+/// when the ledger or the lane changed since `loaded`.
 fn poll(
     path: &Path,
     ledger: &mut Option<Ledger>,
     seen: Option<i64>,
-) -> Result<Option<LaneBoard>, LedgerError> {
+    loaded: Option<(i64, i64)>,
+    want: Option<&Selected>,
+) -> Result<(Option<LaneBoard>, Option<LaneDetail>), LedgerError> {
     let ledger = match ledger {
         Some(l) => l,
         None => ledger.insert(Ledger::open_read_only(path)?),
     };
-    if seen == Some(ledger.data_version()?) {
-        return Ok(None);
-    }
-    let now = ledger.now()?;
-    ledger.lane_board(&now).map(Some)
+    let version = ledger.data_version()?;
+    let board = if seen == Some(version) {
+        None
+    } else {
+        Some(ledger.lane_board(&ledger.now()?)?)
+    };
+    let detail = match want {
+        Some(l) if loaded != Some((version, l.id)) => {
+            Some(ledger.lane_detail(l.id, l.key.as_deref())?)
+        }
+        _ => None,
+    };
+    Ok((board, detail))
 }
 
 #[cfg(test)]
@@ -76,7 +130,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
-    use chaperone_core::checks::CheckInput;
+    use chaperone_core::checks::{AttentionInput, CheckInput};
     use chaperone_core::ledger::Actor;
     use chaperone_core::work::{ClaimInput, CreateInput, UpdateInput};
 
@@ -93,7 +147,8 @@ mod tests {
         times[(times.len() - 1) * q / 100]
     }
 
-    /// R14 U2 and the reload cost, on a busy ledger. Release only:
+    /// R14 U2 and the reload cost, on a busy ledger with a spec of 20
+    /// decisions, a question per lane and lane 1 selected. Release only:
     /// `cargo test --release -p chaperone-ui -- --ignored --nocapture`.
     #[test]
     #[ignore = "release-only budget; run with --ignored"]
@@ -106,11 +161,30 @@ mod tests {
             session: Some(s.into()),
         };
         let checker = lane("checker");
+        let decisions: String = (0..20)
+            .map(|n| format!("- Q: question {n}? A: answer {n}.\n"))
+            .collect();
+        let body =
+            format!("# P\n\n## slice 1: one  (Flexipie/repo0#2)\n\n## decisions\n\n{decisions}");
+        rw.spec_create(
+            &checker,
+            "Flexipie/repo0#1",
+            None,
+            &body,
+            &rw.now().unwrap(),
+            false,
+        )
+        .unwrap()
+        .unwrap();
         for id in 1..=LANES {
             let me = lane(&format!("s{id}"));
             let create = CreateInput {
                 title: format!("lane {id}"),
                 repo: Some(format!("Flexipie/repo{}", id % 5)),
+                source: Some("github".into()),
+                source_id: Some(format!("Flexipie/repo0#{}", id + 1)),
+                spec: Some("Flexipie/repo0#1".into()),
+                lane_key: Some(format!("l{id}")),
                 kind: "code".into(),
                 pr_flow: "pr".into(),
                 ..CreateInput::default()
@@ -137,6 +211,15 @@ mod tests {
                 };
                 rw.check_record(&checker, &check).unwrap().unwrap();
             }
+            let ask = AttentionInput {
+                work: id,
+                kind: "asked".into(),
+                by: "owner".into(),
+                reason: Some("question.scope".into()),
+                note: Some("split it?".into()),
+                ..AttentionInput::default()
+            };
+            rw.attention_record(&checker, &ask).unwrap().unwrap();
         }
 
         let ro = Ledger::open_read_only(&path).unwrap();
@@ -145,6 +228,7 @@ mod tests {
             .map(|_| {
                 let start = Instant::now();
                 assert_eq!(ro.lane_board(&now).unwrap().lanes.len(), LANES as usize);
+                ro.lane_detail(1, Some("Flexipie/repo0#2")).unwrap();
                 start.elapsed()
             })
             .collect();
@@ -154,7 +238,11 @@ mod tests {
             2 * EVENTS
         );
 
-        let shown = Arc::new(Mutex::new(Shown::default()));
+        let item = ro.work_get(1, &now).unwrap().unwrap();
+        let shown = Arc::new(Mutex::new(Shown {
+            selected: Some(Selected::of(&item)),
+            ..Shown::default()
+        }));
         let (tx, rx) = mpsc::channel();
         spawn(path, shown.clone(), move || {
             tx.send(Instant::now()).unwrap()

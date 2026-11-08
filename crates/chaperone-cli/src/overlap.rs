@@ -9,11 +9,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use chaperone_core::git::{BASES, Failure, git, git_bin};
 use chaperone_core::ledger::Ledger;
 use serde::Serialize;
 
 use crate::cli::Format;
-use chaperone_core::git::{Failure, git, git_bin};
 use crate::output::{self, CliError, Meta, Outcome};
 
 /// For every git call of one run, together.
@@ -24,8 +24,6 @@ const PATHS: usize = 500;
 const OUT_BYTES: usize = 256 * 1024;
 /// File rows printed; the rest are counted in `files_omitted`.
 const ROWS: usize = 2000;
-/// Where a lane's base is looked for, before its claimed `base_sha`.
-const BASES: [&str; 3] = ["origin/HEAD", "origin/main", "origin/master"];
 
 struct Lane {
     id: i64,

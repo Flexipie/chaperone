@@ -130,7 +130,11 @@ fn detail_and_feed_read_one_lane_and_the_board() {
         spec: Some("o/r#1".into()),
         ..create()
     };
-    let id = rw.work_create(&me, &input, None, false).unwrap().unwrap().id;
+    let id = rw
+        .work_create(&me, &input, None, false)
+        .unwrap()
+        .unwrap()
+        .id;
     rw.work_claim(&me, id, &ClaimInput::default(), None, false)
         .unwrap()
         .unwrap();
@@ -193,11 +197,19 @@ fn detail_and_feed_read_one_lane_and_the_board() {
         ("a race", "open")
     );
     // A key with no record, or none at all, still reads the checks.
-    assert!(ro.lane_detail(id, Some("o/r#99")).unwrap().dossier.is_none());
+    assert!(
+        ro.lane_detail(id, Some("o/r#99"))
+            .unwrap()
+            .dossier
+            .is_none()
+    );
     assert_eq!(ro.lane_detail(id, None).unwrap().checks.len(), 2);
 
     let board = ro.lane_board(T0).unwrap();
-    assert_eq!(board.specs[0].decisions, ["Q: c? A: d.", "[slice 1] Q: a? A: b."]);
+    assert_eq!(
+        board.specs[0].decisions,
+        ["Q: c? A: d.", "[slice 1] Q: a? A: b."]
+    );
     let feed: Vec<_> = board
         .attention
         .iter()
@@ -205,6 +217,9 @@ fn detail_and_feed_read_one_lane_and_the_board() {
         .collect();
     assert_eq!(
         feed,
-        [("answered", Some("yes, in two")), ("asked", Some("split it?"))]
+        [
+            ("answered", Some("yes, in two")),
+            ("asked", Some("split it?"))
+        ]
     );
 }

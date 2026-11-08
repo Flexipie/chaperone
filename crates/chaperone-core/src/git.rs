@@ -7,6 +7,9 @@ use std::time::Instant;
 
 use crate::child;
 
+/// Where a lane's base is looked for, before its claimed `base_sha`.
+pub const BASES: [&str; 3] = ["origin/HEAD", "origin/main", "origin/master"];
+
 /// The git binary itself, from its exec path: macOS's `/usr/bin/git` is
 /// an xcrun shim that adds about 9 ms to every call. Else plain `git`.
 pub fn git_bin(deadline: Instant) -> PathBuf {

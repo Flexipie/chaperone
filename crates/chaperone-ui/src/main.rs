@@ -1,7 +1,10 @@
 //! chaperone-ui: a read-only live board of every lane. It opens the ledger
 //! read-only and redraws when the ledger changes; herdr stays where you type.
+//! Clicking a lane shows its detail and its worktree's diff.
 
 mod board;
+mod detail;
+mod diff;
 mod watch;
 
 use std::path::PathBuf;
@@ -12,7 +15,7 @@ use chaperone_core::work::{BoardLane, LaneBoard};
 use clap::Parser;
 use eframe::egui;
 
-use watch::Shown;
+use watch::{Selected, Shown};
 
 /// Repaints with no ledger change, so "updated" ages move.
 const AGE_TICK: Duration = Duration::from_secs(30);
@@ -45,6 +48,8 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
             watch::spawn(path, shown.clone(), move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            diff::spawn(shown.clone(), move || ctx.request_repaint());
             Ok(Box::new(App {
                 shown,
                 first_frame: args.first_frame,
@@ -63,18 +68,52 @@ impl eframe::App for App {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
-        let shown = self.shown.lock().unwrap();
+        let mut shown = self.shown.lock().unwrap();
+        // A claim or update since the click moves the worktree or base.
+        let fresh = shown.selected.as_ref().and_then(|sel| {
+            let board = shown.board.as_ref()?;
+            let lane = board.lanes.iter().find(|l| l.board.item.id == sel.id)?;
+            Some(Selected::of(&lane.board.item)).filter(|f| f != sel)
+        });
+        if fresh.is_some() {
+            shown.selected = fresh;
+        }
+        let mut picked = None;
+        let mut refresh = false;
+        if let Some(board) = &shown.board {
+            egui::Panel::bottom("feed")
+                .resizable(true)
+                .default_size(180.0)
+                .show(ui, |ui| detail::feed(ui, board));
+        }
+        if let Some(sel) = &shown.selected {
+            let lane = shown
+                .board
+                .as_ref()
+                .and_then(|b| b.lanes.iter().find(|l| l.board.item.id == sel.id));
+            let detail = shown.detail.as_ref().filter(|d| d.work_id == sel.id);
+            let diff = shown.diff.as_ref().filter(|d| d.lane == sel.id);
+            egui::Panel::right("detail")
+                .resizable(true)
+                .default_size(560.0)
+                .show(ui, |ui| refresh = detail::draw(ui, sel, lane, detail, diff));
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(error) = &shown.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
             match &shown.board {
-                Some(board) => draw(ui, board, now),
+                Some(board) => picked = draw(ui, board, shown.selected.as_ref(), now),
                 None => {
                     ui.label("Reading the ledger...");
                 }
             }
         });
+        if let Some(pick) = picked {
+            // Clicking the selected lane again closes its detail.
+            shown.selected = (shown.selected.as_ref() != Some(&pick)).then_some(pick);
+        }
+        shown.refresh += u64::from(refresh);
         if self.first_frame && shown.board.is_some() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -97,11 +136,18 @@ const COLUMNS: [&str; 12] = [
     "verdict",
 ];
 
-fn draw(ui: &mut egui::Ui, board: &LaneBoard, now: i64) {
+/// The board; returns the lane clicked, if any.
+fn draw(
+    ui: &mut egui::Ui,
+    board: &LaneBoard,
+    selected: Option<&Selected>,
+    now: i64,
+) -> Option<Selected> {
     if board.lanes.is_empty() {
         ui.label("No open lanes.");
-        return;
+        return None;
     }
+    let mut picked = None;
     egui::ScrollArea::both().show(ui, |ui| {
         for repo in board::group(board) {
             ui.heading(repo.slug);
@@ -119,7 +165,13 @@ fn draw(ui: &mut egui::Ui, board: &LaneBoard, now: i64) {
                         }
                         ui.end_row();
                         for lane in spec.lanes {
-                            for cell in cells(lane, now) {
+                            let [first, rest @ ..] = cells(lane, now);
+                            let item = &lane.board.item;
+                            let on = selected.is_some_and(|s| s.id == item.id);
+                            if ui.selectable_label(on, first).clicked() {
+                                picked = Some(Selected::of(item));
+                            }
+                            for cell in rest {
                                 ui.label(cell);
                             }
                             ui.end_row();
@@ -130,6 +182,7 @@ fn draw(ui: &mut egui::Ui, board: &LaneBoard, now: i64) {
             ui.separator();
         }
     });
+    picked
 }
 
 /// One row, in [`COLUMNS`] order. "-" is no record.
