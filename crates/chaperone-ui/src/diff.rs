@@ -74,16 +74,35 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
                     refresh,
                 };
                 // A diff for a lane no longer selected is dropped, so it is
-                // read again if the lane comes back.
+                // read again if the lane comes back. The diff shows before
+                // the files are read.
+                let id = read.lane.id;
                 if done.as_ref() != Some(&read)
-                    && set(&shown, &read, State::Running, None, &changed)
-                    && set(
-                        &shown,
-                        &read,
-                        diff(&bin, &read.lane),
-                        Some(files(&bin, &read.lane)),
-                        &changed,
-                    )
+                    && set(&shown, &read, &changed, |d| {
+                        *d = Some(Diff {
+                            lane: id,
+                            state: State::Running,
+                            files: None,
+                        })
+                    })
+                    && set(&shown, &read, &changed, {
+                        let state = diff(&bin, &read.lane);
+                        move |d| {
+                            *d = Some(Diff {
+                                lane: id,
+                                state,
+                                files: None,
+                            })
+                        }
+                    })
+                    && set(&shown, &read, &changed, {
+                        let files = files(&bin, &read.lane);
+                        move |d| {
+                            if let Some(d) = d {
+                                d.files = Some(files);
+                            }
+                        }
+                    })
                 {
                     done = Some(read);
                 }
@@ -93,23 +112,18 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
     });
 }
 
-/// Shows `state` if the viewer still wants what `read` read.
+/// Writes `shown.diff` if the viewer still wants what `read` read.
 fn set(
     shown: &Mutex<Shown>,
     read: &Read,
-    state: State,
-    files: Option<Result<Files, String>>,
     changed: &impl Fn(),
+    write: impl FnOnce(&mut Option<Diff>),
 ) -> bool {
     let mut s = shown.lock().unwrap();
     if s.selected.as_ref() != Some(&read.lane) || s.refresh != read.refresh {
         return false;
     }
-    s.diff = Some(Diff {
-        lane: read.lane.id,
-        state,
-        files,
-    });
+    write(&mut s.diff);
     drop(s);
     changed();
     true
