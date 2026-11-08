@@ -6,6 +6,7 @@
 
 mod areas;
 mod board;
+mod changes;
 mod detail;
 mod diff;
 mod graph;
@@ -61,6 +62,8 @@ fn main() -> eframe::Result {
             diff::spawn(shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
             areas::spawn(shown.clone(), move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            changes::spawn(path, shown.clone(), move || ctx.request_repaint());
             Ok(Box::new(App {
                 shown,
                 first_frame: args.first_frame,
@@ -139,7 +142,10 @@ impl eframe::App for App {
             shown.graph_open = self.graph;
             if self.graph {
                 match &shown.graph {
-                    Some(repos) => graph::draw(ui, repos),
+                    Some(Ok(repos)) => graph::draw(ui, repos),
+                    Some(Err(e)) => {
+                        ui.colored_label(ui.visuals().error_fg_color, e);
+                    }
                     None => {
                         ui.label("Reading the change graph...");
                     }

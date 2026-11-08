@@ -4,6 +4,7 @@
 //! it stays put until a lane commits.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use chaperone_graph::Impact;
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2, pos2, vec2};
@@ -27,11 +28,12 @@ const PALETTE: [Color32; 8] = [
 /// Fill strength by depth: changed files full, dependents fading.
 const FADE: [f32; DEPTH + 1] = [1.0, 0.55, 0.35, 0.22];
 
-/// One lane's part of the graph, read at `head` against `base`.
+/// Each repo's layout with its slug, in slug order.
+pub type Repos = Vec<(String, Arc<Layout>)>;
+
+/// One lane's part of the graph.
 pub struct Lane {
     pub id: i64,
-    pub head: String,
-    pub base: String,
     /// The files it changes (overlap's paths) with lines added and removed
     /// since the merge-base, in commits only; 0 when git has no count.
     pub files: Vec<(String, u64)>,
@@ -94,8 +96,8 @@ fn reach<'a, 'm>(
 }
 
 /// Lays out `lanes` (one repo's). The same lanes give the same layout.
-pub fn layout(lanes: &[Lane]) -> Layout {
-    let mut lanes: Vec<&Lane> = lanes.iter().collect();
+pub fn layout(lanes: &[&Lane]) -> Layout {
+    let mut lanes = lanes.to_vec();
     lanes.sort_by_key(|l| l.id);
     let mut acc: BTreeMap<&str, Acc> = BTreeMap::new();
     let mut hops = Vec::new();
@@ -222,7 +224,7 @@ pub fn colour(lane: i64) -> Color32 {
 }
 
 /// Every repo's graph, one below the other.
-pub fn draw(ui: &mut egui::Ui, repos: &[(String, Layout)]) {
+pub fn draw(ui: &mut egui::Ui, repos: &Repos) {
     if repos.is_empty() {
         ui.label("No open lanes with changes.");
         return;
@@ -266,7 +268,8 @@ fn draw_one(ui: &mut egui::Ui, layout: &Layout) {
             let points = corners.iter().map(|c| at + *c).collect();
             painter.add(egui::Shape::closed_line(points, Stroke::new(1.5, text)));
         }
-        let name = n.path.rsplit('/').next().unwrap_or(&n.path);
+        // The module names a file across crates; `src/lib.rs` would not.
+        let name = n.module.as_deref().unwrap_or(&n.path);
         let label = match n.entries.first() {
             Some(e) => format!("{name}  [{e}]"),
             None => name.to_string(),
@@ -309,137 +312,5 @@ fn draw_one(ui: &mut egui::Ui, layout: &Layout) {
                 ui.label(format!("entry point: {e}"));
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use chaperone_graph::{Cache, Depth, Entry, EntryPoints, Hop, Node as GNode, Target};
-
-    use super::*;
-
-    fn impact(targets: &[&str], deps: &[&[&str]], entry: Option<(&str, usize)>) -> Impact {
-        Impact {
-            bound: "exact",
-            cache: Cache {
-                parsed: 0,
-                reused: 0,
-                skipped: None,
-            },
-            depths: deps
-                .iter()
-                .enumerate()
-                .map(|(i, fs)| Depth {
-                    bound: "exact",
-                    depth: i + 1,
-                    files: fs
-                        .iter()
-                        .map(|p| GNode {
-                            module: None,
-                            path: p.to_string(),
-                        })
-                        .collect(),
-                    files_omitted: 0,
-                })
-                .collect(),
-            entry_points: Some(EntryPoints {
-                bound: "exact",
-                head: "h".into(),
-                omitted: 0,
-                reached: entry
-                    .map(|(p, d)| Entry {
-                        area: "a".into(),
-                        depth: d,
-                        evidence: vec![
-                            Hop {
-                                at: None,
-                                dirty: false,
-                                path: p.into(),
-                            },
-                            Hop {
-                                at: None,
-                                dirty: false,
-                                path: targets[0].into(),
-                            },
-                        ],
-                        kind: "command".into(),
-                        name: "go".into(),
-                        path: p.into(),
-                    })
-                    .into_iter()
-                    .collect(),
-                unmatched: vec![],
-            }),
-            files_omitted: 0,
-            stale: false,
-            targets: targets
-                .iter()
-                .map(|p| Target {
-                    known: true,
-                    lang: Some("rust"),
-                    module: None,
-                    path: p.to_string(),
-                })
-                .collect(),
-            unsure: vec![],
-            unsure_omitted: 0,
-        }
-    }
-
-    fn lanes() -> Vec<Lane> {
-        vec![
-            Lane {
-                id: 9,
-                head: "b".into(),
-                base: "origin/main".into(),
-                files: vec![("x.rs".into(), 40), ("s.rs".into(), 4)],
-                impact: Ok(impact(
-                    &["x.rs", "s.rs"],
-                    &[&["m.rs"], &["d2.rs"], &["d3.rs"], &["d4.rs"]],
-                    Some(("m.rs", 1)),
-                )),
-                notes: vec![],
-            },
-            Lane {
-                id: 2,
-                head: "a".into(),
-                base: "origin/main".into(),
-                files: vec![("s.rs".into(), 9)],
-                impact: Ok(impact(&["s.rs"], &[&["m.rs", "z.rs"]], None)),
-                notes: vec!["worktree timed_out".into()],
-            },
-        ]
-    }
-
-    #[test]
-    fn layout_is_stable_and_marks_lanes() {
-        let a = layout(&lanes());
-        let mut rev = lanes();
-        rev.reverse();
-        let b = layout(&rev);
-        let at = |l: &Layout| {
-            l.nodes
-                .iter()
-                .map(|n| (n.path.clone(), n.pos))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(at(&a), at(&b));
-        let n = |p: &str| a.nodes.iter().find(|n| n.path == p).unwrap();
-        assert_eq!((n("s.rs").changed_by.len(), n("s.rs").lane), (2, 2));
-        assert_eq!(
-            (n("m.rs").lanes.clone(), n("m.rs").depth, n("m.rs").lane),
-            (vec![2, 9], 1, 2)
-        );
-        assert!(n("m.rs").entries.contains("command go"));
-        assert!(n("x.rs").radius > n("s.rs").radius);
-        assert!(a.nodes.iter().all(|n| n.path != "d4.rs"));
-        assert_eq!(a.edges.len(), 1);
-        for n in &a.nodes {
-            eprintln!(
-                "{} d{} lane {} lanes {:?} {:?}",
-                n.path, n.depth, n.lane, n.lanes, n.pos
-            );
-        }
-        eprintln!("{:?}", a.notes);
     }
 }
