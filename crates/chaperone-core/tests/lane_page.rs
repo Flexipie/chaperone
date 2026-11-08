@@ -206,6 +206,46 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
     assert!(none.timeline.is_empty() && none.gates.is_none());
 }
 
+/// Daisy's view of local review `job` on `head`, for lane `id`'s branch.
+fn review(ledger: &Ledger, id: i64, job: i64, head: &str, status: &str, score: f64) {
+    let view = json!({
+        "job_id": job, "source": "local", "status": status, "phase": "done", "done": true,
+        "repo": "o/r", "branch": format!("b{id}"), "head_sha": head, "score": score,
+        "verdict": "safe", "summary": "s", "findings": [],
+    });
+    ledger
+        .review_record(&actor("daisy"), id, job, &view)
+        .unwrap()
+        .unwrap();
+}
+
+/// Reviews newest job first, a late-recorded older job after it; the head
+/// is the engine's (the newest job's), never the newest record's.
+#[test]
+fn lane_page_reviews_by_job_with_the_engine_head() {
+    let (_dir, _path, ledger) = common::ledger();
+    let id = lane(&ledger, "o/r", None, None);
+    review(&ledger, id, 8, "bbb2222", "reviewed", 8.0);
+    review(&ledger, id, 7, "aaa1111", "reviewed", 6.5);
+    review(&ledger, id, 9, "ccc3333", "failed", 0.0);
+    let page = ledger.lane_page(id, None).unwrap();
+    let got: Vec<(&str, Option<&str>, Option<f64>)> = page
+        .reviews
+        .iter()
+        .map(|r| (r.outcome.as_str(), r.head.as_deref(), r.score))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("skipped", Some("ccc3333"), None),
+            ("ran", Some("bbb2222"), Some(8.0)),
+            ("ran", Some("aaa1111"), Some(6.5)),
+        ]
+    );
+    assert_eq!(page.review_head.as_deref(), Some("bbb2222"));
+    assert_eq!(page.review_rounds, 2);
+}
+
 fn merged(ledger: &Ledger, work: i64, repo: &str, merged_at: &str) {
     let input = MergedInput {
         work,

@@ -1,5 +1,5 @@
 //! The lane page's ledger data (`chaperone-ui` draws it): the lane's
-//! detail, its timeline, its decisions with who made them, its review
+//! detail, its timeline, its decisions with who made them, its reviews, its review
 //! rounds and the gates its next gated step requires, in one read
 //! transaction. Its files are git's, not the ledger's
 //! (`git::lane_files`), and its repo's median claim to merge
@@ -27,6 +27,11 @@ pub struct LanePage {
     pub decisions: Vec<DecisionRow>,
     /// `review.local_rounds`: the engine's count, the one the gates read.
     pub review_rounds: i64,
+    /// `review.local_head`: the head of the newest local review that ran,
+    /// as the engine picks it (by job, not by when it was recorded).
+    pub review_head: Option<String>,
+    /// The lane's local and PR reviews, newest job first.
+    pub reviews: Vec<ReviewRow>,
     /// None when this binary has no document for the lane's stamp, or the
     /// document no row for its route: unstamped, never "0 of 0 passed".
     pub gates: Option<Gates>,
@@ -56,6 +61,18 @@ pub struct DecisionRow {
     /// When it was recorded; None for a spec line.
     pub at: Option<String>,
     pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewRow {
+    pub at: String,
+    /// local_review | pr_review
+    pub check: String,
+    /// ran, or skipped for a failed or cancelled job (no score).
+    pub outcome: String,
+    pub head: Option<String>,
+    pub score: Option<f64>,
+    pub verdict: Option<String>,
 }
 
 /// The `handoff` transition to ready (to done on a route without one)
@@ -176,6 +193,33 @@ impl Ledger {
             decisions.push(a?);
         }
 
+        let mut stmt = tx.prepare(&format!(
+            "SELECT e.at, {}, {}, {}, {}, {} FROM events e
+              WHERE e.lane_id = ?1 AND e.kind = 'check.finished'
+                AND {} IN ('local_review', 'pr_review')
+              ORDER BY {} IS NULL, {} DESC, e.id DESC LIMIT ?2",
+            j("check"),
+            j("outcome"),
+            j("head_sha"),
+            j("score"),
+            j("verdict"),
+            j("check"),
+            j("job"),
+            j("job"),
+        ))?;
+        let reviews = stmt
+            .query_map((id, DETAIL_ROWS), |r| {
+                Ok(ReviewRow {
+                    at: r.get(0)?,
+                    check: r.get(1)?,
+                    outcome: r.get(2)?,
+                    head: r.get(3)?,
+                    score: r.get(4)?,
+                    verdict: r.get(5)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+
         let head = detail
             .handoffs
             .first()
@@ -187,11 +231,14 @@ impl Ledger {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        let (mut review_rounds, mut gates) = (0, None);
+        let (mut review_rounds, mut review_head, mut gates) = (0, None, None);
         if let Some((pid, hash, route)) = stamp {
             let facts = self.project(id, head.as_deref())?;
             if let Fact::Int(n) = facts.get("review.local_rounds") {
                 review_rounds = *n;
+            }
+            if let Fact::Str(h) = facts.get("review.local_head") {
+                review_head = Some(h.clone());
             }
             gates = (|| {
                 let doc = by_stamp(pid.as_deref()?, hash.as_deref()?)?;
@@ -216,6 +263,8 @@ impl Ledger {
             timeline,
             decisions,
             review_rounds,
+            review_head,
+            reviews,
             gates,
         })
     }
