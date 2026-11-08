@@ -27,7 +27,8 @@ pub enum Error {
 }
 
 /// `impact` as `chaperone impact` answers it, for the repo `dir` is in;
-/// `targets` are relative to `dir`.
+/// `targets` are relative to `dir`, a relative `cache` or `profile` to
+/// the process's working directory.
 pub fn impact_in(
     dir: &Path,
     targets: Vec<String>,
