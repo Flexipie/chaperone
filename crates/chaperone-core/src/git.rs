@@ -105,7 +105,7 @@ pub struct ChangedFile {
     pub area: Option<String>,
     /// Lines, worktree against the merge base (the change graph's count
     /// is `HEAD`'s). None for a binary file, and for an untracked one past
-    /// [`COUNT_BYTES`] or not counted.
+    /// 1 MiB or not counted.
     pub added: Option<u64>,
     pub removed: Option<u64>,
     pub untracked: bool,
