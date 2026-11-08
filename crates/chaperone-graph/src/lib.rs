@@ -250,8 +250,7 @@ pub fn impact(
             users[d].push(file);
         }
     }
-    let mut seen = HashSet::new();
-    // A dependent's depth, and the file it was reached through.
+    // Each file reached: its depth, and the file it was reached through.
     let mut from: HashMap<usize, (usize, Option<usize>)> = HashMap::new();
     let mut frontier = Vec::new();
     let targets: Vec<Target> = targets
@@ -259,9 +258,8 @@ pub fn impact(
         .map(|t| {
             let i = paths.iter().position(|p| p == t);
             if let Some(i) = i
-                && seen.insert(i)
+                && from.insert(i, (0, None)).is_none()
             {
-                from.insert(i, (0, None));
                 frontier.push(i);
             }
             Target {
@@ -287,8 +285,8 @@ pub fn impact(
         let mut next: Vec<usize> = Vec::new();
         for &f in &frontier {
             for &u in &users[f] {
-                if seen.insert(u) {
-                    from.insert(u, (depth, Some(f)));
+                if let std::collections::hash_map::Entry::Vacant(e) = from.entry(u) {
+                    e.insert((depth, Some(f)));
                     next.push(u);
                 }
             }
