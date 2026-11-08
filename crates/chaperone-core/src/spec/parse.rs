@@ -228,11 +228,11 @@ pub fn parse_decisions(md: &str) -> Vec<Decision> {
     items.iter().map(|t| parse_decision(t)).collect()
 }
 
-/// Lowercase words, punctuation gone.
+/// Lowercase ASCII words, everything else gone (`[a-z0-9]+`).
 fn words(s: &str) -> String {
     let s = s.to_lowercase();
     let w: Vec<&str> = s
-        .split(|c: char| !c.is_alphanumeric())
+        .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| !w.is_empty())
         .collect();
     w.join(" ")
