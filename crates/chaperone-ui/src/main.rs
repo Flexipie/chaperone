@@ -1,17 +1,22 @@
 //! chaperone-ui: a read-only live board of every lane. It opens the ledger
 //! read-only and redraws when the ledger changes; herdr stays where you type.
-//! Clicking a lane shows its detail and its worktree's diff.
+//! Clicking a lane shows its detail and its worktree's diff. Above it, the
+//! R11 numbers of the lanes merged since a date. Each lane names the
+//! lanes it shares files with (`chaperone overlap`).
 
 mod areas;
 mod board;
 mod detail;
 mod diff;
+mod numbers;
+mod overlap;
 mod watch;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use chaperone_core::stats::BoardStats;
 use chaperone_core::work::{BoardLane, LaneBoard};
 use clap::Parser;
 use eframe::egui;
@@ -48,7 +53,9 @@ fn main() -> eframe::Result {
         eframe::NativeOptions::default(),
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
-            watch::spawn(path, shown.clone(), move || ctx.request_repaint());
+            watch::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            overlap::spawn(path, shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
             diff::spawn(shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
@@ -56,6 +63,7 @@ fn main() -> eframe::Result {
             Ok(Box::new(App {
                 shown,
                 first_frame: args.first_frame,
+                since: numbers::Since::default(),
             }))
         }),
     )
@@ -64,6 +72,7 @@ fn main() -> eframe::Result {
 struct App {
     shown: Arc<Mutex<Shown>>,
     first_frame: bool,
+    since: numbers::Since,
 }
 
 impl eframe::App for App {
@@ -87,6 +96,13 @@ impl eframe::App for App {
         }
         let mut picked = None;
         let mut refresh = false;
+        let mut since = None;
+        egui::Panel::top("cohort").resizable(true).show(ui, |ui| {
+            since = numbers::cohort(ui, shown.stats.as_ref(), &mut self.since)
+        });
+        if since.is_some() {
+            shown.since = since;
+        }
         if let Some(board) = &shown.board {
             egui::Panel::bottom("feed")
                 .resizable(true)
@@ -131,7 +147,7 @@ impl eframe::App for App {
     }
 }
 
-const COLUMNS: [&str; 13] = [
+const COLUMNS: [&str; 18] = [
     "lane",
     "issue",
     "title",
@@ -145,6 +161,11 @@ const COLUMNS: [&str; 13] = [
     "quality gate",
     "verdict",
     "areas",
+    "tokens in / out",
+    "cache",
+    "peak context",
+    "attention",
+    "shares files with",
 ];
 
 /// The board; returns the lane clicked, if any.
@@ -173,7 +194,8 @@ fn draw(ui: &mut egui::Ui, shown: &Shown, board: &LaneBoard, now: i64) -> Option
                         ui.end_row();
                         for lane in spec.lanes {
                             let areas = shown.areas.get(&lane.board.item.id);
-                            let [first, rest @ ..] = cells(lane, areas, now);
+                            let stats = shown.stats.as_ref();
+                            let [first, rest @ ..] = cells(lane, areas, stats, now);
                             let item = &lane.board.item;
                             let on = selected.is_some_and(|s| s.id == item.id);
                             if ui.selectable_label(on, first).clicked() {
@@ -182,6 +204,9 @@ fn draw(ui: &mut egui::Ui, shown: &Shown, board: &LaneBoard, now: i64) -> Option
                             for cell in rest {
                                 ui.label(cell);
                             }
+                            let overlap = shown.overlap.as_ref();
+                            let (names, paths) = numbers::shares(item.id, overlap, board);
+                            ui.label(names).on_hover_text(paths);
                             ui.end_row();
                         }
                     });
@@ -193,22 +218,25 @@ fn draw(ui: &mut egui::Ui, shown: &Shown, board: &LaneBoard, now: i64) -> Option
     picked
 }
 
-/// One row, in [`COLUMNS`] order. "-" is no record.
-fn cells(lane: &BoardLane, areas: Option<&areas::Areas>, now: i64) -> [String; 13] {
+/// One row, in [`COLUMNS`] order but the last (overlap, drawn with its
+/// hover text). "-" is no record; "..." is stats not read yet.
+fn cells(
+    lane: &BoardLane,
+    areas: Option<&areas::Areas>,
+    stats: Option<&BoardStats>,
+    now: i64,
+) -> [String; 17] {
     let item = &lane.board.item;
     let s = &lane.stamps;
     let text = |v: &Option<String>| v.clone().unwrap_or_else(|| "-".into());
-    let lane_pos = match (&item.lane_key, item.lane_pos) {
-        (Some(key), Some(pos)) => format!("{key} {pos}"),
-        (Some(key), None) => key.clone(),
-        _ => format!("#{}", item.id),
-    };
+    let row = numbers::lane(stats, item.id);
+    let [tokens, cache] = numbers::tokens(row);
     let verdict = match (&s.verdict, &s.verdict_sha) {
         (Some(v), Some(sha)) => format!("{v} @ {}", board::short(sha)),
         (v, _) => text(v),
     };
     [
-        lane_pos,
+        board::label(item),
         text(&item.source_key),
         item.title.clone(),
         text(&item.branch),
@@ -222,5 +250,9 @@ fn cells(lane: &BoardLane, areas: Option<&areas::Areas>, now: i64) -> [String; 1
         text(&s.quality_gate),
         verdict,
         areas::card(areas::declared(lane), areas),
+        tokens,
+        cache,
+        numbers::peak(row),
+        numbers::attention(row),
     ]
 }
