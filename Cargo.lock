@@ -400,6 +400,8 @@ version = "0.1.0"
 name = "chaperone-graph"
 version = "0.1.0"
 dependencies = [
+ "chaperone-core",
+ "dirs",
  "rusqlite",
  "serde",
  "serde_json",
