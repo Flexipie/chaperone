@@ -146,7 +146,7 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
         [
             ("lane.handed_off", None),
             ("attention.recorded", Some("answered by owner")),
-            ("attention.recorded", Some("asked by owner")),
+            ("attention.recorded", Some("asked to owner")),
             ("check.finished", Some("review_round ran")),
             ("check.finished", Some("plan_check ran")),
             ("pr.opened", Some("o/r#1")),

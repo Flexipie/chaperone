@@ -115,7 +115,16 @@ impl Ledger {
                 let what = match kind.as_str() {
                     "phase.entered" => s(4)?,
                     "check.finished" => pair(s(5)?, s(6)?),
-                    "attention.recorded" => pair(s(7)?, s(8)?.map(|b| format!("by {b}"))),
+                    "attention.recorded" => {
+                        // On `asked`, `by` is who the question went to.
+                        let kind = s(7)?;
+                        let word = if kind.as_deref() == Some("asked") {
+                            "to"
+                        } else {
+                            "by"
+                        };
+                        pair(kind, s(8)?.map(|b| format!("{word} {b}")))
+                    }
                     "lane.updated" => s(9)?,
                     "pr.opened" | "pr.merged" => s(10)?,
                     "gate.denied" => s(11)?,
