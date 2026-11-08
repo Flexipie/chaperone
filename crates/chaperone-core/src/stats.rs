@@ -26,7 +26,7 @@ pub enum Cohort {
 /// R11: a cohort under 25 lanes is flagged, not scored.
 pub const TOO_FEW_LANES: usize = 25;
 /// R11's `lanes_peak_over_500k`.
-const PEAK_OVER: i64 = 500_000;
+pub const PEAK_OVER: i64 = 500_000;
 const TOKENS: [&str; 4] = ["input_total", "cache_read", "cache_write", "output_total"];
 /// What a review number needs when the cohort has no recorded review.
 const NO_REVIEW: &str = "check.finished local_review or pr_review";

@@ -1,6 +1,7 @@
 //! chaperone-ui: a read-only live board of every lane. It opens the ledger
 //! read-only and redraws when the ledger changes; herdr stays where you type.
-//! Clicking a lane shows its detail and its worktree's diff. Above it, the
+//! Clicking a lane opens its page: what it is, how it is doing against its
+//! repo and what it changed. Above it, the
 //! R11 numbers of the lanes merged since a date. Each lane names the
 //! lanes it shares files with (`chaperone overlap`). The change graph tab
 //! shows what each lane's commits change and reach. A left nav picks all
@@ -17,6 +18,7 @@ mod changes;
 mod detail;
 mod diff;
 mod graph;
+mod lane;
 mod nav;
 mod needs;
 mod numbers;
@@ -119,6 +121,7 @@ impl eframe::App for App {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         let mut shown = self.shown.lock().unwrap();
+        let before = self.view.clone();
         egui::Panel::left("nav")
             .frame(theme::glass())
             .show_separator_line(false)
@@ -133,9 +136,13 @@ impl eframe::App for App {
                     &mut self.view,
                 )
             });
+        // Any nav click leaves the lane page.
+        if self.view != before {
+            shown.selected = None;
+        }
         // A claim or update since the click moves the worktree or base; a
         // lane done or cancelled since leaves the board, or one the view
-        // does not show, and its panel closes.
+        // does not show, and its page closes.
         let fresh = match (&shown.selected, &shown.board) {
             (Some(sel), Some(board)) => {
                 let lane = board.lanes.iter().find(|l| l.board.item.id == sel.id);
@@ -153,7 +160,32 @@ impl eframe::App for App {
             shown.selected = fresh;
         }
         let mut picked = None;
-        let mut refresh = false;
+        if let Some(sel) = shown.selected.clone() {
+            let s = &*shown;
+            let reads = lane::Reads {
+                lane: s
+                    .board
+                    .as_ref()
+                    .and_then(|b| b.lanes.iter().find(|l| l.board.item.id == sel.id)),
+                detail: s.detail.as_ref().filter(|d| d.lane == sel.id),
+                diff: s.diff.as_ref().filter(|d| d.lane == sel.id),
+                areas: &s.areas,
+                stats: s.stats.as_ref(),
+                median: s.median.as_ref(),
+            };
+            let mut asked = lane::Asked::default();
+            egui::CentralPanel::default()
+                .frame(theme::ground())
+                .show(ui, |ui| asked = lane::draw(ui, &sel, &reads, now));
+            // The change graph is not read behind the page.
+            shown.graph_open = false;
+            shown.refresh += u64::from(asked.refresh);
+            if asked.back {
+                shown.selected = None;
+            }
+            ui.ctx().request_repaint_after(AGE_TICK);
+            return;
+        }
         let mut since = None;
         egui::Panel::top("cohort")
             .frame(theme::glass())
@@ -172,23 +204,6 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_size(180.0)
                 .show(ui, |ui| detail::feed(ui, board));
-        }
-        if let Some(sel) = &shown.selected {
-            let lane = shown
-                .board
-                .as_ref()
-                .and_then(|b| b.lanes.iter().find(|l| l.board.item.id == sel.id));
-            let detail = shown.detail.as_ref().filter(|d| d.lane == sel.id);
-            let diff = shown.diff.as_ref().filter(|d| d.lane == sel.id);
-            let areas = shown.areas.get(&sel.id);
-            egui::Panel::right("detail")
-                .frame(theme::glass())
-                .show_separator_line(false)
-                .resizable(true)
-                .default_size(560.0)
-                .show(ui, |ui| {
-                    refresh = detail::draw(ui, sel, lane, detail, diff, areas)
-                });
         }
         let mut to = None;
         let view = &self.view;
@@ -279,10 +294,8 @@ impl eframe::App for App {
             self.view = to;
         }
         if let Some(pick) = picked {
-            // Clicking the selected lane again closes its detail.
-            shown.selected = (shown.selected.as_ref() != Some(&pick)).then_some(pick);
+            shown.selected = Some(pick);
         }
-        shown.refresh += u64::from(refresh);
         if self.first_frame && shown.board.is_some() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
