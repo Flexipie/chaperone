@@ -75,7 +75,8 @@ pub fn run(
     for d in dirs {
         let before = files.len();
         collect(d, &mut files, &mut scan);
-        if files.len() == before {
+        // A missing path is already `unreadable`.
+        if files.len() == before && d.exists() {
             scan.add(
                 d,
                 None,
