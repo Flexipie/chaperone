@@ -1,6 +1,7 @@
 //! The access rule (R13) through `reviews record`: daisy's review text,
 //! whatever it says, never becomes a verdict.
 
+use chaperone_core::checks::CheckInput;
 use chaperone_core::ledger::Actor;
 use chaperone_core::ledger::{Ledger, Refusal};
 use chaperone_core::pipeline::Fact;
@@ -96,4 +97,39 @@ fn review_from_another_lane_refused() {
     for (job, good) in [(7, view(7, true, "reviewed")), (10, pr)] {
         ledger.review_record(&lane, 1, job, &good).unwrap().unwrap();
     }
+}
+
+/// A local review's `round` is the engine's count: a `review_round` a
+/// review agent recorded before it is a round too (one owner, #111).
+#[test]
+fn local_review_round_counts_review_rounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ledger, _) = lane(&dir);
+    let round = CheckInput {
+        work: 1,
+        check: "review_round".into(),
+        head: "abc1234".into(),
+        outcome: "ran".into(),
+        ..CheckInput::default()
+    };
+    ledger
+        .check_record(&pair("reviewer", "s2"), &round)
+        .unwrap()
+        .unwrap();
+    ledger
+        .review_record(&pair("daisy", "w"), 1, 7, &view(7, true, "reviewed"))
+        .unwrap()
+        .unwrap();
+    let db = rusqlite::Connection::open(dir.path().join("ledger.db")).unwrap();
+    let stamped: i64 = db
+        .query_row(
+            "SELECT json_extract(payload_json, '$.round') FROM events
+              WHERE json_extract(payload_json, '$.check') = 'local_review'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stamped, 2);
+    let f = ledger.project(1, None).unwrap();
+    assert_eq!(f.get("review.local_rounds"), &Fact::Int(2));
 }
