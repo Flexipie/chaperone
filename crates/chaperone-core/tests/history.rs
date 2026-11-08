@@ -153,7 +153,7 @@ fn lanes_group_by_their_first_stamp_else_their_claim() {
     );
     let early = lane(&ledger, "o/r", Some("2026-09-01T00:00:00.000Z"), &[]);
     let other_repo = lane(&ledger, "o/other", Some("2026-11-02T00:00:00.000Z"), &[]);
-    let _never_claimed = lane(&ledger, "o/r", None, &["pipeline v3"]);
+    let _never_claimed = lane(&ledger, "o/r", None, &[]);
     let cancelled = lane(&ledger, "o/r", Some("2026-11-02T00:00:00.000Z"), &[]);
     ledger
         .work_cancel(&actor("1"), cancelled, None, None, None, false)

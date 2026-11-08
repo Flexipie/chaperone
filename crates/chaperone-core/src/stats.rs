@@ -633,7 +633,7 @@ fn summarize(lanes: &[Lane]) -> Value {
 }
 
 /// The pipeline changelog under the dotfiles root, as `lane-stats` reads it.
-pub const CHANGELOG: &str = "claude/pipeline-changelog.md";
+const CHANGELOG: &str = "claude/pipeline-changelog.md";
 
 /// One `## vN <time>` entry of the pipeline changelog.
 #[derive(Clone, Debug, PartialEq)]
@@ -683,13 +683,9 @@ pub fn parse_changelog(text: &str) -> Result<Vec<Version>, String> {
             continue;
         };
         let bad = |why: &str| format!("{CHANGELOG}:{}: {line:?} {why}", i + 1);
-        let (n, at) = rest
-            .trim_end()
-            .split_once(' ')
-            .ok_or_else(|| bad("is not `## v<N> <YYYY-MM-DDTHH:MMZ>`"))?;
-        let n: u64 = n
-            .parse()
-            .map_err(|_| bad("is not `## v<N> <YYYY-MM-DDTHH:MMZ>`"))?;
+        let malformed = || bad("is not `## v<N> <YYYY-MM-DDTHH:MMZ>`");
+        let (n, at) = rest.trim_end().split_once(' ').ok_or_else(malformed)?;
+        let n: u64 = n.parse().map_err(|_| malformed())?;
         let shape = at.len() == 17
             && at.bytes().zip("dddd-dd-ddTdd:ddZ".bytes()).all(|(c, p)| {
                 if p == b'd' {
@@ -699,7 +695,7 @@ pub fn parse_changelog(text: &str) -> Result<Vec<Version>, String> {
                 }
             });
         if !shape {
-            return Err(bad("is not `## v<N> <YYYY-MM-DDTHH:MMZ>`"));
+            return Err(malformed());
         }
         let at = format!("{}:00.000Z", &at[..16]);
         if n <= last_n || out.last().is_some_and(|v| at <= v.at) {
@@ -753,21 +749,20 @@ impl Ledger {
              AND (?1 IS NULL OR lower(repo_slug) = lower(?1))",
             &repo,
         )?;
-        let mut groups: BTreeMap<String, (Vec<Lane>, i64)> = BTreeMap::new();
+        let mut groups: BTreeMap<String, Vec<Lane>> = BTreeMap::new();
         for lane in lanes {
-            let (version, stamped) = match (&lane.stamp, &lane.claimed) {
-                (Some(s), _) => (s.clone(), 1),
+            let version = match (&lane.stamp, &lane.claimed) {
+                (Some(s), _) => s.clone(),
                 (None, Some((at, _))) => {
                     let v = versions.iter().rev().find(|v| v.at <= *at);
-                    (v.map_or("manual".into(), |v| v.id.clone()), 0)
+                    v.map_or("manual".into(), |v| v.id.clone())
                 }
                 (None, None) => continue,
             };
-            let group = groups.entry(version).or_default();
-            group.0.push(lane);
-            group.1 += stamped;
+            groups.entry(version).or_default().push(lane);
         }
-        let row = |id: &str, v: Option<&Version>, (lanes, stamped): (Vec<Lane>, i64)| {
+        let row = |id: &str, v: Option<&Version>, lanes: Vec<Lane>| {
+            let stamped = lanes.iter().filter(|l| l.stamp.is_some()).count();
             let engine: BTreeSet<&str> = lanes
                 .iter()
                 .filter_map(|l| l.pipeline_id.as_deref())
@@ -778,7 +773,7 @@ impl Ledger {
                 "entry": v.map(|v| &v.entry),
                 "engine_ids": engine,
                 "lane_ids": lanes.iter().map(|l| l.id).collect::<Vec<_>>(),
-                "version_from": { "stamp": stamped, "claim": lanes.len() as i64 - stamped },
+                "version_from": { "stamp": stamped, "claim": lanes.len() - stamped },
                 "cohort": summarize(&lanes)["cohort"],
             })
         };
