@@ -2,17 +2,18 @@
 //! `impact --entry-points --declared` on the files its worktree changes
 //! against its base (committed, uncommitted and untracked), one lane at a
 //! time. Read again when the worktree commits, the declared areas change,
-//! or the lane's worktree or base does.
+//! the repo's profile is edited, or the lane's worktree or base does.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use chaperone_core::git::{BASES, Failure, git, git_bin};
 use chaperone_core::work::BoardLane;
-use chaperone_graph::Error;
+use chaperone_graph::{Error, profile_file};
 
 use crate::diff::reflog_time;
 use crate::watch::Shown;
@@ -50,6 +51,8 @@ struct Key {
     base_sha: Option<String>,
     declared: Vec<String>,
     reflog: Option<SystemTime>,
+    /// The profile's mtime: its `[areas]` decide the answer.
+    profile: Option<SystemTime>,
 }
 
 /// Starts the thread. `changed` runs after each change to `shown.areas`.
@@ -57,7 +60,7 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
     thread::spawn(move || {
         let bin = git_bin(Instant::now() + DEADLINE);
         loop {
-            let lanes: Vec<(i64, Key)> = {
+            let lanes: Vec<(i64, Key, Option<PathBuf>)> = {
                 let s = shown.lock().unwrap();
                 s.board
                     .iter()
@@ -72,15 +75,20 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
                                 base_sha: item.base_sha.clone(),
                                 declared,
                                 reflog: None,
+                                profile: None,
                             },
+                            item.repo_slug.as_deref().and_then(profile_file),
                         ))
                     })
                     .collect()
             };
             let lanes: HashMap<i64, Key> = lanes
                 .into_iter()
-                .map(|(id, mut key)| {
+                .map(|(id, mut key, profile)| {
                     key.reflog = key.worktree.as_deref().and_then(reflog_time);
+                    key.profile = profile
+                        .and_then(|p| fs::metadata(p).ok())
+                        .and_then(|m| m.modified().ok());
                     (id, key)
                 })
                 .collect();

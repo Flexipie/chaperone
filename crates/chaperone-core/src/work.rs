@@ -1493,20 +1493,23 @@ mod tests {
             .work_claim(&a, id, &ClaimInput::default(), Some(T0), false)
             .unwrap()
             .unwrap();
-        let handoff = |summary: String, status: &str, ready: Option<bool>| {
+        let handoff = |summary: String, status: &str, areas: Option<Vec<String>>| {
             let input = HandoffInput {
                 summary,
                 status: Some(status.into()),
-                ready,
+                areas,
                 ..HandoffInput::default()
             };
             ledger
                 .work_handoff(&a, id, &input, Some(T1), false)
                 .unwrap()
         };
+        // An empty `areas` would read as declaring nothing, which a
+        // handoff without it (not declared) must never be confused with.
         for refused in [
             handoff("x".repeat(4001), "active", None),
             handoff("s".into(), "queued", None),
+            handoff("s".into(), "active", Some(Vec::new())),
         ] {
             assert!(
                 matches!(refused, Err(Refusal::InvalidInput(_))),
@@ -1515,7 +1518,15 @@ mod tests {
         }
         assert_eq!(kinds(&ledger).len(), 2);
         // A needs-you handoff is not gated (ready and done: tests/handoff_gate.rs).
-        assert_eq!(handoff("s".into(), "blocked", None).unwrap().id, 3);
+        let h = handoff("s".into(), "blocked", None).unwrap();
+        assert_eq!(h.id, 3);
+        // Not declared stores no `areas` key: older handoffs read the same.
+        assert!(
+            serde_json::to_value(&h.handoff)
+                .unwrap()
+                .get("areas")
+                .is_none()
+        );
         assert_eq!(ledger.work_get(id, T1).unwrap().unwrap().status, "blocked");
         assert!(matches!(
             ledger

@@ -249,6 +249,17 @@ pub fn impact_in(
 /// The entry rules: from `profile`, or the origin's pipeline profile, by
 /// the origin URL in git config (an `insteadOf` alias is not expanded). No
 /// rules is a refusal, never an empty answer.
+/// The pipeline profile of repo `slug` (`owner/repo`), where [`impact_in`]
+/// looks for it when it is not passed.
+pub fn profile_file(slug: &str) -> Option<PathBuf> {
+    let file = format!("{}.md", slug.replace('/', "-").to_lowercase());
+    Some(
+        dirs::home_dir()?
+            .join("dotfiles/claude/pipeline/profiles")
+            .join(file),
+    )
+}
+
 fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, Error> {
     let refuse = Error::Invalid;
     let (path, slug) = match profile {
@@ -259,13 +270,9 @@ fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, Error>
                     "entry points: no GitHub origin to find the profile by; pass --profile".into(),
                 )
             })?;
-            let file = format!("{}.md", slug.replace('/', "-").to_lowercase());
-            let dir =
-                dirs::home_dir().ok_or_else(|| refuse("entry points: no home directory".into()))?;
-            (
-                dir.join("dotfiles/claude/pipeline/profiles").join(file),
-                Some(slug),
-            )
+            let path = profile_file(&slug)
+                .ok_or_else(|| refuse("entry points: no home directory".into()))?;
+            (path, Some(slug))
         }
     };
     let at = path.display();
