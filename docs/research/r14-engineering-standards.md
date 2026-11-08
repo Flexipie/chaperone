@@ -119,7 +119,7 @@ CONTRIBUTING.md
 crates/chaperone-core/      ledger, engine, migrations, deadline-bounded git and daisy-cli calls. No clap, no PTY, no home directory.
 crates/chaperone-cli/       the `chaperone` binary. CLI, supervise, in-tree adapters.
 crates/chaperone-fake/      scripted agent. publish = false. Not installed by `cargo install`.
-crates/chaperone-graph/     the code graph behind `impact`: tree-sitter facts, module map, cache (ADR 0043).
+crates/chaperone-graph/     the code graph behind `impact`: tree-sitter facts, module map, cache (ADR 0043), and the git and profile reads of a run.
 crates/chaperone-ui/        the `chaperone-ui` window. Read-only, the only crate with a GUI dependency.
 pipelines/                 v17.toml and later ids. Loaded from disk.
 docs/                      vision, research, decisions, events.md, the CLI contract
