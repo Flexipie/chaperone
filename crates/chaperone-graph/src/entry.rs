@@ -71,11 +71,16 @@ impl Rules {
         self.areas(path).next().unwrap_or_default()
     }
 
-    fn areas<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a str> {
+    /// Every area `path` is in; only an entry point's file must be in one.
+    pub(crate) fn areas<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a str> {
         self.areas
             .iter()
             .filter(move |(_, globs)| globs.iter().any(|g| glob(g, path)))
             .map(|(name, _)| name.as_str())
+    }
+
+    pub(crate) fn has_area(&self, name: &str) -> bool {
+        self.areas.contains_key(name)
     }
 
     /// Against every file of the tree and every target: each entry point is

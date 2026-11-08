@@ -9,7 +9,7 @@ mod parse;
 mod resolve;
 mod worktree;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -17,7 +17,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 pub use entry::{Rules, Unmatched};
-pub use worktree::{Error, impact_in};
+pub use worktree::{Error, impact_in, profile_file};
 
 /// Files past this size are not parsed (generated code): their references
 /// are unknown, so the answer is a lower bound. A parse holds about 45
@@ -25,6 +25,8 @@ pub use worktree::{Error, impact_in};
 const MAX_BYTES: usize = 256 * 1024;
 /// `unsure` entries listed; the rest are counted.
 const UNSURE_ROWS: usize = 20;
+/// Files listed per undeclared area, and unmapped files; the rest counted.
+const AREA_FILES: usize = 50;
 
 /// One file of the tree: its path from the repo root, and the key of its
 /// content when the caller knows it (git's blob id for a clean file).
@@ -44,11 +46,17 @@ pub struct Entries<'a> {
     pub head: String,
     /// Paths whose index differs from `head`: their lines are not `head`'s.
     pub staged: HashSet<String>,
+    /// The areas the caller says the targets change, to compare.
+    pub declared: Option<Vec<String>>,
 }
 
 // Fields in sorted order: the bytes `render_ok` gives.
 #[derive(Serialize)]
 pub struct Impact {
+    /// With `Entries::declared`: those areas against the targets' and the
+    /// entry points'.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub areas: Option<Areas>,
     /// `exact`, or `lower_bound` when some file's references are unknown
     /// (see `unsure`): every depth, and an empty answer, may miss files.
     pub bound: &'static str,
@@ -98,6 +106,36 @@ pub struct EntryPoints {
     /// Nearest first.
     pub reached: Vec<Entry>,
     pub unmatched: Vec<Unmatched>,
+}
+
+/// Declared areas against the targets'. Every list is sorted.
+#[derive(Serialize)]
+pub struct Areas {
+    /// As `EntryPoints::bound`: when `lower_bound`, `reached` may miss
+    /// areas, so `reached_undeclared` may too and `unused` may list more.
+    pub bound: &'static str,
+    /// Areas a target is in.
+    pub changed: Vec<String>,
+    /// Areas of the entry points reached.
+    pub reached: Vec<String>,
+    /// Reached, not declared and not changed: what a shared file reaches.
+    pub reached_undeclared: Vec<String>,
+    /// Changed and not declared, with the targets in each.
+    pub undeclared: Vec<AreaFiles>,
+    /// Declared names the profile does not have.
+    pub unknown: Vec<String>,
+    /// Targets in no area: an undeclared change no area names.
+    pub unmapped: Vec<String>,
+    pub unmapped_omitted: usize,
+    /// Declared, and neither changed nor reached.
+    pub unused: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct AreaFiles {
+    pub area: String,
+    pub files: Vec<String>,
+    pub files_omitted: usize,
 }
 
 #[derive(Serialize)]
@@ -329,6 +367,7 @@ pub fn impact(
         frontier = next;
     }
 
+    let mut areas = None;
     let entry_points = entries.map(|e| {
         let rules = e.rules;
         // Read from the worktree (a changed file, or one not matching its
@@ -388,13 +427,18 @@ pub fn impact(
         reached.sort_by(|a, b| {
             (a.depth, &a.path, &a.kind, &a.name).cmp(&(b.depth, &b.path, &b.kind, &b.name))
         });
+        let bound = match e.unmatched.is_empty() {
+            true => bound,
+            false => "lower_bound",
+        };
+        // Before the trim: every entry point reached counts.
+        if let Some(declared) = &e.declared {
+            areas = Some(compare(rules, declared, &targets, &reached, bound));
+        }
         let omitted = reached.len().saturating_sub(limit);
         reached.truncate(limit);
         EntryPoints {
-            bound: match e.unmatched.is_empty() {
-                true => bound,
-                false => "lower_bound",
-            },
+            bound,
             head: e.head,
             omitted,
             reached,
@@ -405,6 +449,7 @@ pub fn impact(
     let stale = facts.iter().any(Option::is_none);
     let unsure_omitted = graph.unsure.len().saturating_sub(UNSURE_ROWS);
     Impact {
+        areas,
         bound,
         cache: Cache {
             parsed,
@@ -426,5 +471,67 @@ pub fn impact(
             })
             .collect(),
         unsure_omitted,
+    }
+}
+
+/// `declared` against the areas the targets are in and the entry points
+/// reached are in.
+fn compare(
+    rules: &Rules,
+    declared: &[String],
+    targets: &[Target],
+    reached: &[Entry],
+    bound: &'static str,
+) -> Areas {
+    let declared: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+    let mut changed: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut unmapped = BTreeSet::new();
+    for t in targets {
+        let mut any = false;
+        for a in rules.areas(&t.path) {
+            changed.entry(a).or_default().push(&t.path);
+            any = true;
+        }
+        if !any {
+            unmapped.insert(t.path.as_str());
+        }
+    }
+    let reached: BTreeSet<&str> = reached.iter().map(|e| e.area.as_str()).collect();
+    let list = |s: &mut dyn Iterator<Item = &str>| s.map(String::from).collect();
+    Areas {
+        bound,
+        changed: list(&mut changed.keys().copied()),
+        reached: list(&mut reached.iter().copied()),
+        reached_undeclared: list(
+            &mut reached
+                .iter()
+                .copied()
+                .filter(|a| !declared.contains(a) && !changed.contains_key(a)),
+        ),
+        undeclared: changed
+            .iter()
+            .filter(|(a, _)| !declared.contains(*a))
+            .map(|(a, files)| {
+                let mut files: Vec<String> = files.iter().map(|f| f.to_string()).collect();
+                files.sort();
+                files.dedup();
+                let files_omitted = files.len().saturating_sub(AREA_FILES);
+                files.truncate(AREA_FILES);
+                AreaFiles {
+                    area: a.to_string(),
+                    files,
+                    files_omitted,
+                }
+            })
+            .collect(),
+        unknown: list(&mut declared.iter().copied().filter(|a| !rules.has_area(a))),
+        unmapped_omitted: unmapped.len().saturating_sub(AREA_FILES),
+        unmapped: list(&mut unmapped.iter().copied().take(AREA_FILES)),
+        unused: list(
+            &mut declared
+                .iter()
+                .copied()
+                .filter(|a| rules.has_area(a) && !changed.contains_key(a) && !reached.contains(a)),
+        ),
     }
 }

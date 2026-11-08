@@ -1,9 +1,10 @@
 //! The selected lane's panel (issue, spec slice, handoffs, checks,
-//! findings, diff) and the board's feed of decisions and questions.
+//! findings, areas, diff) and the board's feed of decisions and questions.
 
 use chaperone_core::work::{BoardLane, DETAIL_ROWS, LaneBoard, LaneDetail};
 use eframe::egui::{self, Color32, RichText, TextStyle};
 
+use crate::areas::{self, State as AreasState};
 use crate::board;
 use crate::diff::{Diff, OUT_BYTES, State};
 use crate::watch::{Detail, Selected};
@@ -18,6 +19,7 @@ pub fn draw(
     lane: Option<&BoardLane>,
     detail: Option<&Detail>,
     diff: Option<&Diff>,
+    areas: Option<&areas::Areas>,
 ) -> bool {
     let mut refresh = false;
     egui::ScrollArea::vertical()
@@ -42,6 +44,8 @@ pub fn draw(
                     section(ui, "Review findings", |ui| findings(ui, d));
                 }
             }
+            let declared = lane.and_then(areas::declared);
+            section(ui, "Areas", |ui| draw_areas(ui, declared, areas));
             section(ui, "Diff against the base", |ui| {
                 refresh = ui.button("Refresh").clicked();
                 draw_diff(ui, diff);
@@ -162,6 +166,71 @@ fn findings(ui: &mut egui::Ui, d: &LaneDetail) {
             "{} @ {head} {} [{}]{path}: {}",
             f.check, f.severity, f.status, f.title
         ));
+    }
+}
+
+/// The newest handoff's declared areas against the diff's; never an empty
+/// section that would read as in scope.
+fn draw_areas(ui: &mut egui::Ui, declared: Option<&[String]>, areas: Option<&areas::Areas>) {
+    let Some(declared) = declared else {
+        ui.label("Not declared: the newest handoff names no areas.");
+        return;
+    };
+    ui.label(format!("Declared: {}", declared.join(", ")));
+    let a = match areas.filter(|a| a.is_for(declared)).map(|a| &a.state) {
+        None | Some(AreasState::Running) => {
+            ui.label("Comparing with the diff...");
+            return;
+        }
+        Some(AreasState::Failed(e)) => {
+            ui.colored_label(ui.visuals().error_fg_color, format!("Not checked: {e}"));
+            return;
+        }
+        Some(AreasState::Done(a)) => a,
+    };
+    ui.label("Against the base: committed, uncommitted and untracked files, read again on a commit or a new handoff.");
+    let warn = ui.visuals().warn_fg_color;
+    for u in &a.undeclared {
+        let more = match u.files_omitted {
+            0 => String::new(),
+            n => format!(" and {n} more"),
+        };
+        ui.colored_label(
+            warn,
+            format!(
+                "Changed, not declared: {} ({}{more})",
+                u.area,
+                u.files.join(", ")
+            ),
+        );
+    }
+    if !a.unknown.is_empty() {
+        ui.colored_label(
+            warn,
+            format!("Not in the profile: {}", a.unknown.join(", ")),
+        );
+    }
+    if !a.unmapped.is_empty() {
+        let more = match a.unmapped_omitted {
+            0 => String::new(),
+            n => format!(" and {n} more"),
+        };
+        ui.colored_label(warn, format!("In no area: {}{more}", a.unmapped.join(", ")));
+    }
+    for (what, list) in [
+        ("Changed", &a.changed),
+        ("Reached", &a.reached),
+        ("Reached, not declared or changed", &a.reached_undeclared),
+        ("Declared, not changed or reached", &a.unused),
+    ] {
+        let names = match list.is_empty() {
+            true => "none".to_string(),
+            false => list.join(", "),
+        };
+        ui.label(format!("{what}: {names}"));
+    }
+    if a.bound == "lower_bound" {
+        ui.label("Lower bound: some references are unknown, so more areas may be reached.");
     }
 }
 

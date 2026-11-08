@@ -114,7 +114,7 @@ stamp's top-level fields, and `lane.ready_overridden` changes no column.
 | `lane.reopened` | `reopen` | `changed` (status `done` or `cancelled` to `queued`), `reason` |
 | `lane.cancelled` | `cancel` | `changed`, `reason` |
 | `lane.released` | `release` | `changed` (holder cleared; status `claimed` to `queued`, any other status kept) |
-| `lane.handed_off` | `handoff` | `handoff_id` (the id of its own event, set by the write on any lane event that carries `handoff`), `handoff` (daisy's `HandoffInput`: `summary`, `status`, `changed_files`, `verification`, `smoke`, `blockers`, `open_questions`, `next_action`, `commit`, `pull_request`, `ready`, `brief`), `changed` |
+| `lane.handed_off` | `handoff` | `handoff_id` (the id of its own event, set by the write on any lane event that carries `handoff`), `handoff` (daisy's `HandoffInput`: `summary`, `status`, `changed_files`, `areas` (absent when not declared), `verification`, `smoke`, `blockers`, `open_questions`, `next_action`, `commit`, `pull_request`, `ready`, `brief`), `changed` |
 | `lane.ready_overridden` | `ready_override` | `ready` (`true`, `false`, or `null` for `--clear`), `reason` |
 
 The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the first

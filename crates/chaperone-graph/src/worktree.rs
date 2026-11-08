@@ -28,13 +28,15 @@ pub enum Error {
 
 /// `impact` as `chaperone impact` answers it, for the repo `dir` is in;
 /// `targets` are relative to `dir`, a relative `cache` or `profile` to
-/// the process's working directory.
+/// the process's working directory. `declared` is compared only with
+/// `entry_points` (it needs the profile's areas).
 pub fn impact_in(
     dir: &Path,
     targets: Vec<String>,
     cache: Option<PathBuf>,
     entry_points: bool,
     profile: Option<PathBuf>,
+    declared: Option<Vec<String>>,
 ) -> Result<Impact, Error> {
     let deadline = Instant::now() + DEADLINE;
     let bin = git_bin(deadline);
@@ -227,6 +229,7 @@ pub fn impact_in(
                     .filter(|p| !p.is_empty())
                     .map(|p| String::from_utf8_lossy(p).to_string())
                     .collect(),
+                declared,
             })
         }
         None => None,
@@ -246,6 +249,17 @@ pub fn impact_in(
 /// The entry rules: from `profile`, or the origin's pipeline profile, by
 /// the origin URL in git config (an `insteadOf` alias is not expanded). No
 /// rules is a refusal, never an empty answer.
+/// The pipeline profile of repo `slug` (`owner/repo`), where [`impact_in`]
+/// looks for it when it is not passed.
+pub fn profile_file(slug: &str) -> Option<PathBuf> {
+    let file = format!("{}.md", slug.replace('/', "-").to_lowercase());
+    Some(
+        dirs::home_dir()?
+            .join("dotfiles/claude/pipeline/profiles")
+            .join(file),
+    )
+}
+
 fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, Error> {
     let refuse = Error::Invalid;
     let (path, slug) = match profile {
@@ -256,13 +270,9 @@ fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, Error>
                     "entry points: no GitHub origin to find the profile by; pass --profile".into(),
                 )
             })?;
-            let file = format!("{}.md", slug.replace('/', "-").to_lowercase());
-            let dir =
-                dirs::home_dir().ok_or_else(|| refuse("entry points: no home directory".into()))?;
-            (
-                dir.join("dotfiles/claude/pipeline/profiles").join(file),
-                Some(slug),
-            )
+            let path = profile_file(&slug)
+                .ok_or_else(|| refuse("entry points: no home directory".into()))?;
+            (path, Some(slug))
         }
     };
     let at = path.display();

@@ -6,9 +6,10 @@ Arguments:
   <FILES>...  Files, from the repo root or the current directory
 
 Options:
-      --cache <CACHE>      The cache file (default: one per origin in the user cache directory)
-      --db <DB>            Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
-      --entry-points       Also list the entry points (commands, routes, screens) the files reach, each with its area and evidence, from the pipeline profile's `[[entry_points]]` and `[areas]`
-      --format <FORMAT>    Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
-      --profile <PROFILE>  The profile (default: the origin's in ~/dotfiles/claude/pipeline/profiles)
-  -h, --help               Print help
+      --cache <CACHE>        The cache file (default: one per origin in the user cache directory)
+      --db <DB>              Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --entry-points         Also list the entry points (commands, routes, screens) the files reach, each with its area and evidence, from the pipeline profile's `[[entry_points]]` and `[areas]`
+      --format <FORMAT>      Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --profile <PROFILE>    The profile (default: the origin's in ~/dotfiles/claude/pipeline/profiles)
+      --declared <DECLARED>  Compare these areas (comma-separated, from the profile's `[areas]`, as a handoff's `areas` declares them) with the areas the files are in and the entry points they reach
+  -h, --help                 Print help

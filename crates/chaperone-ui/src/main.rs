@@ -2,6 +2,7 @@
 //! read-only and redraws when the ledger changes; herdr stays where you type.
 //! Clicking a lane shows its detail and its worktree's diff.
 
+mod areas;
 mod board;
 mod detail;
 mod diff;
@@ -50,6 +51,8 @@ fn main() -> eframe::Result {
             watch::spawn(path, shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
             diff::spawn(shown.clone(), move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            areas::spawn(shown.clone(), move || ctx.request_repaint());
             Ok(Box::new(App {
                 shown,
                 first_frame: args.first_frame,
@@ -97,17 +100,20 @@ impl eframe::App for App {
                 .and_then(|b| b.lanes.iter().find(|l| l.board.item.id == sel.id));
             let detail = shown.detail.as_ref().filter(|d| d.lane == sel.id);
             let diff = shown.diff.as_ref().filter(|d| d.lane == sel.id);
+            let areas = shown.areas.get(&sel.id);
             egui::Panel::right("detail")
                 .resizable(true)
                 .default_size(560.0)
-                .show(ui, |ui| refresh = detail::draw(ui, sel, lane, detail, diff));
+                .show(ui, |ui| {
+                    refresh = detail::draw(ui, sel, lane, detail, diff, areas)
+                });
         }
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(error) = &shown.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
             match &shown.board {
-                Some(board) => picked = draw(ui, board, shown.selected.as_ref(), now),
+                Some(board) => picked = draw(ui, &shown, board, now),
                 None => {
                     ui.label("Reading the ledger...");
                 }
@@ -125,7 +131,7 @@ impl eframe::App for App {
     }
 }
 
-const COLUMNS: [&str; 12] = [
+const COLUMNS: [&str; 13] = [
     "lane",
     "issue",
     "title",
@@ -138,15 +144,12 @@ const COLUMNS: [&str; 12] = [
     "plan check",
     "quality gate",
     "verdict",
+    "areas",
 ];
 
 /// The board; returns the lane clicked, if any.
-fn draw(
-    ui: &mut egui::Ui,
-    board: &LaneBoard,
-    selected: Option<&Selected>,
-    now: i64,
-) -> Option<Selected> {
+fn draw(ui: &mut egui::Ui, shown: &Shown, board: &LaneBoard, now: i64) -> Option<Selected> {
+    let selected = shown.selected.as_ref();
     if board.lanes.is_empty() {
         ui.label("No open lanes.");
         return None;
@@ -169,7 +172,8 @@ fn draw(
                         }
                         ui.end_row();
                         for lane in spec.lanes {
-                            let [first, rest @ ..] = cells(lane, now);
+                            let areas = shown.areas.get(&lane.board.item.id);
+                            let [first, rest @ ..] = cells(lane, areas, now);
                             let item = &lane.board.item;
                             let on = selected.is_some_and(|s| s.id == item.id);
                             if ui.selectable_label(on, first).clicked() {
@@ -190,7 +194,7 @@ fn draw(
 }
 
 /// One row, in [`COLUMNS`] order. "-" is no record.
-fn cells(lane: &BoardLane, now: i64) -> [String; 12] {
+fn cells(lane: &BoardLane, areas: Option<&areas::Areas>, now: i64) -> [String; 13] {
     let item = &lane.board.item;
     let s = &lane.stamps;
     let text = |v: &Option<String>| v.clone().unwrap_or_else(|| "-".into());
@@ -217,5 +221,6 @@ fn cells(lane: &BoardLane, now: i64) -> [String; 12] {
         text(&s.plan_check),
         text(&s.quality_gate),
         verdict,
+        areas::card(areas::declared(lane), areas),
     ]
 }
