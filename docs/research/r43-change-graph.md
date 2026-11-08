@@ -70,6 +70,22 @@ blob id but read from the worktree, so on a miss `git hash-object` checks the by
 still hash to it, and ones that do not (an edit since, `skip-worktree`) are keyed by their
 sha256, never stored under a blob id they do not match.
 
+## Entry points
+
+`impact --entry-points` (#44) names the commands, routes and screens a change reaches.
+The rules live in the repo's pipeline profile (owner decision on #39), as TOML front
+matter: `[[entry_points]]` rows `{kind, path glob, name}` and an `[areas]` map. An entry
+point is reached when its file is a target or depends on one; the answer carries the hop
+chain with the `file:line` of each reference and the commit the lines are read at. Every
+file a rule names must be in exactly one area, and every rule must name a file, checked
+against the whole tree on each call, so a gap in the map fails the call instead of
+showing up as "other" or as nothing.
+
+A rule should name the file that implements an entry point, not a dispatcher: this
+repo's `main.rs` depends on every command, so every change that reaches any command
+reaches it, and a rule on it would be reported for all of them. Several commands in one
+file (`checks.rs`) are always reached together; that is the module graph's grain.
+
 ## Measured
 
 On this repo (57 Rust files), Apple M-series, warm page cache.
@@ -103,8 +119,11 @@ case once a lane has called it, is 6.0 to 6.3 MiB. Files over 256 KiB are not pa
 the answer `lower_bound`), which caps the peak near 17 MiB, inside M1's 32 MiB CI
 ceiling. R14's M4 row budgets a cold `impact` on this repo at 12 MiB (10.9 MiB measured at the final head, warm 6.9 MiB); a warm call stays under M1's 8 MiB.
 
+`--entry-points` (#44), same method, warm, 50 samples, this repo's 12 command rules: p50 /
+p99 34.5 / 51.3 ms against 34.2 / 37.8 ms without the flag; RSS 7.2 MiB.
+
 ## Next
 
-- TypeScript imports and the naiss timing: #93.
+- TypeScript imports and the naiss timing: #93, with naiss's Expo-route entry points.
 - The UI slices (#44 to #48) draw `impact` and `overlap`.
 - Symbol-level edges (a call graph) only if module-level answers prove too coarse.
