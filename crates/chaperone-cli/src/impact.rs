@@ -71,7 +71,7 @@ pub fn run(
         // Staged changes: `ls-files -s` keys them by the index's blob, whose
         // lines are not `HEAD`'s.
         let index = s.spawn(|| match entry_points {
-            true => call(&["diff-index", "--cached", "--name-only", "-z", "HEAD"]),
+            true => call(&["diff-index", "--cached", "--name-only", "-z", "HEAD", "--"]),
             false => Ok(Vec::new()),
         });
         let status = s.spawn(|| {

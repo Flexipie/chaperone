@@ -37,6 +37,7 @@ struct Rule {
 #[derive(Serialize)]
 pub struct Unmatched {
     pub kind: String,
+    pub name: Option<String>,
     pub path: String,
 }
 
@@ -109,10 +110,13 @@ impl Rules {
                 .filter(|(_, u)| !**u)
                 .map(|(r, _)| Unmatched {
                     kind: r.kind.clone(),
+                    name: r.name.clone(),
                     path: r.path.clone(),
                 })
                 .collect());
         }
+        // The tree comes in no order: the same refusal every run.
+        errors.sort();
         let more = errors.len().saturating_sub(ERRORS);
         errors.truncate(ERRORS);
         if more > 0 {
