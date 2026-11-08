@@ -8,9 +8,9 @@ use eframe::egui::{
 
 /// The window's ground, behind every panel.
 pub const GROUND: Color32 = Color32::from_rgb(11, 14, 21);
-pub const ACCENT: Color32 = Color32::from_rgb(10, 132, 255);
+const ACCENT: Color32 = Color32::from_rgb(10, 132, 255);
 /// The needs-you badge.
-pub const ALERT: Color32 = Color32::from_rgb(255, 159, 10);
+const ALERT: Color32 = Color32::from_rgb(255, 159, 10);
 const RADIUS: u8 = 14;
 
 /// Dark always: the glass only reads over a dark ground.
@@ -41,11 +41,6 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(Theme::Dark, v);
 }
 
-/// The clear colour under the panels, as eframe wants it.
-pub fn ground_rgba() -> [f32; 4] {
-    egui::Rgba::from(GROUND).to_array()
-}
-
 fn edge() -> Stroke {
     Stroke::new(1.0, Color32::from_white_alpha(22))
 }
@@ -71,17 +66,17 @@ pub fn ground() -> Frame {
     Frame::new().inner_margin(Margin::same(14))
 }
 
-/// A small count pill; nothing for zero.
-pub fn badge(ui: &mut egui::Ui, n: usize, colour: Color32) {
+/// The needs-you count pill; nothing for zero.
+pub fn badge(ui: &mut egui::Ui, n: usize) {
     if n == 0 {
         return;
     }
     Frame::new()
-        .fill(colour.gamma_multiply(0.25))
-        .stroke(Stroke::new(1.0, colour.gamma_multiply(0.7)))
+        .fill(ALERT.gamma_multiply(0.25))
+        .stroke(Stroke::new(1.0, ALERT.gamma_multiply(0.7)))
         .corner_radius(CornerRadius::same(9))
         .inner_margin(Margin::symmetric(7, 1))
         .show(ui, |ui| {
-            ui.label(RichText::new(n.to_string()).small().strong().color(colour))
+            ui.label(RichText::new(n.to_string()).small().strong().color(ALERT))
         });
 }

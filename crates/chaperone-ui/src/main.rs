@@ -92,7 +92,7 @@ struct App {
 
 impl eframe::App for App {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        theme::ground_rgba()
+        egui::Rgba::from(theme::GROUND).to_array()
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

@@ -57,6 +57,6 @@ fn entry(ui: &mut egui::Ui, view: &mut View, to: View, name: &str, needs: usize)
         if ui.selectable_label(*view == to, name).clicked() {
             *view = to;
         }
-        theme::badge(ui, needs, theme::ALERT);
+        theme::badge(ui, needs);
     });
 }
