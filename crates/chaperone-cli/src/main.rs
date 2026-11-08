@@ -82,7 +82,12 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
             };
             Ok(Outcome::One(Ledger::open(&path)?.stats(&cohort)??))
         }
-        Cmd::Impact { files, cache } => impact::run(files, cache, meta, cli.format),
+        Cmd::Impact {
+            files,
+            cache,
+            entry_points,
+            profile,
+        } => impact::run(files, cache, entry_points, profile, meta, cli.format),
         Cmd::Overlap { repo, uncommitted } => {
             overlap::run(&Ledger::open(&path)?, repo, uncommitted, meta, cli.format)
         }

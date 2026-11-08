@@ -3,15 +3,18 @@
 //! the tree, and the facts live in their own cache (ADR 0043).
 
 mod cache;
+mod entry;
 mod parse;
 mod resolve;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+
+pub use entry::{Rules, Unmatched};
 
 /// Files past this size are not parsed (generated code): their references
 /// are unknown, so the answer is a lower bound. A parse holds about 45
@@ -28,6 +31,18 @@ pub struct File {
     pub key: Option<String>,
 }
 
+/// What `impact` needs to list the entry points reached.
+pub struct Entries<'a> {
+    /// Checked against the tree and the targets by the caller.
+    pub rules: &'a Rules,
+    /// `Rules::check`'s answer.
+    pub unmatched: Vec<Unmatched>,
+    /// The commit the lines are read at.
+    pub head: String,
+    /// Paths whose index differs from `head`: their lines are not `head`'s.
+    pub staged: HashSet<String>,
+}
+
 // Fields in sorted order: the bytes `render_ok` gives.
 #[derive(Serialize)]
 pub struct Impact {
@@ -36,6 +51,8 @@ pub struct Impact {
     pub bound: &'static str,
     pub cache: Cache,
     pub depths: Vec<Depth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_points: Option<EntryPoints>,
     pub files_omitted: usize,
     pub stale: bool,
     pub targets: Vec<Target>,
@@ -68,6 +85,41 @@ pub struct Node {
 }
 
 #[derive(Serialize)]
+pub struct EntryPoints {
+    /// As `Impact::bound`, and `lower_bound` when a rule is `unmatched`:
+    /// more may be reached.
+    pub bound: &'static str,
+    /// The commit the answer's lines are read at, less `dirty` hops.
+    pub head: String,
+    pub omitted: usize,
+    /// Nearest first.
+    pub reached: Vec<Entry>,
+    pub unmatched: Vec<Unmatched>,
+}
+
+#[derive(Serialize)]
+pub struct Entry {
+    pub area: String,
+    pub depth: usize,
+    /// From the entry point's file to a target: each hop's file, and
+    /// where it names the next one.
+    pub evidence: Vec<Hop>,
+    pub kind: String,
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct Hop {
+    /// `file:line` of the reference to the next hop; none for the target,
+    /// and for an edge Cargo makes (integration tests run the binaries).
+    pub at: Option<String>,
+    /// `at` is read from the worktree or the index, not `head`.
+    pub dirty: bool,
+    pub path: String,
+}
+
+#[derive(Serialize)]
 pub struct Target {
     /// In the tree.
     pub known: bool,
@@ -94,7 +146,9 @@ pub fn cache_file(dir: &Path, origin: &str) -> PathBuf {
 /// `limit` of them. `read` gives a file's bytes by path; `ids` the key of
 /// those bytes as `File::key` names it (`None`: unknown); `cache` is the
 /// facts file, `None` to parse everything, and `cache_given` whether it
-/// was passed by hand (an empty one is then refused, not used).
+/// was passed by hand (an empty one is then refused, not used);
+/// `entries` to list the entry points reached.
+#[allow(clippy::too_many_arguments)]
 pub fn impact(
     files: &[File],
     read: impl Fn(&str) -> io::Result<Vec<u8>>,
@@ -103,6 +157,7 @@ pub fn impact(
     cache_given: bool,
     targets: &[String],
     limit: usize,
+    entries: Option<Entries>,
 ) -> Impact {
     let rust: Vec<&File> = files.iter().filter(|f| f.path.ends_with(".rs")).collect();
     let mut store = cache::Cache::open(cache, cache_given);
@@ -208,14 +263,15 @@ pub fn impact(
             users[d].push(file);
         }
     }
-    let mut seen = HashSet::new();
+    // Each file reached: its depth, and the file it was reached through.
+    let mut from: HashMap<usize, (usize, Option<usize>)> = HashMap::new();
     let mut frontier = Vec::new();
     let targets: Vec<Target> = targets
         .iter()
         .map(|t| {
             let i = paths.iter().position(|p| p == t);
             if let Some(i) = i
-                && seen.insert(i)
+                && from.insert(i, (0, None)).is_none()
             {
                 frontier.push(i);
             }
@@ -238,11 +294,16 @@ pub fn impact(
     let mut listed = 0;
     let mut files_omitted = 0;
     while !frontier.is_empty() {
-        let mut next: Vec<usize> = frontier
-            .iter()
-            .flat_map(|&f| users[f].iter().copied())
-            .filter(|&u| seen.insert(u))
-            .collect();
+        let depth = depths.len() + 1;
+        let mut next: Vec<usize> = Vec::new();
+        for &f in &frontier {
+            for &u in &users[f] {
+                if let std::collections::hash_map::Entry::Vacant(e) = from.entry(u) {
+                    e.insert((depth, Some(f)));
+                    next.push(u);
+                }
+            }
+        }
         if next.is_empty() {
             break;
         }
@@ -265,6 +326,79 @@ pub fn impact(
         frontier = next;
     }
 
+    let entry_points = entries.map(|e| {
+        let rules = e.rules;
+        // Read from the worktree (a changed file, or one not matching its
+        // blob), or from an index that differs from `head`.
+        let dirty = |i: usize| {
+            keys[i].as_deref().is_none_or(|k| k.starts_with("sha256:"))
+                || e.staged.contains(&paths[i])
+        };
+        let mut reached = Vec::new();
+        let mut add = |path: &str, depth: usize, evidence: &dyn Fn() -> Vec<Hop>| {
+            for (kind, name) in rules.at(path) {
+                reached.push(Entry {
+                    area: rules.area(path).to_string(),
+                    depth,
+                    evidence: evidence(),
+                    kind: kind.to_string(),
+                    name: name.to_string(),
+                    path: path.to_string(),
+                });
+            }
+        };
+        for (&i, &(depth, _)) in &from {
+            add(&paths[i], depth, &|| {
+                let mut hops = Vec::new();
+                let mut at = i;
+                while let Some(&(_, Some(next))) = from.get(&at) {
+                    let w = graph.at.get(&(at, next));
+                    hops.push(Hop {
+                        at: w.map(|(f, line)| format!("{}:{line}", paths[*f])),
+                        dirty: w.is_some_and(|(f, _)| dirty(*f)),
+                        path: paths[at].clone(),
+                    });
+                    at = next;
+                }
+                hops.push(Hop {
+                    at: None,
+                    dirty: false,
+                    path: paths[at].clone(),
+                });
+                hops
+            });
+        }
+        // Not a Rust file: only the target itself.
+        let mut once = HashSet::new();
+        for t in targets
+            .iter()
+            .filter(|t| t.lang.is_none() && once.insert(&t.path))
+        {
+            add(&t.path, 0, &|| {
+                vec![Hop {
+                    at: None,
+                    dirty: false,
+                    path: t.path.clone(),
+                }]
+            });
+        }
+        reached.sort_by(|a, b| {
+            (a.depth, &a.path, &a.kind, &a.name).cmp(&(b.depth, &b.path, &b.kind, &b.name))
+        });
+        let omitted = reached.len().saturating_sub(limit);
+        reached.truncate(limit);
+        EntryPoints {
+            bound: match e.unmatched.is_empty() {
+                true => bound,
+                false => "lower_bound",
+            },
+            head: e.head,
+            omitted,
+            reached,
+            unmatched: e.unmatched,
+        }
+    });
+
     let stale = facts.iter().any(Option::is_none);
     let unsure_omitted = graph.unsure.len().saturating_sub(UNSURE_ROWS);
     Impact {
@@ -275,6 +409,7 @@ pub fn impact(
             skipped: store.skipped,
         },
         depths,
+        entry_points,
         files_omitted,
         stale,
         targets,

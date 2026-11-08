@@ -22,6 +22,10 @@ struct Krate {
 pub struct Graph {
     /// `deps[f]`: the files `f` depends on.
     pub deps: Vec<HashSet<usize>>,
+    /// `at[(f, d)]`: where a reference that makes `f` depend on `d` is
+    /// written (the first one found), (file, line). No entry for an edge
+    /// Cargo makes (integration tests run the binaries).
+    pub at: HashMap<(usize, usize), (usize, u32)>,
     /// Each file's module path (`chaperone_core::ledger::write`), when a
     /// crate root reaches it.
     pub module: Vec<Option<String>>,
@@ -41,6 +45,7 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
     let n = paths.len();
     let mut g = Graph {
         deps: vec![HashSet::new(); n],
+        at: HashMap::new(),
         module: vec![None; n],
         unsure: Vec::new(),
     };
@@ -97,14 +102,14 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
         .collect();
     // `macro_rules!` is in scope by name across its crate; `#[macro_export]`
     // puts it at the crate root, where `crate::name!` and `other::name!` land.
-    let mut defs: HashMap<(usize, &str), Vec<usize>> = HashMap::new();
+    let mut defs: HashMap<(usize, &str), Vec<(usize, u32)>> = HashMap::new();
     for file in 0..n {
         let Some(f) = &facts[file] else { continue };
         for (k, _) in &owners[file] {
-            for (name, export) in &f.macros {
-                defs.entry((*k, name)).or_default().push(file);
+            for (name, export, line) in &f.macros {
+                defs.entry((*k, name)).or_default().push((file, *line));
                 if *export {
-                    g.deps[krates[*k].root].insert(file);
+                    g.add(krates[*k].root, file, (file, *line));
                 }
             }
         }
@@ -130,17 +135,15 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
                 path,
                 facts: f,
             };
-            for name in &f.bangs {
-                if let Some(d) = defs.get(&(*k, name.as_str())) {
-                    g.deps[file].extend(d);
+            for (name, line) in &f.bangs {
+                for &(d, _) in defs.get(&(*k, name.as_str())).into_iter().flatten() {
+                    g.add(file, d, (file, *line));
                 }
             }
             let mut past_root = false;
             for r in &f.refs {
                 match cx.resolve(r, 0) {
-                    Res::Module(m) => {
-                        g.deps[file].insert(mods[&m]);
-                    }
+                    Res::Module(m) => g.add(file, mods[&m], (file, r.line)),
                     Res::PastRoot => past_root = true,
                     Res::External => {}
                 }
@@ -159,7 +162,7 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
                 }
                 for m in targets {
                     let t = mods[&m];
-                    g.deps[t].insert(file);
+                    g.add(t, file, (file, r.line));
                     // `pub use foo::T;` there: callers that name `foo::T`
                     // need this file too.
                     let Some(tf) = &facts[t] else { continue };
@@ -171,7 +174,7 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
                     };
                     let name = &r.path[r.path.len() - 1];
                     if let Some(Res::Module(d)) = there.alias(name).map(|a| there.resolve(a, 0)) {
-                        g.deps[mods[&d]].insert(file);
+                        g.add(mods[&d], file, (file, r.line));
                     }
                 }
             }
@@ -179,9 +182,18 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
                 g.unsure.push((file, "super_past_root".into()));
             }
         }
-        g.deps[file].remove(&file);
     }
     g
+}
+
+impl Graph {
+    /// `file` depends on `dep`, written at `at`; the first place kept.
+    fn add(&mut self, file: usize, dep: usize, at: (usize, u32)) {
+        if file != dep {
+            self.deps[file].insert(dep);
+            self.at.entry((file, dep)).or_insert(at);
+        }
+    }
 }
 
 fn krates(index: &HashMap<&str, usize>, manifests: &[(String, String)]) -> Vec<Krate> {
@@ -353,6 +365,7 @@ impl Cx<'_> {
                         scope: a.scope.clone(),
                         path,
                         alias: None,
+                        line: a.line,
                     };
                     return self.resolve(&via, depth + 1);
                 } else if let Some((gk, g)) = (depth < 2).then(|| self.globs_with(first)).flatten()

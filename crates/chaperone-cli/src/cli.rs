@@ -97,6 +97,15 @@ pub enum Cmd {
         /// directory)
         #[arg(long)]
         cache: Option<PathBuf>,
+        /// Also list the entry points (commands, routes, screens) the files
+        /// reach, each with its area and evidence, from the pipeline
+        /// profile's `[[entry_points]]` and `[areas]`
+        #[arg(long)]
+        entry_points: bool,
+        /// The profile (default: the origin's in
+        /// ~/dotfiles/claude/pipeline/profiles)
+        #[arg(long, requires = "entry_points")]
+        profile: Option<PathBuf>,
     },
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
