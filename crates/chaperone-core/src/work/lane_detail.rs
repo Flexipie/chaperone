@@ -71,13 +71,15 @@ impl Ledger {
                 })
             })?
             .collect::<Result<_, _>>()?;
-        // Through gate_results (keyed by lane) and findings' unique
-        // (check_event_id, finding_key): no scan of every lane's findings.
+        // Every finished check of the lane (events_lane), then findings'
+        // unique (check_event_id, finding_key): a check recorded again on
+        // the same head keeps the earlier round's findings.
         let mut stmt = tx.prepare(
-            "SELECT g.gate, f.head_sha, f.severity, f.status, f.path, f.title
-               FROM gate_results g JOIN findings f ON f.check_event_id = g.event_id
-              WHERE g.lane_id = ?1
-              ORDER BY f.status = 'open' DESC, g.event_id DESC, f.id LIMIT ?2",
+            "SELECT json_extract(e.payload_json, '$.check'), f.head_sha, f.severity,
+                    f.status, f.path, f.title
+               FROM events e JOIN findings f ON f.check_event_id = e.id
+              WHERE e.lane_id = ?1 AND e.kind = 'check.finished'
+              ORDER BY f.status = 'open' DESC, e.id DESC, f.id LIMIT ?2",
         )?;
         let findings = stmt
             .query_map((id, ROWS), |r| {
