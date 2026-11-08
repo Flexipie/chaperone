@@ -111,6 +111,10 @@ fn help_matches_snapshots() {
             &["pipeline", "current"],
             include_str!("snapshots/pipeline-current.txt"),
         ),
+        (
+            &["pipeline", "history"],
+            include_str!("snapshots/pipeline-history.txt"),
+        ),
         (&["doctor"], include_str!("snapshots/doctor.txt")),
         (&["migrate"], include_str!("snapshots/migrate.txt")),
     ] {

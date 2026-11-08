@@ -1,0 +1,10 @@
+Each version of the pipeline changelog (`## vN <time>` in <dotfiles>/claude/pipeline-changelog.md), newest first, with its entry, engine ids and `stats`' cohort numbers over its lanes: the first `pipeline vN` a handoff summary names, else the version active at the lane's first claim
+
+Usage: chaperone pipeline history [OPTIONS]
+
+Options:
+      --db <DB>              Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --dotfiles <DOTFILES>  The dotfiles checkout (default: ~/dotfiles)
+      --format <FORMAT>      Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --repo <REPO>          Only lanes in this repo (owner/repo, any case)
+  -h, --help                 Print help

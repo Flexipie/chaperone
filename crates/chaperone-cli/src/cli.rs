@@ -146,6 +146,19 @@ pub enum PipelineCmd {
     /// The pipeline a new claim stamps: {id, hash}. Skills read the
     /// version from here rather than naming one
     Current,
+    /// Each version of the pipeline changelog (`## vN <time>` in
+    /// <dotfiles>/claude/pipeline-changelog.md), newest first, with its
+    /// entry, engine ids and `stats`' cohort numbers over its lanes: the
+    /// first `pipeline vN` a handoff summary names, else the version
+    /// active at the lane's first claim
+    History {
+        /// The dotfiles checkout (default: ~/dotfiles)
+        #[arg(long)]
+        dotfiles: Option<PathBuf>,
+        /// Only lanes in this repo (owner/repo, any case)
+        #[arg(long)]
+        repo: Option<String>,
+    },
 }
 
 impl Cmd {
