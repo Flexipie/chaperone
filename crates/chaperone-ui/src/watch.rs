@@ -16,6 +16,7 @@ use chaperone_core::work::{LaneBoard, LaneDetail, WorkItem};
 use crate::areas::Areas;
 use crate::diff::Diff;
 use crate::overlap::Markers;
+use crate::graph::Layout;
 
 /// A poll is one pragma on an open connection, so idle costs next to
 /// nothing; a commit shows within this.
@@ -42,6 +43,10 @@ pub struct Shown {
     pub since: Option<String>,
     pub stats: Option<BoardStats>,
     pub overlap: Option<Markers>,
+    /// Set by the window: the graph is read only while it is shown.
+    pub graph_open: bool,
+    /// Each repo's change graph, by slug.
+    pub graph: Option<Vec<(String, Layout)>>,
 }
 
 /// One lane's detail as read at `version`, or why it could not be. A

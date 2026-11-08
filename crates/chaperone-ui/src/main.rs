@@ -8,6 +8,7 @@ mod areas;
 mod board;
 mod detail;
 mod diff;
+mod graph;
 mod numbers;
 mod overlap;
 mod watch;
@@ -64,6 +65,7 @@ fn main() -> eframe::Result {
                 shown,
                 first_frame: args.first_frame,
                 since: numbers::Since::default(),
+                graph: false,
             }))
         }),
     )
@@ -73,6 +75,8 @@ struct App {
     shown: Arc<Mutex<Shown>>,
     first_frame: bool,
     since: numbers::Since,
+    /// The change graph in place of the board.
+    graph: bool,
 }
 
 impl eframe::App for App {
@@ -127,6 +131,20 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(error) = &shown.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.graph, false, "Board");
+                ui.selectable_value(&mut self.graph, true, "Change graph");
+            });
+            shown.graph_open = self.graph;
+            if self.graph {
+                match &shown.graph {
+                    Some(repos) => graph::draw(ui, repos),
+                    None => {
+                        ui.label("Reading the change graph...");
+                    }
+                }
+                return;
             }
             match &shown.board {
                 Some(board) => picked = draw(ui, &shown, board, now),
