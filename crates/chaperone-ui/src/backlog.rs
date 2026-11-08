@@ -186,7 +186,9 @@ fn read_mirror(slug: &str) -> Result<Mirror, String> {
         }
         let env = daisy(&args)?;
         let status = &env["meta"]["source_freshness"]["github"]["status"];
-        stale = stale.or(status.as_str().filter(|s| *s != "fresh").map(String::from));
+        // No status proves nothing: not fresh.
+        let status = status.as_str().unwrap_or("of unknown freshness");
+        stale = stale.or((status != "fresh").then(|| status.to_string()));
         let data = &env["data"];
         for item in data["items"].as_array().into_iter().flatten() {
             let same = item["repo"]
@@ -222,6 +224,21 @@ fn read_mirror(slug: &str) -> Result<Mirror, String> {
         .filter(|b| !open.contains(*b))
         .collect();
     for key in others {
+        // A body is anyone's text: only `owner/name#N` reaches daisy's argv.
+        let shaped = key.split_once('/').is_some_and(|(owner, rest)| {
+            let name = |s: &str| {
+                !s.is_empty()
+                    && !s.starts_with('-')
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+            };
+            rest.split_once('#')
+                .is_some_and(|(repo, _)| name(owner) && name(repo))
+        });
+        if !shaped {
+            missing.insert(key.clone());
+            continue;
+        }
         match daisy(&["github", "get", key]) {
             Ok(env) if env["data"]["item"]["state"] == "open" => {}
             Ok(env) if env["data"]["item"]["state"] == "closed" => {
@@ -355,7 +372,10 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str) {
         (None, _) => {}
     }
     if backlog.rows.is_empty() {
-        ui.label(format!("All {} open issues are in a lane.", backlog.open));
+        let n = backlog.open;
+        ui.label(format!(
+            "None of the {n} open issues is waiting: each is in a lane or a spec parent."
+        ));
         return;
     }
     let ready = backlog

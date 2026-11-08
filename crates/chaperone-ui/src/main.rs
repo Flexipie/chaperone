@@ -209,7 +209,10 @@ impl eframe::App for App {
                 let repo = match view {
                     nav::View::Repo(r) => shown.board.as_ref().and_then(|b| {
                         let repos = board::group(b);
-                        let slug = repos.iter().find(|x| x.slug.eq_ignore_ascii_case(r));
+                        // Lanes with no repo have no mirror to read.
+                        let slug = repos
+                            .iter()
+                            .find(|x| x.slug.eq_ignore_ascii_case(r) && x.slug != "(no repo)");
                         slug.map(|x| x.slug.to_string())
                     }),
                     _ => None,
