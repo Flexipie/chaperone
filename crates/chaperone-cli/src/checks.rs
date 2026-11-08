@@ -11,7 +11,7 @@ use chaperone_core::ledger::Ledger;
 use chaperone_core::usage::Roots;
 use serde_json::{Value, json};
 
-use crate::child;
+use chaperone_core::child;
 use crate::cli::{AttentionCmd, CheckCmd, DossierCmd, JobsCmd, ReviewsCmd, UsageCmd};
 use crate::output::{CliError, ErrorBody, Outcome};
 use crate::work::one;

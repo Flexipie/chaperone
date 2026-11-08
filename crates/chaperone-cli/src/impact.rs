@@ -10,7 +10,7 @@ use chaperone_core::ledger::Refusal;
 use chaperone_graph::File;
 
 use crate::cli::Format;
-use crate::git::{Failure, git, git_bin};
+use chaperone_core::git::{Failure, git, git_bin};
 use crate::output::{self, CliError, Meta, Outcome};
 
 /// For every git call of one run, together.

@@ -116,7 +116,7 @@ CHANGELOG.md               first release creates it; every release updates it
 LICENSE-MIT                first commit that contains code (ADR 0001)
 LICENSE-APACHE
 CONTRIBUTING.md
-crates/chaperone-core/      ledger, engine, migrations. No clap, no PTY, no home directory.
+crates/chaperone-core/      ledger, engine, migrations, deadline-bounded git and daisy-cli calls. No clap, no PTY, no home directory.
 crates/chaperone-cli/       the `chaperone` binary. CLI, supervise, in-tree adapters.
 crates/chaperone-fake/      scripted agent. publish = false. Not installed by `cargo install`.
 crates/chaperone-graph/     the code graph behind `impact`: tree-sitter facts, module map, cache (ADR 0043).

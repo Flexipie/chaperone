@@ -1,4 +1,5 @@
-//! git calls in a worktree, under a deadline: `overlap` and `impact`.
+//! git calls in a worktree, under a deadline: `overlap`, `impact` and the
+//! UI's diff.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

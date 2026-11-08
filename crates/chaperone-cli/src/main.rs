@@ -2,9 +2,7 @@
 //! (docs/cli-contract.md), so a skill switches by changing the binary path.
 
 mod checks;
-mod child;
 mod cli;
-mod git;
 mod impact;
 mod output;
 mod overlap;
