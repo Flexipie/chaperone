@@ -120,12 +120,15 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 }
             }
             let mut notes: BTreeMap<i64, Vec<String>> = BTreeMap::new();
-            // Lanes whose worktree git could not read.
+            // Lanes whose worktree read failed this time.
             let mut unread = BTreeSet::new();
             for t in &over.lanes {
                 let n = notes.entry(t.id).or_default();
                 if t.worktree != "ok" {
-                    unread.insert(t.id);
+                    // Only a failed read passes; no worktree or base may last.
+                    if matches!(t.worktree, "timed_out" | "error") {
+                        unread.insert(t.id);
+                    }
                     let why = t
                         .error
                         .as_deref()
