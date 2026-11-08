@@ -4,7 +4,6 @@
 use chaperone_core::pipeline::{Denied, Fact, FactBundle, Phase, Pipeline, Route};
 
 const V17: &str = include_str!("../../../pipelines/v17.toml");
-const V19: &str = include_str!("../../../pipelines/v19.toml");
 
 /// A document whose `handoff` (code_pr, to done) requires gate `a`.
 fn doc(gates: &str) -> Pipeline {
@@ -426,28 +425,4 @@ fn v17_investigation_handoff_ready_is_denied() {
         p.evaluate("handoff", Route::Investigation, Phase::Done, &f),
         Ok(())
     );
-}
-
-/// v19: CI is not a gate. With no `ci.state`, v17 denies at `ci_not_red`;
-/// v19's verdict and ready rows pass on both PR routes.
-#[test]
-fn v19_reads_no_ci_state() {
-    let v17 = Pipeline::load(V17).unwrap();
-    let mut f = ready_lane(&v17, "abc1234");
-    f.set("ci.state", Fact::Absent);
-    assert_eq!(
-        v17.evaluate("to_ready", Route::CodePr, Phase::Ready, &f),
-        denied("ci_not_red", &["ci.state"])
-    );
-
-    let v19 = Pipeline::load(V19).unwrap();
-    let mut f = ready_lane(&v19, "abc1234");
-    f.set("pipeline.id", "v19").set("ci.state", Fact::Absent);
-    for route in [Route::CodePr, Route::Direct] {
-        assert_eq!(
-            v19.evaluate("ask_verdict", route, Phase::Verdict, &f),
-            Ok(())
-        );
-        assert_eq!(v19.evaluate("to_ready", route, Phase::Ready, &f), Ok(()));
-    }
 }

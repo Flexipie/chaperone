@@ -234,7 +234,12 @@ fn done_without_stamps_is_denied_once_and_moves_nothing() {
 #[test]
 fn the_lane_session_cannot_record_its_own_stamps() {
     let lane = Lane::new();
-    for check in ["plan_check", "quality_gate", "merge_verdict"] {
+    for check in [
+        "plan_check",
+        "quality_gate",
+        "merge_verdict",
+        "review_round",
+    ] {
         let applied = lane.check(&lane.lane, check, json!({"decision": "yes"}));
         assert!(
             matches!(applied, Applied::Refused(Refusal::InvalidInput(_))),
@@ -568,18 +573,13 @@ fn v19_ready_needs_no_smoke_on_a_no_code_lane() {
 }
 
 /// v19: ready allows at most `local_rounds` (3) review rounds, recorded by a
-/// fresh session as `review_round`; the lane's own session cannot record one.
+/// fresh session as `review_round`.
 #[test]
 fn v19_ready_caps_review_rounds() {
     for (rounds, want) in [(3, None), (4, Some("rounds_at_most"))] {
         let lane = Lane::new();
         lane.stamps();
         lane.smoke_and_kept();
-        let own = lane.check(&lane.lane, "review_round", json!({}));
-        assert!(
-            matches!(own, Applied::Refused(Refusal::InvalidInput(_))),
-            "{own:?}"
-        );
         for _ in 0..rounds {
             lane.check(&lane.checker, "review_round", json!({}));
         }

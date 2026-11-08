@@ -109,8 +109,6 @@ id = "kept_tests_recorded"
 fn = "eq"
 args = { field = "kept_tests.recorded", value = true }
 
-# Smoke and kept tests at ready: recorded (ran, or skipped with a reason) on a lane that
-# changes code. A lane that changes none needs neither.
 [[gate]]
 id = "smoke_ok"
 fn = "any"
