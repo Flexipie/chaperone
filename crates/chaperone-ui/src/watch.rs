@@ -63,8 +63,8 @@ pub struct Shown {
     /// Set by the window when it hands the writer an act, cleared by the
     /// writer when it is done; the buttons wait for it.
     pub writing: bool,
-    /// The newest act's outcome, in a line.
-    pub wrote: Option<Result<String, String>>,
+    /// The newest act's outcome.
+    pub wrote: Option<crate::writer::Wrote>,
 }
 
 /// One lane's page as read at `version`, or why it could not be. A

@@ -1,4 +1,4 @@
-//! chaperone-ui: a read-only live board of every lane. It opens the ledger
+//! chaperone-ui: a live board of every lane. It opens the ledger
 //! read-only and redraws when the ledger changes; herdr stays where you type.
 //! Clicking a lane opens its page: what it is, how it is doing against its
 //! repo and what it changed. Above the board, the R11 numbers of the lanes
@@ -203,9 +203,11 @@ impl eframe::App for App {
             }
             if let Some(act) = asked.act {
                 // The writer ending clears it; one gone sends nothing back.
+                shown.wrote = None;
                 shown.writing = self.writer.send(act).is_ok();
                 if !shown.writing {
-                    shown.wrote = Some(Err("the writer stopped".into()));
+                    let said = Err("the writer stopped".into());
+                    shown.wrote = Some(writer::Wrote { work: sel.id, said });
                 }
             }
             ui.ctx().request_repaint_after(AGE_TICK);

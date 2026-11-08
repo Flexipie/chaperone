@@ -13,8 +13,9 @@ use eframe::egui::{self, RichText};
 use crate::areas::{self, Areas};
 use crate::diff::{Diff, Files};
 use crate::watch::{Detail, Median, Selected};
-use crate::writer::{Act, Confirm, Lane, NOTE_CHARS};
+use crate::writer::{Act, Confirm, Lane, NOTE_CHARS, Wrote};
 use crate::{board, detail, needs, numbers, repo, theme};
+use chaperone_core::spec::parse::asks_about;
 
 /// What the viewer asked for on the page.
 #[derive(Default)]
@@ -26,12 +27,15 @@ pub struct Asked {
     pub act: Option<Act>,
 }
 
-/// What the owner has typed on the page, for lane `lane` only.
+/// What the owner has typed on the page, for lane `lane` only, kept
+/// until the act it went with is done.
 #[derive(Default)]
 pub struct Typed {
     pub lane: i64,
     pub answer: String,
     pub reason: String,
+    /// The act sent and not done yet: true for a send-back.
+    sent: Option<bool>,
 }
 
 /// What the page reads, each for the selected lane only.
@@ -44,7 +48,7 @@ pub struct Reads<'a> {
     pub median: Option<&'a Median>,
     /// The writer is busy with an act.
     pub writing: bool,
-    pub wrote: Option<&'a Result<String, String>>,
+    pub wrote: Option<&'a Wrote>,
 }
 
 pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, typed: &mut Typed, now: i64) -> Asked {
@@ -171,6 +175,16 @@ fn actions(
     let item = &lane.board.item;
     let mut act = None;
     let free = !r.writing;
+    let wrote = r.wrote.filter(|w| w.work == item.id).map(|w| &w.said);
+    if !r.writing
+        && let Some(back) = typed.sent.take()
+        && let Some(Ok(_)) = wrote
+    {
+        match back {
+            true => typed.reason.clear(),
+            false => typed.answer.clear(),
+        }
+    }
     // What the lane asks: its open questions, else its blocker or next
     // step, which an answer records as the question.
     let blocker = item.blocker.clone().or_else(|| item.next_action.clone());
@@ -197,10 +211,10 @@ fn actions(
             .clone()
             .unwrap_or_else(|| board::label(item)),
     };
-    // Answers the oldest open question, else records one first.
-    let answer = |text: String, confirm| Act::Answer {
+    // Answers question `asks`, else records one first.
+    let answer = |asks, text: String, confirm| Act::Answer {
         lane: target.clone(),
-        asks: page.questions.first().map(|q| q.id),
+        asks,
         blocker: blocker
             .clone()
             .unwrap_or_else(|| "the lane needs you".into()),
@@ -208,20 +222,27 @@ fn actions(
         confirm,
     };
     let in_spec = page.detail.slice.as_ref().and_then(|s| s.in_spec.as_ref());
-    for d in &page.provisional {
+    for d in in_spec.iter().flat_map(|s| &s.provisional) {
         let (Some(q), Some(a), Some(spec)) = (&d.question, &d.answer, in_spec) else {
             continue;
         };
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("Provisional: {q} -> {a}"));
             if ui.add_enabled(free, egui::Button::new("Accept")).clicked() {
+                // A spec-wide decision is confirmed spec-wide.
                 let confirm = Confirm {
                     spec: spec.parent_key.clone(),
-                    slice: spec.n,
+                    slice: d.slice,
                     question: q.clone(),
                     answer: a.clone(),
                 };
-                act = Some(answer(format!("confirmed: {q} -> {a}"), Some(confirm)));
+                // Only a question about this decision is answered by it.
+                let asks = page
+                    .questions
+                    .iter()
+                    .find(|x| x.note.as_deref().is_some_and(|n| asks_about(n, q)));
+                let text = format!("confirmed: {q} -> {a}");
+                act = Some(answer(asks.map(|x| x.id), text, Some(confirm)));
             }
         });
     }
@@ -240,15 +261,18 @@ fn actions(
         })
         .inner
     };
+    let oldest = page.questions.first().map(|q| q.id);
     if line(ui, &mut typed.answer, "Your answer", "Answer") {
-        act = Some(answer(std::mem::take(&mut typed.answer), None));
+        act = Some(answer(oldest, typed.answer.clone(), None));
+        typed.sent = Some(false);
     }
     if line(ui, &mut typed.reason, "Why it goes back", "Send back") {
         act = Some(Act::SendBack {
             lane: target.clone(),
             round: page.sent_back as u64 + 1,
-            reason: std::mem::take(&mut typed.reason),
+            reason: typed.reason.clone(),
         });
+        typed.sent = Some(true);
     }
     match &item.session {
         Some(ws) => {
@@ -257,6 +281,7 @@ fn actions(
                 .clicked()
             {
                 act = Some(Act::Focus {
+                    work: item.id,
                     workspace: ws.clone(),
                 });
             }
@@ -265,7 +290,7 @@ fn actions(
             ui.label("No herdr workspace recorded for the lane.");
         }
     }
-    match (r.writing, r.wrote) {
+    match (r.writing, wrote) {
         (true, _) => {
             ui.label("Working...");
         }

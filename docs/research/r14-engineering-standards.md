@@ -120,7 +120,7 @@ crates/chaperone-core/      ledger, engine, migrations, deadline-bounded git and
 crates/chaperone-cli/       the `chaperone` binary. CLI, supervise, in-tree adapters.
 crates/chaperone-fake/      scripted agent. publish = false. Not installed by `cargo install`.
 crates/chaperone-graph/     the code graph behind `impact`: tree-sitter facts, module map, cache (ADR 0043), and the git and profile reads of a run.
-crates/chaperone-ui/        the `chaperone-ui` window. Read-only, the only crate with a GUI dependency.
+crates/chaperone-ui/        the `chaperone-ui` window. Reads read-only; the owner's lane actions go through one writer (`owner-ui`). The only crate with a GUI dependency.
 pipelines/                 v17.toml and later ids. Loaded from disk.
 docs/                      vision, research, decisions, events.md, the CLI contract
 .github/workflows/ci.yml

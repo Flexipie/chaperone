@@ -91,6 +91,10 @@ pub struct InSpec {
     pub title: String,
     /// This slice's decisions and the spec-wide ones, each its line.
     pub decisions: Vec<String>,
+    /// Those still provisional, whole (`decisions` cuts its lines): what
+    /// the lane page's owner can accept. Not in the dossier's answer.
+    #[serde(skip)]
+    pub provisional: Vec<Decision>,
 }
 
 #[derive(Debug, Serialize)]
@@ -346,21 +350,6 @@ fn decision_lines(mut d: Vec<Decision>, name: &'static str, omitted: &mut Omitte
         .collect()
 }
 
-/// The standing provisional decisions of `raw`'s slice and spec-wide,
-/// whole (the dossier cuts its lines). Empty when the key does not parse
-/// or no spec has it.
-pub(crate) fn provisional_of(conn: &Connection, raw: &str) -> Result<Vec<Decision>, LedgerError> {
-    let Ok(key) = key_of(raw) else {
-        return Ok(Vec::new());
-    };
-    let Some(s) = spec_for_key(conn, &key)?.map_or(Ok(None), |id| read_spec(conn, id, None))?
-    else {
-        return Ok(Vec::new());
-    };
-    let decisions = section_for(&s.body, &key).map(|(_, d)| d);
-    Ok(standing_provisional(decisions.unwrap_or_default()))
-}
-
 /// The slice section alone (`chaperone-ui`'s lane page), in the caller's
 /// read transaction. None when the key does not parse.
 pub(crate) fn slice_of(conn: &Connection, raw: &str) -> Result<Option<SliceSection>, LedgerError> {
@@ -386,6 +375,7 @@ fn slice_section(conn: &Connection, key: &str) -> Result<SliceSection, LedgerErr
             version: s.version,
             n: section.n,
             title: cut(section.title, TEXT_CHARS, &mut omitted),
+            provisional: standing_provisional(decisions.clone()),
             decisions: decision_lines(decisions, "slice_decisions", &mut omitted),
         });
     }

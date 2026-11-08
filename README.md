@@ -12,7 +12,7 @@ The Rust workspace and CI are in place (`crates/chaperone-core`, `crates/chapero
 `crates/chaperone-fake`, `crates/chaperone-ui`); the ledger and gates are being built in
 milestone 1. To build and test, see [CONTRIBUTING.md](CONTRIBUTING.md) "Setup".
 
-`chaperone-ui` is a read-only window with every open lane, grouped by repo and spec, that
+`chaperone-ui` is a window with every open lane, grouped by repo and spec, that
 redraws when the ledger changes: `cargo run --release -p chaperone-ui -- [--db PATH]`.
 Clicking a lane opens its page: a header (state, goal, agent, branch, PR, pipeline), tiles
 for time against the repo median, tokens, peak context, reviews, people needed and gates,
@@ -21,8 +21,11 @@ folded its handoffs, review findings, areas and diff against the base. A feed sh
 questions, answers and decisions between lanes. The change graph tab draws each lane's changed files in its
 colour, the files that depend on them by depth and the entry points they reach
 (`overlap` and `impact`), with files two lanes share ringed.
-It opens the ledger read-only and never writes it; the graph writes only the code graph's
-own cache. CI shows "not recorded" until the
+On a lane that needs you, the page answers it (a typed answer, or Accept on a provisional
+spec decision), sends it back with a reason or opens its herdr workspace: the herdr prompt
+first, then the attention record, as agent `owner-ui`, session `ui:<start time>`, by owner.
+Those writes go through one separate writer; the board opens the ledger read-only and never
+writes it, and the graph writes only the code graph's own cache. CI shows "not recorded" until the
 ledger has a CI record.
 
 Planning artifacts:

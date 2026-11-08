@@ -11,11 +11,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::DETAIL_ROWS;
+use super::lane_board::OPEN_OWNER_QUESTION;
 use super::lane_detail::LaneDetail;
-use crate::dossier::provisional_of;
 use crate::ledger::{Ledger, LedgerError, check_schema};
 use crate::pipeline::{Fact, Phase, Route, by_stamp};
-use crate::spec::parse::Decision;
 use crate::stats::Cohort;
 
 #[derive(Debug, Serialize)]
@@ -40,11 +39,9 @@ pub struct LanePage {
     /// The questions to the owner with no answer yet, oldest first: what
     /// the board counts as `open_questions`.
     pub questions: Vec<Question>,
-    /// How many times the lane was sent back (`sent_back` attention).
+    /// The highest send-back round, 0 for none: what stats reads as
+    /// `send_back_rounds`.
     pub sent_back: i64,
-    /// The spec's provisional decisions for the lane still standing, whole:
-    /// what the owner can accept.
-    pub provisional: Vec<Decision>,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,18 +202,10 @@ impl Ledger {
             decisions.push(a?);
         }
 
-        // As the board counts them (`lane_board`).
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare(&format!(
             "SELECT a.id, json_extract(a.payload_json, '$.note') FROM events a
-              WHERE a.lane_id = ?1 AND a.kind = 'attention.recorded'
-                AND json_extract(a.payload_json, '$.type') = 'asked'
-                AND json_extract(a.payload_json, '$.by') = 'owner'
-                AND NOT EXISTS (SELECT 1 FROM events b
-                      WHERE b.lane_id = a.lane_id AND b.id > a.id
-                        AND b.kind = 'attention.recorded'
-                        AND json_extract(b.payload_json, '$.answers') = a.id)
-              ORDER BY a.id",
-        )?;
+              WHERE a.lane_id = ?1 AND {OPEN_OWNER_QUESTION} ORDER BY a.id"
+        ))?;
         let questions = stmt
             .query_map([id], |r| {
                 Ok(Question {
@@ -225,12 +214,9 @@ impl Ledger {
                 })
             })?
             .collect::<Result<_, _>>()?;
-        let provisional = match key {
-            Some(k) => provisional_of(&tx, k)?,
-            None => Vec::new(),
-        };
         let sent_back = tx.query_row(
-            "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'attention.recorded'
+            "SELECT coalesce(max(json_extract(payload_json, '$.round')), 0) FROM events
+              WHERE lane_id = ?1 AND kind = 'attention.recorded'
                 AND json_extract(payload_json, '$.type') = 'sent_back'",
             [id],
             |r| r.get(0),
@@ -303,7 +289,6 @@ impl Ledger {
             gates,
             questions,
             sent_back,
-            provisional,
         })
     }
 

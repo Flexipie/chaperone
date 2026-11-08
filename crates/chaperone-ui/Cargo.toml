@@ -1,6 +1,6 @@
 [package]
 name = "chaperone-ui"
-description = "Read-only live board of every Chaperone lane"
+description = "Live board of every Chaperone lane, with the owner's lane actions"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

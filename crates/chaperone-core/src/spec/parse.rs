@@ -228,23 +228,66 @@ pub fn parse_decisions(md: &str) -> Vec<Decision> {
     items.iter().map(|t| parse_decision(t)).collect()
 }
 
+/// Lowercase words, punctuation gone.
+fn words(s: &str) -> String {
+    let s = s.to_lowercase();
+    let w: Vec<&str> = s
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    w.join(" ")
+}
+
+/// Characters `a` and `b` share in matching blocks (Ratcliff/Obershelp,
+/// what Python's `SequenceMatcher` counts, less its junk rule for 200+
+/// characters).
+fn matched(a: &[char], b: &[char]) -> usize {
+    let (mut at, mut len) = ((0, 0), 0);
+    let mut prev = vec![0; b.len() + 1];
+    for (i, x) in a.iter().enumerate() {
+        let mut row = vec![0; b.len() + 1];
+        for (j, y) in b.iter().enumerate() {
+            if x == y {
+                row[j + 1] = prev[j] + 1;
+                if row[j + 1] > len {
+                    len = row[j + 1];
+                    at = (i + 1 - len, j + 1 - len);
+                }
+            }
+        }
+        prev = row;
+    }
+    if len == 0 {
+        return 0;
+    }
+    let (i, j) = at;
+    len + matched(&a[..i], &b[..j]) + matched(&a[i + len..], &b[j + len..])
+}
+
+/// Two decision questions are one: equal once case and punctuation go,
+/// or a light rewording (ratio 0.85 or more), as `ship-handoff` reads them.
+pub fn same_question(a: &str, b: &str) -> bool {
+    let (a, b) = (words(a), words(b));
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let total = a.len() + b.len();
+    a == b || total > 0 && 2 * matched(&a, &b) * 100 >= 85 * total
+}
+
+/// A question's note asks about decision question `q`: the same question,
+/// or a note that names it ("confirm: <q>").
+pub fn asks_about(note: &str, q: &str) -> bool {
+    same_question(note, q) || words(note).contains(&words(q))
+}
+
 /// The decisions whose newest line for their question is still agreed
-/// `provisional ...`: what the owner has yet to confirm. `ship-handoff`'s
-/// rule, but two questions are one only when equal once case and
-/// punctuation go, not on a light rewording.
+/// `provisional ...`: what the owner has yet to confirm, as `ship-handoff`
+/// reads them.
 pub fn standing_provisional(decisions: Vec<Decision>) -> Vec<Decision> {
-    let q = |d: &Decision| {
-        let t = d.question.as_deref().unwrap_or(&d.text).to_lowercase();
-        let words: Vec<&str> = t
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| !w.is_empty())
-            .collect();
-        words.join(" ")
-    };
+    let q = |d: &Decision| d.question.clone().unwrap_or_else(|| d.text.clone());
     let mut newest: Vec<Decision> = Vec::new();
     for d in decisions {
         let k = q(&d);
-        newest.retain(|n| q(n) != k);
+        newest.retain(|n| !same_question(&q(n), &k));
         newest.push(d);
     }
     newest.retain(|d| {

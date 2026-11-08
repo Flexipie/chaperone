@@ -55,8 +55,24 @@ pub enum Act {
         reason: String,
     },
     Focus {
+        work: i64,
         workspace: String,
     },
+}
+
+impl Act {
+    fn work(&self) -> i64 {
+        match self {
+            Act::Answer { lane, .. } | Act::SendBack { lane, .. } => lane.work,
+            Act::Focus { work, .. } => *work,
+        }
+    }
+}
+
+/// An act's outcome in a line, for the lane it was on.
+pub struct Wrote {
+    pub work: i64,
+    pub said: Result<String, String>,
 }
 
 /// Starts the writer; `herdr` is the herdr CLI. Each act's outcome lands
@@ -76,13 +92,14 @@ pub fn spawn(
                 Ok((l, owner(&now)))
             });
         for act in rx {
+            let work = act.work();
             let said = match &open {
                 Ok((ledger, actor)) => run(ledger, actor, &herdr, act),
                 Err(e) => Err(format!("ledger not opened for writing: {e}")),
             };
             let mut s = shown.lock().unwrap();
             s.writing = false;
-            s.wrote = Some(said);
+            s.wrote = Some(Wrote { work, said });
             drop(s);
             changed();
         }
@@ -136,7 +153,7 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
         ..AttentionInput::default()
     };
     match act {
-        Act::Focus { workspace } => {
+        Act::Focus { workspace, .. } => {
             herdr_run(herdr, &["workspace", "focus", &workspace])?;
             Ok(format!("Focused herdr workspace {workspace}."))
         }
@@ -147,9 +164,10 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
         } => {
             let reason = note(&reason);
             let prompt = format!(
-                "Owner check (chaperone-ui), round {round}, on {}: {reason}. Fix it, run the \
+                "Owner check (chaperone-ui), round {round}, on {}: {}. Fix it, run the \
                  /ship steps it needs (smoke, review round, handoff) and hand off again.",
-                lane.key
+                lane.key,
+                reason.trim_end_matches('.')
             );
             herdr_run(herdr, &["agent", "prompt", &lane.agent, &prompt])?;
             let input = AttentionInput {
@@ -172,11 +190,13 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
                 Some(c) => format!(
                     "Owner (chaperone-ui): confirmed the provisional decision: {} -> {}. It is \
                      in the spec; carry on.",
-                    c.question, c.answer
+                    c.question,
+                    c.answer.trim_end_matches('.')
                 ),
                 None => format!(
-                    "Owner (chaperone-ui): {text}. Record it as /issue says for a resolved block \
-                     (next action 'resolved: ...', and the decision in the spec), then carry on."
+                    "Owner (chaperone-ui): {}. Record it as /issue says for a resolved block \
+                     (next action 'resolved: ...', and the decision in the spec), then carry on.",
+                    text.trim_end_matches('.')
                 ),
             };
             herdr_run(herdr, &["agent", "prompt", &lane.agent, &prompt])?;
@@ -271,7 +291,14 @@ mod tests {
             page.questions.iter().map(|q| q.id).collect::<Vec<_>>(),
             [asked]
         );
-        assert_eq!(page.provisional.len(), 1);
+        assert_eq!(
+            page.detail
+                .slice
+                .as_ref()
+                .and_then(|s| s.in_spec.as_ref())
+                .map_or(0, |s| s.provisional.len()),
+            1
+        );
         let db = rusqlite::Connection::open(&path).unwrap();
         let max = |db: &rusqlite::Connection| -> i64 {
             db.query_row("SELECT max(id) FROM events", [], |r| r.get(0))
@@ -327,6 +354,7 @@ mod tests {
         };
         run(&rw, &actor, &herdr, back).unwrap();
         let focus = Act::Focus {
+            work,
             workspace: "w1".into(),
         };
         run(&rw, &actor, &herdr, focus).unwrap();
@@ -367,7 +395,15 @@ mod tests {
         }
         let page = rw.lane_page(work, Some("o/r#2")).unwrap();
         assert!(page.questions.is_empty());
-        assert!(page.provisional.is_empty(), "the confirmation stands");
+        assert_eq!(
+            page.detail
+                .slice
+                .as_ref()
+                .and_then(|s| s.in_spec.as_ref())
+                .map_or(0, |s| s.provisional.len()),
+            0,
+            "the confirmation stands"
+        );
         assert_eq!(page.sent_back, 1);
         let calls = std::fs::read_to_string(calls).unwrap();
         let calls: Vec<&str> = calls.lines().collect();
