@@ -30,6 +30,13 @@ pub struct Areas {
     pub state: State,
 }
 
+impl Areas {
+    /// Read for this declaration: a result for an older one is not drawn.
+    pub fn is_for(&self, declared: &[String]) -> bool {
+        self.key.declared == declared
+    }
+}
+
 pub enum State {
     Running,
     Done(chaperone_graph::Areas),
@@ -143,6 +150,8 @@ fn read(bin: &Path, key: &Key) -> State {
             "--no-textconv",
             "--name-only",
             "-z",
+            // Both sides of a move: the old path's area changes too.
+            "--no-renames",
             "--merge-base",
             "--end-of-options",
             base,
@@ -201,7 +210,7 @@ pub fn card(declared: Option<&[String]>, areas: Option<&Areas>) -> String {
         return "not declared".into();
     };
     let d = declared.join(", ");
-    let a = match areas.map(|a| &a.state) {
+    let a = match areas.filter(|a| a.is_for(declared)).map(|a| &a.state) {
         None | Some(State::Running) => return format!("{d} (checking)"),
         Some(State::Failed(_)) => return format!("{d} (not checked)"),
         Some(State::Done(a)) => a,

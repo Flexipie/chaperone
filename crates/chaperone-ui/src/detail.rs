@@ -177,7 +177,7 @@ fn draw_areas(ui: &mut egui::Ui, declared: Option<&[String]>, areas: Option<&are
         return;
     };
     ui.label(format!("Declared: {}", declared.join(", ")));
-    let a = match areas.map(|a| &a.state) {
+    let a = match areas.filter(|a| a.is_for(declared)).map(|a| &a.state) {
         None | Some(AreasState::Running) => {
             ui.label("Comparing with the diff...");
             return;
