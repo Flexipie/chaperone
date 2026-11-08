@@ -10,7 +10,7 @@ use chaperone_graph::Impact;
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2, pos2, vec2};
 
 /// Dependents drawn; deeper ones are counted.
-pub const DEPTH: usize = 3;
+const DEPTH: usize = 3;
 const COLUMN: f32 = 260.0;
 const ROW: f32 = 40.0;
 const MARGIN: f32 = 24.0;
@@ -39,37 +39,36 @@ pub struct Lane {
     pub files: Vec<(String, u64)>,
     /// The dependents and entry points of `files`, or why there are none.
     pub impact: Result<Impact, String>,
-    /// Why some of the lane may be missing: overlap's worktree status
-    /// when not `ok`, or paths it cut.
+    /// Why some of the lane may be missing.
     pub notes: Vec<String>,
 }
 
-pub struct Node {
-    pub path: String,
-    pub module: Option<String>,
-    pub pos: Pos2,
-    pub radius: f32,
+struct Node {
+    path: String,
+    module: Option<String>,
+    pos: Pos2,
+    radius: f32,
     /// Nearest: 0 for a changed file.
-    pub depth: usize,
+    depth: usize,
     /// The lane it is coloured by: the nearest, the lowest id on a tie.
-    pub lane: i64,
+    lane: i64,
     /// Every lane changing or reaching it, by id.
-    pub lanes: Vec<i64>,
-    pub changed_by: Vec<i64>,
-    pub lines: u64,
+    lanes: Vec<i64>,
+    changed_by: Vec<i64>,
+    lines: u64,
     /// `kind name` of each entry point at this file.
-    pub entries: BTreeSet<String>,
+    entries: BTreeSet<String>,
 }
 
 /// One repo's graph, positions relative to its own top left.
 pub struct Layout {
-    pub nodes: Vec<Node>,
+    nodes: Vec<Node>,
     /// Entry-point evidence hops, as node indexes; impact gives depths,
     /// not edges, so these are the only ones drawn.
-    pub edges: BTreeSet<(usize, usize)>,
-    /// One line per lane for what the drawing may be missing.
+    edges: BTreeSet<(usize, usize)>,
+    /// What the drawing may be missing.
     pub notes: Vec<String>,
-    pub size: Vec2,
+    size: Vec2,
 }
 
 #[derive(Default)]
@@ -219,7 +218,7 @@ pub fn layout(lanes: &[&Lane]) -> Layout {
     }
 }
 
-pub fn colour(lane: i64) -> Color32 {
+fn colour(lane: i64) -> Color32 {
     PALETTE[lane.rem_euclid(PALETTE.len() as i64) as usize]
 }
 
@@ -257,7 +256,6 @@ fn draw_one(ui: &mut egui::Ui, layout: &Layout) {
         let at = n.pos + origin;
         let fill = colour(n.lane).gamma_multiply(FADE[n.depth]);
         painter.circle_filled(at, n.radius, fill);
-        // Two lanes on one node: a ring, thicker when both change it.
         if n.lanes.len() > 1 {
             let width = if n.changed_by.len() > 1 { 3.0 } else { 1.5 };
             painter.circle_stroke(at, n.radius + 3.0, Stroke::new(width, text));

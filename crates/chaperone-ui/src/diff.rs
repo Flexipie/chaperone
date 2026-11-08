@@ -17,7 +17,7 @@ use crate::watch::{Selected, Shown};
 
 /// A poll stats one file, no process; a commit shows within this.
 const POLL: Duration = Duration::from_millis(250);
-const DEADLINE: Duration = Duration::from_secs(5);
+pub const DEADLINE: Duration = Duration::from_secs(5);
 pub const OUT_BYTES: usize = 1024 * 1024;
 
 /// One lane's diff, or why there is none.
@@ -100,37 +100,51 @@ fn diff(bin: &Path, lane: &Selected) -> State {
     if !wt.is_dir() {
         return State::Failed(format!("worktree missing: {}", wt.display()));
     }
+    let args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv"];
+    match against_base(bin, wt, lane.base_sha.as_deref(), &args, &[]) {
+        Ok((base, out, cut)) => State::Text {
+            base,
+            lines: String::from_utf8_lossy(&out)
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+            cut,
+        },
+        Err(e) => State::Failed(e),
+    }
+}
+
+/// `git <pre> --merge-base <base> <post> --` in `wt` against the first base
+/// this clone has, the claimed `base_sha` last: the base, git's output and
+/// whether it was cut at [`OUT_BYTES`], or why there is none.
+pub fn against_base(
+    bin: &Path,
+    wt: &Path,
+    base_sha: Option<&str>,
+    pre: &[&str],
+    post: &[&str],
+) -> Result<(String, Vec<u8>, bool), String> {
     let deadline = Instant::now() + DEADLINE;
-    for base in BASES.iter().copied().chain(lane.base_sha.as_deref()) {
+    for base in BASES.iter().copied().chain(base_sha) {
         // `--end-of-options`: a claimed base_sha is not checked as hex.
         let args = [
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--merge-base",
-            "--end-of-options",
-            base,
-            "--",
-        ];
+            pre,
+            &["--merge-base", "--end-of-options", base],
+            post,
+            &["--"],
+        ]
+        .concat();
         match git(bin, wt, &args, deadline, OUT_BYTES) {
-            Ok((out, cut)) => {
-                let text = String::from_utf8_lossy(&out);
-                return State::Text {
-                    base: base.into(),
-                    lines: text.lines().map(str::to_owned).collect(),
-                    cut,
-                };
-            }
+            Ok((out, cut)) => return Ok((base.into(), out, cut)),
             // A base this clone lacks: try the next one.
             Err(Failure::BadRevision) => {}
             Err(Failure::TimedOut) => {
-                return State::Failed(format!("git diff passed {}s", DEADLINE.as_secs()));
+                return Err(format!("git {} passed {}s", pre[0], DEADLINE.as_secs()));
             }
-            Err(Failure::Other(e)) => return State::Failed(e),
+            Err(Failure::Other(e)) => return Err(e),
         }
     }
-    State::Failed(format!(
+    Err(format!(
         "no base: none of {} or the claimed base_sha is in this clone",
         BASES.join(", ")
     ))

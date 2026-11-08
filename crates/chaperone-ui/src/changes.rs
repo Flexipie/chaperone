@@ -11,19 +11,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use chaperone_core::git::{BASES, Failure, git, git_bin};
+use chaperone_core::git::git_bin;
 use chaperone_core::ledger::Ledger;
 use chaperone_core::overlap::overlap;
 use chaperone_graph::{Error, impact_in};
 
-use crate::diff::reflog_time;
+use crate::diff::{DEADLINE, against_base, reflog_time};
 use crate::graph::{Lane, Layout, Repos, layout};
 use crate::watch::Shown;
 
 /// A poll stats one file per lane, no process.
 const POLL: Duration = Duration::from_millis(250);
-const DEADLINE: Duration = Duration::from_secs(5);
-const OUT_BYTES: usize = 1024 * 1024;
 
 /// What a lane's part was read from: its head and its files.
 type Key = (String, Vec<String>);
@@ -121,7 +119,6 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 }
             }
 
-            // Lanes no longer on the board.
             lanes.retain(|id, _| want.iter().any(|w| w.id == *id));
             let mut by_repo: BTreeMap<String, (String, Vec<i64>)> = BTreeMap::new();
             for w in &want {
@@ -177,9 +174,8 @@ fn publish(shown: &Mutex<Shown>, graph: Result<Repos, String>, changed: &impl Fn
 }
 
 /// One lane's impact and lines changed, read at `key`.
-fn read_lane(w: &Want, key: &Key, notes: Vec<String>) -> Lane {
+fn read_lane(w: &Want, key: &Key, mut notes: Vec<String>) -> Lane {
     let (head, paths) = key;
-    let mut notes = notes;
     let Some(wt) = w.worktree.as_deref().map(Path::new).filter(|p| p.is_dir()) else {
         return Lane {
             id: w.id,
@@ -222,43 +218,24 @@ fn read_lane(w: &Want, key: &Key, notes: Vec<String>) -> Lane {
 /// Lines added and removed per path in HEAD's commits since the
 /// merge-base with the first base this clone has (as the diff panel).
 fn numstat(wt: &Path, base_sha: Option<&str>) -> Result<HashMap<String, u64>, String> {
-    let deadline = Instant::now() + DEADLINE;
-    let bin = git_bin(deadline);
-    for base in BASES.iter().copied().chain(base_sha) {
-        let args = [
-            "diff",
-            "--numstat",
-            "-z",
-            "--no-renames",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--merge-base",
-            "--end-of-options",
-            base,
-            "HEAD",
-            "--",
-        ];
-        match git(&bin, wt, &args, deadline, OUT_BYTES) {
-            Ok((out, _)) => {
-                let text = String::from_utf8_lossy(&out);
-                // `added\tremoved\tpath`; `-` for a binary file.
-                return Ok(text
-                    .split('\0')
-                    .filter_map(|e| {
-                        let mut f = e.splitn(3, '\t');
-                        let n =
-                            |s: Option<&str>| s.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                        let (a, r) = (n(f.next()), n(f.next()));
-                        Some((f.next()?.to_string(), a + r))
-                    })
-                    .collect());
-            }
-            Err(Failure::BadRevision) => {}
-            Err(Failure::TimedOut) => {
-                return Err(format!("git diff passed {}s", DEADLINE.as_secs()));
-            }
-            Err(Failure::Other(e)) => return Err(e),
-        }
-    }
-    Err("no base in this clone".into())
+    let bin = git_bin(Instant::now() + DEADLINE);
+    let args = [
+        "diff",
+        "--numstat",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+    ];
+    let (_, out, _) = against_base(&bin, wt, base_sha, &args, &["HEAD"])?;
+    // `added\tremoved\tpath`; `-` for a binary file.
+    Ok(String::from_utf8_lossy(&out)
+        .split('\0')
+        .filter_map(|e| {
+            let mut f = e.splitn(3, '\t');
+            let n = |s: Option<&str>| s.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let (a, r) = (n(f.next()), n(f.next()));
+            Some((f.next()?.to_string(), a + r))
+        })
+        .collect())
 }
