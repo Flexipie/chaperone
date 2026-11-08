@@ -242,11 +242,11 @@ fn read_lane(w: &Want, key: &Key) -> Lane {
     };
     // Entry points need the repo's pipeline profile; without one, the
     // dependents still show.
-    let impact = match impact_in(wt, paths.clone(), None, true, None) {
+    let impact = match impact_in(wt, paths.clone(), None, true, None, None) {
         Ok(i) => Ok(i),
         Err(e) => {
             notes.push(format!("no entry points: {}", why(e)));
-            impact_in(wt, paths.clone(), None, false, None).map_err(why)
+            impact_in(wt, paths.clone(), None, false, None, None).map_err(why)
         }
     };
     Lane {
