@@ -70,8 +70,7 @@ fn slice(ui: &mut egui::Ui, d: &LaneDetail) {
         ui.label("Nothing in the ledger on this key.");
         return;
     };
-    let s = &dossier.slice;
-    if let Some(i) = &s.in_spec {
+    if let Some(i) = &dossier.slice.in_spec {
         let n = i.n.map_or(String::new(), |n| format!("slice {n}: "));
         ui.strong(format!("{n}{}", i.title));
         ui.label(format!(
@@ -79,19 +78,8 @@ fn slice(ui: &mut egui::Ui, d: &LaneDetail) {
             i.parent_key, i.parent_title, i.version
         ));
         lines(ui, &i.decisions, "No decisions.");
-    }
-    if let Some(p) = &s.parent_of {
-        ui.strong(format!(
-            "Parent of {} slices: {} (v{})",
-            p.slices, p.title, p.version
-        ));
-        lines(ui, &p.decisions, "No decisions.");
-    }
-    if s.in_spec.is_none() && s.parent_of.is_none() {
-        ui.label("Not in a spec.");
-    }
-    for n in &dossier.notes.items {
-        ui.label(format!("note {}: {}", n.at, n.note));
+    } else {
+        ui.label("Not a slice of a spec.");
     }
 }
 
@@ -123,14 +111,6 @@ fn handoffs(ui: &mut egui::Ui, id: i64, d: &LaneDetail) {
     }
     if !any {
         ui.label("No handoffs.");
-    }
-    for h in dossier
-        .handoffs
-        .decisions
-        .iter()
-        .filter(|h| h.work_id == id)
-    {
-        ui.label(format!("decision: {}", h.decision));
     }
 }
 
@@ -198,19 +178,14 @@ fn draw_diff(ui: &mut egui::Ui, diff: Option<&Diff>) {
         .max_height(DIFF_HEIGHT)
         .show_rows(ui, row, lines.len(), |ui, range| {
             for l in &lines[range] {
-                let color = if l.starts_with("+++") || l.starts_with("---") {
-                    None
-                } else if l.starts_with('+') {
-                    Some(Color32::from_rgb(60, 160, 80))
-                } else if l.starts_with('-') {
-                    Some(Color32::from_rgb(200, 70, 70))
-                } else if l.starts_with("@@") {
-                    Some(Color32::from_rgb(90, 130, 200))
-                } else {
-                    None
-                };
                 let text = RichText::new(l).monospace();
-                ui.label(color.map_or(text.clone(), |c| text.color(c)));
+                ui.label(match l.as_bytes() {
+                    [b'+', b'+', b'+', ..] | [b'-', b'-', b'-', ..] => text,
+                    [b'+', ..] => text.color(Color32::from_rgb(60, 160, 80)),
+                    [b'-', ..] => text.color(Color32::from_rgb(200, 70, 70)),
+                    [b'@', b'@', ..] => text.color(Color32::from_rgb(90, 130, 200)),
+                    _ => text,
+                });
             }
         });
 }
