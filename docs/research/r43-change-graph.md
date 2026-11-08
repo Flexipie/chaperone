@@ -77,9 +77,11 @@ The rules live in the repo's pipeline profile (owner decision on #39), as TOML f
 matter: `[[entry_points]]` rows `{kind, path glob, name}` and an `[areas]` map. An entry
 point is reached when its file is a target or depends on one; the answer carries the hop
 chain with the `file:line` of each reference and the commit the lines are read at. Every
-file a rule names must be in exactly one area, and every rule must name a file, checked
-against the whole tree on each call, so a gap in the map fails the call instead of
-showing up as "other" or as nothing.
+file a rule names must be in exactly one area, checked against the whole tree and the
+targets on each call, so a gap in the map fails the call instead of showing up as
+"other". A rule that names no file is listed as unmatched and makes the answer a lower
+bound, not a refusal: one lane renaming a file a rule names would otherwise break the
+call for every other lane.
 
 A rule should name the file that implements an entry point, not a dispatcher: this
 repo's `main.rs` depends on every command, so every change that reaches any command
