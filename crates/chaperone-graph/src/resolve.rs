@@ -22,9 +22,9 @@ struct Krate {
 pub struct Graph {
     /// `deps[f]`: the files `f` depends on.
     pub deps: Vec<HashSet<usize>>,
-    /// `at[(f, d)]`: where the first reference that makes `f` depend on `d`
-    /// is written, (file, line). No entry for an edge Cargo makes
-    /// (integration tests run the binaries).
+    /// `at[(f, d)]`: where a reference that makes `f` depend on `d` is
+    /// written (the first one found), (file, line). No entry for an edge
+    /// Cargo makes (integration tests run the binaries).
     pub at: HashMap<(usize, usize), (usize, u32)>,
     /// Each file's module path (`chaperone_core::ledger::write`), when a
     /// crate root reaches it.
@@ -182,7 +182,6 @@ pub fn build(paths: &[String], facts: &[Option<Facts>], manifests: &[(String, St
                 g.unsure.push((file, "super_past_root".into()));
             }
         }
-        g.deps[file].remove(&file);
     }
     g
 }

@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 /// Bump when what `facts` extracts changes, or the grammar does: cached
 /// facts of another version are never read (`cache.rs` names its table
 /// with it).
-pub const FACTS_VERSION: u32 = 4;
+pub const FACTS_VERSION: u32 = 5;
 /// Tree depth read; every walk below recurses along the tree, so a deeper
 /// file could overflow the stack and is not read.
 const MAX_DEPTH: u32 = 256;
@@ -106,7 +106,7 @@ fn walk(node: Node, src: &[u8], scope: &mut Vec<String>, f: &mut Facts) {
         }
         "use_declaration" => {
             if let Some(arg) = node.child_by_field_name("argument") {
-                use_tree(arg, src, &[], scope, f);
+                use_tree(arg, src, &[], scope, line(node), f);
             }
             return;
         }
@@ -194,9 +194,9 @@ fn has_attr(node: Node, src: &[u8], prefix: &str) -> bool {
     false
 }
 
-/// Each path a `use` tree names, with the name it brings in.
-fn use_tree(node: Node, src: &[u8], prefix: &[String], scope: &[String], f: &mut Facts) {
-    let at = line(node);
+/// Each path a `use` tree names, with the name it brings in, all at `at`:
+/// the `use`'s line, not a leaf's in a list split over lines.
+fn use_tree(node: Node, src: &[u8], prefix: &[String], scope: &[String], at: u32, f: &mut Facts) {
     let mut push = |path: Vec<String>, alias: String| {
         f.refs.push(Ref {
             scope: scope.to_vec(),
@@ -227,13 +227,13 @@ fn use_tree(node: Node, src: &[u8], prefix: &[String], scope: &[String], f: &mut
                 None => Some(prefix.to_vec()),
             };
             if let (Some(base), Some(list)) = (base, node.child_by_field_name("list")) {
-                use_tree(list, src, &base, scope, f);
+                use_tree(list, src, &base, scope, at, f);
             }
         }
         "use_list" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                use_tree(child, src, prefix, scope, f);
+                use_tree(child, src, prefix, scope, at, f);
             }
         }
         // `{self}` in a list names the prefix itself.
@@ -278,7 +278,7 @@ fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
             line,
         })
     };
-    // The run's first token's line.
+    // The line of the run's first identifier.
     let mut at = 0;
     let mut run: Vec<String> = Vec::new();
     let mut joined = false;
@@ -295,6 +295,9 @@ fn tokens(node: Node, src: &[u8], scope: &[String], f: &mut Facts) {
                 }
                 if !joined {
                     run.clear();
+                }
+                // Also after a leading `::`, which starts a run too.
+                if run.is_empty() {
                     at = line(child);
                 }
                 run.push(match kind {
