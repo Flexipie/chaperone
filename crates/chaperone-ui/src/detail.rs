@@ -44,9 +44,7 @@ pub fn draw(
                     section(ui, "Review findings", |ui| findings(ui, d));
                 }
             }
-            let declared = lane
-                .and_then(|l| l.board.handoff.as_ref())
-                .and_then(|h| h.handoff.areas.as_deref());
+            let declared = lane.and_then(areas::declared);
             section(ui, "Areas", |ui| draw_areas(ui, declared, areas));
             section(ui, "Diff against the base", |ui| {
                 refresh = ui.button("Refresh").clicked();

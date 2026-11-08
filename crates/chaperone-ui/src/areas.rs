@@ -11,6 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use chaperone_core::git::{BASES, Failure, git, git_bin};
+use chaperone_core::work::BoardLane;
 use chaperone_graph::Error;
 
 use crate::diff::reflog_time;
@@ -55,7 +56,7 @@ pub fn spawn(shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
                     .iter()
                     .flat_map(|b| &b.lanes)
                     .filter_map(|l| {
-                        let declared = l.board.handoff.as_ref()?.handoff.areas.clone()?;
+                        let declared = declared(l)?.to_vec();
                         let item = &l.board.item;
                         Some((
                             item.id,
@@ -175,13 +176,11 @@ fn read(bin: &Path, key: &Key) -> State {
         Ok(out) => names.extend(out.unwrap_or_default()),
         Err(e) => return State::Failed(e),
     }
-    let mut paths: Vec<String> = names
+    let paths: Vec<String> = names
         .split(|b| *b == 0)
         .filter(|p| !p.is_empty())
         .map(|p| String::from_utf8_lossy(p).to_string())
         .collect();
-    paths.sort();
-    paths.dedup();
     let declared = Some(key.declared.clone());
     match chaperone_graph::impact_in(wt, paths, None, true, None, declared) {
         Ok(i) => i
@@ -189,6 +188,11 @@ fn read(bin: &Path, key: &Key) -> State {
             .map_or_else(|| State::Failed("impact gave no areas".into()), State::Done),
         Err(Error::Invalid(e) | Error::Internal(e)) => State::Failed(e),
     }
+}
+
+/// The areas the lane's newest handoff declares.
+pub fn declared(lane: &BoardLane) -> Option<&[String]> {
+    lane.board.handoff.as_ref()?.handoff.areas.as_deref()
 }
 
 /// The card's cell: the declared areas, and what the diff does beyond them.

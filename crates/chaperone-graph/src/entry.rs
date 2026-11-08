@@ -79,7 +79,6 @@ impl Rules {
             .map(|(name, _)| name.as_str())
     }
 
-    /// The profile names this area.
     pub(crate) fn has_area(&self, name: &str) -> bool {
         self.areas.contains_key(name)
     }

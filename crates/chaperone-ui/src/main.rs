@@ -221,11 +221,6 @@ fn cells(lane: &BoardLane, areas: Option<&areas::Areas>, now: i64) -> [String; 1
         text(&s.plan_check),
         text(&s.quality_gate),
         verdict,
-        areas::card(declared(lane), areas),
+        areas::card(areas::declared(lane), areas),
     ]
-}
-
-/// The areas the lane's newest handoff declares.
-fn declared(lane: &BoardLane) -> Option<&[String]> {
-    lane.board.handoff.as_ref()?.handoff.areas.as_deref()
 }
