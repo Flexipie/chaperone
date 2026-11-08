@@ -122,7 +122,7 @@ brief (the instruction file an agent starts with) and the reserved `brief` check
   is a handful of index searches, so the table buys nothing a lane can feel.
 - **Notes as GitHub comments.** They are public and human-facing, which is the noise
   #69 is about, and Chaperone would have to call `gh` ([ADR 0003](0003-chaperone-replaces-daisy.md)
-  keeps its only outside call to `daisy-cli reviews get`).
+  keeps the CLI's only outside call to `daisy-cli reviews get`).
 - **Spec decisions only.** A decision needs a spec, and a follow-up issue started with
   `spawn <KEY>` has none.
 

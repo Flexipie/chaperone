@@ -6,9 +6,12 @@
 //! shows what each lane's commits change and reach. A left nav picks all
 //! repos, one repo or the pipeline, each with how many lanes need you. All
 //! repos opens on a card per repo, a repo on its lanes in plain words and
-//! what merged lately; the full board stays a tab away.
+//! what merged lately; the full board stays a tab away. A repo's Backlog
+//! tab lists its open issues not in a lane, from daisy's GitHub mirror,
+//! each ready or blocked.
 
 mod areas;
+mod backlog;
 mod board;
 mod changes;
 mod detail;
@@ -72,7 +75,9 @@ fn main() -> eframe::Result {
             let ctx = cc.egui_ctx.clone();
             areas::spawn(shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
-            changes::spawn(path, shown.clone(), move || ctx.request_repaint());
+            changes::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            backlog::spawn(path, shown.clone(), move || ctx.request_repaint());
             Ok(Box::new(App {
                 shown,
                 first_frame: args.first_frame,
@@ -100,6 +105,8 @@ enum Tab {
     Page,
     Board,
     Graph,
+    /// Only in a repo's view.
+    Backlog,
 }
 
 impl eframe::App for App {
@@ -191,11 +198,27 @@ impl eframe::App for App {
                 if let Some(error) = &shown.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
+                shown.graph_open = false;
+                shown.backlog_for = None;
                 if *view == nav::View::Pipeline {
                     ui.heading("Pipeline");
                     ui.label("The pipeline page is not built yet (#109, slice 11).");
-                    shown.graph_open = false;
                     return;
+                }
+                // The repo as the board spells it: daisy may match case.
+                let repo = match view {
+                    nav::View::Repo(r) => shown.board.as_ref().and_then(|b| {
+                        let repos = board::group(b);
+                        // Lanes with no repo have no mirror to read.
+                        let slug = repos
+                            .iter()
+                            .find(|x| x.slug.eq_ignore_ascii_case(r) && x.slug != "(no repo)");
+                        slug.map(|x| x.slug.to_string())
+                    }),
+                    _ => None,
+                };
+                if repo.is_none() && self.tab == Tab::Backlog {
+                    self.tab = Tab::default();
                 }
                 ui.horizontal(|ui| {
                     let page = if *view == nav::View::All {
@@ -206,7 +229,15 @@ impl eframe::App for App {
                     ui.selectable_value(&mut self.tab, Tab::Page, page);
                     ui.selectable_value(&mut self.tab, Tab::Board, "Board");
                     ui.selectable_value(&mut self.tab, Tab::Graph, "Change graph");
+                    if repo.is_some() {
+                        ui.selectable_value(&mut self.tab, Tab::Backlog, "Backlog");
+                    }
                 });
+                if let (Tab::Backlog, Some(slug)) = (self.tab, &repo) {
+                    shown.backlog_for = Some(slug.clone());
+                    backlog::draw(ui, shown.backlog.as_ref(), slug);
+                    return;
+                }
                 shown.graph_open = self.tab == Tab::Graph;
                 if self.tab == Tab::Graph {
                     match &shown.graph {

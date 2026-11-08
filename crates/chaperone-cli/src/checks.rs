@@ -1,5 +1,5 @@
 //! `chaperone check`, `reviews`, `jobs`, `usage`, `attention` and `dossier`. `reviews record` runs
-//! `daisy-cli reviews get`, Chaperone's only call into daisy, before the
+//! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction.
 
 use std::process::Command;
