@@ -42,6 +42,7 @@ pub struct Entries<'a> {
     pub rules: &'a Rules,
     /// `Rules::check`'s answer.
     pub unmatched: Vec<Unmatched>,
+    pub total: usize,
     /// The commit the lines are read at.
     pub head: String,
     /// Paths whose index differs from `head`: their lines are not `head`'s.
@@ -105,6 +106,8 @@ pub struct EntryPoints {
     pub omitted: usize,
     /// Nearest first.
     pub reached: Vec<Entry>,
+    /// Entry points in the tree and the targets, reached or not.
+    pub total: usize,
     pub unmatched: Vec<Unmatched>,
 }
 
@@ -442,6 +445,7 @@ pub fn impact(
             head: e.head,
             omitted,
             reached,
+            total: e.total,
             unmatched: e.unmatched,
         }
     });

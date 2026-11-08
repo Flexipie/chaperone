@@ -692,7 +692,7 @@ fn repo_checks(dir: &Path, profile: Option<PathBuf>, scan: &mut Scan) -> Option<
                 }
                 // Its refusal (an entry point in no or several areas) is
                 // the per-file list above; only the unmatched rules are new.
-                if let Ok(unmatched) = rules.check(tree.into_iter()) {
+                if let Ok((unmatched, _)) = rules.check(tree.into_iter()) {
                     for u in unmatched {
                         let msg = format!("{} rule {} names no tracked file", u.kind, u.path);
                         scan.add(dir, None, "entry_point", msg);
