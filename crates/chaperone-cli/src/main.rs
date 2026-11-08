@@ -4,6 +4,8 @@
 mod checks;
 mod child;
 mod cli;
+mod git;
+mod impact;
 mod output;
 mod overlap;
 mod spec;
@@ -82,6 +84,7 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
             };
             Ok(Outcome::One(Ledger::open(&path)?.stats(&cohort)??))
         }
+        Cmd::Impact { files, cache } => impact::run(files, cache, meta, cli.format),
         Cmd::Overlap { repo, uncommitted } => {
             overlap::run(&Ledger::open(&path)?, repo, uncommitted, meta, cli.format)
         }
