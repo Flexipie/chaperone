@@ -5,6 +5,7 @@
 mod handoff;
 mod lane_board;
 mod lane_detail;
+mod lane_page;
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -17,6 +18,7 @@ pub(crate) use self::handoff::commit_ok;
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
 pub use self::lane_board::{AttentionRow, BoardLane, LaneBoard, SpecTitle, Stamps};
 pub use self::lane_detail::{CheckRow, DETAIL_ROWS, FindingRow, LaneDetail};
+pub use self::lane_page::{DecisionRow, GateRow, Gates, LanePage, TimelineRow};
 use crate::cursor::{self, Cursor, Page};
 use crate::engine;
 use crate::ledger::{

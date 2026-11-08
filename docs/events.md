@@ -261,8 +261,8 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 | `pr_review` | daisy_worker | Same as `local_review`, without `round`, plus `pr`. |
 | `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. `review`. No score or findings. It sets no `review.local_head`, adds no round, and projects `daisy_review.state` as `failed`, which no gate accepts. |
 
-`job` is daisy's job id as a JSON integer. `round` is the lane's count of `ran` local
-reviews including this one, not daisy's round, so `jobs get` reports `round` null. `review` holds daisy's scalars only (`status`, `phase`,
+`job` is daisy's job id as a JSON integer. `round` is the lane's review rounds including this one
+(`review.local_rounds`: `ran` local reviews and `review_round` checks), not daisy's round, so `jobs get` reports `round` null. `review` holds daisy's scalars only (`status`, `phase`,
 `source`, `pr_ref`, `branch`, `repo`), for `reviews get` and `jobs get`; daisy's free text
 is not stored.
 

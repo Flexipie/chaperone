@@ -2,7 +2,7 @@
 //! slice (the dossier's section), its handoffs, its check results by head
 //! and its reviews' findings, in one read transaction.
 
-use rusqlite::{Transaction, TransactionBehavior};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 use serde::Serialize;
 
 use super::{Handoff, IS_HANDOFF, handoff_at};
@@ -53,9 +53,19 @@ impl Ledger {
     pub fn lane_detail(&self, id: i64, key: Option<&str>) -> Result<LaneDetail, LedgerError> {
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
         check_schema(&tx)?;
+        self.detail_in(&tx, id, key)
+    }
+
+    /// [`Ledger::lane_detail`] inside the caller's read transaction.
+    pub(super) fn detail_in(
+        &self,
+        tx: &Connection,
+        id: i64,
+        key: Option<&str>,
+    ) -> Result<LaneDetail, LedgerError> {
         let data_version = self.data_version()?;
         let slice = match key {
-            Some(k) => slice_of(&tx, k)?,
+            Some(k) => slice_of(tx, k)?,
             None => None,
         };
         // By lane, not through the dossier: a lane with no tracker key has

@@ -8,11 +8,12 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::ledger::projection::project;
 use crate::ledger::{
     Actor, Applied, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation, Payload,
     Refusal, canonical_at, exists,
 };
-use crate::pipeline::canonical_string;
+use crate::pipeline::{Fact, canonical_string};
 
 const ENTITY: &str = "work item";
 const JOB: &str = "job";
@@ -543,14 +544,12 @@ impl Ledger {
                     return invalid(format!("job {job} is recorded on work item {other}"));
                 }
                 if outcome == Some("ran") && check == "local_review" {
-                    let rounds: i64 = conn.query_row(
-                        "SELECT count(*) FROM events WHERE lane_id = ?1
-                           AND kind = 'check.finished'
-                           AND json_extract(payload_json, '$.check') = 'local_review'
-                           AND json_extract(payload_json, '$.outcome') = 'ran'",
-                        [work],
-                        |r| r.get(0),
-                    )?;
+                    // The engine's count (`review_round` checks too), so the
+                    // stamp is the round the gates see.
+                    let rounds = match project(conn, work, None)?.get("review.local_rounds") {
+                        Fact::Int(n) => *n,
+                        _ => 0,
+                    };
                     p.rest.insert("round".into(), json!(rounds + 1));
                 }
                 Ok(Ok(check_event(kind, work, p)))
