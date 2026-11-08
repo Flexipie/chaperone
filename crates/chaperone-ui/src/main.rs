@@ -121,8 +121,7 @@ impl eframe::App for App {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         let mut shown = self.shown.lock().unwrap();
-        let before = self.view.clone();
-        egui::Panel::left("nav")
+        let clicked = egui::Panel::left("nav")
             .frame(theme::glass())
             .show_separator_line(false)
             .resizable(false)
@@ -135,9 +134,10 @@ impl eframe::App for App {
                     now,
                     &mut self.view,
                 )
-            });
+            })
+            .inner;
         // Any nav click leaves the lane page.
-        if self.view != before {
+        if clicked {
             shown.selected = None;
         }
         // A claim or update since the click moves the worktree or base; a
@@ -176,7 +176,12 @@ impl eframe::App for App {
             let mut asked = lane::Asked::default();
             egui::CentralPanel::default()
                 .frame(theme::ground())
-                .show(ui, |ui| asked = lane::draw(ui, &sel, &reads, now));
+                .show(ui, |ui| {
+                    if let Some(error) = &s.error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                    asked = lane::draw(ui, &sel, &reads, now)
+                });
             // The change graph is not read behind the page.
             shown.graph_open = false;
             shown.refresh += u64::from(asked.refresh);

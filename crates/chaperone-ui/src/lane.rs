@@ -34,7 +34,9 @@ pub struct Reads<'a> {
 
 pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, now: i64) -> Asked {
     let mut asked = Asked::default();
-    egui::ScrollArea::vertical().id_salt("lane").show(ui, |ui| {
+    // Each lane keeps its own scroll offset.
+    let salt = ("lane", sel.id);
+    egui::ScrollArea::vertical().id_salt(salt).show(ui, |ui| {
         asked.back = ui.button("< Back").clicked();
         let page = match r.detail.map(|d| &d.read) {
             Some(Ok(p)) => Some(p),
@@ -50,7 +52,9 @@ pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, now: i64) -> Asked {
         };
         header(ui, sel, lane, page, r, now);
         let Some(page) = page else {
-            ui.label("Reading the lane...");
+            if r.detail.is_none() {
+                ui.label("Reading the lane...");
+            }
             return;
         };
         tiles(ui, lane, page, r, now);
@@ -99,17 +103,19 @@ fn header(
             None => ui.label(RichText::new(row.state).strong()),
         };
     });
-    // The newest brief's goal, else the spec slice's title.
-    let newest = page.and_then(|p| p.detail.handoffs.first());
-    let goal = newest
-        .and_then(|h| h.handoff.brief.as_ref())
-        .and_then(|b| b.goal.trim().lines().next())
-        .filter(|g| !g.is_empty());
-    let slice = page
-        .and_then(|p| p.detail.slice.as_ref())
-        .and_then(|s| s.in_spec.as_ref())
-        .map(|s| s.title.as_str());
-    ui.label(goal.or(slice).unwrap_or("No goal recorded yet."));
+    // The newest brief's goal, else the spec slice's title, once read.
+    if let Some(p) = page {
+        let goal = p
+            .detail
+            .handoffs
+            .first()
+            .and_then(|h| h.handoff.brief.as_ref())
+            .and_then(|b| b.goal.trim().lines().next())
+            .filter(|g| !g.is_empty());
+        let slice = p.detail.slice.as_ref().and_then(|s| s.in_spec.as_ref());
+        let slice = slice.map(|s| s.title.as_str());
+        ui.label(goal.or(slice).unwrap_or("No goal recorded yet."));
+    }
     ui.horizontal_wrapped(|ui| {
         detail::issue(ui, sel.key.as_deref());
         let text = |v: &Option<String>| v.clone().unwrap_or_else(|| "-".into());
@@ -215,8 +221,8 @@ fn review(page: &LanePage) -> (String, String) {
         .collect();
     let value = match scores.is_empty() {
         true => "no score".into(),
-        // The rows are newest first: oldest first here, the newest last.
-        false => scores.into_iter().rev().collect::<Vec<_>>().join(" > "),
+        // The rows are newest first: shown oldest first, the newest last.
+        false => scores.into_iter().rev().collect::<Vec<_>>().join(", "),
     };
     let head = page
         .detail
@@ -229,8 +235,11 @@ fn review(page: &LanePage) -> (String, String) {
         (Some(r), Some(h)) if r == h => "on head".into(),
         (Some(r), Some(_)) => format!("not on head (reviewed {})", board::short(r)),
     };
-    let rounds = page.review_rounds;
-    (value, format!("{rounds} rounds, {on}"))
+    let rounds = match page.review_rounds {
+        1 => "1 round".to_string(),
+        n => format!("{n} rounds"),
+    };
+    (value, format!("{rounds}, {on}"))
 }
 
 fn gates(page: &LanePage) -> (String, String) {
@@ -285,6 +294,11 @@ fn decisions(ui: &mut egui::Ui, page: &LanePage) {
             ui.label(RichText::new(who).small().weak());
             ui.label(&d.text);
         });
+    }
+    // The dossier keeps the spec's newest 20.
+    let slice = page.detail.slice.as_ref();
+    if let Some(n) = slice.and_then(|s| s.omitted.get("slice_decisions")) {
+        ui.label(format!("Left out: the {n} oldest decisions."));
     }
 }
 
