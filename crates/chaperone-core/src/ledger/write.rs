@@ -35,6 +35,7 @@ pub const SESSION_CHECKS: &[&str] = &[
     "merge_verdict",
     "smoke",
     "kept_tests",
+    "review_round",
 ];
 
 pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];

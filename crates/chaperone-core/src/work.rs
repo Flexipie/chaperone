@@ -26,7 +26,7 @@ use crate::ledger::{
 use crate::pipeline::Phase;
 
 const ENTITY: &str = "work item";
-/// The M1 gated transition (pipelines/v17.1.toml).
+/// The M1 gated transition (pipelines/v19.toml).
 const HANDOFF: &str = "handoff";
 const DEFAULT_LEASE_SECS: i64 = 900;
 /// Daisy's `tool` on handoff and event rows.
@@ -1666,7 +1666,7 @@ mod tests {
         let events = || kinds(&ledger).len();
         let before = events();
         let unknown = Err(Refusal::PipelineUnknown {
-            pipeline_id: "v17.1".into(),
+            pipeline_id: crate::pipeline::current().id.clone(),
             pipeline_hash: "v18hash".into(),
         });
         assert_eq!(claim(&a, false).map(|_| ()), unknown, "renew");

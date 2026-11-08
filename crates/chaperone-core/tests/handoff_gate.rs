@@ -140,6 +140,26 @@ impl Lane {
         }
     }
 
+    /// v19's ready records: smoke ran and kept tests skipped (none).
+    fn smoke_and_kept(&self) {
+        self.check(&self.checker, "smoke", json!({}));
+        self.finish(
+            "kept_tests",
+            "skipped",
+            "abc1234",
+            json!({"reason": "none"}),
+        );
+    }
+
+    /// The gate a ready handoff on abc1234def is denied as, None when it passes.
+    fn ready_denied_as(&self) -> Option<String> {
+        match self.handoff("abc1234def", "review", Some(true)) {
+            Ok(_) => None,
+            Err(Refusal::GateDenied { gate, .. }) => Some(gate),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+
     fn handoff(&self, commit: &str, status: &str, ready: Option<bool>) -> Result<i64, Refusal> {
         let input = HandoffInput {
             summary: "s".into(),
@@ -284,6 +304,7 @@ fn a_ready_handoff_passes_the_gate_and_reads_ready() {
         Err(Refusal::GateDenied { .. })
     ));
     lane.stamps();
+    lane.smoke_and_kept();
     lane.handoff("abc1234def", "review", Some(true)).unwrap();
     let item = lane.ledger.work_get(1, T2).unwrap().unwrap();
     assert_eq!(
@@ -411,6 +432,7 @@ fn the_board_reads_the_newest_handoff_and_the_override() {
         (false, "status is claimed, not review".into(), None, None)
     );
     lane.stamps();
+    lane.smoke_and_kept();
     let h = lane.handoff("abc1234def", "review", Some(true)).unwrap();
     assert_eq!(board(), (true, "the lane says ready".into(), None, Some(h)));
     let h = lane.handoff("abc1234def", "active", None).unwrap();
@@ -515,4 +537,72 @@ fn a_v17_lane_keeps_the_v17_rule() {
         lane.done_no_commit(),
         denied("verdict_is_yes", &["verdict.decision"])
     );
+}
+
+/// v19: a code lane's ready needs smoke, then kept tests, recorded; a skip
+/// with its reason counts.
+#[test]
+fn v19_ready_needs_smoke_and_kept_tests_on_a_code_lane() {
+    let lane = Lane::new();
+    lane.stamps();
+    assert_eq!(lane.ready_denied_as().as_deref(), Some("smoke_ok"));
+    lane.finish(
+        "smoke",
+        "skipped",
+        "abc1234",
+        json!({"reason": "nothing_runs"}),
+    );
+    assert_eq!(lane.ready_denied_as().as_deref(), Some("kept_tests_ok"));
+    lane.check(&lane.checker, "kept_tests", json!({}));
+    assert_eq!(lane.ready_denied_as(), None);
+    assert_eq!(lane.row().1.as_deref(), Some("ready"));
+}
+
+/// v19: a lane that changes no code is ready without smoke or kept tests.
+#[test]
+fn v19_ready_needs_no_smoke_on_a_no_code_lane() {
+    let lane = Lane::with("docs", "pr");
+    lane.skips();
+    lane.check(&lane.checker, "merge_verdict", json!({"decision": "yes"}));
+    assert_eq!(lane.ready_denied_as(), None);
+}
+
+/// v19: ready allows at most `local_rounds` (3) review rounds, recorded by a
+/// fresh session as `review_round`; the lane's own session cannot record one.
+#[test]
+fn v19_ready_caps_review_rounds() {
+    for (rounds, want) in [(3, None), (4, Some("rounds_at_most"))] {
+        let lane = Lane::new();
+        lane.stamps();
+        lane.smoke_and_kept();
+        let own = lane.check(&lane.lane, "review_round", json!({}));
+        assert!(
+            matches!(own, Applied::Refused(Refusal::InvalidInput(_))),
+            "{own:?}"
+        );
+        for _ in 0..rounds {
+            lane.check(&lane.checker, "review_round", json!({}));
+        }
+        assert_eq!(lane.ready_denied_as().as_deref(), want, "{rounds} rounds");
+    }
+}
+
+/// A lane stamped v17.1 keeps v17.1: ready needs no smoke, kept tests or
+/// round cap.
+#[test]
+fn a_v17_1_lane_keeps_the_v17_1_rule() {
+    let lane = Lane::new();
+    lane.db
+        .execute(
+            "UPDATE lanes SET pipeline_id = 'v17.1',
+             pipeline_hash = 'd99d9de3d9fe7e59aa046cabdb80a6d34670d5a1dfcab1873a248ba245e32fd5'
+             WHERE id = 1",
+            [],
+        )
+        .unwrap();
+    lane.stamps();
+    for _ in 0..4 {
+        lane.check(&lane.checker, "review_round", json!({}));
+    }
+    assert_eq!(lane.ready_denied_as(), None);
 }

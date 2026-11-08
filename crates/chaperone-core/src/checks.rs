@@ -26,6 +26,7 @@ const CHECKS: &[(&str, &[&str])] = &[
     ("merge_verdict", &[]),
     ("smoke", &["nothing_runs", "attempt_failed"]),
     ("kept_tests", &["none"]),
+    ("review_round", &[]),
 ];
 
 /// The check events that carry a daisy job. Matches the `events_job`

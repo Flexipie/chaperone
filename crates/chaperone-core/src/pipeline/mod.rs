@@ -167,6 +167,7 @@ static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
     [
         include_str!("../../../../pipelines/v17.toml"),
         include_str!("../../../../pipelines/v17.1.toml"),
+        include_str!("../../../../pipelines/v19.toml"),
     ]
     .iter()
     .map(|src| Pipeline::load(src).expect("embedded pipelines load (*_loads_with_pinned_hash)"))
@@ -217,6 +218,8 @@ mod tests {
     const V17_HASH: &str = "1a8a599ca26abaf2ab5b1dc9aaa301c019237d45fa3293f4326da0b47b6ea2c5";
     const V17_1: &str = include_str!("../../../../pipelines/v17.1.toml");
     const V17_1_HASH: &str = "d99d9de3d9fe7e59aa046cabdb80a6d34670d5a1dfcab1873a248ba245e32fd5";
+    const V19: &str = include_str!("../../../../pipelines/v19.toml");
+    const V19_HASH: &str = "d45442e63a1b77001987bb5d82e987d730c26ddf4ba7c2941b6c09622287f5ea";
 
     const MINI: &str = r#"
 schema = 1
@@ -290,11 +293,27 @@ requires = ["a"]
     }
 
     #[test]
+    fn v19_loads_with_pinned_hash() {
+        let p = Pipeline::load(V19).unwrap();
+        assert_eq!((p.id.as_str(), p.hash.as_str()), ("v19", V19_HASH));
+        let ready = p
+            .transitions
+            .iter()
+            .find(|t| t.id == "handoff" && t.to == Phase::Ready)
+            .unwrap();
+        for gate in ["smoke_ok", "kept_tests_ok", "rounds_at_most"] {
+            assert!(ready.requires.iter().any(|g| g == gate), "{gate}");
+        }
+        assert!(!p.gates.contains_key("ci_not_red"));
+    }
+
+    #[test]
     fn by_stamp_needs_id_and_hash() {
         assert!(by_stamp("v17", V17_HASH).is_some());
         assert!(by_stamp("v17.1", V17_1_HASH).is_some());
+        assert!(by_stamp("v19", V19_HASH).is_some());
         assert!(by_stamp("v18", V17_HASH).is_none());
-        assert_eq!(current().id, "v17.1");
+        assert_eq!(current().id, "v19");
     }
 
     #[test]
