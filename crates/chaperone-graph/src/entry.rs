@@ -57,7 +57,7 @@ impl Rules {
 
     /// The one area `path` is in; `check` has refused a tree where an
     /// entry point is in none or several.
-    pub fn area(&self, path: &str) -> &str {
+    pub fn area<'a>(&'a self, path: &'a str) -> &'a str {
         self.areas(path).next().unwrap_or_default()
     }
 
