@@ -1,13 +1,13 @@
 //! One lane's detail (`chaperone-ui` draws it): its issue key's spec
 //! slice (the dossier's section), its handoffs, its check results by head
-//! and its reviews' findings, in one read transaction.
+//! and its reviews' findings, inside the lane page's read transaction.
 
-use rusqlite::{Connection, Transaction, TransactionBehavior};
+use rusqlite::Connection;
 use serde::Serialize;
 
 use super::{Handoff, IS_HANDOFF, handoff_at};
 use crate::dossier::{SliceSection, slice_of};
-use crate::ledger::{Ledger, LedgerError, check_schema};
+use crate::ledger::{Ledger, LedgerError};
 
 /// Rows kept per list, newest first.
 pub const DETAIL_ROWS: i64 = 50;
@@ -48,15 +48,9 @@ pub struct FindingRow {
 }
 
 impl Ledger {
-    /// Lane `id`'s detail; `key` is its tracker key (the board's
-    /// `source_key`). An unknown lane has no checks or findings.
-    pub fn lane_detail(&self, id: i64, key: Option<&str>) -> Result<LaneDetail, LedgerError> {
-        let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
-        check_schema(&tx)?;
-        self.detail_in(&tx, id, key)
-    }
-
-    /// [`Ledger::lane_detail`] inside the caller's read transaction.
+    /// Lane `id`'s detail inside the caller's read transaction; `key` is
+    /// its tracker key (the board's `source_key`). An unknown lane has no
+    /// checks or findings.
     pub(super) fn detail_in(
         &self,
         tx: &Connection,

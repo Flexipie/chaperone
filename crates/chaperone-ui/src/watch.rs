@@ -32,8 +32,9 @@ const STATS_EVERY: Duration = Duration::from_secs(1);
 const MEDIAN_EVERY: Duration = Duration::from_secs(60);
 
 /// What the window draws: the newest board, or why there is none, and
-/// the selected lane's detail and diff. The window sets `selected` and
-/// `refresh`; a detail or diff is drawn only for the lane it was read for.
+/// the selected lane's page, diff, files and repo median. The window sets
+/// `selected` and `refresh`; each is drawn only for the lane (or repo) it
+/// was read for.
 #[derive(Default)]
 pub struct Shown {
     pub board: Option<LaneBoard>,
@@ -77,7 +78,7 @@ pub struct Median {
     pub read: Result<Value, String>,
 }
 
-/// The lane picked on the board, with what its detail and diff read.
+/// The lane picked, with what its page, diff, files and median read.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selected {
     pub id: i64,

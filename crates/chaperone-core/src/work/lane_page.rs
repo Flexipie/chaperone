@@ -97,7 +97,7 @@ const QUIET: &str = "('usage.reported', 'lane.renewed', 'check.requested', 'find
 
 impl Ledger {
     /// Lane `id`'s page as of one snapshot, its schema re-checked inside
-    /// it; `key` is its tracker key as for [`Ledger::lane_detail`]. An
+    /// it; `key` is its tracker key (the board's `source_key`). An
     /// unknown lane has an empty timeline and no gates.
     pub fn lane_page(&self, id: i64, key: Option<&str>) -> Result<LanePage, LedgerError> {
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
