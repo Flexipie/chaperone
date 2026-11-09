@@ -100,6 +100,8 @@ struct Cockpit {
     view: View,
     board: Option<LaneBoard>,
     error: Option<String>,
+    /// The time the last reload used, so badges and rows agree.
+    now: i64,
     table: Entity<TableState<lanes::Lanes>>,
     first_frame: bool,
     _watch: Task<()>,
@@ -142,6 +144,7 @@ impl Cockpit {
             view: View::default(),
             board: None,
             error: None,
+            now: board::now(),
             table,
             first_frame: args.first_frame,
             _watch: watch,
@@ -151,7 +154,7 @@ impl Cockpit {
 
     /// Rebuilds the table's rows for the view at the current time.
     fn reload(&mut self, cx: &mut Context<Self>) {
-        let now = board::now();
+        self.now = board::now();
         // A repo whose lanes all closed has no entry: back to All.
         if let (View::Repo(r), Some(b)) = (&self.view, &self.board)
             && !board::group(b)
@@ -163,7 +166,7 @@ impl Cockpit {
         let rows = self
             .board
             .as_ref()
-            .map(|b| lanes::rows(b, &self.view, now))
+            .map(|b| lanes::rows(b, &self.view, self.now))
             .unwrap_or_default();
         self.table.update(cx, |t, cx| {
             t.delegate_mut().rows = rows;
@@ -174,7 +177,7 @@ impl Cockpit {
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let now = board::now();
+        let now = self.now;
         let groups = self.board.as_ref().map(board::group).unwrap_or_default();
         let all = self
             .board
