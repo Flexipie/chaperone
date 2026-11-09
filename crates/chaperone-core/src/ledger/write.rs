@@ -14,7 +14,7 @@ use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal}
 use super::{Ledger, LedgerError, check_schema, fold, redact};
 use crate::engine;
 use crate::pipeline::{REQUIRED_TRANSITIONS, Route};
-use crate::work::SPEC_BY_KEY;
+use crate::work::{OWNER_UI, PAUSED_BY_OWNER, SPEC_BY_KEY};
 
 pub(crate) const MIN_LEASE_SECS: i64 = 30;
 pub(crate) const MAX_LEASE_SECS: i64 = 86_400;
@@ -377,14 +377,29 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             }
             event.lane_id = Some(next_id(tx, "lanes")?);
         }
-        // On a key, never a lane, so it moves no lane's `updated_at` and is
-        // no fact anchor (ADR 0007). `dossier note` checks the rest.
-        DossierNoted => {
-            if event.lane_id.is_some() || event.spec_id.is_some() || !p.changed.is_empty() {
+        // On a key or a repo, never a lane, so they move no lane's
+        // `updated_at` and are no fact anchor (ADR 0007, #119). `dossier
+        // note` and `backlog_prioritise` check the rest.
+        DossierNoted | BacklogPrioritised
+            if event.lane_id.is_some() || event.spec_id.is_some() || !p.changed.is_empty() =>
+        {
+            refuse!(invalid(&format!(
+                "{} names no lane or spec and changes no column",
+                event.kind
+            )));
+        }
+        BacklogPrioritised => {
+            let lower = p.repo.as_deref().is_some_and(|r| r == r.to_lowercase());
+            if !lower
+                || !p.rest.get("order").is_some_and(Value::is_array)
+                || !p.rest.contains_key("after")
+            {
                 refuse!(invalid(
-                    "dossier.noted names no lane or spec and changes no column"
+                    "backlog.prioritised needs a lowercased repo, an order and after"
                 ));
             }
+        }
+        DossierNoted => {
             let lower = |v: &Value| v.as_str().is_some_and(|k| k == k.to_lowercase());
             if !p.rest.get("key").is_some_and(lower)
                 || !p.rest.get("note").is_some_and(Value::is_string)
@@ -440,12 +455,13 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
     use EventKind::*;
     let ((agent, session, _, until), same_pair) = check!(holder(tx, &event.actor, lane_id));
     let live = until.as_deref().is_some_and(|u| u > event.at.as_str());
-    let p = &mut event.payload;
     // Checks and the ready override come from other sessions, and a
     // takeover is the way past a live lease, so those kinds skip the holder
-    // rule. A claim keeps it: over an expired lease its `changed.from` pins
-    // the holder it replaces.
-    let holder_rule = !(event.kind.keeps_updated_at() || event.kind == LaneTakenOver);
+    // rule, as does the owner's pause. A claim keeps it: over an expired
+    // lease its `changed.from` pins the holder it replaces.
+    let holder_rule =
+        !(event.kind.keeps_updated_at() || event.kind == LaneTakenOver || owner_pause(event));
+    let p = &mut event.payload;
     // Their exemption must not reach the row: these kinds change no column.
     if event.kind.keeps_updated_at() && !p.changed.is_empty() {
         refuse!(invalid(&format!("{} changes no lane column", event.kind)));
@@ -668,6 +684,27 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
         _ => {}
     }
     Ok(Ok(()))
+}
+
+/// The owner's pause (cli-contract, `work update`): `owner-ui` moving a
+/// claimed or active lane to blocked, "paused by owner", and nothing
+/// else. The one update another pair may write over a live lease.
+fn owner_pause(event: &Event) -> bool {
+    let p = &event.payload;
+    let status = p.changed.get("status");
+    let blocker = p.changed.get("blocker");
+    event.kind == EventKind::LaneUpdated
+        && event.actor.agent.as_deref() == Some(OWNER_UI)
+        && p.changed.len() == 2
+        && status.is_some_and(|c| {
+            matches!(c.from.as_str(), Some("claimed" | "active")) && c.to == "blocked"
+        })
+        && blocker.is_some_and(|c| c.to == PAUSED_BY_OWNER)
+        && *p
+            == Payload {
+                changed: p.changed.clone(),
+                ..Payload::default()
+            }
 }
 
 /// The session has held the lane: it wrote a `lane.claimed` or

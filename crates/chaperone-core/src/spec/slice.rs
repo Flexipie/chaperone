@@ -265,11 +265,12 @@ mod tests {
         ledger.rebuild().unwrap();
         assert_eq!(keys(ledger.conn()), folded);
 
-        // A v2 file: migrating runs 0003 and its backfill, then 0004.
+        // A v2 file: migrating runs 0003 and its backfill, then 0004 and 0005.
         ledger
             .conn()
             .execute_batch(
-                "DROP INDEX events_dossier; DROP INDEX specs_key; DROP INDEX lanes_source;
+                "DROP INDEX events_backlog; DROP INDEX events_dossier; DROP INDEX specs_key;
+                 DROP INDEX lanes_source;
                  DROP TABLE spec_keys;
                  PRAGMA user_version = 2;",
             )

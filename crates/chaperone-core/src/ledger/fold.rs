@@ -94,8 +94,9 @@ pub(super) fn fold(conn: &Connection, e: &Event) -> Result<(), LedgerError> {
                 ],
             )?;
         }
-        // A note is on a key, not a lane (ADR 0007): nothing to fold.
-        DossierNoted => {}
+        // A note is on a key, an order on a repo, not a lane (ADR 0007,
+        // #119): nothing to fold.
+        DossierNoted | BacklogPrioritised => {}
         _ => fold_lane(conn, e)?,
     }
     Ok(())
