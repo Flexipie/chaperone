@@ -153,9 +153,10 @@ fn poll(
     let read = ledger
         .lane_page(w.id, w.key.as_deref())
         .map_err(|e| e.to_string());
-    let stats = match ledger.stats(&Cohort::Work(vec![w.id]))? {
-        Ok(mut v) => Ok(v["lanes"][0].take()),
-        Err(refused) => Err(format!("{refused:?}")),
+    let stats = match ledger.stats(&Cohort::Work(vec![w.id])) {
+        Ok(Ok(mut v)) => Ok(v["lanes"][0].take()),
+        Ok(Err(refused)) => Err(format!("{refused:?}")),
+        Err(e) => Err(e.to_string()),
     };
     let median = match (&w.repo, &s.median) {
         (None, _) => None,

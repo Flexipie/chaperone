@@ -22,7 +22,10 @@ pub fn open(cockpit: &Entity<Cockpit>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, window, cx| {
         if focus.replace(false) {
             let state = cockpit.read(cx).palette.clone();
-            state.update(cx, |s, cx| s.focus(window, cx));
+            state.update(cx, |s, cx| {
+                s.set_query("", window, cx);
+                s.focus(window, cx);
+            });
         }
         let (command, targets) = items(cockpit.read(cx));
         let to = cockpit.clone();

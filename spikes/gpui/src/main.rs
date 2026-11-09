@@ -178,10 +178,9 @@ impl Cockpit {
                     }
                     c.reload(cx);
                 },
+                // Kept for any lane, as the watcher keys its next read on it;
+                // the page draws only the shown lane's.
                 |c: &mut Cockpit, mut page, cx| {
-                    if c.view != View::Lane(page.id) {
-                        return;
-                    }
                     if let Some(m) = page.median.take() {
                         c.median = Some(m);
                     }
@@ -255,7 +254,6 @@ impl Cockpit {
 
     fn go(&mut self, to: View, cx: &mut Context<Self>) {
         if self.view != to {
-            self.page = None;
             self.files = None;
             self._files = None;
         }
@@ -291,10 +289,8 @@ impl Cockpit {
         self._files = Some(cx.spawn(async move |this, cx| {
             let files: page::Files = read.await;
             let _ = this.update(cx, |c, cx| {
-                if c.view == View::Lane(id) {
-                    c.files = Some(files);
-                    cx.notify();
-                }
+                c.files = Some(files);
+                cx.notify();
             });
         }));
     }
@@ -375,7 +371,7 @@ impl Cockpit {
                 let reads = page::Reads {
                     id,
                     lane,
-                    page: self.page.as_ref(),
+                    page: self.page.as_ref().filter(|p| p.id == id),
                     median: self.median.as_ref(),
                     files: self.files.as_ref(),
                 };
