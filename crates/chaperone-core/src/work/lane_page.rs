@@ -42,7 +42,8 @@ pub struct LanePage {
     /// The highest send-back round, 0 for none: what stats reads as
     /// `send_back_rounds`.
     pub sent_back: i64,
-    /// The merge sha of the lane's newest `pr.merged`, None before one.
+    /// The merge sha of the newest `pr.merged` of the lane's current PR, None
+    /// before it merges.
     pub merged: Option<String>,
 }
 
@@ -225,8 +226,13 @@ impl Ledger {
         )?;
         let merged = tx
             .query_row(
+                // The lane's current PR: a lane that took another PR after
+                // one merged can still merge it.
                 "SELECT json_extract(payload_json, '$.merge_sha') FROM events
-                  WHERE lane_id = ?1 AND kind = 'pr.merged' ORDER BY id DESC LIMIT 1",
+                  WHERE lane_id = ?1 AND kind = 'pr.merged'
+                    AND lower(json_extract(payload_json, '$.pr'))
+                        = (SELECT lower(pr_ref) FROM lanes WHERE id = ?1)
+                  ORDER BY id DESC LIMIT 1",
                 [id],
                 |r| r.get(0),
             )
