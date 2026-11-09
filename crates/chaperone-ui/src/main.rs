@@ -11,7 +11,8 @@
 //! tab lists its open issues not in a lane, from daisy's GitHub mirror,
 //! each ready or blocked. On a lane that needs you, the lane page answers
 //! it, sends it back or opens it in herdr, through a separate writer: the
-//! board's ledger stays read-only.
+//! board's ledger stays read-only. The Pipeline page shows each pipeline
+//! version's numbers, the skills' drift check and what changed in them.
 
 mod areas;
 mod backlog;
@@ -25,6 +26,7 @@ mod nav;
 mod needs;
 mod numbers;
 mod overlap;
+mod pipeline;
 mod repo;
 mod theme;
 mod watch;
@@ -50,6 +52,9 @@ struct Args {
     /// Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
     #[arg(long)]
     db: Option<PathBuf>,
+    /// The dotfiles checkout the Pipeline page reads (defaults to ~/dotfiles)
+    #[arg(long)]
+    dotfiles: Option<PathBuf>,
     /// Close after the first frame that shows the board (R14 startup
     /// measurement)
     #[arg(long, hide = true)]
@@ -63,6 +68,13 @@ fn main() -> eframe::Result {
         .or_else(|| dirs::data_dir().map(|d| d.join("chaperone").join("ledger.db")))
     else {
         eprintln!("no user data directory; pass --db");
+        std::process::exit(2);
+    };
+    let Some(dotfiles) = args
+        .dotfiles
+        .or_else(|| dirs::home_dir().map(|h| h.join("dotfiles")))
+    else {
+        eprintln!("no home directory; pass --dotfiles");
         std::process::exit(2);
     };
     let shown = Arc::new(Mutex::new(Shown::default()));
@@ -81,6 +93,10 @@ fn main() -> eframe::Result {
             areas::spawn(shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
             changes::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            pipeline::spawn(path.clone(), dotfiles, shown.clone(), move || {
+                ctx.request_repaint()
+            });
             let ctx = cc.egui_ctx.clone();
             backlog::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
@@ -195,8 +211,9 @@ impl eframe::App for App {
                     }
                     asked = lane::draw(ui, &sel, &reads, &mut self.typed, now)
                 });
-            // The change graph is not read behind the page.
+            // The change graph and the Pipeline page are not read behind it.
             shown.graph_open = false;
+            shown.pipeline_open = false;
             shown.refresh += u64::from(asked.refresh);
             if asked.back {
                 shown.selected = None;
@@ -242,9 +259,9 @@ impl eframe::App for App {
                 }
                 shown.graph_open = false;
                 shown.backlog_for = None;
-                if *view == nav::View::Pipeline {
-                    ui.heading("Pipeline");
-                    ui.label("The pipeline page is not built yet (#109, slice 11).");
+                shown.pipeline_open = *view == nav::View::Pipeline;
+                if shown.pipeline_open {
+                    pipeline::draw(ui, &shown.pipeline, now);
                     return;
                 }
                 // The repo as the board spells it: daisy may match case.
