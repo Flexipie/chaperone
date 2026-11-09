@@ -197,9 +197,14 @@ fn doctor(root: &Path) -> Result<Drift, String> {
         let findings = found
             .iter()
             .map(|f| {
+                // Under the root, as the skills list names them.
+                let file = text(&f["file"]);
+                let file = Path::new(&file)
+                    .strip_prefix(root)
+                    .map_or(file.clone(), |p| p.display().to_string());
                 let at = match f["line"].as_u64() {
-                    Some(n) => format!("{}:{n}", text(&f["file"])),
-                    None => text(&f["file"]),
+                    Some(n) => format!("{file}:{n}"),
+                    None => file,
                 };
                 [at, text(&f["kind"]), text(&f["message"])]
             })
@@ -390,14 +395,14 @@ fn versions(ui: &mut egui::Ui, rows: &[Value]) {
 fn numbers(row: &Value) -> String {
     let c = &row["cohort"];
     let n = |v: &Value| v.as_i64().unwrap_or(0);
-    let median = |v: &Value| v.as_f64().map_or("-".into(), |h| format!("{h}"));
+    let median = |v: &Value, unit: &str| v.as_f64().map_or("-".into(), |m| format!("{m}{unit}"));
     let mut line = format!(
-        "{} lanes, {} merged · median claim to merge {} h · {} send-backs · review rounds median {} over {} reviewed",
+        "{} lanes, {} merged · median claim to merge {} · {} send-backs · review rounds median {} over {} reviewed",
         n(&c["lanes"]),
         n(&c["merged"]),
-        median(&c["claim_to_merge_h_median"]),
+        median(&c["claim_to_merge_h_median"], " h"),
         n(&c["attention"]["sent_back"]),
-        median(&row["review_rounds_median"]),
+        median(&row["review_rounds_median"], ""),
         n(&row["lanes_review_rounds"]),
     );
     if c["too_few_lanes"] == true {
