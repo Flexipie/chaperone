@@ -44,7 +44,8 @@ struct Args {
     /// Quit after the first frame that shows the board (R14 U1)
     #[arg(long, hide = true)]
     first_frame: bool,
-    /// Print `drawn <data_version>` when a new board is drawn (R14 U2)
+    /// Print `notify <data_version>` when a new board reaches the view, as
+    /// it asks for a redraw: where egui's U2 stops (R14 U2)
     #[arg(long, hide = true)]
     trace: bool,
 }
@@ -101,9 +102,6 @@ struct Cockpit {
     error: Option<String>,
     table: Entity<TableState<lanes::Lanes>>,
     first_frame: bool,
-    trace: bool,
-    /// The last board version `trace` printed.
-    traced: Option<i64>,
     _watch: Task<()>,
     _tick: Task<()>,
 }
@@ -115,11 +113,14 @@ impl Cockpit {
                 .col_movable(false)
                 .sortable(false)
         });
-        let path = args.db;
+        let (path, trace) = (args.db, args.trace);
         let watch = cx.spawn(async move |this, cx| {
-            watch::run(path, this, cx, |c: &mut Cockpit, read, cx| {
+            watch::run(path, this, cx, move |c: &mut Cockpit, read, cx| {
                 match read {
                     Ok(board) => {
+                        if trace {
+                            println!("notify {}", board.data_version);
+                        }
                         c.board = Some(board);
                         c.error = None;
                     }
@@ -143,8 +144,6 @@ impl Cockpit {
             error: None,
             table,
             first_frame: args.first_frame,
-            trace: args.trace,
-            traced: None,
             _watch: watch,
             _tick: tick,
         }
@@ -255,15 +254,9 @@ fn badge(n: usize) -> impl IntoElement {
 
 impl Render for Cockpit {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(b) = &self.board {
-            if self.trace && self.traced != Some(b.data_version) {
-                self.traced = Some(b.data_version);
-                println!("drawn {}", b.data_version);
-            }
-            if self.first_frame {
-                self.first_frame = false;
-                cx.on_next_frame(window, |_, _, cx| cx.quit());
-            }
+        if self.first_frame && self.board.is_some() {
+            self.first_frame = false;
+            cx.on_next_frame(window, |_, _, cx| cx.quit());
         }
         h_flex()
             .size_full()

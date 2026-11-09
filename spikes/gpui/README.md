@@ -37,5 +37,7 @@ cargo test --release -p chaperone-ui -- --ignored --nocapture commit_to_redraw
 ```
 
 The script prints U1, U3 and U4 for both apps on one seeded ledger, and the
-GPUI U2: commit to the app's `drawn` line (`--trace`), which includes the
-render. egui's U2 is its own test, which stops at the repaint request.
+GPUI U2: commit to the app's `notify` line (`--trace`), the board handed to
+the view as it asks for a redraw, where egui's own U2 test stops too. It
+includes GPUI's hop from the background read to the main thread, not the
+render: GPUI skips rendering a window that is not drawing.

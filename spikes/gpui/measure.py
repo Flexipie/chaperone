@@ -9,7 +9,7 @@ can never reach a real ledger. `seed` writes the ledger of chaperone-ui's
 U2 test. U1: one unmeasured launch each, then 10 `--first-frame` launches
 each, alternated, wall time around the spawn. U3 and U4: each app opened
 alone for 5 s, then its CPU time over 20 s and its RSS at the end. U2:
-`seed u2` (commit to drawn); egui's U2 is its own ignored test. Prints
+`seed u2` (commit to repaint request); egui's U2 is its own ignored test. Prints
 markdown. Python stdlib only.
 """
 
@@ -52,6 +52,7 @@ def main(seed, gpui, egui):
         "gpui": [bins["gpui"], "--db", db],
         "egui": [bins["egui"], "--db", db, "--dotfiles", os.path.join(root, "dotfiles")],
     }
+    print("| budget | GPUI | egui |\n|---|---|---|", flush=True)
     try:
         u1 = {app: [] for app in argv}
         for n in range(LAUNCHES + 1):
@@ -60,6 +61,10 @@ def main(seed, gpui, egui):
                 subprocess.run([*args, "--first-frame"], check=True, env=env)
                 if n:
                     u1[app].append((time.perf_counter() - start) * 1000)
+        p50 = {a: statistics.median(t) for a, t in u1.items()}
+        top = {a: max(t) for a, t in u1.items()}
+        print(f"| U1 p50 (max), {LAUNCHES} launches | {p50['gpui']:.0f} ms ({top['gpui']:.0f}) "
+              f"| {p50['egui']:.0f} ms ({top['egui']:.0f}) |", flush=True)
         idle = {}
         for app, args in argv.items():
             proc = subprocess.Popen(args, env=env)
@@ -72,20 +77,12 @@ def main(seed, gpui, egui):
             finally:
                 proc.kill()
                 proc.wait()
-        u2 = subprocess.run(
-            [bins["seed"], "u2", db, bins["gpui"]], check=True, env=env,
-            capture_output=True, text=True,
-        ).stdout.strip()
+        print(f"| U3 CPU over {IDLE} s | {idle['gpui'][0]:.2f}% | {idle['egui'][0]:.2f}% |")
+        print(f"| U4 RSS after {SETTLE + IDLE} s | {idle['gpui'][1]:.0f} MiB "
+              f"| {idle['egui'][1]:.0f} MiB |", flush=True)
+        subprocess.run([bins["seed"], "u2", db, bins["gpui"]], check=True, env=env)
     finally:
         shutil.rmtree(root)
-    print(f"| budget | GPUI | egui |\n|---|---|---|")
-    p50 = {a: statistics.median(t) for a, t in u1.items()}
-    top = {a: max(t) for a, t in u1.items()}
-    print(f"| U1 p50 (max), {LAUNCHES} launches | {p50['gpui']:.0f} ms ({top['gpui']:.0f}) "
-          f"| {p50['egui']:.0f} ms ({top['egui']:.0f}) |")
-    print(f"| U3 CPU over {IDLE} s | {idle['gpui'][0]:.2f}% | {idle['egui'][0]:.2f}% |")
-    print(f"| U4 RSS after {SETTLE + IDLE} s | {idle['gpui'][1]:.0f} MiB | {idle['egui'][1]:.0f} MiB |")
-    print(f"\nGPUI {u2}")
 
 
 if __name__ == "__main__":

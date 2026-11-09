@@ -7,12 +7,14 @@
 //! 50 lanes over 5 repos, a spec of 20 decisions, 200 events, a question
 //! and 300 `usage.reported` per lane, every other lane merged. U2 starts the
 //! app with `--trace`, commits a heartbeat, and times it to the app's
-//! `drawn <data_version>` line for the new board: commit to drawn, where
-//! egui's test stops at the repaint request.
+//! `notify <data_version>` line for the new board: the board handed to the
+//! view as it asks for a redraw, where egui's test stops too. That includes
+//! GPUI's hop from the background read to the main thread, not the render:
+//! GPUI skips rendering a window that is not drawing, such as a hidden one.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -186,18 +188,19 @@ fn p(times: &mut [Duration], q: usize) -> Duration {
 
 fn u2(path: &Path, app: &str, samples: usize) {
     let rw = Ledger::open(path).unwrap();
-    let mut child = Command::new(app)
+    let child = Command::new(app)
         .arg("--db")
         .arg(path)
         .arg("--trace")
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the app");
+    let mut child = Kill(child);
     let (tx, rx) = mpsc::channel();
-    let out = BufReader::new(child.stdout.take().unwrap());
+    let out = BufReader::new(child.0.stdout.take().unwrap());
     thread::spawn(move || {
         for line in out.lines().map_while(Result::ok) {
-            if let Some(v) = line.strip_prefix("drawn ") {
+            if let Some(v) = line.strip_prefix("notify ") {
                 let _ = tx.send((v.parse::<i64>().unwrap(), Instant::now()));
             }
         }
@@ -211,17 +214,25 @@ fn u2(path: &Path, app: &str, samples: usize) {
         rw.work_heartbeat(&lane(&format!("s{id}")), id, None, false)
             .unwrap()
             .unwrap();
-        let drawn = loop {
-            let (v, at) = rx.recv_timeout(wait).expect("a drawn board");
+        let notified = loop {
+            let (v, at) = rx.recv_timeout(wait).expect("a new board");
             if v != seen {
                 seen = v;
                 break at;
             }
         };
-        lags.push(drawn - start);
+        lags.push(notified - start);
     }
-    let _ = child.kill();
-    let _ = child.wait();
     let (p50, p99) = (p(&mut lags, 50), p(&mut lags, 99));
-    println!("U2 commit to drawn, {samples} samples: p50 {p50:?}, p99 {p99:?}");
+    println!("U2 commit to repaint request, {samples} samples: p50 {p50:?}, p99 {p99:?}");
+}
+
+/// The app, killed when U2 ends, a panic too.
+struct Kill(Child);
+
+impl Drop for Kill {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
