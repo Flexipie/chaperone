@@ -354,12 +354,23 @@ fn merge(
     match v["state"].as_str().unwrap_or_default() {
         "OPEN" => {
             let squash = ["--squash", "--delete-branch", "--match-head-commit", &oid];
-            cli(
+            let merge = cli(
                 "gh",
                 gh,
                 &[["pr", "merge", n, "-R", repo].as_slice(), &squash].concat(),
-            )?;
-            v = view().map_err(|e| format!("Merged on GitHub; {e} (Merge again records it)"))?;
+            );
+            // gh can fail after GitHub merged (say, deleting the branch).
+            v = match (view(), &merge) {
+                (Ok(v), _) => v,
+                (Err(e), Ok(_)) => {
+                    return Err(format!("Merged on GitHub; {e} (Merge again records it)"));
+                }
+                (Err(_), Err(e)) => return Err(e.clone()),
+            };
+            if v["state"] != "MERGED" || v["headRefOid"] != oid.as_str() {
+                merge?;
+                return Err(format!("Not merged yet: GitHub has {pr} queued or open."));
+            }
         }
         // A merge cut short before it was recorded: record it now.
         "MERGED" => {}
@@ -396,7 +407,7 @@ fn merge(
         return Ok(
             match cli("herdr", herdr, &["agent", "prompt", &lane.agent, &prompt]) {
                 Ok(_) => format!("{merged}; asked the lane to hand off done."),
-                Err(_) => format!("{merged}; the lane hands off done."),
+                Err(e) => format!("{merged}; the lane hands off done ({e})."),
             },
         );
     }
@@ -407,7 +418,6 @@ fn merge(
         ready: Some(false),
         next_action: Some(format!("done: merged as {sha}")),
         commit: Some(handed.into()),
-        brief: None,
         ..newest.unwrap_or_default()
     };
     done(ledger.work_handoff(actor, lane.work, &input, None, false))
