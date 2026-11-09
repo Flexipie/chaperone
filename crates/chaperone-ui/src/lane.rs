@@ -334,10 +334,8 @@ fn actions(
         pr: pr.clone(),
         head,
     };
-    let why_not = if pr.is_empty() {
-        Some("no PR recorded".to_string())
-    } else if !passed("verdict_is_yes") {
-        Some("no YES verdict".into())
+    let why_not = if !passed("verdict_is_yes") {
+        Some("no YES verdict".to_string())
     } else if !passed("verdict_on_head") {
         Some(format!(
             "the YES verdict is on another head than the handoff's {}",
@@ -359,6 +357,9 @@ fn actions(
         if !live && ui.add_enabled(free, egui::Button::new("Finish")).clicked() {
             act = Some(merge(head));
         }
+    } else if pr.is_empty() {
+        // A lane with no PR has nothing to merge, and no reason to say so.
+        typed.merge = None;
     } else if let Some(why) = why_not {
         typed.merge = None;
         ui.label(RichText::new(format!("Merge: {why}.")).small().weak());
