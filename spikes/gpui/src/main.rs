@@ -21,13 +21,13 @@ use std::time::Duration;
 
 use chaperone_core::work::LaneBoard;
 use clap::Parser;
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Task, TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
+    AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled, Task,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
 };
 use gpui_component::sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem};
 use gpui_component::table::{DataTable, TableState};
-use gpui::prelude::FluentBuilder;
 use gpui_component::{ActiveTheme, h_flex, v_flex};
 
 use theme::STEP;
@@ -154,7 +154,9 @@ impl Cockpit {
         let now = board::now();
         // A repo whose lanes all closed has no entry: back to All.
         if let (View::Repo(r), Some(b)) = (&self.view, &self.board)
-            && !board::group(b).iter().any(|g| g.slug.eq_ignore_ascii_case(r))
+            && !board::group(b)
+                .iter()
+                .any(|g| g.slug.eq_ignore_ascii_case(r))
         {
             self.view = View::All;
         }
@@ -179,7 +181,10 @@ impl Cockpit {
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let now = board::now();
         let groups = self.board.as_ref().map(board::group).unwrap_or_default();
-        let all = self.board.as_ref().map_or(0, |b| needs::count(&b.lanes, now));
+        let all = self
+            .board
+            .as_ref()
+            .map_or(0, |b| needs::count(&b.lanes, now));
         let entry = |to: View, name: SharedString, n: usize| {
             let active = self.view == to;
             SidebarMenuItem::new(name)
@@ -192,7 +197,11 @@ impl Cockpit {
             .child(entry(View::Pipeline, "Pipeline".into(), 0));
         let repos = SidebarMenu::new().children(groups.iter().map(|g| {
             let n = needs::count(g.specs.iter().flat_map(|s| s.lanes.iter().copied()), now);
-            entry(View::Repo(g.slug.to_lowercase()), g.slug.to_string().into(), n)
+            entry(
+                View::Repo(g.slug.to_lowercase()),
+                g.slug.to_string().into(),
+                n,
+            )
         }));
         Sidebar::new("nav")
             .header(SidebarHeader::new().child("Chaperone"))
