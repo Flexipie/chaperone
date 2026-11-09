@@ -34,7 +34,7 @@ mod writer;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use chaperone_core::stats::BoardStats;
 use chaperone_core::work::{BoardLane, LaneBoard};
@@ -144,9 +144,7 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
+        let now = board::now();
         let mut shown = self.shown.lock().unwrap();
         let clicked = egui::Panel::left("nav")
             .frame(theme::glass())

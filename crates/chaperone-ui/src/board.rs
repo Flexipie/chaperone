@@ -1,6 +1,7 @@
 //! The board grouped for drawing: repo, then spec, lanes in board order.
 
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chaperone_core::work::{BoardLane, LaneBoard, SpecTitle, WorkItem};
 
@@ -70,6 +71,13 @@ pub fn slug(repo: Option<&str>) -> &str {
 /// A commit's first 7 characters.
 pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
+}
+
+/// Now, in seconds since the epoch.
+pub fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// Time from `then` to `now`, both seconds since the epoch: `<1m`, `5m`,

@@ -776,6 +776,13 @@ pub fn parse_changelog(text: &str) -> Result<Vec<Version>, String> {
     Ok(out)
 }
 
+/// The version active at `at` (RFC 3339 UTC, as [`Version::at`]):
+/// `manual` before the first.
+pub fn version_at<'a>(versions: &'a [Version], at: &str) -> &'a str {
+    let v = versions.iter().rev().find(|v| v.at.as_str() <= at);
+    v.map_or("manual", |v| &v.id)
+}
+
 /// The first `pipeline v<N>` in `text`, as words (`lane-stats`'
 /// `\bpipeline (v\d+)\b`): `pipeline v17.1` names v17.
 fn stamp(text: &str) -> Option<String> {
@@ -819,10 +826,7 @@ impl Ledger {
         for lane in lanes {
             let version = match (&lane.stamp, &lane.claimed) {
                 (Some(s), _) => s.clone(),
-                (None, Some((at, _))) => {
-                    let v = versions.iter().rev().find(|v| v.at <= *at);
-                    v.map_or("manual".into(), |v| v.id.clone())
-                }
+                (None, Some((at, _))) => version_at(versions, at).to_string(),
                 (None, None) => continue,
             };
             groups.entry(version).or_default().push(lane);

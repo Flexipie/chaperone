@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use chaperone_core::child;
 use chaperone_core::git::{Failure, git, git_bin};
 use chaperone_core::ledger::{Ledger, LedgerError};
-use chaperone_core::stats::{Version, changelog};
+use chaperone_core::stats::{Version, changelog, version_at};
 use eframe::egui::{self, RichText};
 use serde_json::Value;
 
@@ -96,24 +96,18 @@ pub fn spawn(
             if due(skills_at, SKILLS_EVERY) {
                 skills_at = Some(Instant::now());
                 let got = skills(&root, &versions);
-                shown.lock().unwrap().pipeline.skills = Some((unix_now(), got));
+                shown.lock().unwrap().pipeline.skills = Some((board::now(), got));
                 changed();
             }
             if due(doctor_at, DOCTOR_EVERY) {
                 let got = doctor(&root);
                 doctor_at = Some(Instant::now());
-                shown.lock().unwrap().pipeline.drift = Some((unix_now(), got));
+                shown.lock().unwrap().pipeline.drift = Some((board::now(), got));
                 changed();
             }
             thread::sleep(POLL);
         }
     });
-}
-
-fn unix_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// The history's rows when the changelog or the ledger changed since
@@ -275,13 +269,12 @@ fn skills(root: &Path, versions: &[Version]) -> Result<Vec<Entry>, String> {
                 && entries[i].changed.is_none()
             {
                 let at = utc(secs);
-                let v = versions.iter().rev().find(|v| v.at[..16] <= at[..16]);
-                let v = match (v, versions.is_empty()) {
-                    (Some(v), _) => v.id.clone(),
-                    // No changelog read: no version to name.
-                    (None, true) => "-".into(),
-                    (None, false) => "before the first".into(),
+                // No changelog read: no version to name.
+                let v = match versions.is_empty() {
+                    true => "-",
+                    false => version_at(versions, &at),
                 };
+                let v = v.to_string();
                 entries[i].changed = Some((at[..10].to_string(), v));
             }
         }
@@ -306,7 +299,7 @@ fn skills(root: &Path, versions: &[Version]) -> Result<Vec<Entry>, String> {
     Ok(entries)
 }
 
-/// `secs` as `YYYY-MM-DDTHH:MM` UTC, as the changelog writes its times.
+/// `secs` as RFC 3339 UTC with milliseconds, as [`Version::at`].
 fn utc(secs: i64) -> String {
     let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Howard Hinnant's civil_from_days.
@@ -320,9 +313,10 @@ fn utc(secs: i64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
     format!(
-        "{y:04}-{m:02}-{d:02}T{:02}:{:02}",
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z",
         rest / 3600,
-        rest % 3600 / 60
+        rest % 3600 / 60,
+        rest % 60
     )
 }
 
@@ -391,7 +385,6 @@ fn versions(ui: &mut egui::Ui, rows: &[Value]) {
     }
 }
 
-/// lanes, merged, median claim to merge, send-backs, review rounds.
 fn numbers(row: &Value) -> String {
     let c = &row["cohort"];
     let n = |v: &Value| v.as_i64().unwrap_or(0);
