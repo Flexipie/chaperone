@@ -311,12 +311,39 @@ pub fn draw_one(ui: &mut egui::Ui, layout: &Layout, opts: &Opts) {
             .y
             .max(2.0 * MARGIN + (changed + opts.extra.len()) as f32 * ROW);
     }
+    let text = ui.visuals().text_color();
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let label = |n: &Node| {
+        // The module names a file across crates; `src/lib.rs` would not.
+        let name = match opts.paths {
+            true => &n.path,
+            false => n.module.as_deref().unwrap_or(&n.path),
+        };
+        match n.entries.first() {
+            Some(e) => format!("{name}  [{e}]"),
+            None => name.to_string(),
+        }
+    };
+    let extra = |p: &str| format!("{p}  (not in the graph yet, dependents not read)");
+    // As wide as the widest label: the painter clips to its rect.
+    let width = |s: String| ui.painter().layout_no_wrap(s, font.clone(), text).size().x;
+    let right = layout
+        .nodes
+        .iter()
+        .map(|n| n.pos.x + n.radius + 8.0 + width(label(n)))
+        .chain(
+            layout
+                .commands
+                .iter()
+                .map(|c| c.pos.x + 14.0 + width(c.label.clone())),
+        )
+        .chain(opts.extra.iter().map(|p| MARGIN + 22.0 + width(extra(p))))
+        .fold(0.0, f32::max);
+    size.x = size.x.max(right + MARGIN);
     let (response, painter) = ui.allocate_painter(size, Sense::hover());
     let origin = response.rect.min.to_vec2();
-    let text = ui.visuals().text_color();
     let faint = ui.visuals().weak_text_color();
     let red = Stroke::new(2.0, ui.visuals().error_fg_color);
-    let font = egui::TextStyle::Small.resolve(ui.style());
     let diamond = |at: Pos2, r: f32| {
         let corners = [vec2(0.0, -r), vec2(r, 0.0), vec2(0.0, r), vec2(-r, 0.0)];
         let points = corners.iter().map(|c| at + *c).collect();
@@ -337,11 +364,10 @@ pub fn draw_one(ui: &mut egui::Ui, layout: &Layout, opts: &Opts) {
         let at = pos2(MARGIN, MARGIN + row as f32 * ROW) + origin;
         painter.circle_stroke(at, 6.0, Stroke::new(1.5, faint));
         painter.circle_stroke(at, 14.0, red);
-        let label = format!("{path}  (uncommitted, dependents not read)");
         painter.text(
             at + vec2(22.0, 0.0),
             egui::Align2::LEFT_CENTER,
-            label,
+            extra(path),
             font.clone(),
             text,
         );
@@ -361,20 +387,11 @@ pub fn draw_one(ui: &mut egui::Ui, layout: &Layout, opts: &Opts) {
         if !n.entries.is_empty() {
             painter.add(diamond(at, n.radius + 6.0));
         }
-        // The module names a file across crates; `src/lib.rs` would not.
-        let name = match opts.paths {
-            true => &n.path,
-            false => n.module.as_deref().unwrap_or(&n.path),
-        };
-        let label = match n.entries.first() {
-            Some(e) => format!("{name}  [{e}]"),
-            None => name.to_string(),
-        };
         let colour = if n.depth == 0 { text } else { faint };
         painter.text(
             at + vec2(n.radius + 8.0, 0.0),
             egui::Align2::LEFT_CENTER,
-            label,
+            label(n),
             font.clone(),
             colour,
         );

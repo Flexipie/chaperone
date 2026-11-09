@@ -621,7 +621,9 @@ fn change_graph(
         None => "entry points not read".into(),
     };
     let exact = snap.exact && snap.notes.is_empty() && snap.files_omitted == 0;
-    let bound = match exact && opts.extra.is_empty() {
+    // Declared areas still checking or not checked: the out of scope part is unknown.
+    let scoped = declared.is_none() || matches!(done.map(|a| &a.state), Some(State::Done(_)));
+    let bound = match exact && scoped && opts.extra.is_empty() {
         true => "exact",
         false => "lower bound",
     };
@@ -645,7 +647,7 @@ fn change_graph(
         let n = opts.extra.len();
         ui.colored_label(
             warn,
-            format!("Out of scope and uncommitted, dependents not read: {n}."),
+            format!("Out of scope, not in the graph yet, dependents not read: {n}."),
         );
     }
     ui.label(
