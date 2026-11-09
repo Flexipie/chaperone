@@ -55,6 +55,8 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
         let mut lanes: HashMap<i64, (Key, Lane)> = HashMap::new();
         // Lanes whose last read failed, read again on the next overlap run.
         let mut retry: BTreeSet<i64> = BTreeSet::new();
+        // Each lane's profile mtime when it was last selected.
+        let mut profiles: HashMap<i64, Option<SystemTime>> = HashMap::new();
         let mut repos: HashMap<String, Built> = HashMap::new();
         loop {
             thread::sleep(POLL);
@@ -99,9 +101,8 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
             if seen == now {
                 continue;
             }
-            if let (Some(id), Some((.., was, p))) = (sel, &seen)
-                && *was == sel
-                && *p != profile
+            if let Some(id) = sel
+                && profiles.insert(id, profile).is_some_and(|p| p != profile)
             {
                 retry.insert(id);
             }
