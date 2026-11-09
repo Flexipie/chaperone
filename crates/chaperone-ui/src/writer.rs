@@ -13,8 +13,10 @@ use std::process::Command;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use chaperone_core::checks::{AttentionInput, MergedInput, NOTE_CHARS};
+use chaperone_core::child;
 use chaperone_core::ledger::{Actor, Ledger, LedgerError, Refusal};
 use chaperone_core::pipeline::sha_prefix_eq;
 use chaperone_core::spec::decide::DecideInput;
@@ -25,6 +27,9 @@ use crate::board::short;
 use crate::watch::Shown;
 
 pub const AGENT: &str = "owner-ui";
+/// How long one gh or herdr call may take.
+const CLI_TIMEOUT: Duration = Duration::from_secs(30);
+const OUT_CAP: usize = 1 << 20;
 
 /// The lane a write is for: its work item, its herdr agent and its key.
 #[derive(Clone)]
@@ -145,18 +150,25 @@ fn done<T>(c: Result<Result<T, Refusal>, LedgerError>) -> Result<T, String> {
 
 /// The `name` CLI at `cmd` with `args`: its stdout, else its stderr. Run
 /// from the temp dir, so gh never reads or changes a checkout (`-R`
-/// names the repo).
+/// names the repo). A call past [`CLI_TIMEOUT`] fails.
 fn cli(name: &str, cmd: &OsString, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(cmd)
-        .args(args)
-        .current_dir(std::env::temp_dir())
-        .output()
-        .map_err(|e| format!("{name} did not start: {e}"))?;
-    if out.status.success() {
-        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    let call = format!("{name} {}", args[..2].join(" "));
+    let deadline = Instant::now() + CLI_TIMEOUT;
+    let mut command = Command::new(cmd);
+    command.args(args).current_dir(std::env::temp_dir());
+    let out = child::run(&mut command, deadline, OUT_CAP).map_err(|e| match e {
+        child::Failed::Spawn(e) => format!("{name} did not start: {e}"),
+        child::Failed::TimedOut => format!("{call}: no answer in {}s", CLI_TIMEOUT.as_secs()),
+        child::Failed::Wait(e) => format!("{call}: {e}"),
+    })?;
+    if out.cut {
+        return Err(format!("{call}: answer past {OUT_CAP} bytes"));
     }
-    let err = String::from_utf8_lossy(&out.stderr);
-    Err(format!("{name} {}: {}", args[..2].join(" "), err.trim()))
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.out).into_owned());
+    }
+    let err = String::from_utf8_lossy(&out.err);
+    Err(format!("{call}: {}", err.trim()))
 }
 
 /// One line of at most [`NOTE_CHARS`], what an attention note takes.
@@ -290,7 +302,7 @@ fn merge(
     // handoff head the owner confirmed, on the PR the lane holds.
     let page = ledger.lane_page(lane.work, Some(&lane.key)).map_err(read)?;
     let gates = page.gates.as_ref();
-    let passed = |id: &str| gates.is_some_and(|g| g.gates.iter().any(|r| r.gate == id && r.passed));
+    let passed = |id: &str| gates.is_some_and(|g| g.passed(id));
     let handed = gates.and_then(|g| g.head.as_deref()).unwrap_or_default();
     let item = done(ledger.work_get(lane.work, &now))?;
     let board = ledger.work_board_item(lane.work, &now).map_err(read)?;
@@ -340,7 +352,7 @@ fn merge(
     }
     // Never --admin or --auto; GitHub refuses a head that moved since.
     match v["state"].as_str().unwrap_or_default() {
-        "OPEN" if page.merged.is_none() => {
+        "OPEN" => {
             let squash = ["--squash", "--delete-branch", "--match-head-commit", &oid];
             cli(
                 "gh",
@@ -360,7 +372,7 @@ fn merge(
         pr: pr.into(),
         merge_sha: sha.into(),
         head: oid,
-        // GitHub's seconds, as the ledger stores them (cli-contract.md).
+        // GitHub gives seconds; the ledger takes milliseconds (cli-contract.md).
         merged_at: format!("{}.000Z", at.trim_end_matches('Z')),
         patch_id: None,
     };

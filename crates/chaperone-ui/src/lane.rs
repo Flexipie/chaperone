@@ -326,7 +326,7 @@ fn actions(
     // Merge: a ready lane with a PR and a YES verdict on its handoff
     // head, behind a confirm; the writer checks it all again.
     let gates = page.gates.as_ref();
-    let passed = |id: &str| gates.is_some_and(|g| g.gates.iter().any(|r| r.gate == id && r.passed));
+    let passed = |id: &str| gates.is_some_and(|g| g.passed(id));
     let head = gates.and_then(|g| g.head.clone()).unwrap_or_default();
     let pr = item.pr_ref.clone().unwrap_or_default();
     let merge = |head: String| Act::Merge {

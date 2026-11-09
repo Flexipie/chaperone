@@ -98,6 +98,13 @@ pub struct Gates {
     pub gates: Vec<GateRow>,
 }
 
+impl Gates {
+    /// Gate `id` is listed and passed.
+    pub fn passed(&self, id: &str) -> bool {
+        self.gates.iter().any(|r| r.gate == id && r.passed)
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct GateRow {
     pub gate: String,
