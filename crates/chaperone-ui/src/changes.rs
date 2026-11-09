@@ -57,7 +57,8 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
         let mut ran: Option<Instant> = None;
         // Each lane's read, with its profile's mtime when read.
         let mut lanes: HashMap<i64, (Key, Option<SystemTime>, Lane)> = HashMap::new();
-        // Lanes whose last read failed, read again on the next overlap run.
+        // Lanes whose last read failed, read again on the next overlap run
+        // (the selected lane's also after SOON).
         let mut retry: BTreeSet<i64> = BTreeSet::new();
         let mut repos: HashMap<String, Built> = HashMap::new();
         loop {
@@ -96,15 +97,20 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 .map(|w| w.worktree.as_deref().and_then(reflog_time))
                 .collect();
             let now = (version, times, open, sel, profile);
-            if seen.as_ref() == Some(&now) {
+            let soon = ran.is_some_and(|t| t.elapsed() < SOON);
+            // The selected lane's failed read is tried again after SOON, a
+            // quiet ledger or not.
+            let again = sel.is_some_and(|id| retry.contains(&id)) && !soon;
+            if seen.as_ref() == Some(&now) && !again {
                 continue;
             }
             // With only a lane's page open, a ledger write alone (any lane's
-            // events) reads again at most every SOON, as the overlap thread.
+            // events) reads again at most every SOON; the overlap thread
+            // throttles every read, this one only ledger-only changes.
             let only_version = seen
                 .as_ref()
                 .is_some_and(|s| (&s.1, s.2, s.3, s.4) == (&now.1, now.2, now.3, now.4));
-            if !open && only_version && ran.is_some_and(|t| t.elapsed() < SOON) {
+            if !open && only_version && soon {
                 continue;
             }
             let read = match &ledger {
@@ -186,10 +192,8 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
             }
 
             let sel_note = sel.and_then(|id| notes.get(&id).cloned());
-            if open {
-                lanes.retain(|id, _| want.iter().any(|w| w.id == *id));
-                retry.retain(|id| lanes.contains_key(id));
-            }
+            lanes.retain(|id, _| want.iter().any(|w| w.id == *id));
+            retry.retain(|id| lanes.contains_key(id));
             let mut by_repo: BTreeMap<String, (String, Vec<Part>)> = BTreeMap::new();
             for w in want.iter().filter(|w| open || Some(w.id) == sel) {
                 // Sorted: overlap lists shared files first, so another lane's
