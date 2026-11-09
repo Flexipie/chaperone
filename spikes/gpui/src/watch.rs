@@ -25,21 +25,25 @@ pub async fn run<V: 'static>(
     got: impl Fn(&mut V, Read, &mut gpui::Context<V>) + 'static,
 ) {
     let ex = cx.background_executor().clone();
-    // The ledger, the data_version shown, and the error shown (so a ledger
-    // that stays broken redraws once), handed between background tasks.
-    let mut state = (None, None, None::<String>);
+    // The ledger, the data_version shown, the error shown (so a ledger that
+    // stays broken redraws once) and when the last poll started (so polls
+    // stay POLL apart across a hand-over), handed between background tasks.
+    let mut state = (None, None, None::<String>, None::<Instant>);
     loop {
         let (path, timer) = (path.clone(), ex.clone());
         let (back, read) = ex
             .spawn(async move {
-                let (mut ledger, mut seen, mut said) = state;
+                let (mut ledger, mut seen, mut said, last) = state;
+                if let Some(last) = last {
+                    timer.timer(POLL.saturating_sub(last.elapsed())).await;
+                }
                 loop {
                     let start = Instant::now();
                     match poll(&path, &mut ledger, seen) {
                         Ok(None) => {}
                         Ok(Some(board)) => {
                             seen = Some(board.data_version);
-                            return ((ledger, seen, None), Ok(board));
+                            return ((ledger, seen, None, Some(start)), Ok(board));
                         }
                         Err(e) => {
                             // Reopened next tick: the file may be migrated or created.
@@ -48,7 +52,7 @@ pub async fn run<V: 'static>(
                             let text = e.to_string();
                             if said.as_ref() != Some(&text) {
                                 said = Some(text.clone());
-                                return ((ledger, seen, said), Err(text));
+                                return ((ledger, seen, said, Some(start)), Err(text));
                             }
                         }
                     }
