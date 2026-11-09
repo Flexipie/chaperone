@@ -45,6 +45,8 @@ pub struct Read {
 
 /// doctor's answer: no findings, or each as `file:line kind: message`.
 pub struct Drift {
+    /// The binary checked, as run.
+    pub bin: String,
     pub invocations: Option<i64>,
     pub findings: Vec<[String; 3]>,
 }
@@ -145,17 +147,10 @@ fn history(
     }
 }
 
-/// The chaperone the skills call: `CHAPERONE_BIN`, else the one next to
-/// this window's binary, else PATH's (a Dock launch has no ~/.local/bin).
+/// The chaperone the skills call: `CHAPERONE_BIN`, else PATH's, as `$L`
+/// finds it.
 fn chaperone() -> PathBuf {
-    if let Some(bin) = std::env::var_os("CHAPERONE_BIN") {
-        return bin.into();
-    }
-    let next = std::env::current_exe()
-        .ok()
-        .and_then(|e| Some(e.parent()?.join("chaperone")))
-        .filter(|p| p.is_file());
-    next.unwrap_or_else(|| "chaperone".into())
+    std::env::var_os("CHAPERONE_BIN").map_or("chaperone".into(), PathBuf::from)
 }
 
 /// `chaperone doctor --skills` over the skills and scripts: its exit 0,
@@ -168,16 +163,24 @@ fn doctor(root: &Path) -> Result<Drift, String> {
     let deadline = Instant::now() + DOCTOR_TIMEOUT;
     let done = child::run(&mut cmd, deadline, OUT_CAP).map_err(|e| match e {
         child::Failed::Spawn(e) => format!("could not run {}: {e}", bin.display()),
-        child::Failed::TimedOut => format!("doctor: no answer in {}s", DOCTOR_TIMEOUT.as_secs()),
-        child::Failed::Wait(e) => format!("doctor: {e}"),
+        child::Failed::TimedOut => format!(
+            "{} doctor: no answer in {}s",
+            bin.display(),
+            DOCTOR_TIMEOUT.as_secs()
+        ),
+        child::Failed::Wait(e) => format!("{} doctor: {e}", bin.display()),
     })?;
     if done.status.success() {
         let env: Value = serde_json::from_slice(&done.out).unwrap_or(Value::Null);
         if env["ok"] != true || done.cut {
-            return Err("doctor: not a chaperone envelope".into());
+            return Err(format!(
+                "{} doctor: not a chaperone envelope",
+                bin.display()
+            ));
         }
         let invocations = env["data"]["invocations"].as_i64();
         return Ok(Drift {
+            bin: bin.display().to_string(),
             invocations,
             findings: Vec::new(),
         });
@@ -204,6 +207,7 @@ fn doctor(root: &Path) -> Result<Drift, String> {
             })
             .collect();
         return Ok(Drift {
+            bin: bin.display().to_string(),
             invocations: None,
             findings,
         });
@@ -212,7 +216,7 @@ fn doctor(root: &Path) -> Result<Drift, String> {
         Some(m) => format!("{}: {m}", error["code"].as_str().unwrap_or("error")),
         None => String::from_utf8_lossy(&done.err).trim().to_string(),
     };
-    Err(format!("doctor: {message}"))
+    Err(format!("{} doctor: {message}", bin.display()))
 }
 
 /// Every skill and script (each entry of [`DIRS`] but hidden ones and
@@ -235,7 +239,9 @@ fn skills(root: &Path, versions: &[Version]) -> Result<Vec<Entry>, String> {
     let deadline = Instant::now() + GIT_TIMEOUT;
     let bin = git_bin(deadline);
     let run = |args: &[&str]| -> Result<String, String> {
-        match git(&bin, root, args, deadline, OUT_CAP) {
+        // Paths as written, not quoted, so a non-ASCII name still matches.
+        let all = [&["-c", "core.quotePath=false"], args].concat();
+        match git(&bin, root, &all, deadline, OUT_CAP) {
             Ok((_, true)) => Err(format!("git {}: past {OUT_CAP} bytes", args[0])),
             Ok((out, false)) => Ok(String::from_utf8_lossy(&out).into_owned()),
             Err(Failure::TimedOut) => Err(format!("git {}: timed out", args[0])),
@@ -390,7 +396,7 @@ fn numbers(row: &Value) -> String {
     let n = |v: &Value| v.as_i64().unwrap_or(0);
     let median = |v: &Value, unit: &str| v.as_f64().map_or("-".into(), |m| format!("{m}{unit}"));
     let mut line = format!(
-        "{} lanes, {} merged · median claim to merge {} · {} send-backs · review rounds median {} over {} reviewed",
+        "{} lanes, {} merged · median claim to merge {} · {} send-backs · review rounds median {} over {} with local rounds",
         n(&c["lanes"]),
         n(&c["merged"]),
         median(&c["claim_to_merge_h_median"], " h"),
@@ -437,13 +443,15 @@ fn drift(ui: &mut egui::Ui, d: &Drift) {
     if d.findings.is_empty() {
         let calls = d.invocations.unwrap_or(0);
         ui.label(format!(
-            "No drift: {calls} chaperone calls match the installed binary."
+            "No drift: {calls} chaperone calls match {}.",
+            d.bin
         ));
         return;
     }
     let n = d.findings.len();
     ui.label(theme::alert(&format!(
-        "{n} mismatches between the skills and the installed binary"
+        "{n} mismatches between the skills and {}",
+        d.bin
     )));
     egui::Grid::new("drift").striped(true).show(ui, |ui| {
         for c in ["where", "kind", "what"] {
