@@ -484,8 +484,9 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str, can: &Can) -> Op
                             moved = Some((i, i + 1));
                         }
                     });
-                    let start =
-                        ui.add_enabled(free && can.start.is_ok(), egui::Button::new("Start"));
+                    // A blocked issue waits for its blockers, so only a ready one starts.
+                    let ok = free && can.start.is_ok() && row.blocked_by.is_empty();
+                    let start = ui.add_enabled(ok, egui::Button::new("Start"));
                     if start.clicked()
                         && let Ok(path) = &can.start
                     {
