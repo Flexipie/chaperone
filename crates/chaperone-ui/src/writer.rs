@@ -267,7 +267,10 @@ pub fn run(
             // the agent to stop.
             done(ledger.work_update(actor, work, &input, stamp, None, true))?;
             if let Some(agent) = &agent {
-                cli("herdr", herdr, &["agent", "prompt", agent, PAUSE])?;
+                let late = "; the agent may have been told to stop, but the pause is not \
+                            recorded: press Pause again";
+                let args = ["agent", "prompt", agent, PAUSE];
+                cli_within("herdr", herdr, &args, CLI_TIMEOUT, late)?;
             }
             done(ledger.work_update(actor, work, &input, stamp, None, false)).map_err(|e| {
                 match &agent {
@@ -374,7 +377,8 @@ pub fn run(
 }
 
 /// Runs spawn and reads its one JSON line: `{status, work_ids, ...}`.
-/// Another agent holding the item, or no line, is not a start.
+/// Only `started` started an agent: `focused` and `reopened` found the
+/// worktree there, and another agent holding the item, or no line, fails.
 fn start(spawn: &OsString, key: &str, repo_path: &str) -> Result<String, String> {
     let args = ["--repo", repo_path, "--no-focus", key];
     let late = "; the lane may still appear, check the board before starting it again";
@@ -388,7 +392,11 @@ fn start(spawn: &OsString, key: &str, repo_path: &str) -> Result<String, String>
         (Some("claimed_elsewhere"), _) => Err(format!(
             "spawn {key}: another agent holds its work item; nothing started"
         )),
-        (Some(status), Some(ids)) => Ok(format!("Started {key}: {status}, work {ids}.")),
+        (Some("started"), Some(ids)) => Ok(format!("Started {key}: started, work {ids}.")),
+        (Some(status @ ("focused" | "reopened")), _) => Ok(format!(
+            "spawn found {key}'s worktree already there ({status}); no agent was started: open \
+             it in herdr."
+        )),
         _ => Err(format!("spawn {key}: no status line in its answer")),
     }
 }
