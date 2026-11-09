@@ -38,8 +38,7 @@ const NO_USAGE: &str = "usage.reported";
 const NO_COMMITS: &str =
     "git rev-list --count <first real handoff commit>..<pr.merged head_sha>, not in the ledger";
 /// The cohort `--merged-since` reads, on the `events_merged` index
-/// (migration 0006): it, [`MERGED_LANES`] and lane_page.rs `REPO_MERGED`
-/// must match the index's expression and kind term for term.
+/// (migration 0006).
 pub(crate) const MERGED_SINCE: &str = "SELECT lane_id FROM events WHERE kind = 'pr.merged'
                             AND json_extract(payload_json, '$.merged_at') >= ?1";
 
@@ -521,7 +520,7 @@ pub struct MergedLane {
 /// The board's recently merged lanes, newest first. Done lanes only: an
 /// open one with a merged PR (a stack lane, or one not closed yet) stays an
 /// open lane. By `merged_at`, as `repo_median` reads: a lane closed before
-/// its PR merged is kept. On `events_merged` (see [`MERGED_SINCE`]): the
+/// its PR merged is kept. On `events_merged` (migration 0006): the
 /// `+` keeps `lanes_status` out, which with no ANALYZE the planner would
 /// pick and then read every event of every done lane.
 pub(crate) static MERGED_LANES: LazyLock<String> = LazyLock::new(|| {

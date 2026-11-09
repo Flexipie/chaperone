@@ -17,8 +17,7 @@ use crate::ledger::{Ledger, LedgerError, check_schema};
 use crate::pipeline::{Fact, Phase, Route, by_stamp};
 use crate::stats::Cohort;
 
-/// `repo_median`'s lanes, on the `events_merged` index (stats.rs
-/// `MERGED_SINCE` names the statements that must match it).
+/// `repo_median`'s lanes, on the `events_merged` index (migration 0006).
 pub(crate) const REPO_MERGED: &str =
     "SELECT DISTINCT e.lane_id FROM events e JOIN lanes l ON l.id = e.lane_id
       WHERE e.kind = 'pr.merged' AND l.repo_slug = ?1 COLLATE NOCASE
