@@ -173,11 +173,6 @@ impl Cockpit {
         cx.notify();
     }
 
-    fn go(&mut self, to: View, cx: &mut Context<Self>) {
-        self.view = to;
-        self.reload(cx);
-    }
-
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let now = board::now();
         let groups = self.board.as_ref().map(board::group).unwrap_or_default();
@@ -190,7 +185,10 @@ impl Cockpit {
             SidebarMenuItem::new(name)
                 .active(active)
                 .suffix(move |_, _| badge(n))
-                .on_click(cx.listener(move |c, _, _, cx| c.go(to.clone(), cx)))
+                .on_click(cx.listener(move |c, _, _, cx| {
+                    c.view = to.clone();
+                    c.reload(cx);
+                }))
         };
         let top = SidebarMenu::new()
             .child(entry(View::All, "All repos".into(), all))

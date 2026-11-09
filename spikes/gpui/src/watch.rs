@@ -16,7 +16,8 @@ const POLL: Duration = Duration::from_millis(100);
 /// What a poll read: a new board, or the error that closed the ledger.
 pub type Read = Result<LaneBoard, String>;
 
-/// Polls `path` until `view` is gone, calling `got` with each new read.
+/// Polls `path` until `view` is gone, calling `got` with each new read;
+/// `got` asks for the redraw.
 pub async fn run<V: 'static>(
     path: PathBuf,
     view: WeakEntity<V>,
@@ -57,12 +58,7 @@ pub async fn run<V: 'static>(
             }
         };
         if let Some(read) = read
-            && view
-                .update(cx, |v, cx| {
-                    got(v, read, cx);
-                    cx.notify();
-                })
-                .is_err()
+            && view.update(cx, |v, cx| got(v, read, cx)).is_err()
         {
             return;
         }

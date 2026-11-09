@@ -1,7 +1,7 @@
 //! The budget ledger and R14 U2 for the spike.
 //!
 //!     seed <db>                  writes the ledger of chaperone-ui's U2 test
-//!     seed u2 <db> <app> [n]     U2 against the GPUI app on that ledger
+//!     seed u2 <db> <app>         U2 against the GPUI app on that ledger
 //!
 //! The ledger is `commit_to_redraw`'s in crates/chaperone-ui/src/watch.rs:
 //! 50 lanes over 5 repos, a spec of 20 decisions, 200 events, a question
@@ -26,15 +26,15 @@ use chaperone_core::work::{Brief, ClaimInput, CreateInput, HandoffInput, UpdateI
 const LANES: i64 = 50;
 const EVENTS: u64 = 100;
 const USAGE: u64 = 300;
+const SAMPLES: usize = 50;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [db] => seed(Path::new(db)),
-        ["u2", db, app] => u2(Path::new(db), app, 50),
-        ["u2", db, app, n] => u2(Path::new(db), app, n.parse().expect("a sample count")),
+        ["u2", db, app] => u2(Path::new(db), app),
         _ => {
-            eprintln!("usage: seed <db> | seed u2 <db> <app> [samples]");
+            eprintln!("usage: seed <db> | seed u2 <db> <app>");
             std::process::exit(2);
         }
     }
@@ -186,7 +186,7 @@ fn p(times: &mut [Duration], q: usize) -> Duration {
     times[(times.len() - 1) * q / 100]
 }
 
-fn u2(path: &Path, app: &str, samples: usize) {
+fn u2(path: &Path, app: &str) {
     let rw = Ledger::open(path).unwrap();
     let child = Command::new(app)
         .arg("--db")
@@ -207,8 +207,8 @@ fn u2(path: &Path, app: &str, samples: usize) {
     });
     let wait = Duration::from_secs(10);
     let (mut seen, _) = rx.recv_timeout(wait).expect("the first board");
-    let mut lags = Vec::with_capacity(samples);
-    for i in 0..samples {
+    let mut lags = Vec::with_capacity(SAMPLES);
+    for i in 0..SAMPLES {
         let id = i as i64 % LANES + 1;
         let start = Instant::now();
         rw.work_heartbeat(&lane(&format!("s{id}")), id, None, false)
@@ -224,7 +224,7 @@ fn u2(path: &Path, app: &str, samples: usize) {
         lags.push(notified - start);
     }
     let (p50, p99) = (p(&mut lags, 50), p(&mut lags, 99));
-    println!("U2 commit to repaint request, {samples} samples: p50 {p50:?}, p99 {p99:?}");
+    println!("U2 commit to repaint request, {SAMPLES} samples: p50 {p50:?}, p99 {p99:?}");
 }
 
 /// The app, killed when U2 ends, a panic too.
