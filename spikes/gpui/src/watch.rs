@@ -1,7 +1,7 @@
 //! The watcher, as in chaperone-ui's `watch.rs`: its own read-only ledger,
 //! polled for `PRAGMA data_version`, and a new board only when that
-//! changes. It runs on GPUI's executors: the reads on a background
-//! thread, the board handed to the view on the main one.
+//! changes. The poll loop runs on a background thread and wakes GPUI's
+//! main thread only with something to show: a new board or a new error.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -24,47 +24,42 @@ pub async fn run<V: 'static>(
     cx: &mut AsyncApp,
     got: impl Fn(&mut V, Read, &mut gpui::Context<V>) + 'static,
 ) {
-    let mut ledger = None;
-    let mut seen = None;
-    // The error shown, so a ledger that stays broken redraws once.
-    let mut said: Option<String> = None;
+    let ex = cx.background_executor().clone();
+    // The ledger, the data_version shown, and the error shown (so a ledger
+    // that stays broken redraws once), handed between background tasks.
+    let mut state = (None, None, None::<String>);
     loop {
-        let start = Instant::now();
-        let path = path.clone();
-        let (back, polled) = cx
-            .background_executor()
+        let (path, timer) = (path.clone(), ex.clone());
+        let (back, read) = ex
             .spawn(async move {
-                let polled = poll(&path, &mut ledger, seen);
-                (ledger, polled)
+                let (mut ledger, mut seen, mut said) = state;
+                loop {
+                    let start = Instant::now();
+                    match poll(&path, &mut ledger, seen) {
+                        Ok(None) => {}
+                        Ok(Some(board)) => {
+                            seen = Some(board.data_version);
+                            return ((ledger, seen, None), Ok(board));
+                        }
+                        Err(e) => {
+                            // Reopened next tick: the file may be migrated or created.
+                            ledger = None;
+                            seen = None;
+                            let text = e.to_string();
+                            if said.as_ref() != Some(&text) {
+                                said = Some(text.clone());
+                                return ((ledger, seen, said), Err(text));
+                            }
+                        }
+                    }
+                    timer.timer(POLL.saturating_sub(start.elapsed())).await;
+                }
             })
             .await;
-        ledger = back;
-        let read = match polled {
-            Ok(None) => None,
-            Ok(Some(board)) => {
-                seen = Some(board.data_version);
-                said = None;
-                Some(Ok(board))
-            }
-            Err(e) => {
-                // Reopened next tick: the file may be migrated or created.
-                ledger = None;
-                seen = None;
-                let text = e.to_string();
-                (said.as_ref() != Some(&text)).then(|| {
-                    said = Some(text.clone());
-                    Err(text)
-                })
-            }
-        };
-        if let Some(read) = read
-            && view.update(cx, |v, cx| got(v, read, cx)).is_err()
-        {
+        state = back;
+        if view.update(cx, |v, cx| got(v, read, cx)).is_err() {
             return;
         }
-        cx.background_executor()
-            .timer(POLL.saturating_sub(start.elapsed()))
-            .await;
     }
 }
 
