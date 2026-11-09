@@ -27,6 +27,8 @@ const LANES: i64 = 50;
 const EVENTS: u64 = 100;
 const USAGE: u64 = 300;
 const SAMPLES: usize = 50;
+/// The seed's spec, which `u2` checks for before it writes.
+const SPEC: &str = "Flexipie/repo0#1";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -55,16 +57,9 @@ fn seed(path: &Path) {
         .map(|n| format!("- Q: question {n}? A: answer {n}.\n"))
         .collect();
     let body = format!("# P\n\n## slice 1: one  (Flexipie/repo0#2)\n\n## decisions\n\n{decisions}");
-    rw.spec_create(
-        &checker,
-        "Flexipie/repo0#1",
-        None,
-        &body,
-        &rw.now().unwrap(),
-        false,
-    )
-    .unwrap()
-    .unwrap();
+    rw.spec_create(&checker, SPEC, None, &body, &rw.now().unwrap(), false)
+        .unwrap()
+        .unwrap();
     for id in 1..=LANES {
         let me = lane(&format!("s{id}"));
         let create = CreateInput {
@@ -72,7 +67,7 @@ fn seed(path: &Path) {
             repo: Some(format!("Flexipie/repo{}", id % 5)),
             source: Some("github".into()),
             source_id: Some(format!("Flexipie/repo0#{}", id + 1)),
-            spec: Some("Flexipie/repo0#1".into()),
+            spec: Some(SPEC.into()),
             lane_key: Some(format!("l{id}")),
             kind: "code".into(),
             pr_flow: "pr".into(),
@@ -188,6 +183,11 @@ fn p(times: &mut [Duration], q: usize) -> Duration {
 
 fn u2(path: &Path, app: &str) {
     let rw = Ledger::open(path).unwrap();
+    // It heartbeats lanes 1-50: only on a ledger `seed` wrote, never a real one.
+    if !matches!(rw.spec_get(SPEC, None), Ok(Ok(_))) {
+        eprintln!("{} has no spec {SPEC}: not a seeded ledger", path.display());
+        std::process::exit(1);
+    }
     let child = Command::new(app)
         .arg("--db")
         .arg(path)
