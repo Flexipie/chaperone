@@ -192,15 +192,16 @@ fn done<T>(c: Result<Result<T, Refusal>, LedgerError>) -> Result<T, String> {
 /// from the temp dir, so gh never reads or changes a checkout (`-R`
 /// names the repo). A call past [`CLI_TIMEOUT`] fails.
 fn cli(name: &str, cmd: &OsString, args: &[&str]) -> Result<String, String> {
-    cli_within(name, cmd, args, CLI_TIMEOUT)
+    cli_within(name, cmd, args, CLI_TIMEOUT, "")
 }
 
-/// [`cli`] with its own time limit.
+/// [`cli`] with its own time limit; `late` ends the timeout's message.
 fn cli_within(
     name: &str,
     cmd: &OsString,
     args: &[&str],
     limit: Duration,
+    late: &str,
 ) -> Result<String, String> {
     let call = format!("{name} {}", args[..2].join(" "));
     let deadline = Instant::now() + limit;
@@ -208,7 +209,7 @@ fn cli_within(
     command.args(args).current_dir(std::env::temp_dir());
     let out = child::run(&mut command, deadline, OUT_CAP).map_err(|e| match e {
         child::Failed::Spawn(e) => format!("{name} did not start: {e}"),
-        child::Failed::TimedOut => format!("{call}: no answer in {}s", limit.as_secs()),
+        child::Failed::TimedOut => format!("{call}: no answer in {}s{late}", limit.as_secs()),
         child::Failed::Wait(e) => format!("{call}: {e}"),
     })?;
     if out.cut {
@@ -268,7 +269,15 @@ pub fn run(
             if let Some(agent) = &agent {
                 cli("herdr", herdr, &["agent", "prompt", agent, PAUSE])?;
             }
-            done(ledger.work_update(actor, work, &input, stamp, None, false))?;
+            done(ledger.work_update(actor, work, &input, stamp, None, false)).map_err(|e| {
+                match &agent {
+                    Some(agent) => format!(
+                        "Told {agent} to stop, but the pause was not recorded: {e}. Press Pause \
+                         again."
+                    ),
+                    None => e,
+                }
+            })?;
             Ok(format!("Paused {key}. Answer it to resume."))
         }
         Act::Start { key, repo_path } => start(spawn, &key, &repo_path),
@@ -368,7 +377,8 @@ pub fn run(
 /// Another agent holding the item, or no line, is not a start.
 fn start(spawn: &OsString, key: &str, repo_path: &str) -> Result<String, String> {
     let args = ["--repo", repo_path, "--no-focus", key];
-    let out = cli_within("spawn", spawn, &args, SPAWN_TIMEOUT)?;
+    let late = "; the lane may still appear, check the board before starting it again";
+    let out = cli_within("spawn", spawn, &args, SPAWN_TIMEOUT, late)?;
     let line: Value = serde_json::from_str(&out).unwrap_or(Value::Null);
     let ids = line["work_ids"].as_array().map(|ids| {
         let ids: Vec<String> = ids.iter().map(Value::to_string).collect();
