@@ -155,10 +155,8 @@ fn refusal(r: &Refusal) -> String {
     }
 }
 
-/// The chaperone to check: `CHAPERONE_BIN`, else the first on PATH, by
-/// its full path so the card can name it. Skills run the profile's
-/// `ledger.cli`; the two differ only when another install is earlier on
-/// PATH, and the card's path shows which was checked.
+/// The chaperone the skills call: `CHAPERONE_BIN`, else the first on
+/// PATH, as `$L` finds it, by its full path so the card can name it.
 fn chaperone() -> PathBuf {
     if let Some(bin) = std::env::var_os("CHAPERONE_BIN") {
         return bin.into();
