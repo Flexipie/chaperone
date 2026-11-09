@@ -83,14 +83,19 @@ pub fn spawn(
 ) -> Sender<Act> {
     let (tx, rx) = mpsc::channel::<Act>();
     thread::spawn(move || {
-        let open = Ledger::open(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|l| {
-                let now = l.now().map_err(|e| e.to_string())?;
-                Ok((l, owner(&now)))
-            });
+        let writable = || {
+            let l = Ledger::open(&path).map_err(|e| e.to_string())?;
+            let now = l.now().map_err(|e| e.to_string())?;
+            Ok::<_, String>((l, owner(&now)))
+        };
+        let mut open = writable();
         for act in rx {
             let work = act.work();
+            // A ledger missing at start is opened once it exists, as the
+            // board's watcher does; kept once open.
+            if open.is_err() {
+                open = writable();
+            }
             let said = match &open {
                 Ok((ledger, actor)) => run(ledger, actor, &herdr, act),
                 Err(e) => Err(format!("ledger not opened for writing: {e}")),
