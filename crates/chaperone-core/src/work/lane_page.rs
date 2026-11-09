@@ -42,6 +42,8 @@ pub struct LanePage {
     /// The highest send-back round, 0 for none: what stats reads as
     /// `send_back_rounds`.
     pub sent_back: i64,
+    /// The merge sha of the lane's newest `pr.merged`, None before one.
+    pub merged: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -221,6 +223,14 @@ impl Ledger {
             [id],
             |r| r.get(0),
         )?;
+        let merged = tx
+            .query_row(
+                "SELECT json_extract(payload_json, '$.merge_sha') FROM events
+                  WHERE lane_id = ?1 AND kind = 'pr.merged' ORDER BY id DESC LIMIT 1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?;
 
         let mut stmt = tx.prepare(&format!(
             "SELECT {}, {} FROM events e
@@ -289,6 +299,7 @@ impl Ledger {
             gates,
             questions,
             sent_back,
+            merged,
         })
     }
 

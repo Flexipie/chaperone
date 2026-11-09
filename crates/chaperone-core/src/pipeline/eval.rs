@@ -261,7 +261,7 @@ fn literal(lit: &Literal) -> Fact {
 
 /// `left` is a prefix of `right` (with `both_ways`, the shorter of the two
 /// is a prefix of the longer), and that prefix is hex of a length in `len`.
-pub(crate) fn sha_prefix_eq(
+pub fn sha_prefix_eq(
     left: &str,
     right: &str,
     len: std::ops::RangeInclusive<i64>,
