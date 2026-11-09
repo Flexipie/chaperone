@@ -19,8 +19,9 @@ Cargo workspace: the root workspace, CI and other lanes never compile it.
   version and the lane, and `git::lane_files` once on a background thread
   (no area column). Its word helpers are copies of chaperone-ui's `lane.rs`,
   `numbers.rs` and `diff.rs`, which import egui, each marked with its
-  source. The repo median is read again at most every 60 s, as chaperone-ui
-  does.
+  source. The repo median is read again with the page after a ledger write,
+  at most every 60 s (chaperone-ui also re-reads it on a 60 s tick). The
+  files are read once per page open, not again when the worktree commits.
 - ⌘K opens GPUI Kit's command palette (Go with ⌘1 and ⌘2, every repo,
   every open lane); a lane's Merge opens a confirm that writes nothing.
 
