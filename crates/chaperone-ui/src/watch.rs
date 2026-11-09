@@ -20,6 +20,7 @@ use crate::backlog;
 use crate::diff::Diff;
 use crate::graph::Repos;
 use crate::overlap::Markers;
+use crate::pipeline;
 
 /// A poll is one pragma on an open connection, so idle costs next to
 /// nothing; a commit shows within this.
@@ -65,6 +66,9 @@ pub struct Shown {
     pub writing: bool,
     /// The newest act's outcome.
     pub wrote: Option<crate::writer::Wrote>,
+    /// Set by the window: the Pipeline page's thread works only then.
+    pub pipeline_open: bool,
+    pub pipeline: pipeline::Read,
 }
 
 /// One lane's page as read at `version`, or why it could not be. A

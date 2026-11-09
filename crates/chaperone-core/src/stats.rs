@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use crate::checks::ATTENTION_TYPES;
 use crate::ledger::{Checked, Ledger, LedgerError, Refusal, canonical_at, check_schema};
-use crate::pipeline::sha_prefix_eq;
+use crate::pipeline::{Fact, sha_prefix_eq};
 use crate::work::IS_HANDOFF;
 
 /// Which lanes `stats` reads.
@@ -776,6 +776,13 @@ pub fn parse_changelog(text: &str) -> Result<Vec<Version>, String> {
     Ok(out)
 }
 
+/// The version active at `at` (RFC 3339 UTC, as [`Version::at`]):
+/// `manual` before the first.
+pub fn version_at<'a>(versions: &'a [Version], at: &str) -> &'a str {
+    let v = versions.iter().rev().find(|v| v.at.as_str() <= at);
+    v.map_or("manual", |v| &v.id)
+}
+
 /// The first `pipeline v<N>` in `text`, as words (`lane-stats`'
 /// `\bpipeline (v\d+)\b`): `pipeline v17.1` names v17.
 fn stamp(text: &str) -> Option<String> {
@@ -797,8 +804,11 @@ impl Ledger {
     /// its first claim (`manual` before the first); a lane never claimed
     /// nor stamped ran no pipeline and is left out. Every changelog
     /// version is listed, newest first, then stamped versions the
-    /// changelog lacks, then `manual`.
+    /// changelog lacks, then `manual`. One read snapshot, schema checked,
+    /// so the UI can keep calling it.
     pub fn pipeline_history(&self, versions: &[Version], repo: Option<&str>) -> Checked<Value> {
+        let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
+        check_schema(&tx)?;
         for v in versions {
             if !canonical_at(self.conn(), &v.at)? {
                 return Ok(Err(Refusal::InvalidInput(format!(
@@ -816,15 +826,24 @@ impl Ledger {
         for lane in lanes {
             let version = match (&lane.stamp, &lane.claimed) {
                 (Some(s), _) => s.clone(),
-                (None, Some((at, _))) => {
-                    let v = versions.iter().rev().find(|v| v.at <= *at);
-                    v.map_or("manual".into(), |v| v.id.clone())
-                }
+                (None, Some((at, _))) => version_at(versions, at).to_string(),
                 (None, None) => continue,
             };
             groups.entry(version).or_default().push(lane);
         }
+        // The engine's review rounds (the gates' count), by lane.
+        let mut rounds = BTreeMap::new();
+        for l in groups.values().flatten() {
+            if let Fact::Int(n) = self.project(l.id, None)?.get("review.local_rounds") {
+                rounds.insert(l.id, *n);
+            }
+        }
         let row = |id: &str, v: Option<&Version>, lanes: Vec<Lane>| {
+            let reviewed: Vec<f64> = lanes
+                .iter()
+                .filter_map(|l| rounds.get(&l.id).filter(|n| **n > 0))
+                .map(|n| *n as f64)
+                .collect();
             let stamped = lanes.iter().filter(|l| l.stamp.is_some()).count();
             let engine: BTreeSet<&str> = lanes
                 .iter()
@@ -837,6 +856,8 @@ impl Ledger {
                 "engine_ids": engine,
                 "lane_ids": lanes.iter().map(|l| l.id).collect::<Vec<_>>(),
                 "version_from": { "stamp": stamped, "claim": lanes.len() - stamped },
+                "lanes_review_rounds": reviewed.len(),
+                "review_rounds_median": median(reviewed),
                 "cohort": summarize(&lanes)["cohort"],
             })
         };
