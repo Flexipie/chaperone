@@ -274,7 +274,7 @@ fn same_question(a: &str, b: &str) -> bool {
 }
 
 /// A question's note asks about decision question `q`: the same question,
-/// or a note that names it ("confirm: <q>").
+/// or a note that names it (`"confirm: <q>"`).
 pub fn asks_about(note: &str, q: &str) -> bool {
     same_question(note, q) || words(note).contains(&words(q))
 }
