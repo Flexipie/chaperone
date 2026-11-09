@@ -8,7 +8,8 @@ from there, with HOME and XDG_DATA_HOME pointing there too, so a missed --db
 can never reach a real ledger. `seed` writes the ledger of chaperone-ui's
 U2 test. U1: one unmeasured launch each, then 10 `--first-frame` launches
 each, alternated, wall time around the spawn. U3 and U4: each app opened
-alone for 5 s, then its CPU time over 20 s and its RSS at the end. U2:
+alone for 5 s, then its CPU time over 20 s; U4 is its max RSS (from
+wait4 once killed), with its RSS at the end in brackets. U2:
 `seed u2` (commit to repaint request); egui's U2 is its own ignored test. Prints
 markdown. Python stdlib only.
 """
@@ -73,13 +74,16 @@ def main(seed, gpui, egui):
                 before = cpu_secs(proc.pid)
                 time.sleep(IDLE)
                 used = cpu_secs(proc.pid) - before
-                idle[app] = (used / IDLE * 100, rss_mib(proc.pid))
+                rss = rss_mib(proc.pid)
             finally:
                 proc.kill()
-                proc.wait()
+                # ru_maxrss is in bytes on macOS.
+                peak = os.wait4(proc.pid, 0)[2].ru_maxrss / 2**20
+            idle[app] = (used / IDLE * 100, rss, peak)
         print(f"| U3 CPU over {IDLE} s | {idle['gpui'][0]:.2f}% | {idle['egui'][0]:.2f}% |")
-        print(f"| U4 RSS after {SETTLE + IDLE} s | {idle['gpui'][1]:.0f} MiB "
-              f"| {idle['egui'][1]:.0f} MiB |", flush=True)
+        print(f"| U4 max RSS (RSS after {SETTLE + IDLE} s) "
+              f"| {idle['gpui'][2]:.0f} MiB ({idle['gpui'][1]:.0f}) "
+              f"| {idle['egui'][2]:.0f} MiB ({idle['egui'][1]:.0f}) |", flush=True)
         subprocess.run([bins["seed"], "u2", db, bins["gpui"]], check=True, env=env)
     finally:
         shutil.rmtree(root)
