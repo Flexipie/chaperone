@@ -37,9 +37,9 @@ pub struct Typed {
     pub reason: String,
     /// The question the answer is for, the oldest when typing started.
     asks: Option<i64>,
-    /// That question was answered elsewhere, or one was asked on a lane
-    /// that had none: the answer was not sent.
-    gone: bool,
+    /// Why the answer was not sent: that question was answered elsewhere,
+    /// or one was asked on a lane that had none.
+    gone: Option<&'static str>,
     /// The act sent and not done yet: true for a send-back.
     sent: Option<bool>,
 }
@@ -273,18 +273,21 @@ fn actions(
         if line(ui, &mut typed.answer, "Your answer", "Answer") {
             let open = |id| page.questions.iter().any(|q| q.id == id);
             typed.gone = match typed.asks {
-                Some(id) => !open(id),
-                None => !page.questions.is_empty(),
+                Some(id) if !open(id) => Some("that question was answered elsewhere"),
+                None if !page.questions.is_empty() => {
+                    Some("the lane asked a question since you started typing")
+                }
+                _ => None,
             };
-            if typed.gone {
+            if typed.gone.is_some() {
                 typed.asks = page.questions.first().map(|q| q.id);
             } else {
                 act = Some(answer(typed.asks, typed.answer.clone(), None));
                 typed.sent = Some(false);
             }
         }
-        if typed.gone {
-            let e = "Not sent: that question was answered elsewhere. Answer again to send it to what the lane asks now.";
+        if let Some(why) = typed.gone {
+            let e = format!("Not sent: {why}. Answer again to send it to what the lane asks now.");
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
     }
