@@ -60,6 +60,8 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
         // Lanes whose last read failed, read again on the next overlap run
         // (the selected lane's also after SOON).
         let mut retry: BTreeSet<i64> = BTreeSet::new();
+        // The selected lane's failed read was tried again on a quiet ledger.
+        let mut retried = false;
         let mut repos: HashMap<String, Built> = HashMap::new();
         loop {
             thread::sleep(POLL);
@@ -98,12 +100,15 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 .collect();
             let now = (version, times, open, sel, profile);
             let soon = ran.is_some_and(|t| t.elapsed() < SOON);
-            // The selected lane's failed read is tried again after SOON, a
-            // quiet ledger or not.
-            let again = sel.is_some_and(|id| retry.contains(&id)) && !soon;
-            if seen.as_ref() == Some(&now) && !again {
+            // The selected lane's failed read is tried again after SOON on a
+            // quiet ledger, once until something changes: a lane with no
+            // worktree fails for good.
+            let quiet = seen.as_ref() == Some(&now);
+            let again = quiet && !retried && !soon && sel.is_some_and(|id| retry.contains(&id));
+            if quiet && !again {
                 continue;
             }
+            retried = again;
             // With only a lane's page open, a ledger write alone (any lane's
             // events) reads again at most every SOON; the overlap thread
             // throttles every read, this one only ledger-only changes.

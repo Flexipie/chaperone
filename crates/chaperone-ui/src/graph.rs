@@ -305,13 +305,10 @@ pub fn draw(ui: &mut egui::Ui, repos: &Repos) {
 }
 
 pub fn draw_one(ui: &mut egui::Ui, layout: &Layout, opts: &Opts) {
-    let changed = layout.nodes.iter().filter(|n| n.depth == 0).count();
+    // The extra rows go below the tallest column, clear of every label.
+    let below = ((layout.size.y - 2.0 * MARGIN) / ROW).round() as usize;
     let mut size = layout.size;
-    if !opts.extra.is_empty() {
-        size.y = size
-            .y
-            .max(2.0 * MARGIN + (changed + opts.extra.len()) as f32 * ROW);
-    }
+    size.y += opts.extra.len() as f32 * ROW;
     let text = ui.visuals().text_color();
     let font = egui::TextStyle::Small.resolve(ui.style());
     let label = |n: &Node| {
@@ -361,7 +358,7 @@ pub fn draw_one(ui: &mut egui::Ui, layout: &Layout, opts: &Opts) {
         let at = at + vec2(14.0, 0.0);
         painter.text(at, egui::Align2::LEFT_CENTER, &c.label, font.clone(), text);
     }
-    for (row, path) in (changed..).zip(&opts.extra) {
+    for (row, path) in (below..).zip(&opts.extra) {
         let at = pos2(MARGIN, MARGIN + row as f32 * ROW) + origin;
         painter.circle_stroke(at, 6.0, Stroke::new(1.5, faint));
         painter.circle_stroke(at, 14.0, red);
