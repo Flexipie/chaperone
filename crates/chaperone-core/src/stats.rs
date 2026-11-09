@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::LazyLock;
 
 use rusqlite::{ToSql, Transaction, TransactionBehavior};
 use serde_json::{Map, Value, json};
@@ -36,6 +37,11 @@ const NO_USAGE: &str = "usage.reported";
 /// ledger read.
 const NO_COMMITS: &str =
     "git rev-list --count <first real handoff commit>..<pr.merged head_sha>, not in the ledger";
+/// The cohort `--merged-since` reads, on the `events_merged` index
+/// (migration 0006): it, [`MERGED_LANES`] and lane_page.rs `REPO_MERGED`
+/// must match the index's expression and kind term for term.
+pub(crate) const MERGED_SINCE: &str = "SELECT lane_id FROM events WHERE kind = 'pr.merged'
+                            AND json_extract(payload_json, '$.merged_at') >= ?1";
 
 #[derive(Default)]
 struct Review {
@@ -392,11 +398,7 @@ impl Ledger {
                          milliseconds (2026-11-07T00:00:00.000Z)"
                     ))));
                 }
-                (
-                    "SELECT lane_id FROM events WHERE kind = 'pr.merged'
-                     AND json_extract(payload_json, '$.merged_at') >= ?1",
-                    at,
-                )
+                (MERGED_SINCE, at)
             }
             Cohort::Work(ids) => ("SELECT value FROM json_each(?1)", json!(ids).to_string()),
         };
@@ -516,6 +518,29 @@ pub struct MergedLane {
     pub merged_secs: i64,
 }
 
+/// The board's recently merged lanes, newest first. Done lanes only: an
+/// open one with a merged PR (a stack lane, or one not closed yet) stays an
+/// open lane. By `merged_at`, as `repo_median` reads: a lane closed before
+/// its PR merged is kept. On `events_merged` (see [`MERGED_SINCE`]): the
+/// `+` keeps `lanes_status` out, which with no ANALYZE the planner would
+/// pick and then read every event of every done lane.
+pub(crate) static MERGED_LANES: LazyLock<String> = LazyLock::new(|| {
+    let goal = "json_extract(payload_json, '$.handoff.brief.goal')";
+    format!(
+        "SELECT l.id, l.repo_slug, l.lane_key, l.lane_pos, l.title,
+                unixepoch(max(json_extract(e.payload_json, '$.merged_at'))) AS merged,
+                (SELECT {goal} FROM events
+                  WHERE lane_id = l.id AND {IS_HANDOFF} AND trim(ifnull({goal}, '')) <> ''
+                  ORDER BY id DESC LIMIT 1)
+           FROM events e JOIN lanes l ON l.id = e.lane_id
+          WHERE e.kind = 'pr.merged' AND +l.status = 'done'
+            AND json_extract(e.payload_json, '$.merged_at')
+                >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)
+          GROUP BY l.id
+          ORDER BY merged DESC, l.id DESC LIMIT ?2"
+    )
+});
+
 impl Ledger {
     /// [`BoardStats`] as of one snapshot, its schema re-checked inside it,
     /// as `lane_board` does.
@@ -543,23 +568,7 @@ impl Ledger {
             Err(r) => return Err(std::io::Error::other(format!("stats: {r:?}")).into()),
         };
         let cohort = self.stats(&Cohort::MergedSince(since.clone()))?;
-        // Done lanes only: an open one with a merged PR (a stack lane, or
-        // one not closed yet) stays an open lane. By `merged_at`, as
-        // `repo_median` reads: a lane closed before its PR merged is kept.
-        let goal = "json_extract(payload_json, '$.handoff.brief.goal')";
-        let mut stmt = tx.prepare(&format!(
-            "SELECT l.id, l.repo_slug, l.lane_key, l.lane_pos, l.title,
-                    unixepoch(max(json_extract(e.payload_json, '$.merged_at'))) AS merged,
-                    (SELECT {goal} FROM events
-                      WHERE lane_id = l.id AND {IS_HANDOFF} AND trim(ifnull({goal}, '')) <> ''
-                      ORDER BY id DESC LIMIT 1)
-               FROM events e JOIN lanes l ON l.id = e.lane_id
-              WHERE e.kind = 'pr.merged' AND l.status = 'done'
-                AND json_extract(e.payload_json, '$.merged_at')
-                    >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)
-              GROUP BY l.id
-              ORDER BY merged DESC, l.id DESC LIMIT ?2"
-        ))?;
+        let mut stmt = tx.prepare(&MERGED_LANES)?;
         let merged = stmt
             .query_map(
                 rusqlite::params![format!("-{MERGED_DAYS} days"), MERGED_MAX],

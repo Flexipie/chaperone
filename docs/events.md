@@ -167,6 +167,10 @@ So each PR of a lane is measured from its own handoffs, even when a later PR was
 before an earlier one merged. When the owner made it ready, it is the newest
 `lane.ready_overridden` with `ready: true` in that window.
 
+The `--merged-since` cohort, the board's recently merged lanes and the lane page's repo median
+find merges on the partial index `events_merged` (migration 0006, ledger v6),
+`json_extract(payload_json, '$.merged_at') WHERE kind = 'pr.merged'`.
+
 
 ### Attention
 

@@ -17,6 +17,14 @@ use crate::ledger::{Ledger, LedgerError, check_schema};
 use crate::pipeline::{Fact, Phase, Route, by_stamp};
 use crate::stats::Cohort;
 
+/// `repo_median`'s lanes, on the `events_merged` index (stats.rs
+/// `MERGED_SINCE` names the statements that must match it).
+pub(crate) const REPO_MERGED: &str =
+    "SELECT DISTINCT e.lane_id FROM events e JOIN lanes l ON l.id = e.lane_id
+      WHERE e.kind = 'pr.merged' AND l.repo_slug = ?1 COLLATE NOCASE
+        AND json_extract(e.payload_json, '$.merged_at')
+            >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')";
+
 #[derive(Debug, Serialize)]
 pub struct LanePage {
     pub detail: LaneDetail,
@@ -322,12 +330,7 @@ impl Ledger {
     pub fn repo_median(&self, repo: &str) -> Result<Value, LedgerError> {
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
         check_schema(&tx)?;
-        let mut stmt = tx.prepare(
-            "SELECT DISTINCT e.lane_id FROM events e JOIN lanes l ON l.id = e.lane_id
-              WHERE e.kind = 'pr.merged' AND l.repo_slug = ?1 COLLATE NOCASE
-                AND json_extract(e.payload_json, '$.merged_at')
-                    >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')",
-        )?;
+        let mut stmt = tx.prepare(REPO_MERGED)?;
         let ids = stmt
             .query_map([repo], |r| r.get(0))?
             .collect::<Result<Vec<i64>, _>>()?;
@@ -342,6 +345,34 @@ impl Ledger {
                 }))
             }
             Err(r) => Err(std::io::Error::other(format!("stats: {r:?}")).into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stats::{MERGED_LANES, MERGED_SINCE};
+
+    /// The three reads of `pr.merged` by `merged_at` search
+    /// `events_merged`, on a ledger with no ANALYZE, as every real one is.
+    #[test]
+    fn merged_reads_use_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        for sql in [MERGED_SINCE, MERGED_LANES.as_str(), REPO_MERGED] {
+            let mut stmt = ledger
+                .conn()
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let nulls = vec![rusqlite::types::Null; stmt.parameter_count()];
+            let plan = stmt
+                .query_map(rusqlite::params_from_iter(nulls), |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n");
+            assert!(plan.contains("USING INDEX events_merged"), "{sql}\n{plan}");
         }
     }
 }

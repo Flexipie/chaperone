@@ -45,6 +45,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         include_str!("../../migrations/0005_events_backlog.sql"),
         None,
     ),
+    (
+        include_str!("../../migrations/0006_events_merged.sql"),
+        None,
+    ),
 ];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
