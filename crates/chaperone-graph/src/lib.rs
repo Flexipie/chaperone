@@ -40,9 +40,9 @@ pub struct File {
 pub struct Entries<'a> {
     /// Checked against the tree and the targets by the caller.
     pub rules: &'a Rules,
-    /// `Rules::check`'s answer: the rules that match nothing, and the
-    /// entry points the tree has.
+    /// `Rules::check`'s answer.
     pub unmatched: Vec<Unmatched>,
+    /// The entry points the tree has, `Rules::check`'s other answer.
     pub total: usize,
     /// The commit the lines are read at.
     pub head: String,

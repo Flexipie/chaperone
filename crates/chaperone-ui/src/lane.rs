@@ -601,7 +601,7 @@ fn change_graph(
         }
         Some(Err(why)) => {
             ui.label(why);
-            // No graph (nothing committed yet): the areas' files still show.
+            // No graph (no commits, no repo, a read error): the areas' files still show.
             for p in &opts.out_of_scope {
                 ui.colored_label(ui.visuals().error_fg_color, format!("out of scope: {p}"));
             }

@@ -290,7 +290,7 @@ fn snapshot(lane: &Lane, notes: Option<Vec<String>>, over: &Overlap) -> LaneSnap
         notes: notes.unwrap_or_default(),
         files_omitted: over.files_omitted,
         reached: ep.map(|e| (e.reached.len() + e.omitted, e.total)),
-        exact: impact.is_some_and(|i| i.bound == "exact") && ep.is_some_and(|e| e.bound == "exact"),
+        exact: ep.is_some_and(|e| e.bound == "exact"),
     }
 }
 
