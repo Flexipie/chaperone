@@ -1,0 +1,30 @@
+# The GPUI spike (#134): its own workspace, so the root workspace, CI and
+# other lanes never compile GPUI.
+[workspace]
+
+[package]
+name = "chaperone-ui-gpui"
+description = "Spike: the chaperone-ui board in GPUI + GPUI Kit"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+chaperone-core = { path = "../../crates/chaperone-core" }
+clap = { version = "4.6", features = ["derive"] }
+serde_json = "1.0"
+# One gpui lineage: gpui-component 0.9.1 and the gpui-pre snapshot it pins.
+# gpui-kit brings that snapshot's platform (gpui-pre-platform).
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui-component = "=0.9.1"
+gpui-kit = { version = "=0.9.1", default-features = false, features = ["component"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# The root workspace's, so the budgets compare like with like.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
