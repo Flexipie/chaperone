@@ -68,6 +68,8 @@ pub struct Shown {
     pub writing: bool,
     /// The newest act's outcome.
     pub wrote: Option<crate::writer::Wrote>,
+    /// The `after` the newest act was sent with, when it was a reorder.
+    pub reorder_after: Option<Option<i64>>,
     /// Set by the window: the Pipeline page's thread works only then.
     pub pipeline_open: bool,
     pub pipeline: pipeline::Read,

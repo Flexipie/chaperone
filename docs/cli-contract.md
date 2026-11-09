@@ -157,6 +157,15 @@ question and its answer, is a separate record. Without `--idempotency-key`, a re
 replays; a real repeat (a second nudge on a stalled lane) passes its own key. It prints
 `{event_id, work_id, kind, replayed, at, payload}`.
 
+`work update` keeps daisy's owner rule (a live lease held by another pair refuses everyone
+else) with one exception, the owner's pause from chaperone-ui (#119): agent `owner-ui` may move
+a `claimed` or `active` item to `blocked` with `--blocker "paused by owner"` and nothing else
+(no `--reason`, no other field) over another pair's live lease. It is an ordinary `lane.updated`
+that keeps the holder and bumps `updated_at`, so the lane's next `--expected-updated-at` is
+stale and it reads the pause. Any other change from `owner-ui`, and the same pause from any
+other agent, is `conflict` (lease held). The write's lease guard checks the event itself, so
+no other path gets past it.
+
 `dossier note` and `dossier get` are new (#83, [ADR 0007](decisions/0007-issue-dossier.md)).
 `<key>` is `owner/repo#N` or `TEAM-123` (`normalize_key`); a bare `#N` is `invalid_input`.
 `dossier note` appends one `dossier.noted` (events.md, Dossier) on the key, from any session; it

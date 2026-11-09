@@ -19,7 +19,7 @@ One row in `events`. The log is the truth. Every other table is a fold of it. Th
 | --- | --- | --- |
 | `id` | integer | Log order. Assigned by the write, never reused. |
 | `kind` | text | One of the M1 kinds below. A reserved kind is refused. |
-| `lane_id` | integer, nullable | Null for spec events and `dossier.noted`. |
+| `lane_id` | integer, nullable | Null for spec events, `dossier.noted` and `backlog.prioritised`. |
 | `spec_id` | integer, nullable | Null for a lane created without `--spec`. |
 | `actor` | `{agent, session, tool}` | From `--agent` / `--session` (or `DAISY_AGENT` / `DAISY_SESSION`). `tool` is always `chaperone`. |
 | `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (by key and kind, never the payload). A key already used by another kind is `invalid_input`. |
@@ -196,6 +196,20 @@ differs, so a retry replays, a restored note appends and another session's ident
 appends. Notes are never edited: a correction supersedes. No fact reads `dossier.*`.
 `dossier get` finds a key's notes on the partial index `events_dossier` (migration 0004),
 `json_extract(payload_json, '$.key') WHERE kind = 'dossier.noted'`.
+
+### Backlog
+
+| Kind | Command | Payload |
+| --- | --- | --- |
+| `backlog.prioritised` | chaperone-ui's Backlog tab (`Ledger::backlog_prioritise`, no CLI command) | `repo` (`owner/repo`, lowercased), `order` (at most 500 distinct issue keys of that repo, `owner/repo#N` lowercased, first first), `after` (the event id of the repo's newest `backlog.prioritised` the order was built from, or null when it had none) |
+
+The owner's order of a repo's open issues (#119). `lane_id` and `spec_id` are null: it folds
+nothing, never changes a lane's `updated_at` and is never a gate anchor. The newest one on a
+repo stands; the Backlog tab lists its keys first, in its order, then the rest by issue number.
+The write refuses it (`conflict`, nothing written) when `after` is not the repo's newest order,
+so an order another window wrote since is never lost. It takes no idempotency key. The newest
+order is read on the partial index `events_backlog` (migration 0005, ledger v5),
+`json_extract(payload_json, '$.repo') WHERE kind = 'backlog.prioritised'`.
 
 ### Usage
 

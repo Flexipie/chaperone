@@ -35,6 +35,10 @@ const HANDOFF: &str = "handoff";
 const DEFAULT_LEASE_SECS: i64 = 900;
 /// Daisy's `tool` on handoff and event rows.
 const TOOL: &str = "chaperone";
+/// chaperone-ui's agent, and the blocker its pause writes: the one update
+/// it may make over another pair's live lease (cli-contract, `work update`).
+pub const OWNER_UI: &str = "owner-ui";
+pub const PAUSED_BY_OWNER: &str = "paused by owner";
 
 /// The events that carry a handoff (events.md, folded rows): what `work
 /// handoffs` lists and where "the latest handoff" is read.
@@ -417,7 +421,10 @@ impl Ledger {
             Err(r) => return Ok(Err(r)),
         };
         self.write_lane(actor, id, at, dry_run, |conn, item| {
-            if let Err(r) = check_owner(item, actor) {
+            // The owner's pause passes over a live lease; the write's lease
+            // guard refuses it unless it changes nothing else.
+            let pause = actor.agent.as_deref() == Some(OWNER_UI);
+            if !pause && let Err(r) = check_owner(item, actor) {
                 return Ok(Err(r));
             }
             let spec_id = match input.spec.as_deref().map(|s| resolve_spec(conn, s)) {
@@ -1148,7 +1155,8 @@ fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
         PhaseEntered if carries_handoff => "handoff",
         PhaseEntered => "update",
         SpecCreated | SpecRevised | SpecApproved | GateDenied | CheckRequested | CheckFinished
-        | FindingUpdated | UsageReported | PrMerged | AttentionRecorded | DossierNoted => {
+        | FindingUpdated | UsageReported | PrMerged | AttentionRecorded | DossierNoted
+        | BacklogPrioritised => {
             return None;
         }
     })
@@ -1444,6 +1452,60 @@ mod tests {
             .unwrap();
         assert_eq!(item.status, "active");
         assert!(item.updated_at.as_str() > T1, "{}", item.updated_at);
+    }
+
+    /// Access: over a live lease, owner-ui may pause the lane and do
+    /// nothing else, and no other pair may pause it.
+    #[test]
+    fn owner_pause_passes_a_live_lease() {
+        let (_dir, ledger) = ledger();
+        let (a, ui, b) = (pair("a", "s1"), pair(OWNER_UI, "ui:1"), pair("b", "s2"));
+        let item = create(&ledger, None, None).unwrap();
+        let item = ledger
+            .work_claim(&a, item.id, &ClaimInput::default(), Some(T0), false)
+            .unwrap()
+            .unwrap();
+        let pause = UpdateInput {
+            status: Some("blocked".into()),
+            blocker: Some(PAUSED_BY_OWNER.into()),
+            ..UpdateInput::default()
+        };
+        let update = |who: &Actor, input: &UpdateInput| {
+            let at = Some(item.updated_at.as_str());
+            ledger.work_update(who, item.id, input, at, Some(T1), false)
+        };
+        let more = [
+            UpdateInput {
+                next_action: Some("x".into()),
+                ..pause.clone()
+            },
+            UpdateInput {
+                reason: Some("x".into()),
+                ..pause.clone()
+            },
+            UpdateInput {
+                blocker: Some("stuck".into()),
+                ..pause.clone()
+            },
+            UpdateInput {
+                status: Some("active".into()),
+                ..UpdateInput::default()
+            },
+        ];
+        for input in &more {
+            let r = update(&ui, input).unwrap();
+            assert!(matches!(r, Err(Refusal::LeaseHeld { .. })), "{input:?}");
+        }
+        let r = update(&b, &pause).unwrap();
+        assert!(matches!(r, Err(Refusal::LeaseHeld { .. })));
+        assert_eq!(kinds(&ledger).len(), 2);
+        let paused = update(&ui, &pause).unwrap().unwrap();
+        assert_eq!(
+            (paused.status.as_str(), paused.blocker.as_deref()),
+            ("blocked", Some(PAUSED_BY_OWNER))
+        );
+        // The lane's agent still holds it, and resumes it.
+        assert_eq!(paused.session.as_deref(), Some("s1"));
     }
 
     /// A stack's layers share a lane at different positions; a taken slot,

@@ -61,6 +61,7 @@ kinds! {
     PrMerged => "pr.merged",
     AttentionRecorded => "attention.recorded",
     DossierNoted => "dossier.noted",
+    BacklogPrioritised => "backlog.prioritised",
 }
 
 impl EventKind {

@@ -2,6 +2,7 @@
 //! (git, daisy-cli) the CLI and the UI share. No CLI, no terminal I/O, no
 //! home directory.
 
+pub mod backlog;
 pub mod checks;
 pub mod child;
 pub mod cursor;

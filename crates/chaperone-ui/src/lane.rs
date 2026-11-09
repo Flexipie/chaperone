@@ -3,7 +3,7 @@
 //! decisions, what to check by hand, the files and the lane's change graph,
 //! then the #41 panel's handoffs, findings, areas and diff, folded. On a
 //! lane that needs you, the owner answers it, sends it back, opens it in
-//! herdr or merges it (`writer`).
+//! herdr or merges it, and pauses a working one (`writer`).
 
 use std::collections::HashMap;
 
@@ -14,7 +14,7 @@ use eframe::egui::{self, RichText};
 use crate::areas::{self, Areas, State};
 use crate::diff::{Diff, Files};
 use crate::watch::{Detail, LaneGraph, Median, Selected};
-use crate::writer::{Act, Confirm, Lane, Wrote};
+use crate::writer::{Act, Confirm, Lane, Target, Wrote};
 use crate::{board, detail, graph, needs, numbers, repo, theme};
 use chaperone_core::checks::NOTE_CHARS;
 use chaperone_core::spec::parse::asks_about;
@@ -92,9 +92,14 @@ pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, typed: &mut Typed, now
             }
             return;
         };
-        if needs::why(lane, now).is_some() {
+        let needs = needs::why(lane, now).is_some();
+        if matches!(lane.board.item.status.as_str(), "claimed" | "active") {
+            asked.act = pause(ui, lane, r, !needs);
+        }
+        if needs {
             card(ui, "Needs you", |ui| {
-                asked.act = actions(ui, lane, page, r, typed, now)
+                let act = actions(ui, lane, page, r, typed, now);
+                asked.act = asked.act.take().or(act);
             });
         }
         tiles(ui, lane, page, r, now);
@@ -176,6 +181,64 @@ fn header(
     });
 }
 
+/// The lane's key as its acts name it.
+fn key(lane: &BoardLane) -> String {
+    let item = &lane.board.item;
+    item.source_key
+        .clone()
+        .unwrap_or_else(|| board::label(item))
+}
+
+/// What the writer last did for this lane, if anything.
+fn wrote<'a>(r: &Reads<'a>, work: i64) -> Option<&'a Result<String, String>> {
+    r.wrote
+        .filter(|w| w.target == Target::Lane(work))
+        .map(|w| &w.said)
+}
+
+/// The act being done, or its outcome.
+pub fn said(ui: &mut egui::Ui, writing: bool, wrote: Option<&Result<String, String>>) {
+    match (writing, wrote) {
+        (true, _) => {
+            ui.label("Working...");
+        }
+        (false, Some(Ok(m))) => {
+            ui.label(m);
+        }
+        (false, Some(Err(e))) => {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+        }
+        (false, None) => {}
+    }
+}
+
+/// Pause: a working lane to blocked, "paused by owner", its agent told
+/// first. It then needs you, and an answer resumes it. The outcome shows
+/// here when the Needs you card does not show it.
+fn pause(ui: &mut egui::Ui, lane: &BoardLane, r: &Reads, outcome: bool) -> Option<Act> {
+    let item = &lane.board.item;
+    let mut act = None;
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(!r.writing, egui::Button::new("Pause"))
+            .clicked()
+        {
+            act = Some(Act::Pause {
+                work: item.id,
+                key: key(lane),
+                agent: item.agent.clone(),
+                expected_updated_at: item.updated_at.clone(),
+            });
+        }
+        let what = "Blocks the lane and tells its agent to wait; answer it to resume.";
+        ui.label(RichText::new(what).small());
+    });
+    if outcome {
+        said(ui, r.writing, wrote(r, item.id));
+    }
+    act
+}
+
 /// Answer, send back, open in herdr and merge, each one act; a button
 /// waits while the writer is busy.
 fn actions(
@@ -189,7 +252,7 @@ fn actions(
     let item = &lane.board.item;
     let mut act = None;
     let free = !r.writing;
-    let wrote = r.wrote.filter(|w| w.work == item.id).map(|w| &w.said);
+    let wrote = wrote(r, item.id);
     if !r.writing
         && let Some(back) = typed.sent.take()
         && let Some(Ok(_)) = wrote
@@ -220,10 +283,7 @@ fn actions(
     let target = Lane {
         work: item.id,
         agent,
-        key: item
-            .source_key
-            .clone()
-            .unwrap_or_else(|| board::label(item)),
+        key: key(lane),
     };
     let answer = |asks, text: String, confirm| Act::Answer {
         lane: target.clone(),
@@ -383,18 +443,7 @@ fn actions(
     } else if ui.add_enabled(free, egui::Button::new("Merge")).clicked() {
         typed.merge = Some(head);
     }
-    match (r.writing, wrote) {
-        (true, _) => {
-            ui.label("Working...");
-        }
-        (false, Some(Ok(m))) => {
-            ui.label(m);
-        }
-        (false, Some(Err(e))) => {
-            ui.colored_label(ui.visuals().error_fg_color, e);
-        }
-        (false, None) => {}
-    }
+    said(ui, r.writing, wrote);
     act
 }
 
