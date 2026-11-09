@@ -1,7 +1,7 @@
 //! The lane table: one row per open lane in plain words, needs-you first,
 //! drawn by GPUI Kit's virtualized table (only the visible rows render).
 
-use chaperone_core::work::LaneBoard;
+use chaperone_core::work::{BoardLane, LaneBoard};
 use gpui::{App, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
 use gpui_component::ActiveTheme;
 use gpui_component::table::{Column, TableDelegate, TableState};
@@ -87,21 +87,13 @@ pub fn rows(board: &LaneBoard, view: &View, now: i64) -> Vec<Row> {
         .filter(|l| view.shows(board::slug(l.board.item.repo_slug.as_deref())))
         .map(|lane| {
             let item = &lane.board.item;
-            let why = needs::why(lane, now);
-            let state = match (why, item.status.as_str()) {
-                (Some(w), _) => w.words(),
-                (None, "queued") => "waiting to start",
-                (None, "claimed") => "starting",
-                (None, "active") => "working",
-                (None, "review") => "in review",
-                (None, _) => "open",
-            };
+            let (state, needs_you) = state(lane, now);
             let blocker = item.blocker.as_deref().filter(|_| item.status == "blocked");
             Row {
                 label: board::label(item).into(),
                 title: item.title.clone().into(),
                 state: state.into(),
-                needs_you: why.is_some(),
+                needs_you,
                 next: blocker
                     .or(item.next_action.as_deref())
                     .unwrap_or("-")
@@ -116,4 +108,18 @@ pub fn rows(board: &LaneBoard, view: &View, now: i64) -> Vec<Row> {
         .collect();
     rows.sort_by_key(|r| !r.needs_you);
     rows
+}
+
+/// The lane's state in plain words, and whether it needs you.
+pub fn state(lane: &BoardLane, now: i64) -> (&'static str, bool) {
+    let why = needs::why(lane, now);
+    let state = match (why, lane.board.item.status.as_str()) {
+        (Some(w), _) => w.words(),
+        (None, "queued") => "waiting to start",
+        (None, "claimed") => "starting",
+        (None, "active") => "working",
+        (None, "review") => "in review",
+        (None, _) => "open",
+    };
+    (state, why.is_some())
 }
