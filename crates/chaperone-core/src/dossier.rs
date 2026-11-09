@@ -598,7 +598,7 @@ mod tests {
     use super::*;
     use crate::ledger::MIGRATIONS;
 
-    /// A v3 file migrates to v4, and the note lookup searches the index.
+    /// A v3 file migrates to the current version, and the note lookup searches the index.
     #[test]
     fn note_lookup_uses_index() {
         let dir = tempfile::tempdir().unwrap();
