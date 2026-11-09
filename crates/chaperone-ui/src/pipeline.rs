@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use chaperone_core::child;
 use chaperone_core::git::{Failure, git, git_bin};
-use chaperone_core::ledger::{Ledger, LedgerError};
+use chaperone_core::ledger::{Ledger, LedgerError, Refusal};
 use chaperone_core::stats::{Version, changelog, version_at};
 use eframe::egui::{self, RichText};
 use serde_json::Value;
@@ -85,9 +85,9 @@ pub fn spawn(
                         versions = v.clone();
                         history(&path, &mut ledger, v, &mut read)
                     }
-                    Err(e) => {
+                    Err(r) => {
                         read = None;
-                        Some(Err(format!("{e:?}")))
+                        Some(Err(refusal(&r)))
                     }
                 };
                 if let Some(got) = got {
@@ -137,7 +137,7 @@ fn history(
     match got {
         Ok(None) => None,
         Ok(Some(Ok(v))) => Some(Ok(v["versions"].as_array().cloned().unwrap_or_default())),
-        Ok(Some(Err(r))) => Some(Err(format!("{r:?}"))),
+        Ok(Some(Err(r))) => Some(Err(refusal(&r))),
         Err(e) => {
             // Reopened next time: the file may be migrated or created.
             *ledger = None;
@@ -147,10 +147,25 @@ fn history(
     }
 }
 
-/// The chaperone the skills call: `CHAPERONE_BIN`, else PATH's, as `$L`
-/// finds it.
+/// A refusal as the owner reads it: its message, not its debug form.
+fn refusal(r: &Refusal) -> String {
+    match r {
+        Refusal::InvalidInput(m) => m.clone(),
+        r => format!("{r:?}"),
+    }
+}
+
+/// The chaperone the skills call: `CHAPERONE_BIN`, else the first on
+/// PATH, as `$L` finds it, by its full path so the card can name it.
 fn chaperone() -> PathBuf {
-    std::env::var_os("CHAPERONE_BIN").map_or("chaperone".into(), PathBuf::from)
+    if let Some(bin) = std::env::var_os("CHAPERONE_BIN") {
+        return bin.into();
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .map(|d| d.join("chaperone"))
+        .find(|p| p.is_file())
+        .unwrap_or("chaperone".into())
 }
 
 /// `chaperone doctor --skills` over the skills and scripts: its exit 0,
