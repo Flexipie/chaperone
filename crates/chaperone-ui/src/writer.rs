@@ -1,11 +1,13 @@
 //! The owner's writes from the lane page (#109 slice 6): answer, send
-//! back, open in herdr, merge (#117). One thread with its own read-write
+//! back, open in herdr, merge (#117), pause; and from a repo's Backlog
+//! (slice 9): start a lane, reorder. One thread with its own read-write
 //! ledger, the only one the UI opens; the board keeps its read-only
 //! handle. Every write is agent `owner-ui`, session `ui:<start time>`,
 //! `--by owner`, the orchestrator's path: the herdr prompt first, then the
 //! record, so a lane herdr cannot reach gets nothing recorded. Merge is
 //! the exception, as `/merge` does it: GitHub first, then `pr.merged`,
-//! then the herdr prompt to hand off done.
+//! then the herdr prompt to hand off done. A start is spawn's: the lane
+//! writes its own create and claim.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -20,16 +22,21 @@ use chaperone_core::child;
 use chaperone_core::ledger::{Actor, Ledger, LedgerError, Refusal};
 use chaperone_core::pipeline::sha_prefix_eq;
 use chaperone_core::spec::decide::DecideInput;
-use chaperone_core::work::HandoffInput;
+use chaperone_core::work::{HandoffInput, OWNER_UI, PAUSED_BY_OWNER, UpdateInput};
 use serde_json::Value;
 
 use crate::board::short;
 use crate::watch::Shown;
 
-pub const AGENT: &str = "owner-ui";
+pub const AGENT: &str = OWNER_UI;
 /// How long one gh or herdr call may take.
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
+/// spawn answers once the worktree and item exist; setup and the agent
+/// start in the background.
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
 const OUT_CAP: usize = 1 << 20;
+const PAUSE: &str = "Paused by the owner: stop where you are and don't change the work item; \
+                     wait for the owner.";
 
 /// The lane a write is for: its work item, its herdr agent and its key.
 #[derive(Clone)]
@@ -75,31 +82,64 @@ pub enum Act {
         pr: String,
         head: String,
     },
+    /// Blocks a claimed or active lane, "paused by owner", over its
+    /// agent's lease, as of `expected_updated_at`; its herdr `agent`, when
+    /// it has one, is told first.
+    Pause {
+        work: i64,
+        key: String,
+        agent: Option<String>,
+        expected_updated_at: String,
+    },
+    /// `spawn --repo <repo_path> --no-focus <key>`, `key` an
+    /// `owner/repo#N` as the board spells the repo.
+    Start {
+        key: String,
+        repo_path: String,
+    },
+    /// `repo`'s backlog order, built from its order `after`.
+    Prioritise {
+        repo: String,
+        order: Vec<String>,
+        after: Option<i64>,
+    },
+}
+
+/// Where an act's outcome shows: a lane's page or a repo's Backlog.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    Lane(i64),
+    Repo(String),
 }
 
 impl Act {
-    fn work(&self) -> i64 {
+    pub fn target(&self) -> Target {
         match self {
             Act::Answer { lane, .. } | Act::SendBack { lane, .. } | Act::Merge { lane, .. } => {
-                lane.work
+                Target::Lane(lane.work)
             }
-            Act::Focus { work, .. } => *work,
+            Act::Focus { work, .. } | Act::Pause { work, .. } => Target::Lane(*work),
+            Act::Start { key, .. } => {
+                Target::Repo(key.rsplit_once('#').map_or(key.as_str(), |(r, _)| r).into())
+            }
+            Act::Prioritise { repo, .. } => Target::Repo(repo.clone()),
         }
     }
 }
 
-/// An act's outcome in a line, for the lane it was on.
+/// An act's outcome in a line, for where it was.
 pub struct Wrote {
-    pub work: i64,
+    pub target: Target,
     pub said: Result<String, String>,
 }
 
-/// Starts the writer; `herdr` and `gh` are the CLIs. Each act's outcome
-/// lands in `shown.wrote`, then `changed` runs.
+/// Starts the writer; `herdr` and `gh` are the CLIs, `spawn` the lane
+/// starter. Each act's outcome lands in `shown.wrote`, then `changed` runs.
 pub fn spawn(
     path: PathBuf,
     herdr: OsString,
     gh: OsString,
+    spawn: OsString,
     shown: Arc<Mutex<Shown>>,
     changed: impl Fn() + Send + 'static,
 ) -> Sender<Act> {
@@ -112,19 +152,19 @@ pub fn spawn(
         };
         let mut open = writable();
         for act in rx {
-            let work = act.work();
+            let target = act.target();
             // A ledger missing at start is opened once it exists, as the
             // board's watcher does; kept once open.
             if open.is_err() {
                 open = writable();
             }
             let said = match &open {
-                Ok((ledger, actor)) => run(ledger, actor, &herdr, &gh, act),
+                Ok((ledger, actor)) => run(ledger, actor, &herdr, &gh, &spawn, act),
                 Err(e) => Err(format!("ledger not opened for writing: {e}")),
             };
             let mut s = shown.lock().unwrap();
             s.writing = false;
-            s.wrote = Some(Wrote { work, said });
+            s.wrote = Some(Wrote { target, said });
             drop(s);
             changed();
         }
@@ -152,13 +192,23 @@ fn done<T>(c: Result<Result<T, Refusal>, LedgerError>) -> Result<T, String> {
 /// from the temp dir, so gh never reads or changes a checkout (`-R`
 /// names the repo). A call past [`CLI_TIMEOUT`] fails.
 fn cli(name: &str, cmd: &OsString, args: &[&str]) -> Result<String, String> {
+    cli_within(name, cmd, args, CLI_TIMEOUT)
+}
+
+/// [`cli`] with its own time limit.
+fn cli_within(
+    name: &str,
+    cmd: &OsString,
+    args: &[&str],
+    limit: Duration,
+) -> Result<String, String> {
     let call = format!("{name} {}", args[..2].join(" "));
-    let deadline = Instant::now() + CLI_TIMEOUT;
+    let deadline = Instant::now() + limit;
     let mut command = Command::new(cmd);
     command.args(args).current_dir(std::env::temp_dir());
     let out = child::run(&mut command, deadline, OUT_CAP).map_err(|e| match e {
         child::Failed::Spawn(e) => format!("{name} did not start: {e}"),
-        child::Failed::TimedOut => format!("{call}: no answer in {}s", CLI_TIMEOUT.as_secs()),
+        child::Failed::TimedOut => format!("{call}: no answer in {}s", limit.as_secs()),
         child::Failed::Wait(e) => format!("{call}: {e}"),
     })?;
     if out.cut {
@@ -182,6 +232,7 @@ pub fn run(
     actor: &Actor,
     herdr: &OsString,
     gh: &OsString,
+    spawn: &OsString,
     act: Act,
 ) -> Result<String, String> {
     // Keyed by the act's time, as the orchestrator keys its lines: the
@@ -198,6 +249,29 @@ pub fn run(
         Act::Focus { workspace, .. } => {
             cli("herdr", herdr, &["workspace", "focus", &workspace])?;
             Ok(format!("Focused herdr workspace {workspace}."))
+        }
+        Act::Pause {
+            work,
+            key,
+            agent,
+            expected_updated_at,
+        } => {
+            if let Some(agent) = &agent {
+                cli("herdr", herdr, &["agent", "prompt", agent, PAUSE])?;
+            }
+            let input = UpdateInput {
+                status: Some("blocked".into()),
+                blocker: Some(PAUSED_BY_OWNER.into()),
+                ..UpdateInput::default()
+            };
+            let stamp = Some(expected_updated_at.as_str());
+            done(ledger.work_update(actor, work, &input, stamp, None, false))?;
+            Ok(format!("Paused {key}. Answer it to resume."))
+        }
+        Act::Start { key, repo_path } => start(spawn, &key, &repo_path),
+        Act::Prioritise { repo, order, after } => {
+            done(ledger.backlog_prioritise(actor, &repo, &order, after))?;
+            Ok(format!("Saved {repo}'s order."))
         }
         Act::SendBack {
             lane,
@@ -284,6 +358,25 @@ pub fn run(
             Ok(format!("Answered {}.", lane.key))
         }
         Act::Merge { lane, pr, head } => merge(ledger, actor, herdr, gh, lane, &pr, &head),
+    }
+}
+
+/// Runs spawn and reads its one JSON line: `{status, work_ids, ...}`.
+/// Another agent holding the item, or no line, is not a start.
+fn start(spawn: &OsString, key: &str, repo_path: &str) -> Result<String, String> {
+    let args = ["--repo", repo_path, "--no-focus", key];
+    let out = cli_within("spawn", spawn, &args, SPAWN_TIMEOUT)?;
+    let line: Value = serde_json::from_str(&out).unwrap_or(Value::Null);
+    let ids = line["work_ids"].as_array().map(|ids| {
+        let ids: Vec<String> = ids.iter().map(Value::to_string).collect();
+        ids.join(", ")
+    });
+    match (line["status"].as_str(), ids) {
+        (Some("claimed_elsewhere"), _) => Err(format!(
+            "spawn {key}: another agent holds its work item; nothing started"
+        )),
+        (Some(status), Some(ids)) => Ok(format!("Started {key}: {status}, work {ids}.")),
+        _ => Err(format!("spawn {key}: no status line in its answer")),
     }
 }
 
@@ -439,10 +532,10 @@ mod tests {
     type Row = (String, String, String, Option<String>, Option<String>);
 
     /// Access (the test bar): every row the writer adds is agent
-    /// `owner-ui`, session `ui:<start>`, attention by owner, and a herdr
-    /// call that fails records nothing. A merge (the one-way door) runs
-    /// only on a YES verdict on the head the owner confirmed, which
-    /// GitHub still has.
+    /// `owner-ui`, session `ui:<start>`, attention by owner, a herdr call
+    /// that fails records nothing, and a start is spawn's alone. A merge
+    /// (the one-way door) runs only on a YES verdict on the head the owner
+    /// confirmed, which GitHub still has.
     #[test]
     fn writes_only_as_owner_ui() {
         let dir = tempfile::tempdir().unwrap();
@@ -555,9 +648,9 @@ mod tests {
             std::fs::set_permissions(&p, mode).unwrap();
             OsString::from(p)
         };
-        // One fake for herdr and gh (each new script costs a scan on
-        // macOS): it logs its argv, and as gh answers `pr view` from
-        // view.json, which a merge turns MERGED.
+        // One fake for herdr, gh and spawn (each new script costs a scan
+        // on macOS): it logs its argv, as gh answers `pr view` from
+        // view.json, which a merge turns MERGED, and as spawn its line.
         let (calls, view, merged) = (
             dir.path().join("calls"),
             dir.path().join("view.json"),
@@ -567,10 +660,11 @@ mod tests {
             "herdr",
             &format!(
                 "printf '%s|' \"$@\" >> {calls:?}; echo >> {calls:?}\n\
-                 case \"$2\" in view) cat {view:?};; merge) cp {merged:?} {view:?};; esac"
+                 case \"$2\" in view) cat {view:?};; merge) cp {merged:?} {view:?};; esac\n\
+                 case \"$1\" in --repo) echo '{{\"status\":\"started\",\"work_ids\":[7]}}';; esac"
             ),
         );
-        let gh = herdr.clone();
+        let (gh, spawn) = (herdr.clone(), herdr.clone());
         let actor = owner(&now);
         let to = Lane {
             work,
@@ -586,8 +680,16 @@ mod tests {
         };
         // herdr fails: nothing recorded.
         let down = fake("down", "echo no socket >&2; exit 1");
-        let err = run(&rw, &actor, &down, &gh, answer(Some(asked), None)).unwrap_err();
+        let err = run(&rw, &actor, &down, &gh, &spawn, answer(Some(asked), None)).unwrap_err();
         assert!(err.contains("no socket"), "{err}");
+        let updated_at = rw.work_get(work, &now).unwrap().unwrap().updated_at;
+        let pause = || Act::Pause {
+            work,
+            key: "o/r#2".into(),
+            agent: Some("r-2".into()),
+            expected_updated_at: updated_at.clone(),
+        };
+        run(&rw, &actor, &down, &gh, &spawn, pause()).unwrap_err();
         assert_eq!(max(&db), before);
         let confirm = |spec: &str| Confirm {
             spec: spec.into(),
@@ -597,27 +699,21 @@ mod tests {
         };
         // The spec refuses the decision: the agent is told nothing.
         let gone = answer(None, Some(confirm("o/r#9")));
-        run(&rw, &actor, &herdr, &gh, gone).unwrap_err();
+        run(&rw, &actor, &herdr, &gh, &spawn, gone).unwrap_err();
         assert!(!calls.exists());
         assert_eq!(max(&db), before);
 
-        run(&rw, &actor, &herdr, &gh, answer(Some(asked), None)).unwrap();
+        let run = |act| run(&rw, &actor, &herdr, &gh, &spawn, act);
+        run(answer(Some(asked), None)).unwrap();
         // A self-blocked lane: asked, then answered.
-        run(&rw, &actor, &herdr, &gh, answer(None, None)).unwrap();
-        run(
-            &rw,
-            &actor,
-            &herdr,
-            &gh,
-            answer(None, Some(confirm("o/r#1"))),
-        )
-        .unwrap();
+        run(answer(None, None)).unwrap();
+        run(answer(None, Some(confirm("o/r#1")))).unwrap();
         let back = Act::SendBack {
             lane: to.clone(),
             round: 1,
             reason: "no smoke".into(),
         };
-        run(&rw, &actor, &herdr, &gh, back).unwrap();
+        run(back).unwrap();
 
         let full = format!("{head}{}", "d".repeat(33));
         let pr_state = |path: &std::path::Path, state: &str, oid: &str| {
@@ -647,25 +743,25 @@ mod tests {
             (merge(old, 6, head), "not on the handoff head"),
             (merge(yes, 7, older), "since you confirmed"),
         ] {
-            let err = run(&rw, &actor, &herdr, &gh, act).unwrap_err();
+            let err = run(act).unwrap_err();
             assert!(err.contains(why), "{err}");
         }
         assert_eq!(gh_log(), "");
         pr_state(&view, "OPEN", &format!("{older}{}", "d".repeat(33)));
-        let err = run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap_err();
+        let err = run(merge(yes, 7, head)).unwrap_err();
         assert!(err.contains("the PR head moved"), "{err}");
         assert!(!gh_log().contains("pr|merge|"));
         assert_eq!(max(&db), mark);
         // YES on the current head: the exact merge, then one pr.merged.
         pr_state(&view, "OPEN", &full);
         pr_state(&merged, "MERGED", &full);
-        run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap();
+        run(merge(yes, 7, head)).unwrap();
         let argv =
             format!("pr|merge|7|-R|o/r|--squash|--delete-branch|--match-head-commit|{full}|");
         let merges = |log: String| log.lines().filter(|l| l.starts_with("pr|merge|")).count();
         assert_eq!(gh_log().lines().filter(|l| *l == argv).count(), 1);
         // Already merged at that head: recorded once, never merged again.
-        run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap();
+        run(merge(yes, 7, head)).unwrap();
         assert_eq!(merges(gh_log()), 1);
         let n: i64 = db
             .query_row(
@@ -678,14 +774,28 @@ mod tests {
         // Recorded as merged but GitHub has it open: Finish never merges.
         pr_state(&view, "OPEN", &full);
         pr_state(&merged, "OPEN", &full);
-        let err = run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap_err();
+        let err = run(merge(yes, 7, head)).unwrap_err();
         assert!(err.contains("recorded as merged"), "{err}");
         assert_eq!(merges(gh_log()), 1);
+        // Over the lane's live lease.
+        run(pause()).unwrap();
+        let order = Act::Prioritise {
+            repo: "O/R".into(),
+            order: vec!["o/r#3".into(), "O/R#4".into()],
+            after: None,
+        };
+        run(order).unwrap();
+        let start = Act::Start {
+            key: "o/r#3".into(),
+            repo_path: "/src/r".into(),
+        };
+        assert_eq!(start.target(), Target::Repo("o/r".into()));
+        assert_eq!(run(start).unwrap(), "Started o/r#3: started, work 7.");
         let focus = Act::Focus {
             work,
             workspace: "w1".into(),
         };
-        run(&rw, &actor, &herdr, &gh, focus).unwrap();
+        run(focus).unwrap();
 
         let mut stmt = db
             .prepare(
@@ -702,8 +812,12 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         // Two answers, an asked and its answer twice, the spec decision,
-        // the send-back and the merge: none left out of the check below.
-        assert_eq!(rows.len(), 8);
+        // the send-back, the merge, the pause and the order: none left out
+        // of the check below.
+        assert_eq!(rows.len(), 10);
+        assert_eq!(rows[7].0, "pr.merged");
+        assert_eq!(rows[8].0, "lane.updated");
+        assert_eq!(rows[9].0, "backlog.prioritised");
         for (kind, agent, session, by, _) in &rows {
             assert_eq!(agent, AGENT, "{kind}");
             assert_eq!(session, &format!("ui:{now}"), "{kind}");
@@ -723,8 +837,16 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(asked, ["stuck on the seam", "confirm: which way?"]);
-        // Focus writes no row: its herdr call only.
+        // Start and focus write no row: their calls only.
         let calls = std::fs::read_to_string(calls).unwrap();
-        assert_eq!(calls.lines().last(), Some("workspace|focus|w1|"));
+        let last: Vec<&str> = calls.lines().rev().take(3).collect();
+        assert_eq!(
+            last,
+            [
+                "workspace|focus|w1|",
+                "--repo|/src/r|--no-focus|o/r#3|",
+                &format!("agent|prompt|r-2|{PAUSE}|"),
+            ]
+        );
     }
 }

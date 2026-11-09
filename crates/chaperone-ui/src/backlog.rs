@@ -1,23 +1,28 @@
 //! The backlog thread: a repo's open issues from daisy's GitHub mirror
 //! (`daisy-cli github list`, the read-only exception to ADR 0003 agreed in
 //! #109), less those in a lane and spec parents, each ready or blocked by
-//! its "Blocked by" lines. It runs daisy-cli only while the window shows a
+//! its "Blocked by" lines, in the owner's order (`backlog.prioritised`),
+//! then by issue number. It runs daisy-cli only while the window shows a
 //! repo's Backlog, at most every [`MIRROR_EVERY`]; a ledger change only
-//! matches the issues it holds against the lanes again.
+//! matches the issues it holds against the lanes and the order again.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use chaperone_core::backlog::ORDER_CAP;
 use chaperone_core::child;
 use chaperone_core::ledger::{Ledger, LedgerError};
+use chaperone_core::work::LaneBoard;
 use eframe::egui;
 use serde_json::Value;
 
+use crate::lane;
 use crate::watch::Shown;
+use crate::writer::{Act, Target, Wrote};
 
 /// daisy-cli, at the same path `reviews record` uses; `CHAPERONE_DAISY_CLI`
 /// overrides it.
@@ -43,9 +48,11 @@ pub struct Row {
     pub blocked_by: Vec<String>,
 }
 
-/// A repo's backlog: issue number order until slice 9's priority.
+/// A repo's backlog: the owner's order first, then issue number order.
 pub struct Backlog {
     pub rows: Vec<Row>,
+    /// The id of the order the rows follow, None when the repo has none.
+    pub after: Option<i64>,
     /// Open issues the mirror has for the repo, rows or not.
     pub open: usize,
     /// The mirror's freshness when it is not `fresh`.
@@ -171,9 +178,15 @@ fn rows(
             blocked_by,
         });
     }
-    rows.sort_by_key(|r| r.number);
+    let (after, order) = ledger.backlog_priority(&repo)?;
+    let pos: HashMap<&String, usize> = order.iter().enumerate().map(|(i, k)| (k, i)).collect();
+    rows.sort_by_cached_key(|r| {
+        let at = pos.get(&format!("{repo}#{}", r.number));
+        (at.copied().unwrap_or(usize::MAX), r.number)
+    });
     let backlog = Backlog {
         rows,
+        after,
         open: mirror.issues.len(),
         stale: mirror.stale.clone(),
     };
@@ -356,17 +369,43 @@ fn daisy(args: &[&str]) -> Result<Value, String> {
     Err(format!("{code}: {call}: {message}"))
 }
 
-/// The Backlog tab of `slug`, as the board spells it.
-pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str) {
+/// The checkout Start runs spawn in: the newest of `slug`'s lanes'
+/// worktrees still on disk (spawn finds the main clone from it).
+pub fn checkout(board: Option<&LaneBoard>, slug: &str) -> Option<String> {
+    let lanes = board.iter().flat_map(|b| &b.lanes).map(|l| &l.board.item);
+    lanes
+        .filter(|i| {
+            i.repo_slug
+                .as_deref()
+                .is_some_and(|r| r.eq_ignore_ascii_case(slug))
+        })
+        .filter_map(|i| Some((i.id, i.worktree_path.as_ref()?)))
+        .filter(|(_, p)| Path::new(p).is_dir())
+        .max_by_key(|(id, _)| *id)
+        .map(|(_, p)| p.clone())
+}
+
+/// What the tab's buttons need from the window.
+pub struct Can<'a> {
+    /// The checkout Start runs spawn in, or why it cannot.
+    pub start: Result<String, &'static str>,
+    /// The writer is busy with an act.
+    pub writing: bool,
+    pub wrote: Option<&'a Wrote>,
+}
+
+/// The Backlog tab of `slug`, as the board spells it; returns the act
+/// asked for, if any.
+pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str, can: &Can) -> Option<Act> {
     let Some((_, read)) = read.filter(|(s, _)| s == slug) else {
         ui.label("Reading daisy's GitHub mirror...");
-        return;
+        return None;
     };
     let backlog = match read {
         Ok(b) => b,
         Err(e) => {
             ui.colored_label(ui.visuals().error_fg_color, e);
-            return;
+            return None;
         }
     };
     let warn = ui.visuals().warn_fg_color;
@@ -375,13 +414,13 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str) {
             let line =
                 format!("daisy's GitHub mirror is {status}: no open issues read for {slug}.");
             ui.colored_label(warn, line);
-            return;
+            return None;
         }
         (None, 0) => {
             ui.label(format!(
                 "daisy's GitHub mirror has no open issues for {slug}."
             ));
-            return;
+            return None;
         }
         (Some(status), _) => {
             let line = format!("daisy's GitHub mirror is {status}: this may be out of date.");
@@ -394,7 +433,7 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str) {
         ui.label(format!(
             "None of the {n} open issues is waiting: each is in a lane or a spec parent."
         ));
-        return;
+        return None;
     }
     let ready = backlog
         .rows
@@ -403,25 +442,72 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str) {
         .count();
     let waiting = backlog.rows.len();
     ui.label(format!(
-        "{waiting} waiting to start, {ready} ready. Issue number order."
+        "{waiting} waiting to start, {ready} ready. Your order first, then issue number."
     ));
+    let free = !can.writing;
+    let wrote = can.wrote.filter(|w| match &w.target {
+        Target::Repo(r) => r.eq_ignore_ascii_case(slug),
+        Target::Lane(_) => false,
+    });
+    lane::said(ui, can.writing, wrote.map(|w| &w.said));
+    if let Err(why) = &can.start {
+        ui.label(format!("Start is off: {why}."));
+    }
+    let key = |row: &Row| format!("{slug}#{}", row.number);
+    let (mut act, mut moved) = (None, None);
+    // Only the first ORDER_CAP rows are kept in an order, so only they move.
+    let last = backlog.rows.len().min(ORDER_CAP) - 1;
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new(("backlog", slug))
             .striped(true)
             .show(ui, |ui| {
-                for c in ["issue", "title", "can start"] {
+                for c in ["issue", "title", "can start", "order", ""] {
                     ui.strong(c);
                 }
                 ui.end_row();
-                for row in &backlog.rows {
+                for (i, row) in backlog.rows.iter().enumerate() {
                     ui.label(format!("#{}", row.number));
                     ui.label(&row.title);
                     match row.blocked_by.is_empty() {
                         true => ui.label("ready"),
                         false => ui.label(format!("blocked by {}", row.blocked_by.join(", "))),
                     };
+                    ui.horizontal(|ui| {
+                        let up = free && i > 0 && i <= last;
+                        if ui.add_enabled(up, egui::Button::new("Up")).clicked() {
+                            moved = Some((i, i - 1));
+                        }
+                        if ui
+                            .add_enabled(free && i < last, egui::Button::new("Down"))
+                            .clicked()
+                        {
+                            moved = Some((i, i + 1));
+                        }
+                    });
+                    let start =
+                        ui.add_enabled(free && can.start.is_ok(), egui::Button::new("Start"));
+                    if start.clicked()
+                        && let Ok(path) = &can.start
+                    {
+                        act = Some(Act::Start {
+                            key: key(row),
+                            repo_path: path.clone(),
+                        });
+                    }
                     ui.end_row();
                 }
             });
     });
+    // The whole order as shown, so what the owner sees is what is stored.
+    if let Some((a, b)) = moved {
+        let mut order: Vec<String> = backlog.rows.iter().map(key).collect();
+        order.swap(a, b);
+        order.truncate(ORDER_CAP);
+        act = Some(Act::Prioritise {
+            repo: slug.into(),
+            order,
+            after: backlog.after,
+        });
+    }
+    act
 }

@@ -9,11 +9,12 @@
 //! repos opens on a card per repo, a repo on its lanes in plain words and
 //! what merged lately; the full board stays a tab away. A repo's Backlog
 //! tab lists its open issues not in a lane, from daisy's GitHub mirror,
-//! each ready or blocked. On a lane that needs you, the lane page answers
-//! it, sends it back, opens it in herdr or merges its PR, through a
-//! separate writer: the board's ledger stays read-only. The Pipeline page
-//! shows each pipeline version's numbers, the skills' drift check and what
-//! changed in them.
+//! each ready or blocked, in the owner's order, each one started from there
+//! (spawn, `CHAPERONE_SPAWN` overrides it). On a lane that needs you, the
+//! lane page answers it, sends it back, opens it in herdr or merges its PR,
+//! and pauses a working one, through a separate writer: the board's ledger
+//! stays read-only. The Pipeline page shows each pipeline version's
+//! numbers, the skills' drift check and what changed in them.
 
 mod areas;
 mod backlog;
@@ -34,6 +35,7 @@ mod watch;
 mod writer;
 
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -64,10 +66,9 @@ struct Args {
 
 fn main() -> eframe::Result {
     let args = Args::parse();
-    let Some(path) = args
-        .db
-        .or_else(|| dirs::data_dir().map(|d| d.join("chaperone").join("ledger.db")))
-    else {
+    // The CLI's default too: spawn's lanes write that one.
+    let default = dirs::data_dir().map(|d| d.join("chaperone").join("ledger.db"));
+    let Some(path) = args.db.or_else(|| default.clone()) else {
         eprintln!("no user data directory; pass --db");
         std::process::exit(2);
     };
@@ -78,6 +79,8 @@ fn main() -> eframe::Result {
         eprintln!("no home directory; pass --dotfiles");
         std::process::exit(2);
     };
+    let default_ledger = default.as_ref() == Some(&path);
+    let spawn = std::env::var_os("CHAPERONE_SPAWN").unwrap_or_else(|| "spawn".into());
     let shown = Arc::new(Mutex::new(Shown::default()));
     eframe::run_native(
         "Chaperone",
@@ -105,6 +108,7 @@ fn main() -> eframe::Result {
                 path,
                 "herdr".into(),
                 "gh".into(),
+                spawn,
                 shown.clone(),
                 move || ctx.request_repaint(),
             );
@@ -116,6 +120,7 @@ fn main() -> eframe::Result {
                 view: nav::View::default(),
                 typed: lane::Typed::default(),
                 writer,
+                default_ledger,
             }))
         }),
     )
@@ -128,7 +133,9 @@ struct App {
     tab: Tab,
     view: nav::View,
     typed: lane::Typed,
-    writer: std::sync::mpsc::Sender<writer::Act>,
+    writer: Sender<writer::Act>,
+    /// The window reads the CLI's default ledger, the one spawn writes.
+    default_ledger: bool,
 }
 
 /// What the main view shows of All repos or a repo.
@@ -223,13 +230,7 @@ impl eframe::App for App {
                 shown.selected = None;
             }
             if let Some(act) = asked.act {
-                // The writer ending clears it; one gone sends nothing back.
-                shown.wrote = None;
-                shown.writing = self.writer.send(act).is_ok();
-                if !shown.writing {
-                    let said = Err("the writer stopped".into());
-                    shown.wrote = Some(writer::Wrote { work: sel.id, said });
-                }
+                send(&mut shown, &self.writer, act);
             }
             ui.ctx().request_repaint_after(AGE_TICK);
             return;
@@ -254,6 +255,7 @@ impl eframe::App for App {
                 .show(ui, |ui| detail::feed(ui, board));
         }
         let mut to = None;
+        let mut act = None;
         let view = &self.view;
         egui::CentralPanel::default()
             .frame(theme::ground())
@@ -298,7 +300,19 @@ impl eframe::App for App {
                 });
                 if let (Tab::Backlog, Some(slug)) = (self.tab, &repo) {
                     shown.backlog_for = Some(slug.clone());
-                    backlog::draw(ui, shown.backlog.as_ref(), slug);
+                    let start = match backlog::checkout(shown.board.as_ref(), slug) {
+                        _ if !self.default_ledger => {
+                            Err("spawn writes the default ledger, not the one shown")
+                        }
+                        Some(path) => Ok(path),
+                        None => Err("no local checkout known"),
+                    };
+                    let can = backlog::Can {
+                        start,
+                        writing: shown.writing,
+                        wrote: shown.wrote.as_ref(),
+                    };
+                    act = backlog::draw(ui, shown.backlog.as_ref(), slug, &can);
                     return;
                 }
                 shown.graph_open = self.tab == Tab::Graph;
@@ -340,6 +354,9 @@ impl eframe::App for App {
         if let Some(to) = to {
             self.view = to;
         }
+        if let Some(act) = act {
+            send(&mut shown, &self.writer, act);
+        }
         if let Some(pick) = picked {
             shown.selected = Some(pick);
         }
@@ -347,6 +364,18 @@ impl eframe::App for App {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ui.ctx().request_repaint_after(AGE_TICK);
+    }
+}
+
+/// Hands the writer an act. The writer ending clears `writing`; one gone
+/// sends nothing back.
+fn send(shown: &mut Shown, writer: &Sender<writer::Act>, act: writer::Act) {
+    shown.wrote = None;
+    let target = act.target();
+    shown.writing = writer.send(act).is_ok();
+    if !shown.writing {
+        let said = Err("the writer stopped".into());
+        shown.wrote = Some(writer::Wrote { target, said });
     }
 }
 
