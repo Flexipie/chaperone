@@ -352,6 +352,10 @@ fn merge(
     }
     // Never --admin or --auto; GitHub refuses a head that moved since.
     match v["state"].as_str().unwrap_or_default() {
+        // Finish skipped the confirm and the ready check: it only records.
+        "OPEN" if page.merged.is_some() => {
+            return not(format!("{pr} is recorded as merged but GitHub has it open"));
+        }
         "OPEN" => {
             let squash = ["--squash", "--delete-branch", "--match-head-commit", &oid];
             let merge = cli(
@@ -671,6 +675,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1);
+        // Recorded as merged but GitHub has it open: Finish never merges.
+        pr_state(&view, "OPEN", &full);
+        pr_state(&merged, "OPEN", &full);
+        let err = run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap_err();
+        assert!(err.contains("recorded as merged"), "{err}");
+        assert_eq!(merges(gh_log()), 1);
         let focus = Act::Focus {
             work,
             workspace: "w1".into(),
