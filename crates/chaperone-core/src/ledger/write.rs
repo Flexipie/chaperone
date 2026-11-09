@@ -1544,10 +1544,63 @@ mod tests {
                 .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
                 .unwrap()
         };
+        // The owner pauses only a claimed or active lane over a live lease.
+        let ui = Actor {
+            agent: Some(OWNER_UI.into()),
+            session: Some("ui:1".into()),
+        };
+        let mut pause = change("status", json!("queued"), json!("blocked"));
+        pause
+            .changed
+            .extend(change("blocker", json!(null), json!(PAUSED_BY_OWNER)).changed);
+        let order = |repo: &str, rest: serde_json::Value| Payload {
+            repo: Some(repo.into()),
+            rest: serde_json::from_value(rest).unwrap(),
+            ..Payload::default()
+        };
+        let ok = order("o/r", json!({"order": [], "after": null}));
+        let backlog = [
+            ev(EventKind::BacklogPrioritised, Some(1), None, ok.clone()),
+            ev(EventKind::BacklogPrioritised, None, Some(1), ok.clone()),
+            ev(
+                EventKind::BacklogPrioritised,
+                None,
+                None,
+                Payload {
+                    changed: change("status", json!("queued"), json!("done")).changed,
+                    ..ok
+                },
+            ),
+            ev(
+                EventKind::BacklogPrioritised,
+                None,
+                None,
+                order("O/r", json!({"order": [], "after": null})),
+            ),
+            ev(
+                EventKind::BacklogPrioritised,
+                None,
+                None,
+                order("o/r", json!({"order": {}, "after": null})),
+            ),
+            ev(
+                EventKind::BacklogPrioritised,
+                None,
+                None,
+                order("o/r", json!({"order": []})),
+            ),
+        ];
         let cases = cases
             .into_iter()
             .map(|(at, key, m)| (&me, at, key, m))
+            .chain(backlog.map(|m| (&me, AT, None, m)))
             .chain([
+                (
+                    &ui,
+                    AT,
+                    None,
+                    ev(EventKind::LaneUpdated, Some(2), None, pause),
+                ),
                 (
                     &no_session,
                     AT,
