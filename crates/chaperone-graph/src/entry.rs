@@ -85,16 +85,22 @@ impl Rules {
 
     /// Against every file of the tree and every target: each entry point is
     /// in exactly one area, never "other". The rules that name none of them
-    /// are returned (a typo would otherwise reach nothing, quietly).
-    pub fn check<'a>(&self, tree: impl Iterator<Item = &'a str>) -> Result<Vec<Unmatched>, String> {
+    /// are returned (a typo would otherwise reach nothing, quietly), and the
+    /// entry points the tree has: one per file a rule names.
+    pub fn check<'a>(
+        &self,
+        tree: impl Iterator<Item = &'a str>,
+    ) -> Result<(Vec<Unmatched>, usize), String> {
         let mut errors = Vec::new();
         let mut used = vec![false; self.entry_points.len()];
+        let mut total = 0;
         for path in tree {
             let mut hit = false;
             for (i, r) in self.entry_points.iter().enumerate() {
                 if glob(&r.path, path) {
                     used[i] = true;
                     hit = true;
+                    total += 1;
                 }
             }
             if !hit {
@@ -108,7 +114,7 @@ impl Rules {
             }
         }
         if errors.is_empty() {
-            return Ok(self
+            let unmatched = self
                 .entry_points
                 .iter()
                 .zip(&used)
@@ -118,7 +124,8 @@ impl Rules {
                     name: r.name.clone(),
                     path: r.path.clone(),
                 })
-                .collect());
+                .collect();
+            return Ok((unmatched, total));
         }
         // The tree comes in no order: the same refusal every run.
         errors.sort();

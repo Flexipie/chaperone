@@ -20,7 +20,7 @@ use crate::watch::Shown;
 
 /// A poll is one pragma and a stat per worktree.
 const POLL: Duration = Duration::from_secs(1);
-const SOON: Duration = Duration::from_secs(5);
+pub const SOON: Duration = Duration::from_secs(5);
 
 /// What a read was taken at: the ledger's version, and each open lane's
 /// worktree with its reflog's time.

@@ -199,6 +199,7 @@ impl eframe::App for App {
                 median: s.median.as_ref(),
                 writing: s.writing,
                 wrote: s.wrote.as_ref(),
+                lane_graph: s.lane_graph.as_ref().filter(|g| g.lane == sel.id),
             };
             let mut asked = lane::Asked::default();
             egui::CentralPanel::default()

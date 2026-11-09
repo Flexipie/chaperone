@@ -218,11 +218,13 @@ pub fn impact_in(
             // A target need not be in the tree (deleted, or not written
             // yet), and is reported all the same.
             tree.extend(targets.iter().cloned());
+            let (unmatched, total) = rules
+                .check(tree.iter().map(String::as_str))
+                .map_err(|e| Error::Invalid(format!("entry points: {e}")))?;
             Some(Entries {
                 rules,
-                unmatched: rules
-                    .check(tree.iter().map(String::as_str))
-                    .map_err(|e| Error::Invalid(format!("entry points: {e}")))?,
+                unmatched,
+                total,
                 head,
                 staged: index
                     .split(|b| *b == 0)

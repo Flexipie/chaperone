@@ -1,8 +1,9 @@
 //! The lane page (#109 slice 4): what the lane is, how it is doing against
 //! its repo and what it changed. A header, six tiles, the timeline, the
-//! decisions, what to check by hand and the files, then the #41 panel's
-//! handoffs, findings, areas and diff, folded. On a lane that needs you,
-//! the owner answers it, sends it back or opens it in herdr (`writer`).
+//! decisions, what to check by hand, the files and the lane's change graph,
+//! then the #41 panel's handoffs, findings, areas and diff, folded. On a
+//! lane that needs you, the owner answers it, sends it back or opens it in
+//! herdr (`writer`).
 
 use std::collections::HashMap;
 
@@ -10,11 +11,11 @@ use chaperone_core::stats::{BoardStats, PEAK_OVER};
 use chaperone_core::work::{BoardLane, LanePage};
 use eframe::egui::{self, RichText};
 
-use crate::areas::{self, Areas};
+use crate::areas::{self, Areas, State};
 use crate::diff::{Diff, Files};
-use crate::watch::{Detail, Median, Selected};
+use crate::watch::{Detail, LaneGraph, Median, Selected};
 use crate::writer::{Act, Confirm, Lane, Wrote};
-use crate::{board, detail, needs, numbers, repo, theme};
+use crate::{board, detail, graph, needs, numbers, repo, theme};
 use chaperone_core::checks::NOTE_CHARS;
 use chaperone_core::spec::parse::asks_about;
 
@@ -55,6 +56,7 @@ pub struct Reads<'a> {
     /// The writer is busy with an act.
     pub writing: bool,
     pub wrote: Option<&'a Wrote>,
+    pub lane_graph: Option<&'a LaneGraph>,
 }
 
 pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, typed: &mut Typed, now: i64) -> Asked {
@@ -100,11 +102,14 @@ pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, typed: &mut Typed, now
         card(ui, "Files", |ui| {
             files(ui, r.diff.and_then(|d| d.files.as_ref()))
         });
+        let declared = areas::declared(lane);
+        let a = r.areas.get(&sel.id);
+        card(ui, "Change graph", |ui| {
+            change_graph(ui, sel.id, declared, a, r.lane_graph)
+        });
         let d = &page.detail;
         ui.collapsing("Handoffs", |ui| detail::handoffs(ui, d));
         ui.collapsing("Review findings", |ui| detail::findings(ui, d));
-        let declared = areas::declared(lane);
-        let a = r.areas.get(&sel.id);
         ui.collapsing("Areas", |ui| detail::draw_areas(ui, declared, a));
         ui.collapsing("Diff against the base", |ui| {
             asked.refresh = ui.button("Refresh").clicked();
@@ -562,4 +567,99 @@ fn files(ui: &mut egui::Ui, files: Option<&Result<Files, String>>) {
             ui.end_row();
         }
     });
+}
+
+/// One line (declared areas against the change, entry points reached of
+/// the repo's, exact or a lower bound), then the graph, its out-of-scope
+/// files ringed red as the areas check reads them.
+fn change_graph(
+    ui: &mut egui::Ui,
+    id: i64,
+    declared: Option<&[String]>,
+    a: Option<&Areas>,
+    g: Option<&LaneGraph>,
+) {
+    let done = a.filter(|a| declared.is_some_and(|d| a.is_for(d)));
+    let mut opts = graph::Opts {
+        paths: true,
+        ..Default::default()
+    };
+    let mut not_ringed = 0;
+    if let Some(State::Done(x)) = done.map(|a| &a.state) {
+        for u in &x.undeclared {
+            opts.out_of_scope.extend(u.files.iter().map(String::as_str));
+            not_ringed += u.files_omitted;
+        }
+        opts.out_of_scope
+            .extend(x.unmapped.iter().map(String::as_str));
+        not_ringed += x.unmapped_omitted;
+    }
+    let snap = match g.map(|g| &g.read) {
+        None => {
+            ui.label("Reading the change graph...");
+            return;
+        }
+        Some(Err(why)) => {
+            ui.label(why);
+            // No graph (no commits, no repo, a read error): the areas' files still show.
+            for p in &opts.out_of_scope {
+                ui.colored_label(ui.visuals().error_fg_color, format!("out of scope: {p}"));
+            }
+            return;
+        }
+        Some(Ok(s)) => s,
+    };
+    let layout = &snap.layout;
+    opts.extra = opts
+        .out_of_scope
+        .iter()
+        .copied()
+        .filter(|p| !layout.changes(p))
+        .collect();
+    let reached = match snap.reached {
+        Some((n, total)) => format!("entry points reached {n} of {total}"),
+        None => "entry points not read".into(),
+    };
+    let exact = snap.exact && snap.notes.is_empty() && snap.files_omitted == 0;
+    // Declared areas still checking or not checked: the out of scope part is unknown.
+    let scoped = declared.is_none() || matches!(done.map(|a| &a.state), Some(State::Done(_)));
+    let bound = match exact && scoped && not_ringed == 0 && opts.extra.is_empty() {
+        true => "exact",
+        false => "lower bound",
+    };
+    let scope = areas::card(declared, a);
+    ui.label(RichText::new(format!("Areas {scope}; {reached}; {bound}.")).strong());
+    let warn = ui.visuals().warn_fg_color;
+    for n in &snap.notes {
+        ui.colored_label(warn, format!("Overlap: {n}"));
+    }
+    for n in &layout.notes {
+        ui.colored_label(warn, n);
+    }
+    if snap.files_omitted > 0 {
+        let n = snap.files_omitted;
+        ui.colored_label(warn, format!("Overlap left out {n} files."));
+    }
+    if not_ringed > 0 {
+        ui.colored_label(warn, format!("{not_ringed} more out of scope, not ringed."));
+    }
+    if !opts.extra.is_empty() {
+        let n = opts.extra.len();
+        ui.colored_label(
+            warn,
+            format!("Out of scope, not in the graph yet, dependents not read: {n}."),
+        );
+    }
+    ui.label(
+        RichText::new(
+            "Read at each commit: the files changed, what depends on them by depth, then the \
+             entry points reached. Ringed: another open lane changes it too; red: out of the \
+             declared areas. Uncommitted edits show at the next commit.",
+        )
+        .small()
+        .weak(),
+    );
+    egui::ScrollArea::horizontal()
+        .id_salt(("lane graph", id))
+        .show(ui, |ui| graph::draw_one(ui, layout, &opts));
 }

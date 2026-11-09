@@ -1,12 +1,15 @@
-//! The change graph's thread: while the graph is shown, `overlap` (each
-//! open lane's files) when the ledger changes or a lane's worktree commits,
-//! then `impact` and lines changed for each lane whose files or head moved
-//! since its last read, one lane at a time. A repo's layout is built again
-//! only when one of its lanes was or overlap's notes changed. Reads the
-//! ledger read-only; `impact` writes the code graph's own cache (ADR 0043),
-//! never the ledger.
+//! The change graph's thread: while the graph or a lane's page is shown,
+//! `overlap` (each open lane's files) when the ledger changes or a lane's
+//! worktree commits, then `impact` and lines changed for each lane whose
+//! files or head moved since its last read, one lane at a time; with only
+//! a lane's page open, for that lane alone, the other lanes' reads kept,
+//! and a ledger change alone read at most every [`SOON`]. A repo's layout
+//! is built again only when one of its lanes was or overlap's notes
+//! changed. Reads the ledger read-only; `impact` writes
+//! the code graph's own cache (ADR 0043), never the ledger.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -14,12 +17,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use chaperone_core::git::git_bin;
 use chaperone_core::ledger::Ledger;
-use chaperone_core::overlap::overlap;
-use chaperone_graph::{Error, impact_in};
+use chaperone_core::overlap::{Overlap, overlap};
+use chaperone_graph::{Error, impact_in, profile_file};
 
 use crate::diff::{DEADLINE, against_base, reflog_time};
-use crate::graph::{Lane, Layout, Repos, layout};
-use crate::watch::Shown;
+use crate::graph::{Lane, Layout, Repos, lane_layout, layout};
+use crate::overlap::SOON;
+use crate::watch::{LaneGraph, LaneSnap, Shown};
 
 /// A poll stats one file per lane, no process.
 const POLL: Duration = Duration::from_millis(250);
@@ -42,22 +46,30 @@ struct Want {
     base_sha: Option<String>,
 }
 
-/// Starts the thread. `changed` runs after each change to `shown.graph`.
+/// Starts the thread. `changed` runs after each change to `shown.graph`
+/// or `shown.lane_graph`.
 pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send + 'static) {
     thread::spawn(move || {
         let mut ledger: Option<Ledger> = None;
-        // The (data_version, reflog times) last read.
+        // The (data_version, reflog times, graph shown, lane selected, its
+        // profile's mtime) last read, and when.
         let mut seen = None;
-        let mut lanes: HashMap<i64, (Key, Lane)> = HashMap::new();
-        // Lanes whose last read failed, read again on the next overlap run.
+        let mut ran: Option<Instant> = None;
+        // Each lane's read, with its profile's mtime when read.
+        let mut lanes: HashMap<i64, (Key, Option<SystemTime>, Lane)> = HashMap::new();
+        // Lanes whose last read failed, read again on the next overlap run
+        // (the selected lane's also after SOON).
         let mut retry: BTreeSet<i64> = BTreeSet::new();
+        // The selected lane's failed read was tried again on a quiet ledger.
+        let mut retried = false;
         let mut repos: HashMap<String, Built> = HashMap::new();
         loop {
             thread::sleep(POLL);
-            let (version, want) = {
+            let (version, want, open, sel) = {
                 let s = shown.lock().unwrap();
-                match (&s.board, s.graph_open) {
-                    (Some(b), true) => (
+                let sel = s.selected.as_ref().map(|l| (l.id, l.repo.clone()));
+                match &s.board {
+                    Some(b) if s.graph_open || sel.is_some() => (
                         b.data_version,
                         b.lanes
                             .iter()
@@ -71,16 +83,39 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                                 })
                             })
                             .collect::<Vec<_>>(),
+                        s.graph_open,
+                        sel,
                     ),
                     _ => continue,
                 }
+            };
+            // The profile names the entry points: an edit reads the lane again.
+            let (sel, profile) = match sel {
+                Some((id, repo)) => (Some(id), repo.as_deref().and_then(mtime)),
+                None => (None, None),
             };
             let times: Vec<Option<SystemTime>> = want
                 .iter()
                 .map(|w| w.worktree.as_deref().and_then(reflog_time))
                 .collect();
-            let now = Some((version, times));
-            if seen == now {
+            let now = (version, times, open, sel, profile);
+            let soon = ran.is_some_and(|t| t.elapsed() < SOON);
+            // The selected lane's failed read is tried again after SOON on a
+            // quiet ledger, once until something changes: a lane with no
+            // worktree fails for good.
+            let quiet = seen.as_ref() == Some(&now);
+            let again = quiet && !retried && !soon && sel.is_some_and(|id| retry.contains(&id));
+            if quiet && !again {
+                continue;
+            }
+            retried = again;
+            // With only a lane's page open, a ledger write alone (any lane's
+            // events) reads again at most every SOON; the overlap thread
+            // throttles every read, this one only ledger-only changes.
+            let only_version = seen
+                .as_ref()
+                .is_some_and(|s| (&s.1, s.2, s.3, s.4) == (&now.1, now.2, now.3, now.4));
+            if !open && only_version && soon {
                 continue;
             }
             let read = match &ledger {
@@ -91,19 +126,35 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
             let over = match read {
                 Ok(o) => o,
                 Err(e) => {
-                    // Reopened and read again next poll; shown once.
+                    // Reopened and read again next poll.
                     ledger = None;
+                    seen = None;
                     let text = e.to_string();
                     let mut s = shown.lock().unwrap();
-                    if !matches!(&s.graph, Some(Err(t)) if *t == text) {
-                        s.graph = Some(Err(text));
-                        drop(s);
+                    // Shown once.
+                    let same = |g: &LaneGraph| {
+                        Some(g.lane) == sel && matches!(&g.read, Err(t) if *t == text)
+                    };
+                    let new = open && !matches!(&s.graph, Some(Err(t)) if *t == text)
+                        || sel.is_some() && !s.lane_graph.as_ref().is_some_and(same);
+                    if open {
+                        s.graph = Some(Err(text.clone()));
+                    }
+                    if let Some(id) = sel {
+                        s.lane_graph = Some(LaneGraph {
+                            lane: id,
+                            read: Err(text),
+                        });
+                    }
+                    drop(s);
+                    if new {
                         changed();
                     }
                     continue;
                 }
             };
-            seen = now;
+            seen = Some(now);
+            ran = Some(Instant::now());
 
             let mut files: BTreeMap<i64, Vec<String>> = BTreeMap::new();
             let mut heads: BTreeMap<i64, String> = BTreeMap::new();
@@ -145,10 +196,11 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 }
             }
 
+            let sel_note = sel.and_then(|id| notes.get(&id).cloned());
             lanes.retain(|id, _| want.iter().any(|w| w.id == *id));
             retry.retain(|id| lanes.contains_key(id));
             let mut by_repo: BTreeMap<String, (String, Vec<Part>)> = BTreeMap::new();
-            for w in &want {
+            for w in want.iter().filter(|w| open || Some(w.id) == sel) {
                 // Sorted: overlap lists shared files first, so another lane's
                 // clash would reorder them.
                 let mut paths = files.remove(&w.id).unwrap_or_default();
@@ -159,11 +211,14 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     continue;
                 }
                 let key = (heads.get(&w.id).cloned().unwrap_or_default(), paths);
+                // The selected lane's read under another profile is read again.
+                let edited = |p: &Option<SystemTime>| Some(w.id) == sel && *p != profile;
                 // An unread worktree keeps the part last read from it.
-                let fresh = lanes.get(&w.id).is_some_and(|(k, _)| {
-                    (*k == key && !retry.contains(&w.id)) || unread.contains(&w.id)
+                let fresh = lanes.get(&w.id).is_some_and(|(k, p, _)| {
+                    (*k == key && !retry.contains(&w.id) && !edited(p)) || unread.contains(&w.id)
                 });
                 if !fresh {
+                    let at = mtime(&w.slug);
                     let lane = read_lane(w, &key);
                     // A failed read (a timeout on a busy machine) is tried
                     // again on the next overlap run, not kept for good.
@@ -174,8 +229,9 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     } else {
                         retry.remove(&w.id);
                     }
-                    lanes.insert(w.id, (key, lane));
-                    // A read under the same key (a retry) changes the part.
+                    lanes.insert(w.id, (key, at, lane));
+                    // A read under the same key (a retry) changes the part,
+                    // so the repo's layout is stale, shown or not.
                     repos.remove(&w.slug.to_lowercase());
                 }
                 by_repo
@@ -185,13 +241,28 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     .push((w.id, lanes[&w.id].0.clone(), note));
             }
 
+            if let Some(id) = sel {
+                let read = match (want.iter().any(|w| w.id == id), lanes.get(&id)) {
+                    (false, _) => Err("No repo recorded for the lane.".into()),
+                    (true, None) => Err("No changes since the base.".into()),
+                    (true, Some((key, ..))) if key.1.is_empty() => {
+                        Err(sel_note.unwrap_or_default().join("; "))
+                    }
+                    (true, Some((.., lane))) => Ok(snapshot(lane, sel_note, &over)),
+                };
+                shown.lock().unwrap().lane_graph = Some(LaneGraph { lane: id, read });
+                changed();
+            }
+            if !open {
+                continue;
+            }
             repos.retain(|r, _| by_repo.contains_key(r));
             let mut out = Vec::new();
             for (repo, (slug, keys)) in by_repo {
                 let built = match repos.get(&repo) {
                     Some((k, n, l)) if *k == keys && *n == over.files_omitted => l.clone(),
                     _ => {
-                        let part: Vec<&Lane> = keys.iter().map(|(id, ..)| &lanes[id].1).collect();
+                        let part: Vec<&Lane> = keys.iter().map(|(id, ..)| &lanes[id].2).collect();
                         let mut l = layout(&part);
                         for (id, _, n) in keys.iter().filter(|(.., n)| !n.is_empty()) {
                             l.notes.push(format!("#{id}: {}", n.join("; ")));
@@ -210,6 +281,37 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
             publish(&shown, Ok(out), &changed);
         }
     });
+}
+
+/// The lane's graph, ringing the files other open lanes change too.
+fn snapshot(lane: &Lane, notes: Option<Vec<String>>, over: &Overlap) -> LaneSnap {
+    let mut others: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    for row in over
+        .files
+        .iter()
+        .filter(|r| r.lanes.iter().any(|e| e.id == lane.id))
+    {
+        for e in row.lanes.iter().filter(|e| e.id != lane.id) {
+            let ids = others.entry(row.path.clone()).or_default();
+            if !ids.contains(&e.id) {
+                ids.push(e.id);
+            }
+        }
+    }
+    let impact = lane.impact.as_ref().ok();
+    let ep = impact.and_then(|i| i.entry_points.as_ref());
+    LaneSnap {
+        layout: Arc::new(lane_layout(lane, &others)),
+        notes: notes.unwrap_or_default(),
+        files_omitted: over.files_omitted,
+        reached: ep.map(|e| (e.reached.len() + e.omitted, e.total)),
+        exact: ep.is_some_and(|e| e.bound == "exact"),
+    }
+}
+
+/// The mtime of `slug`'s pipeline profile.
+fn mtime(slug: &str) -> Option<SystemTime> {
+    fs::metadata(profile_file(slug)?).ok()?.modified().ok()
 }
 
 fn publish(shown: &Mutex<Shown>, graph: Result<Repos, String>, changed: &impl Fn()) {

@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::areas::Areas;
 use crate::backlog;
 use crate::diff::Diff;
-use crate::graph::Repos;
+use crate::graph::{Layout, Repos};
 use crate::overlap::Markers;
 use crate::pipeline;
 
@@ -57,6 +57,8 @@ pub struct Shown {
     pub graph_open: bool,
     /// Each repo's change graph with its slug, or why there is none.
     pub graph: Option<Result<Repos, String>>,
+    /// The selected lane's own change graph, read while its page is open.
+    pub lane_graph: Option<LaneGraph>,
     /// Set by the window: the repo whose Backlog is shown, as the board
     /// spells it; daisy's mirror is read only then.
     pub backlog_for: Option<String>,
@@ -69,6 +71,26 @@ pub struct Shown {
     /// Set by the window: the Pipeline page's thread works only then.
     pub pipeline_open: bool,
     pub pipeline: pipeline::Read,
+}
+
+/// One lane's change graph, or why there is none.
+pub struct LaneGraph {
+    pub lane: i64,
+    pub read: Result<LaneSnap, String>,
+}
+
+/// The lane's graph as of its last commit read.
+pub struct LaneSnap {
+    pub layout: Arc<Layout>,
+    /// Overlap's notes on the lane (its worktree not read, paths cut).
+    pub notes: Vec<String>,
+    /// Files overlap left out, for every lane.
+    pub files_omitted: usize,
+    /// Entry points reached (with those cut) of the total; none without
+    /// the repo's profile.
+    pub reached: Option<(usize, usize)>,
+    /// Dependents and entry points are exact, as impact says.
+    pub exact: bool,
 }
 
 /// One lane's page as read at `version`, or why it could not be. A
