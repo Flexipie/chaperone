@@ -10,9 +10,10 @@
 //! what merged lately; the full board stays a tab away. A repo's Backlog
 //! tab lists its open issues not in a lane, from daisy's GitHub mirror,
 //! each ready or blocked. On a lane that needs you, the lane page answers
-//! it, sends it back or opens it in herdr, through a separate writer: the
-//! board's ledger stays read-only. The Pipeline page shows each pipeline
-//! version's numbers, the skills' drift check and what changed in them.
+//! it, sends it back, opens it in herdr or merges its PR, through a
+//! separate writer: the board's ledger stays read-only. The Pipeline page
+//! shows each pipeline version's numbers, the skills' drift check and what
+//! changed in them.
 
 mod areas;
 mod backlog;
@@ -100,9 +101,13 @@ fn main() -> eframe::Result {
             let ctx = cc.egui_ctx.clone();
             backlog::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
-            let writer = writer::spawn(path, "herdr".into(), shown.clone(), move || {
-                ctx.request_repaint()
-            });
+            let writer = writer::spawn(
+                path,
+                "herdr".into(),
+                "gh".into(),
+                shown.clone(),
+                move || ctx.request_repaint(),
+            );
             Ok(Box::new(App {
                 shown,
                 first_frame: args.first_frame,
