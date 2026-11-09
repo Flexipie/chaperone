@@ -35,6 +35,10 @@ pub struct Typed {
     pub lane: i64,
     pub answer: String,
     pub reason: String,
+    /// The question the answer is for, the oldest when typing started.
+    asks: Option<i64>,
+    /// That question was answered elsewhere: the answer was not sent.
+    gone: bool,
     /// The act sent and not done yet: true for a send-back.
     sent: Option<bool>,
 }
@@ -259,10 +263,22 @@ fn actions(
         })
         .inner
     };
-    let oldest = page.questions.first().map(|q| q.id);
+    if typed.answer.trim().is_empty() {
+        typed.asks = page.questions.first().map(|q| q.id);
+    }
     if line(ui, &mut typed.answer, "Your answer", "Answer") {
-        act = Some(answer(oldest, typed.answer.clone(), None));
-        typed.sent = Some(false);
+        let open = |id| page.questions.iter().any(|q| q.id == id);
+        typed.gone = typed.asks.is_some_and(|id| !open(id));
+        if typed.gone {
+            typed.asks = page.questions.first().map(|q| q.id);
+        } else {
+            act = Some(answer(typed.asks, typed.answer.clone(), None));
+            typed.sent = Some(false);
+        }
+    }
+    if typed.gone {
+        let e = "Not sent: that question was answered elsewhere. Answer again to send it to what the lane asks now.";
+        ui.colored_label(ui.visuals().error_fg_color, e);
     }
     if line(ui, &mut typed.reason, "Why it goes back", "Send back") {
         act = Some(Act::SendBack {
