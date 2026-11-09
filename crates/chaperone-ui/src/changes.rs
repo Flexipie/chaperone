@@ -2,9 +2,10 @@
 //! `overlap` (each open lane's files) when the ledger changes or a lane's
 //! worktree commits, then `impact` and lines changed for each lane whose
 //! files or head moved since its last read, one lane at a time; with only
-//! a lane's page open, for that lane alone, and the other lanes' reads
-//! are kept. A repo's layout is built again only when one of its lanes was
-//! or overlap's notes changed. Reads the ledger read-only; `impact` writes
+//! a lane's page open, for that lane alone, the other lanes' reads kept,
+//! and a ledger change alone read at most every [`SOON`]. A repo's layout
+//! is built again only when one of its lanes was or overlap's notes
+//! changed. Reads the ledger read-only; `impact` writes
 //! the code graph's own cache (ADR 0043), never the ledger.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -21,6 +22,7 @@ use chaperone_graph::{Error, impact_in, profile_file};
 
 use crate::diff::{DEADLINE, against_base, reflog_time};
 use crate::graph::{Lane, Layout, Repos, lane_layout, layout};
+use crate::overlap::SOON;
 use crate::watch::{LaneGraph, LaneSnap, Shown};
 
 /// A poll stats one file per lane, no process.
@@ -50,13 +52,13 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
     thread::spawn(move || {
         let mut ledger: Option<Ledger> = None;
         // The (data_version, reflog times, graph shown, lane selected, its
-        // profile's mtime) last read.
+        // profile's mtime) last read, and when.
         let mut seen = None;
-        let mut lanes: HashMap<i64, (Key, Lane)> = HashMap::new();
+        let mut ran: Option<Instant> = None;
+        // Each lane's read, with its profile's mtime when read.
+        let mut lanes: HashMap<i64, (Key, Option<SystemTime>, Lane)> = HashMap::new();
         // Lanes whose last read failed, read again on the next overlap run.
         let mut retry: BTreeSet<i64> = BTreeSet::new();
-        // Each lane's profile mtime when it was last selected.
-        let mut profiles: HashMap<i64, Option<SystemTime>> = HashMap::new();
         let mut repos: HashMap<String, Built> = HashMap::new();
         loop {
             thread::sleep(POLL);
@@ -86,25 +88,24 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
             };
             // The profile names the entry points: an edit reads the lane again.
             let (sel, profile) = match sel {
-                Some((id, repo)) => {
-                    let p = repo.as_deref().and_then(profile_file);
-                    let m = p.and_then(|p| fs::metadata(p).ok()?.modified().ok());
-                    (Some(id), m)
-                }
+                Some((id, repo)) => (Some(id), repo.as_deref().and_then(mtime)),
                 None => (None, None),
             };
             let times: Vec<Option<SystemTime>> = want
                 .iter()
                 .map(|w| w.worktree.as_deref().and_then(reflog_time))
                 .collect();
-            let now = Some((version, times, open, sel, profile));
-            if seen == now {
+            let now = (version, times, open, sel, profile);
+            if seen.as_ref() == Some(&now) {
                 continue;
             }
-            if let Some(id) = sel
-                && profiles.insert(id, profile).is_some_and(|p| p != profile)
-            {
-                retry.insert(id);
+            // With only a lane's page open, a ledger write alone (any lane's
+            // events) reads again at most every SOON, as the overlap thread.
+            let only_version = seen
+                .as_ref()
+                .is_some_and(|s| (&s.1, s.2, s.3, s.4) == (&now.1, now.2, now.3, now.4));
+            if !open && only_version && ran.is_some_and(|t| t.elapsed() < SOON) {
+                continue;
             }
             let read = match &ledger {
                 Some(l) => overlap(l, None, false),
@@ -116,6 +117,7 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 Err(e) => {
                     // Reopened and read again next poll.
                     ledger = None;
+                    seen = None;
                     let text = e.to_string();
                     let mut s = shown.lock().unwrap();
                     // Shown once.
@@ -140,7 +142,8 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     continue;
                 }
             };
-            seen = now;
+            seen = Some(now);
+            ran = Some(Instant::now());
 
             let mut files: BTreeMap<i64, Vec<String>> = BTreeMap::new();
             let mut heads: BTreeMap<i64, String> = BTreeMap::new();
@@ -199,11 +202,14 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     continue;
                 }
                 let key = (heads.get(&w.id).cloned().unwrap_or_default(), paths);
+                // The selected lane's read under another profile is read again.
+                let edited = |p: &Option<SystemTime>| Some(w.id) == sel && *p != profile;
                 // An unread worktree keeps the part last read from it.
-                let fresh = lanes.get(&w.id).is_some_and(|(k, _)| {
-                    (*k == key && !retry.contains(&w.id)) || unread.contains(&w.id)
+                let fresh = lanes.get(&w.id).is_some_and(|(k, p, _)| {
+                    (*k == key && !retry.contains(&w.id) && !edited(p)) || unread.contains(&w.id)
                 });
                 if !fresh {
+                    let at = mtime(&w.slug);
                     let lane = read_lane(w, &key);
                     // A failed read (a timeout on a busy machine) is tried
                     // again on the next overlap run, not kept for good.
@@ -214,7 +220,7 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                     } else {
                         retry.remove(&w.id);
                     }
-                    lanes.insert(w.id, (key, lane));
+                    lanes.insert(w.id, (key, at, lane));
                     // A read under the same key (a retry) changes the part,
                     // so the repo's layout is stale, shown or not.
                     repos.remove(&w.slug.to_lowercase());
@@ -230,10 +236,10 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 let read = match (want.iter().any(|w| w.id == id), lanes.get(&id)) {
                     (false, _) => Err("No repo recorded for the lane.".into()),
                     (true, None) => Err("No changes since the base.".into()),
-                    (true, Some((key, _))) if key.1.is_empty() => {
+                    (true, Some((key, ..))) if key.1.is_empty() => {
                         Err(sel_note.unwrap_or_default().join("; "))
                     }
-                    (true, Some((_, lane))) => Ok(snapshot(lane, sel_note, &over)),
+                    (true, Some((.., lane))) => Ok(snapshot(lane, sel_note, &over)),
                 };
                 shown.lock().unwrap().lane_graph = Some(LaneGraph { lane: id, read });
                 changed();
@@ -247,7 +253,7 @@ pub fn spawn(path: PathBuf, shown: Arc<Mutex<Shown>>, changed: impl Fn() + Send 
                 let built = match repos.get(&repo) {
                     Some((k, n, l)) if *k == keys && *n == over.files_omitted => l.clone(),
                     _ => {
-                        let part: Vec<&Lane> = keys.iter().map(|(id, ..)| &lanes[id].1).collect();
+                        let part: Vec<&Lane> = keys.iter().map(|(id, ..)| &lanes[id].2).collect();
                         let mut l = layout(&part);
                         for (id, _, n) in keys.iter().filter(|(.., n)| !n.is_empty()) {
                             l.notes.push(format!("#{id}: {}", n.join("; ")));
@@ -292,6 +298,11 @@ fn snapshot(lane: &Lane, notes: Option<Vec<String>>, over: &Overlap) -> LaneSnap
         reached: ep.map(|e| (e.reached.len() + e.omitted, e.total)),
         exact: ep.is_some_and(|e| e.bound == "exact"),
     }
+}
+
+/// The mtime of `slug`'s pipeline profile.
+fn mtime(slug: &str) -> Option<SystemTime> {
+    fs::metadata(profile_file(slug)?).ok()?.modified().ok()
 }
 
 fn publish(shown: &Mutex<Shown>, graph: Result<Repos, String>, changed: &impl Fn()) {
