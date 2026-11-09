@@ -4,9 +4,11 @@
 //! its "Blocked by" lines, in the owner's order (`backlog.prioritised`),
 //! then by issue number. It runs daisy-cli only while the window shows a
 //! repo's Backlog, at most every [`MIRROR_EVERY`]; a ledger change only
-//! matches the issues it holds against the lanes and the order again.
+//! matches the issues it holds against the lanes and the order again, and
+//! finds the checkout Start runs spawn in.
 
 use std::collections::{BTreeSet, HashMap};
+use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -16,7 +18,6 @@ use std::time::{Duration, Instant};
 use chaperone_core::backlog::ORDER_CAP;
 use chaperone_core::child;
 use chaperone_core::ledger::{Ledger, LedgerError};
-use chaperone_core::work::LaneBoard;
 use eframe::egui;
 use serde_json::Value;
 
@@ -57,6 +58,8 @@ pub struct Backlog {
     pub open: usize,
     /// The mirror's freshness when it is not `fresh`.
     pub stale: Option<String>,
+    /// The checkout Start runs spawn in, when one is known.
+    pub checkout: Option<String>,
 }
 
 /// The repo it was read for, as the board spells it, and the read.
@@ -189,6 +192,7 @@ fn rows(
         after,
         open: mirror.issues.len(),
         stale: mirror.stale.clone(),
+        checkout: checkout(ledger, slug)?,
     };
     Ok(Some((version, backlog)))
 }
@@ -369,26 +373,30 @@ fn daisy(args: &[&str]) -> Result<Value, String> {
     Err(format!("{code}: {call}: {message}"))
 }
 
-/// The checkout Start runs spawn in: the newest of `slug`'s lanes'
+/// The checkout Start runs spawn in: the newest of `slug`'s open lanes'
 /// worktrees still on disk (spawn finds the main clone from it).
-pub fn checkout(board: Option<&LaneBoard>, slug: &str) -> Option<String> {
-    let lanes = board.iter().flat_map(|b| &b.lanes).map(|l| &l.board.item);
-    lanes
-        .filter(|i| {
-            i.repo_slug
-                .as_deref()
-                .is_some_and(|r| r.eq_ignore_ascii_case(slug))
-        })
-        .filter_map(|i| Some((i.id, i.worktree_path.as_ref()?)))
+fn checkout(ledger: &Ledger, slug: &str) -> Result<Option<String>, LedgerError> {
+    let mut paths = Vec::new();
+    let Ok(()) = ledger.work_board_each(&ledger.now()?, |b| {
+        let i = b.item;
+        if i.repo_slug.is_some_and(|r| r.eq_ignore_ascii_case(slug))
+            && let Some(p) = i.worktree_path
+        {
+            paths.push((i.id, p));
+        }
+        Ok::<_, Infallible>(())
+    })?;
+    Ok(paths
+        .into_iter()
         .filter(|(_, p)| Path::new(p).is_dir())
         .max_by_key(|(id, _)| *id)
-        .map(|(_, p)| p.clone())
+        .map(|(_, p)| p))
 }
 
 /// What the tab's buttons need from the window.
 pub struct Can<'a> {
-    /// The checkout Start runs spawn in, or why it cannot.
-    pub start: Result<String, &'static str>,
+    /// The window reads the CLI's default ledger, the one spawn writes.
+    pub default_ledger: bool,
     /// The writer is busy with an act.
     pub writing: bool,
     pub wrote: Option<&'a Wrote>,
@@ -457,7 +465,12 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str, can: &Can) -> Op
     let settling =
         wrote.is_some_and(|w| w.said.is_ok()) && can.reorder_after == Some(backlog.after);
     let movable = free && !settling;
-    if let Err(why) = &can.start {
+    let can_start = match &backlog.checkout {
+        _ if !can.default_ledger => Err("spawn writes the default ledger, not the one shown"),
+        Some(path) => Ok(path),
+        None => Err("no local checkout known"),
+    };
+    if let Err(why) = &can_start {
         ui.label(format!("Start is off: {why}."));
     }
     let key = |row: &Row| format!("{slug}#{}", row.number);
@@ -489,10 +502,10 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str, can: &Can) -> Op
                         }
                     });
                     // A blocked issue waits for its blockers, so only a ready one starts.
-                    let ok = free && can.start.is_ok() && row.blocked_by.is_empty();
+                    let ok = free && can_start.is_ok() && row.blocked_by.is_empty();
                     let start = ui.add_enabled(ok, egui::Button::new("Start"));
                     if start.clicked()
-                        && let Ok(path) = &can.start
+                        && let Ok(path) = can_start
                     {
                         act = Some(Act::Start {
                             key: key(row),

@@ -300,15 +300,8 @@ impl eframe::App for App {
                 });
                 if let (Tab::Backlog, Some(slug)) = (self.tab, &repo) {
                     shown.backlog_for = Some(slug.clone());
-                    let start = match backlog::checkout(shown.board.as_ref(), slug) {
-                        _ if !self.default_ledger => {
-                            Err("spawn writes the default ledger, not the one shown")
-                        }
-                        Some(path) => Ok(path),
-                        None => Err("no local checkout known"),
-                    };
                     let can = backlog::Can {
-                        start,
+                        default_ledger: self.default_ledger,
                         writing: shown.writing,
                         wrote: shown.wrote.as_ref(),
                         reorder_after: shown.reorder_after,
