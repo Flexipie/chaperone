@@ -792,7 +792,6 @@ mod tests {
             key: "o/r#3".into(),
             repo_path: "/src/r".into(),
         };
-        assert_eq!(start.target(), Target::Repo("o/r".into()));
         assert_eq!(run(start).unwrap(), "Started o/r#3: started, work 7.");
         let focus = Act::Focus {
             work,

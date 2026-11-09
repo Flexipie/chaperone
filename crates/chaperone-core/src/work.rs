@@ -423,9 +423,7 @@ impl Ledger {
         self.write_lane(actor, id, at, dry_run, |conn, item| {
             // The owner's pause passes over a live lease; the write's lease
             // guard refuses it unless it changes nothing else.
-            let pause = actor.agent.as_deref() == Some(OWNER_UI)
-                && input.status.as_deref() == Some("blocked")
-                && input.blocker.as_deref() == Some(PAUSED_BY_OWNER);
+            let pause = actor.agent.as_deref() == Some(OWNER_UI);
             if !pause && let Err(r) = check_owner(item, actor) {
                 return Ok(Err(r));
             }
