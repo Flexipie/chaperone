@@ -1,4 +1,4 @@
-//! chaperone-ui: a read-only live board of every lane. It opens the ledger
+//! chaperone-ui: a live board of every lane. It opens the ledger
 //! read-only and redraws when the ledger changes; herdr stays where you type.
 //! Clicking a lane opens its page: what it is, how it is doing against its
 //! repo and what it changed. Above the board, the R11 numbers of the lanes
@@ -9,7 +9,9 @@
 //! repos opens on a card per repo, a repo on its lanes in plain words and
 //! what merged lately; the full board stays a tab away. A repo's Backlog
 //! tab lists its open issues not in a lane, from daisy's GitHub mirror,
-//! each ready or blocked.
+//! each ready or blocked. On a lane that needs you, the lane page answers
+//! it, sends it back or opens it in herdr, through a separate writer: the
+//! board's ledger stays read-only.
 
 mod areas;
 mod backlog;
@@ -26,6 +28,7 @@ mod overlap;
 mod repo;
 mod theme;
 mod watch;
+mod writer;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -79,13 +82,19 @@ fn main() -> eframe::Result {
             let ctx = cc.egui_ctx.clone();
             changes::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
             let ctx = cc.egui_ctx.clone();
-            backlog::spawn(path, shown.clone(), move || ctx.request_repaint());
+            backlog::spawn(path.clone(), shown.clone(), move || ctx.request_repaint());
+            let ctx = cc.egui_ctx.clone();
+            let writer = writer::spawn(path, "herdr".into(), shown.clone(), move || {
+                ctx.request_repaint()
+            });
             Ok(Box::new(App {
                 shown,
                 first_frame: args.first_frame,
                 since: numbers::Since::default(),
                 tab: Tab::default(),
                 view: nav::View::default(),
+                typed: lane::Typed::default(),
+                writer,
             }))
         }),
     )
@@ -97,6 +106,8 @@ struct App {
     since: numbers::Since,
     tab: Tab,
     view: nav::View,
+    typed: lane::Typed,
+    writer: std::sync::mpsc::Sender<writer::Act>,
 }
 
 /// What the main view shows of All repos or a repo.
@@ -172,6 +183,8 @@ impl eframe::App for App {
                 areas: &s.areas,
                 stats: s.stats.as_ref(),
                 median: s.median.as_ref(),
+                writing: s.writing,
+                wrote: s.wrote.as_ref(),
             };
             let mut asked = lane::Asked::default();
             egui::CentralPanel::default()
@@ -180,13 +193,22 @@ impl eframe::App for App {
                     if let Some(error) = &s.error {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                     }
-                    asked = lane::draw(ui, &sel, &reads, now)
+                    asked = lane::draw(ui, &sel, &reads, &mut self.typed, now)
                 });
             // The change graph is not read behind the page.
             shown.graph_open = false;
             shown.refresh += u64::from(asked.refresh);
             if asked.back {
                 shown.selected = None;
+            }
+            if let Some(act) = asked.act {
+                // The writer ending clears it; one gone sends nothing back.
+                shown.wrote = None;
+                shown.writing = self.writer.send(act).is_ok();
+                if !shown.writing {
+                    let said = Err("the writer stopped".into());
+                    shown.wrote = Some(writer::Wrote { work: sel.id, said });
+                }
             }
             ui.ctx().request_repaint_after(AGE_TICK);
             return;

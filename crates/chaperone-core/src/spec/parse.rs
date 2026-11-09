@@ -227,3 +227,75 @@ pub fn parse_decisions(md: &str) -> Vec<Decision> {
     }
     items.iter().map(|t| parse_decision(t)).collect()
 }
+
+/// Lowercase ASCII words, everything else gone (`[a-z0-9]+`).
+fn words(s: &str) -> String {
+    let s = s.to_lowercase();
+    let w: Vec<&str> = s
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    w.join(" ")
+}
+
+/// Characters `a` and `b` share in matching blocks (Ratcliff/Obershelp,
+/// what Python's `SequenceMatcher` counts, less its junk rule for 200+
+/// characters).
+fn matched(a: &[char], b: &[char]) -> usize {
+    let (mut at, mut len) = ((0, 0), 0);
+    let mut prev = vec![0; b.len() + 1];
+    for (i, x) in a.iter().enumerate() {
+        let mut row = vec![0; b.len() + 1];
+        for (j, y) in b.iter().enumerate() {
+            if x == y {
+                row[j + 1] = prev[j] + 1;
+                if row[j + 1] > len {
+                    len = row[j + 1];
+                    at = (i + 1 - len, j + 1 - len);
+                }
+            }
+        }
+        prev = row;
+    }
+    if len == 0 {
+        return 0;
+    }
+    let (i, j) = at;
+    len + matched(&a[..i], &b[..j]) + matched(&a[i + len..], &b[j + len..])
+}
+
+/// Two decision questions are one: equal once case and punctuation go,
+/// or a light rewording (ratio 0.85 or more), as `ship-handoff` reads them.
+fn same_question(a: &str, b: &str) -> bool {
+    let (a, b) = (words(a), words(b));
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let total = a.len() + b.len();
+    a == b || total > 0 && 2 * matched(&a, &b) * 100 >= 85 * total
+}
+
+/// A question's note asks about decision question `q`: the same question,
+/// or a note that names it, whole words (`"confirm: <q>"`).
+pub fn asks_about(note: &str, q: &str) -> bool {
+    let (n, w) = (words(note), words(q));
+    same_question(note, q) || !w.is_empty() && format!(" {n} ").contains(&format!(" {w} "))
+}
+
+/// The decisions whose newest line for their question is still agreed
+/// `provisional ...`: what the owner has yet to confirm, as `ship-handoff`
+/// reads them.
+pub fn standing_provisional(decisions: Vec<Decision>) -> Vec<Decision> {
+    let q = |d: &Decision| d.question.clone().unwrap_or_else(|| d.text.clone());
+    let mut newest: Vec<Decision> = Vec::new();
+    for d in decisions {
+        let k = q(&d);
+        newest.retain(|n| !same_question(&q(n), &k));
+        newest.push(d);
+    }
+    newest.retain(|d| {
+        d.answer.is_some()
+            && d.agreed
+                .as_deref()
+                .is_some_and(|a| a.starts_with("provisional"))
+    });
+    newest
+}

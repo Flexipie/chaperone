@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::DETAIL_ROWS;
+use super::lane_board::OPEN_OWNER_QUESTION;
 use super::lane_detail::LaneDetail;
 use crate::ledger::{Ledger, LedgerError, check_schema};
 use crate::pipeline::{Fact, Phase, Route, by_stamp};
@@ -35,6 +36,19 @@ pub struct LanePage {
     /// None when this binary has no document for the lane's stamp, or the
     /// document no row for its route: unstamped, never "0 of 0 passed".
     pub gates: Option<Gates>,
+    /// The questions to the owner with no answer yet, oldest first: what
+    /// the board counts as `open_questions`.
+    pub questions: Vec<Question>,
+    /// The highest send-back round, 0 for none: what stats reads as
+    /// `send_back_rounds`.
+    pub sent_back: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Question {
+    /// The `asked` event, what an answer's `--answers` names.
+    pub id: i64,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -189,6 +203,26 @@ impl Ledger {
         }
 
         let mut stmt = tx.prepare(&format!(
+            "SELECT a.id, json_extract(a.payload_json, '$.note') FROM events a
+              WHERE a.lane_id = ?1 AND {OPEN_OWNER_QUESTION} ORDER BY a.id"
+        ))?;
+        let questions = stmt
+            .query_map([id], |r| {
+                Ok(Question {
+                    id: r.get(0)?,
+                    note: r.get(1)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        let sent_back = tx.query_row(
+            "SELECT coalesce(max(json_extract(payload_json, '$.round')), 0) FROM events
+              WHERE lane_id = ?1 AND kind = 'attention.recorded'
+                AND json_extract(payload_json, '$.type') = 'sent_back'",
+            [id],
+            |r| r.get(0),
+        )?;
+
+        let mut stmt = tx.prepare(&format!(
             "SELECT {}, {} FROM events e
               WHERE e.lane_id = ?1 AND e.kind = 'check.finished' AND {} = 'local_review'
               ORDER BY {} IS NULL, {} DESC, e.id DESC LIMIT ?2",
@@ -253,6 +287,8 @@ impl Ledger {
             review_head,
             reviews,
             gates,
+            questions,
+            sent_back,
         })
     }
 

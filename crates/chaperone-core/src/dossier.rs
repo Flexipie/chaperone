@@ -16,7 +16,7 @@ use crate::ledger::{
     redact_payload,
 };
 use crate::pipeline::canonical_string;
-use crate::spec::parse::{Decision, parse_decisions, parse_spec_sections};
+use crate::spec::parse::{Decision, parse_decisions, parse_spec_sections, standing_provisional};
 use crate::spec::slice::{KEY_LANES, section_for, spec_for_key};
 use crate::spec::{Spec, normalize_key, read as read_spec};
 use crate::work::{HandoffInput, IS_HANDOFF, SPEC_BY_KEY, commit_ok, pr_ref_ok};
@@ -91,6 +91,10 @@ pub struct InSpec {
     pub title: String,
     /// This slice's decisions and the spec-wide ones, each its line.
     pub decisions: Vec<String>,
+    /// Those still provisional, whole (`decisions` cuts its lines): what
+    /// the lane page's owner can accept. Not in the dossier's answer.
+    #[serde(skip)]
+    pub provisional: Vec<Decision>,
 }
 
 #[derive(Debug, Serialize)]
@@ -371,6 +375,7 @@ fn slice_section(conn: &Connection, key: &str) -> Result<SliceSection, LedgerErr
             version: s.version,
             n: section.n,
             title: cut(section.title, TEXT_CHARS, &mut omitted),
+            provisional: standing_provisional(decisions.clone()),
             decisions: decision_lines(decisions, "slice_decisions", &mut omitted),
         });
     }

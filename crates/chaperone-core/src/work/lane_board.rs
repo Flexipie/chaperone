@@ -82,6 +82,16 @@ pub struct Stamps {
     pub verdict_sha: Option<String>,
 }
 
+/// Event `a` is a question to the owner with no answer yet, on
+/// events_lane: an answer is on its question's lane.
+pub(crate) const OPEN_OWNER_QUESTION: &str = "a.kind = 'attention.recorded'
+    AND json_extract(a.payload_json, '$.type') = 'asked'
+    AND json_extract(a.payload_json, '$.by') = 'owner'
+    AND NOT EXISTS (SELECT 1 FROM events b
+          WHERE b.lane_id = a.lane_id AND b.id > a.id
+            AND b.kind = 'attention.recorded'
+            AND json_extract(b.payload_json, '$.answers') = a.id)";
+
 impl Ledger {
     /// The board, its stamps and specs as of one snapshot, its schema
     /// re-checked inside it: a newer binary may migrate while a viewer is
@@ -95,22 +105,15 @@ impl Ledger {
             lanes.push(board);
             Ok::<_, Infallible>(())
         })?;
-        // Questions to the owner with no answer, per open lane, on
-        // events_lane: an answer is on its question's lane.
+        // Questions to the owner with no answer, per open lane.
         let open_questions: HashMap<i64, i64> = tx
-            .prepare(
+            .prepare(&format!(
                 "SELECT a.lane_id, count(*) FROM events a
                   WHERE a.lane_id IN
                           (SELECT id FROM lanes WHERE status NOT IN ('done', 'cancelled'))
-                    AND a.kind = 'attention.recorded'
-                    AND json_extract(a.payload_json, '$.type') = 'asked'
-                    AND json_extract(a.payload_json, '$.by') = 'owner'
-                    AND NOT EXISTS (SELECT 1 FROM events b
-                          WHERE b.lane_id = a.lane_id AND b.id > a.id
-                            AND b.kind = 'attention.recorded'
-                            AND json_extract(b.payload_json, '$.answers') = a.id)
-                  GROUP BY a.lane_id",
-            )?
+                    AND {OPEN_OWNER_QUESTION}
+                  GROUP BY a.lane_id"
+            ))?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_, _>>()?;
         let lanes = lanes

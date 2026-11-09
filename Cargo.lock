@@ -421,6 +421,7 @@ dependencies = [
  "clap",
  "dirs",
  "eframe",
+ "rusqlite",
  "serde_json",
  "tempfile",
 ]
