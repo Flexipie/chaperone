@@ -274,9 +274,10 @@ fn same_question(a: &str, b: &str) -> bool {
 }
 
 /// A question's note asks about decision question `q`: the same question,
-/// or a note that names it (`"confirm: <q>"`).
+/// or a note that names it, whole words (`"confirm: <q>"`).
 pub fn asks_about(note: &str, q: &str) -> bool {
-    same_question(note, q) || words(note).contains(&words(q))
+    let (n, w) = (words(note), words(q));
+    same_question(note, q) || !w.is_empty() && format!(" {n} ").contains(&format!(" {w} "))
 }
 
 /// The decisions whose newest line for their question is still agreed
