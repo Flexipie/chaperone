@@ -9,7 +9,9 @@ can never reach a real ledger. `seed` writes the ledger of chaperone-ui's
 U2 test. U1: one unmeasured launch each, then 10 `--first-frame` launches
 each, alternated, wall time around the spawn. U3 and U4: each app opened
 alone for 5 s, then its CPU time over 20 s; U4 is its max RSS (from
-wait4 once killed), with its RSS at the end in brackets. U2:
+wait4 once killed), with its RSS at the end in brackets; GPUI also on
+lane 1's page (`--lane 1`, the seed's fullest page), which egui cannot open
+without a click. U2:
 `seed u2` (commit to repaint request); egui's U2 is its own ignored test. Prints
 markdown. Python stdlib only.
 """
@@ -67,7 +69,8 @@ def main(seed, gpui, egui):
         print(f"| U1 p50 (max), {LAUNCHES} launches | {p50['gpui']:.0f} ms ({top['gpui']:.0f}) "
               f"| {p50['egui']:.0f} ms ({top['egui']:.0f}) |", flush=True)
         idle = {}
-        for app, args in argv.items():
+        lane = {"gpui lane": [*argv["gpui"], "--lane", "1"]}
+        for app, args in {**argv, **lane}.items():
             proc = subprocess.Popen(args, env=env)
             try:
                 time.sleep(SETTLE)
@@ -83,7 +86,9 @@ def main(seed, gpui, egui):
         print(f"| U3 CPU over {IDLE} s | {idle['gpui'][0]:.2f}% | {idle['egui'][0]:.2f}% |")
         print(f"| U4 max RSS (RSS after {SETTLE + IDLE} s) "
               f"| {idle['gpui'][2]:.0f} MiB ({idle['gpui'][1]:.0f}) "
-              f"| {idle['egui'][2]:.0f} MiB ({idle['egui'][1]:.0f}) |", flush=True)
+              f"| {idle['egui'][2]:.0f} MiB ({idle['egui'][1]:.0f}) |")
+        print(f"| U3, U4 on lane 1's page | {idle['gpui lane'][0]:.2f}%, "
+              f"{idle['gpui lane'][2]:.0f} MiB ({idle['gpui lane'][1]:.0f}) | - |", flush=True)
         subprocess.run([bins["seed"], "u2", db, bins["gpui"]], check=True, env=env)
     finally:
         shutil.rmtree(root)
