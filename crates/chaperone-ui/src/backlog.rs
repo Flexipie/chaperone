@@ -461,17 +461,14 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str, can: &Can) -> Op
         egui::Grid::new(("backlog", slug))
             .striped(true)
             .show(ui, |ui| {
-                for c in ["issue", "title", "can start", "order", ""] {
+                // The buttons come before the text, so a long title or blocker list
+                // never pushes them out of reach.
+                for c in ["issue", "order", "", "title", "can start"] {
                     ui.strong(c);
                 }
                 ui.end_row();
                 for (i, row) in backlog.rows.iter().enumerate() {
                     ui.label(format!("#{}", row.number));
-                    ui.label(&row.title);
-                    match row.blocked_by.is_empty() {
-                        true => ui.label("ready"),
-                        false => ui.label(format!("blocked by {}", row.blocked_by.join(", "))),
-                    };
                     ui.horizontal(|ui| {
                         let up = free && i > 0 && i <= last;
                         if ui.add_enabled(up, egui::Button::new("Up")).clicked() {
@@ -495,6 +492,11 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str, can: &Can) -> Op
                             repo_path: path.clone(),
                         });
                     }
+                    ui.label(&row.title);
+                    match row.blocked_by.is_empty() {
+                        true => ui.label("ready"),
+                        false => ui.label(format!("blocked by {}", row.blocked_by.join(", "))),
+                    };
                     ui.end_row();
                 }
             });

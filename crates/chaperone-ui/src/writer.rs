@@ -256,15 +256,18 @@ pub fn run(
             agent,
             expected_updated_at,
         } => {
-            if let Some(agent) = &agent {
-                cli("herdr", herdr, &["agent", "prompt", agent, PAUSE])?;
-            }
             let input = UpdateInput {
                 status: Some("blocked".into()),
                 blocker: Some(PAUSED_BY_OWNER.into()),
                 ..UpdateInput::default()
             };
             let stamp = Some(expected_updated_at.as_str());
+            // A dry run first, so a pause the ledger would refuse never tells
+            // the agent to stop.
+            done(ledger.work_update(actor, work, &input, stamp, None, true))?;
+            if let Some(agent) = &agent {
+                cli("herdr", herdr, &["agent", "prompt", agent, PAUSE])?;
+            }
             done(ledger.work_update(actor, work, &input, stamp, None, false))?;
             Ok(format!("Paused {key}. Answer it to resume."))
         }
