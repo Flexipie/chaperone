@@ -311,6 +311,7 @@ impl eframe::App for App {
                         start,
                         writing: shown.writing,
                         wrote: shown.wrote.as_ref(),
+                        reorder_after: shown.reorder_after,
                     };
                     act = backlog::draw(ui, shown.backlog.as_ref(), slug, &can);
                     return;
@@ -371,6 +372,10 @@ impl eframe::App for App {
 /// sends nothing back.
 fn send(shown: &mut Shown, writer: &Sender<writer::Act>, act: writer::Act) {
     shown.wrote = None;
+    shown.reorder_after = match &act {
+        writer::Act::Prioritise { after, .. } => Some(*after),
+        _ => None,
+    };
     let target = act.target();
     shown.writing = writer.send(act).is_ok();
     if !shown.writing {

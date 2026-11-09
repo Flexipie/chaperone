@@ -392,6 +392,8 @@ pub struct Can<'a> {
     /// The writer is busy with an act.
     pub writing: bool,
     pub wrote: Option<&'a Wrote>,
+    /// The `after` the newest act was sent with, when it was a reorder.
+    pub reorder_after: Option<Option<i64>>,
 }
 
 /// The Backlog tab of `slug`, as the board spells it; returns the act
@@ -450,6 +452,11 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str, can: &Can) -> Op
         Target::Lane(_) => false,
     });
     lane::said(ui, can.writing, wrote.map(|w| &w.said));
+    // A saved order shows once the backlog is read again; a move before
+    // that would be sent from the old one.
+    let settling =
+        wrote.is_some_and(|w| w.said.is_ok()) && can.reorder_after == Some(backlog.after);
+    let movable = free && !settling;
     if let Err(why) = &can.start {
         ui.label(format!("Start is off: {why}."));
     }
@@ -470,12 +477,12 @@ pub fn draw(ui: &mut egui::Ui, read: Option<&Read>, slug: &str, can: &Can) -> Op
                 for (i, row) in backlog.rows.iter().enumerate() {
                     ui.label(format!("#{}", row.number));
                     ui.horizontal(|ui| {
-                        let up = free && i > 0 && i <= last;
+                        let up = movable && i > 0 && i <= last;
                         if ui.add_enabled(up, egui::Button::new("Up")).clicked() {
                             moved = Some((i, i - 1));
                         }
                         if ui
-                            .add_enabled(free && i < last, egui::Button::new("Down"))
+                            .add_enabled(movable && i < last, egui::Button::new("Down"))
                             .clicked()
                         {
                             moved = Some((i, i + 1));
