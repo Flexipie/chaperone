@@ -614,7 +614,7 @@ fn change_graph(
         .out_of_scope
         .iter()
         .copied()
-        .filter(|p| !layout.has(p))
+        .filter(|p| !layout.changes(p))
         .collect();
     let reached = match snap.reached {
         Some((n, total)) => format!("entry points reached {n} of {total}"),
@@ -623,7 +623,7 @@ fn change_graph(
     let exact = snap.exact && snap.notes.is_empty() && snap.files_omitted == 0;
     // Declared areas still checking or not checked: the out of scope part is unknown.
     let scoped = declared.is_none() || matches!(done.map(|a| &a.state), Some(State::Done(_)));
-    let bound = match exact && scoped && opts.extra.is_empty() {
+    let bound = match exact && scoped && not_ringed == 0 && opts.extra.is_empty() {
         true => "exact",
         false => "lower bound",
     };

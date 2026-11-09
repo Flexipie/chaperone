@@ -275,8 +275,9 @@ pub fn lane_layout(lane: &Lane, others: &BTreeMap<String, Vec<i64>>) -> Layout {
 }
 
 impl Layout {
-    pub fn has(&self, path: &str) -> bool {
-        self.nodes.iter().any(|n| n.path == path)
+    /// `path` is a changed file (depth 0), its dependents read.
+    pub fn changes(&self, path: &str) -> bool {
+        self.nodes.iter().any(|n| n.depth == 0 && n.path == path)
     }
 }
 
