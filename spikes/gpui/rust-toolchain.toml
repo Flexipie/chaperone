@@ -1,0 +1,7 @@
+# gpui-pre 0.3.11 and 0.3.12 (gpui-component 0.9.x) call
+# Option::map_or_default, unstable in the root's Rust 1.95. The spike takes
+# an installed, dated toolchain that has it stable; keeping GPUI means
+# bumping the root pin.
+[toolchain]
+channel = "nightly-2026-10-20"
+profile = "minimal"
