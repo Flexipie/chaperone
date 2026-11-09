@@ -1,6 +1,6 @@
 //! A child process with a deadline: `daisy-cli reviews get`, the UI
-//! backlog's daisy reads and the git calls of `overlap`, `impact` and the
-//! UI's diff.
+//! backlog's daisy reads, the UI writer's gh and herdr calls and the git
+//! calls of `overlap`, `impact` and the UI's diff.
 
 use std::io::Read;
 use std::process::{Command, ExitStatus, Stdio};

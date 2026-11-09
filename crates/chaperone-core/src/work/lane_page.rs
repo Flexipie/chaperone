@@ -42,6 +42,9 @@ pub struct LanePage {
     /// The highest send-back round, 0 for none: what stats reads as
     /// `send_back_rounds`.
     pub sent_back: i64,
+    /// The merge sha of the newest `pr.merged` of the lane's current PR, None
+    /// before it merges.
+    pub merged: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,6 +96,13 @@ pub struct Gates {
     /// head gate holds for it, not for a newer PR head.
     pub head: Option<String>,
     pub gates: Vec<GateRow>,
+}
+
+impl Gates {
+    /// Gate `id` is listed and passed.
+    pub fn passed(&self, id: &str) -> bool {
+        self.gates.iter().any(|r| r.gate == id && r.passed)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -221,6 +231,19 @@ impl Ledger {
             [id],
             |r| r.get(0),
         )?;
+        let merged = tx
+            .query_row(
+                // The lane's current PR: a lane that took another PR after
+                // one merged can still merge it.
+                "SELECT json_extract(payload_json, '$.merge_sha') FROM events
+                  WHERE lane_id = ?1 AND kind = 'pr.merged'
+                    AND lower(json_extract(payload_json, '$.pr'))
+                        = (SELECT lower(pr_ref) FROM lanes WHERE id = ?1)
+                  ORDER BY id DESC LIMIT 1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?;
 
         let mut stmt = tx.prepare(&format!(
             "SELECT {}, {} FROM events e
@@ -289,6 +312,7 @@ impl Ledger {
             gates,
             questions,
             sent_back,
+            merged,
         })
     }
 

@@ -29,6 +29,10 @@ changed it and any uncommitted edit (`--dotfiles`, default `~/dotfiles`). Doctor
 On a lane that needs you, the page answers it (a typed answer, or Accept on a provisional
 spec decision), sends it back with a reason or opens its herdr workspace: the herdr prompt
 first, then the attention record, as agent `owner-ui`, session `ui:<start time>`, by owner.
+A ready lane with a YES verdict on its handoff head merges behind a confirm, as `/merge` does:
+`gh pr merge --squash --delete-branch --match-head-commit <head>` (never `--admin` or `--auto`),
+then `pr.merged` as `owner-ui`, then a herdr prompt to the lane to hand off done; once its lease
+is not live, `owner-ui` hands it off done instead.
 Those writes go through one separate writer; the board opens the ledger read-only and never
 writes it, and the graph writes only the code graph's own cache. CI shows "not recorded" until the
 ledger has a CI record.

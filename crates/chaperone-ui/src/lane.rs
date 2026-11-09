@@ -2,8 +2,8 @@
 //! its repo and what it changed. A header, six tiles, the timeline, the
 //! decisions, what to check by hand, the files and the lane's change graph,
 //! then the #41 panel's handoffs, findings, areas and diff, folded. On a
-//! lane that needs you, the owner answers it, sends it back or opens it in
-//! herdr (`writer`).
+//! lane that needs you, the owner answers it, sends it back, opens it in
+//! herdr or merges it (`writer`).
 
 use std::collections::HashMap;
 
@@ -43,6 +43,8 @@ pub struct Typed {
     gone: Option<&'static str>,
     /// The act sent and not done yet: true for a send-back.
     sent: Option<bool>,
+    /// The head a Merge confirm is open for.
+    merge: Option<String>,
 }
 
 /// What the page reads, each for the selected lane only.
@@ -92,7 +94,7 @@ pub fn draw(ui: &mut egui::Ui, sel: &Selected, r: &Reads, typed: &mut Typed, now
         };
         if needs::why(lane, now).is_some() {
             card(ui, "Needs you", |ui| {
-                asked.act = actions(ui, lane, page, r, typed)
+                asked.act = actions(ui, lane, page, r, typed, now)
             });
         }
         tiles(ui, lane, page, r, now);
@@ -174,14 +176,15 @@ fn header(
     });
 }
 
-/// Answer, send back and open in herdr, each one act; a button waits
-/// while the writer is busy.
+/// Answer, send back, open in herdr and merge, each one act; a button
+/// waits while the writer is busy.
 fn actions(
     ui: &mut egui::Ui,
     lane: &BoardLane,
     page: &LanePage,
     r: &Reads,
     typed: &mut Typed,
+    now: i64,
 ) -> Option<Act> {
     let item = &lane.board.item;
     let mut act = None;
@@ -319,6 +322,66 @@ fn actions(
         None => {
             ui.label("No herdr workspace recorded for the lane.");
         }
+    }
+    // Merge: a ready lane with a PR and a YES verdict on its handoff
+    // head, behind a confirm; the writer checks it all again.
+    let gates = page.gates.as_ref();
+    let passed = |id: &str| gates.is_some_and(|g| g.passed(id));
+    let head = gates.and_then(|g| g.head.clone()).unwrap_or_default();
+    let pr = item.pr_ref.clone().unwrap_or_default();
+    let merge = |head: String| Act::Merge {
+        lane: target.clone(),
+        pr: pr.clone(),
+        head,
+    };
+    let why_not = if !passed("verdict_is_yes") {
+        Some("no YES verdict".to_string())
+    } else if !passed("verdict_on_head") {
+        Some(format!(
+            "the YES verdict is on another head than the handoff's {}",
+            board::short(&head)
+        ))
+    } else if !lane.board.ready {
+        Some(format!("not ready: {}", lane.board.ready_reason))
+    } else {
+        None
+    };
+    if let Some(sha) = &page.merged {
+        ui.label(format!(
+            "Merged as {}; the lane hands off done.",
+            board::short(sha)
+        ));
+        // Once its lease is not live, owner-ui hands it off done; the
+        // seconds drop the lease's milliseconds, so its last second is live.
+        let live = lane.lease_expires_secs.is_some_and(|at| at >= now);
+        if !live && ui.add_enabled(free, egui::Button::new("Finish")).clicked() {
+            act = Some(merge(head));
+        }
+    } else if pr.is_empty() {
+        // A lane with no PR has nothing to merge, and no reason to say so.
+        typed.merge = None;
+    } else if let Some(why) = why_not {
+        typed.merge = None;
+        ui.label(RichText::new(format!("Merge: {why}.")).small().weak());
+    } else if let Some(h) = typed.merge.clone() {
+        ui.label(format!(
+            "Merge {pr} at {}, squash? This cannot be undone.",
+            board::short(&h)
+        ));
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(free, egui::Button::new("Merge now"))
+                .clicked()
+            {
+                act = Some(merge(h));
+                typed.merge = None;
+            }
+            if ui.button("Cancel").clicked() {
+                typed.merge = None;
+            }
+        });
+    } else if ui.add_enabled(free, egui::Button::new("Merge")).clicked() {
+        typed.merge = Some(head);
     }
     match (r.writing, wrote) {
         (true, _) => {

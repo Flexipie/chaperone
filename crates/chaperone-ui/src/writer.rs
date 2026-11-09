@@ -1,9 +1,11 @@
 //! The owner's writes from the lane page (#109 slice 6): answer, send
-//! back, open in herdr. One thread with its own read-write ledger, the
-//! only one the UI opens; the board keeps its read-only handle. Every
-//! write is agent `owner-ui`, session `ui:<start time>`, `--by owner`,
-//! the orchestrator's path: the herdr prompt first, then the record, so a
-//! lane herdr cannot reach gets nothing recorded.
+//! back, open in herdr, merge (#117). One thread with its own read-write
+//! ledger, the only one the UI opens; the board keeps its read-only
+//! handle. Every write is agent `owner-ui`, session `ui:<start time>`,
+//! `--by owner`, the orchestrator's path: the herdr prompt first, then the
+//! record, so a lane herdr cannot reach gets nothing recorded. Merge is
+//! the exception, as `/merge` does it: GitHub first, then `pr.merged`,
+//! then the herdr prompt to hand off done.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -11,14 +13,23 @@ use std::process::Command;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{AttentionInput, NOTE_CHARS};
+use chaperone_core::checks::{AttentionInput, MergedInput, NOTE_CHARS};
+use chaperone_core::child;
 use chaperone_core::ledger::{Actor, Ledger, LedgerError, Refusal};
+use chaperone_core::pipeline::sha_prefix_eq;
 use chaperone_core::spec::decide::DecideInput;
+use chaperone_core::work::HandoffInput;
+use serde_json::Value;
 
+use crate::board::short;
 use crate::watch::Shown;
 
 pub const AGENT: &str = "owner-ui";
+/// How long one gh or herdr call may take.
+const CLI_TIMEOUT: Duration = Duration::from_secs(30);
+const OUT_CAP: usize = 1 << 20;
 
 /// The lane a write is for: its work item, its herdr agent and its key.
 #[derive(Clone)]
@@ -56,12 +67,22 @@ pub enum Act {
         work: i64,
         workspace: String,
     },
+    /// Squash-merges `pr` at `head`, the handoff head the owner confirmed,
+    /// once the ledger and GitHub both still hold it; a PR already merged
+    /// at that head is only recorded. Then the lane hands off done.
+    Merge {
+        lane: Lane,
+        pr: String,
+        head: String,
+    },
 }
 
 impl Act {
     fn work(&self) -> i64 {
         match self {
-            Act::Answer { lane, .. } | Act::SendBack { lane, .. } => lane.work,
+            Act::Answer { lane, .. } | Act::SendBack { lane, .. } | Act::Merge { lane, .. } => {
+                lane.work
+            }
             Act::Focus { work, .. } => *work,
         }
     }
@@ -73,11 +94,12 @@ pub struct Wrote {
     pub said: Result<String, String>,
 }
 
-/// Starts the writer; `herdr` is the herdr CLI. Each act's outcome lands
-/// in `shown.wrote`, then `changed` runs.
+/// Starts the writer; `herdr` and `gh` are the CLIs. Each act's outcome
+/// lands in `shown.wrote`, then `changed` runs.
 pub fn spawn(
     path: PathBuf,
     herdr: OsString,
+    gh: OsString,
     shown: Arc<Mutex<Shown>>,
     changed: impl Fn() + Send + 'static,
 ) -> Sender<Act> {
@@ -97,7 +119,7 @@ pub fn spawn(
                 open = writable();
             }
             let said = match &open {
-                Ok((ledger, actor)) => run(ledger, actor, &herdr, act),
+                Ok((ledger, actor)) => run(ledger, actor, &herdr, &gh, act),
                 Err(e) => Err(format!("ledger not opened for writing: {e}")),
             };
             let mut s = shown.lock().unwrap();
@@ -126,16 +148,27 @@ fn done<T>(c: Result<Result<T, Refusal>, LedgerError>) -> Result<T, String> {
     }
 }
 
-fn herdr_run(herdr: &OsString, args: &[&str]) -> Result<(), String> {
-    let out = Command::new(herdr)
-        .args(args)
-        .output()
-        .map_err(|e| format!("herdr did not start: {e}"))?;
-    if out.status.success() {
-        return Ok(());
+/// The `name` CLI at `cmd` with `args`: its stdout, else its stderr. Run
+/// from the temp dir, so gh never reads or changes a checkout (`-R`
+/// names the repo). A call past [`CLI_TIMEOUT`] fails.
+fn cli(name: &str, cmd: &OsString, args: &[&str]) -> Result<String, String> {
+    let call = format!("{name} {}", args[..2].join(" "));
+    let deadline = Instant::now() + CLI_TIMEOUT;
+    let mut command = Command::new(cmd);
+    command.args(args).current_dir(std::env::temp_dir());
+    let out = child::run(&mut command, deadline, OUT_CAP).map_err(|e| match e {
+        child::Failed::Spawn(e) => format!("{name} did not start: {e}"),
+        child::Failed::TimedOut => format!("{call}: no answer in {}s", CLI_TIMEOUT.as_secs()),
+        child::Failed::Wait(e) => format!("{call}: {e}"),
+    })?;
+    if out.cut {
+        return Err(format!("{call}: answer past {OUT_CAP} bytes"));
     }
-    let err = String::from_utf8_lossy(&out.stderr);
-    Err(format!("herdr {}: {}", args[..2].join(" "), err.trim()))
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.out).into_owned());
+    }
+    let err = String::from_utf8_lossy(&out.err);
+    Err(format!("{call}: {}", err.trim()))
 }
 
 /// One line of at most [`NOTE_CHARS`], what an attention note takes.
@@ -144,7 +177,13 @@ fn note(s: &str) -> String {
     line.chars().take(NOTE_CHARS).collect()
 }
 
-pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result<String, String> {
+pub fn run(
+    ledger: &Ledger,
+    actor: &Actor,
+    herdr: &OsString,
+    gh: &OsString,
+    act: Act,
+) -> Result<String, String> {
     // Keyed by the act's time, as the orchestrator keys its lines: the
     // same note again is a new record, never a replay of an older one.
     let at = ledger.now().map_err(|e| e.to_string())?;
@@ -157,7 +196,7 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
     };
     match act {
         Act::Focus { workspace, .. } => {
-            herdr_run(herdr, &["workspace", "focus", &workspace])?;
+            cli("herdr", herdr, &["workspace", "focus", &workspace])?;
             Ok(format!("Focused herdr workspace {workspace}."))
         }
         Act::SendBack {
@@ -172,7 +211,7 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
                 lane.key,
                 reason.trim_end_matches('.')
             );
-            herdr_run(herdr, &["agent", "prompt", &lane.agent, &prompt])?;
+            cli("herdr", herdr, &["agent", "prompt", &lane.agent, &prompt])?;
             let input = AttentionInput {
                 round: Some(round),
                 note: Some(reason),
@@ -216,7 +255,7 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
             if let Some((spec, input)) = &decide {
                 done(ledger.spec_decide(actor, spec, input, None, true))?;
             }
-            herdr_run(herdr, &["agent", "prompt", &lane.agent, &prompt])?;
+            cli("herdr", herdr, &["agent", "prompt", &lane.agent, &prompt])?;
             if let Some((spec, input)) = &decide {
                 done(ledger.spec_decide(actor, spec, input, None, false))?;
             }
@@ -244,12 +283,156 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
             done(ledger.attention_record(actor, &input))?;
             Ok(format!("Answered {}.", lane.key))
         }
+        Act::Merge { lane, pr, head } => merge(ledger, actor, herdr, gh, lane, &pr, &head),
     }
+}
+
+fn merge(
+    ledger: &Ledger,
+    actor: &Actor,
+    herdr: &OsString,
+    gh: &OsString,
+    lane: Lane,
+    pr: &str,
+    head: &str,
+) -> Result<String, String> {
+    let read = |e: LedgerError| e.to_string();
+    let now = ledger.now().map_err(read)?;
+    // What the confirm showed, read again now: a YES verdict on the
+    // handoff head the owner confirmed, on the PR the lane holds.
+    let page = ledger.lane_page(lane.work, Some(&lane.key)).map_err(read)?;
+    let gates = page.gates.as_ref();
+    let passed = |id: &str| gates.is_some_and(|g| g.passed(id));
+    let handed = gates.and_then(|g| g.head.as_deref()).unwrap_or_default();
+    let item = done(ledger.work_get(lane.work, &now))?;
+    let board = ledger.work_board_item(lane.work, &now).map_err(read)?;
+    let not = |why: String| Err(format!("Not merged: {why}."));
+    if !passed("verdict_is_yes") {
+        return not("the verdict is not YES".into());
+    }
+    if !passed("verdict_on_head") {
+        return not(format!(
+            "the verdict is not on the handoff head {}",
+            short(handed)
+        ));
+    }
+    if !sha_prefix_eq(head, handed, 7..=40, true) {
+        return not(format!(
+            "the lane handed off {} since you confirmed {}",
+            short(handed),
+            short(head)
+        ));
+    }
+    if item.pr_ref.as_deref() != Some(pr) {
+        return not(format!(
+            "the lane's PR is now {}",
+            item.pr_ref.as_deref().unwrap_or("none")
+        ));
+    }
+    // A recorded merge is finished, whatever the lane says since.
+    if page.merged.is_none() && !board.is_some_and(|b| b.ready) {
+        return not("the lane is not ready".into());
+    }
+    let Some((repo, n)) = pr.split_once('#') else {
+        return not(format!("{pr} is not owner/repo#N"));
+    };
+    let view = || -> Result<Value, String> {
+        let fields = "state,headRefOid,mergeCommit,mergedAt";
+        let out = cli("gh", gh, &["pr", "view", n, "-R", repo, "--json", fields])?;
+        serde_json::from_str(&out).map_err(|e| format!("gh pr view: {e}"))
+    };
+    let mut v = view()?;
+    let oid = v["headRefOid"].as_str().unwrap_or_default().to_string();
+    if !sha_prefix_eq(head, &oid, 7..=40, false) {
+        return not(format!(
+            "the PR head moved to {}; the verdict is on {}",
+            short(&oid),
+            short(head)
+        ));
+    }
+    // Never --admin or --auto; GitHub refuses a head that moved since.
+    match v["state"].as_str().unwrap_or_default() {
+        // Finish skipped the confirm and the ready check: it only records.
+        "OPEN" if page.merged.is_some() => {
+            return not(format!("{pr} is recorded as merged but GitHub has it open"));
+        }
+        "OPEN" => {
+            let squash = ["--squash", "--delete-branch", "--match-head-commit", &oid];
+            let merge = cli(
+                "gh",
+                gh,
+                &[["pr", "merge", n, "-R", repo].as_slice(), &squash].concat(),
+            );
+            // gh can fail after GitHub merged (say, deleting the branch).
+            v = match (view(), &merge) {
+                (Ok(v), _) => v,
+                (Err(e), Ok(_)) => {
+                    return Err(format!("Merged on GitHub; {e} (Merge again records it)"));
+                }
+                (Err(_), Err(e)) => return Err(e.clone()),
+            };
+            if v["state"] != "MERGED" || v["headRefOid"] != oid.as_str() {
+                merge?;
+                return Err(format!("Not merged yet: GitHub has {pr} queued or open."));
+            }
+        }
+        // A merge cut short before it was recorded: record it now.
+        "MERGED" => {}
+        state => return not(format!("{pr} is {state} on GitHub")),
+    }
+    let sha = v["mergeCommit"]["oid"].as_str().unwrap_or_default();
+    let at = v["mergedAt"].as_str().unwrap_or_default();
+    let input = MergedInput {
+        work: lane.work,
+        pr: pr.into(),
+        merge_sha: sha.into(),
+        head: oid,
+        // GitHub gives seconds; the ledger takes milliseconds (cli-contract.md).
+        merged_at: format!("{}.000Z", at.trim_end_matches('Z')),
+        patch_id: None,
+    };
+    let merged = format!("Merged {pr} as {}", short(sha));
+    done(ledger.work_merged(actor, &input)).map_err(|e| {
+        format!("{merged} on GitHub; recording failed: {e} (Merge again records it).")
+    })?;
+    // Only the lane's agent hands off done while its lease is live;
+    // owner-ui does once it is not.
+    let now = ledger.now().map_err(read)?;
+    let item = done(ledger.work_get(lane.work, &now))?;
+    if item.status == "done" {
+        return Ok(format!("{merged}."));
+    }
+    if item.lease_state == "active" {
+        let prompt = format!(
+            "Owner (chaperone-ui): merged {pr} as {sha} (work merged recorded). Hand off {} \
+             done the /ship way.",
+            lane.key
+        );
+        return Ok(
+            match cli("herdr", herdr, &["agent", "prompt", &lane.agent, &prompt]) {
+                Ok(_) => format!("{merged}; asked the lane to hand off done."),
+                Err(e) => format!("{merged}; the lane hands off done ({e})."),
+            },
+        );
+    }
+    let newest = page.detail.handoffs.first().map(|h| h.handoff.clone());
+    let input = HandoffInput {
+        summary: format!("{merged} from chaperone-ui."),
+        status: Some("done".into()),
+        ready: Some(false),
+        next_action: Some(format!("done: merged as {sha}")),
+        commit: Some(handed.into()),
+        ..newest.unwrap_or_default()
+    };
+    done(ledger.work_handoff(actor, lane.work, &input, None, false))
+        .map_err(|e| format!("{merged}; the done handoff failed: {e}"))?;
+    Ok(format!("{merged}; handed off done."))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chaperone_core::checks::CheckInput;
     use chaperone_core::work::{ClaimInput, CreateInput};
 
     /// An event's kind, agent, session, `by` and attention type.
@@ -257,7 +440,9 @@ mod tests {
 
     /// Access (the test bar): every row the writer adds is agent
     /// `owner-ui`, session `ui:<start>`, attention by owner, and a herdr
-    /// call that fails records nothing.
+    /// call that fails records nothing. A merge (the one-way door) runs
+    /// only on a YES verdict on the head the owner confirmed, which
+    /// GitHub still has.
     #[test]
     fn writes_only_as_owner_ui() {
         let dir = tempfile::tempdir().unwrap();
@@ -300,6 +485,62 @@ mod tests {
             ..AttentionInput::default()
         };
         let asked = rw.attention_record(&lane, &ask).unwrap().unwrap().event_id;
+        // Merge lanes: a verdict on `verdict`, handed off at `commit` with
+        // PR `o/r#<n>`, marked ready by the owner.
+        let (head, older) = ("abc1234", "bbb2222");
+        let ready_lane = |n: u32, decision: &str, verdict: &str, commit: &str| {
+            let a = Actor {
+                agent: Some(format!("m-{n}")),
+                session: Some(format!("m{n}")),
+            };
+            let create = CreateInput {
+                title: format!("merge {n}"),
+                repo: Some("o/r".into()),
+                source: Some("manual".into()),
+                kind: "code".into(),
+                pr_flow: "pr".into(),
+                ..CreateInput::default()
+            };
+            let id = rw
+                .work_create(&a, &create, None, false)
+                .unwrap()
+                .unwrap()
+                .id;
+            rw.work_claim(&a, id, &ClaimInput::default(), None, false)
+                .unwrap()
+                .unwrap();
+            let verdict = CheckInput {
+                work: id,
+                check: "merge_verdict".into(),
+                head: verdict.into(),
+                outcome: "ran".into(),
+                reason: None,
+                decision: Some(decision.into()),
+                findings: None,
+            };
+            // Checks and the override come from a session that never held it.
+            let by = Actor {
+                agent: Some("owner".into()),
+                session: Some("cli:1".into()),
+            };
+            rw.check_record(&by, &verdict).unwrap().unwrap();
+            let handoff = HandoffInput {
+                summary: "ready".into(),
+                commit: Some(commit.into()),
+                pull_request: Some(format!("o/r#{n}")),
+                ..HandoffInput::default()
+            };
+            rw.work_handoff(&a, id, &handoff, None, false)
+                .unwrap()
+                .unwrap();
+            rw.work_ready(&by, id, Some(true), None, None, false)
+                .unwrap()
+                .unwrap();
+            id
+        };
+        let no = ready_lane(5, "no", head, head);
+        let old = ready_lane(6, "yes", older, head);
+        let yes = ready_lane(7, "yes", head, head);
         let db = rusqlite::Connection::open(&path).unwrap();
         let max = |db: &rusqlite::Connection| -> i64 {
             db.query_row("SELECT max(id) FROM events", [], |r| r.get(0))
@@ -314,11 +555,22 @@ mod tests {
             std::fs::set_permissions(&p, mode).unwrap();
             OsString::from(p)
         };
-        let calls = dir.path().join("calls");
+        // One fake for herdr and gh (each new script costs a scan on
+        // macOS): it logs its argv, and as gh answers `pr view` from
+        // view.json, which a merge turns MERGED.
+        let (calls, view, merged) = (
+            dir.path().join("calls"),
+            dir.path().join("view.json"),
+            dir.path().join("merged.json"),
+        );
         let herdr = fake(
             "herdr",
-            &format!("printf '%s|' \"$@\" >> {calls:?}; echo >> {calls:?}"),
+            &format!(
+                "printf '%s|' \"$@\" >> {calls:?}; echo >> {calls:?}\n\
+                 case \"$2\" in view) cat {view:?};; merge) cp {merged:?} {view:?};; esac"
+            ),
         );
+        let gh = herdr.clone();
         let actor = owner(&now);
         let to = Lane {
             work,
@@ -334,7 +586,7 @@ mod tests {
         };
         // herdr fails: nothing recorded.
         let down = fake("down", "echo no socket >&2; exit 1");
-        let err = run(&rw, &actor, &down, answer(Some(asked), None)).unwrap_err();
+        let err = run(&rw, &actor, &down, &gh, answer(Some(asked), None)).unwrap_err();
         assert!(err.contains("no socket"), "{err}");
         assert_eq!(max(&db), before);
         let confirm = |spec: &str| Confirm {
@@ -345,25 +597,95 @@ mod tests {
         };
         // The spec refuses the decision: the agent is told nothing.
         let gone = answer(None, Some(confirm("o/r#9")));
-        run(&rw, &actor, &herdr, gone).unwrap_err();
+        run(&rw, &actor, &herdr, &gh, gone).unwrap_err();
         assert!(!calls.exists());
         assert_eq!(max(&db), before);
 
-        run(&rw, &actor, &herdr, answer(Some(asked), None)).unwrap();
+        run(&rw, &actor, &herdr, &gh, answer(Some(asked), None)).unwrap();
         // A self-blocked lane: asked, then answered.
-        run(&rw, &actor, &herdr, answer(None, None)).unwrap();
-        run(&rw, &actor, &herdr, answer(None, Some(confirm("o/r#1")))).unwrap();
+        run(&rw, &actor, &herdr, &gh, answer(None, None)).unwrap();
+        run(
+            &rw,
+            &actor,
+            &herdr,
+            &gh,
+            answer(None, Some(confirm("o/r#1"))),
+        )
+        .unwrap();
         let back = Act::SendBack {
             lane: to.clone(),
             round: 1,
             reason: "no smoke".into(),
         };
-        run(&rw, &actor, &herdr, back).unwrap();
+        run(&rw, &actor, &herdr, &gh, back).unwrap();
+
+        let full = format!("{head}{}", "d".repeat(33));
+        let pr_state = |path: &std::path::Path, state: &str, oid: &str| {
+            let json = format!(
+                r#"{{"state":"{state}","headRefOid":"{oid}","mergeCommit":{{"oid":"{}"}},"mergedAt":"2026-11-09T10:00:00Z"}}"#,
+                "e".repeat(40)
+            );
+            std::fs::write(path, json).unwrap();
+        };
+        let merge = |work, n: u32, head: &str| Act::Merge {
+            lane: Lane {
+                work,
+                agent: format!("m-{n}"),
+                key: format!("o/r#{n}"),
+            },
+            pr: format!("o/r#{n}"),
+            head: head.into(),
+        };
+        let gh_log = || {
+            let log = std::fs::read_to_string(&calls).unwrap();
+            let gh = log.lines().filter(|l| l.starts_with("pr|"));
+            gh.map(|l| format!("{l}\n")).collect::<String>()
+        };
+        let mark = max(&db);
+        for (act, why) in [
+            (merge(no, 5, head), "the verdict is not YES"),
+            (merge(old, 6, head), "not on the handoff head"),
+            (merge(yes, 7, older), "since you confirmed"),
+        ] {
+            let err = run(&rw, &actor, &herdr, &gh, act).unwrap_err();
+            assert!(err.contains(why), "{err}");
+        }
+        assert_eq!(gh_log(), "");
+        pr_state(&view, "OPEN", &format!("{older}{}", "d".repeat(33)));
+        let err = run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap_err();
+        assert!(err.contains("the PR head moved"), "{err}");
+        assert!(!gh_log().contains("pr|merge|"));
+        assert_eq!(max(&db), mark);
+        // YES on the current head: the exact merge, then one pr.merged.
+        pr_state(&view, "OPEN", &full);
+        pr_state(&merged, "MERGED", &full);
+        run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap();
+        let argv =
+            format!("pr|merge|7|-R|o/r|--squash|--delete-branch|--match-head-commit|{full}|");
+        let merges = |log: String| log.lines().filter(|l| l.starts_with("pr|merge|")).count();
+        assert_eq!(gh_log().lines().filter(|l| *l == argv).count(), 1);
+        // Already merged at that head: recorded once, never merged again.
+        run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap();
+        assert_eq!(merges(gh_log()), 1);
+        let n: i64 = db
+            .query_row(
+                "SELECT count(*) FROM events WHERE kind = 'pr.merged' AND lane_id = ?1",
+                [yes],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        // Recorded as merged but GitHub has it open: Finish never merges.
+        pr_state(&view, "OPEN", &full);
+        pr_state(&merged, "OPEN", &full);
+        let err = run(&rw, &actor, &herdr, &gh, merge(yes, 7, head)).unwrap_err();
+        assert!(err.contains("recorded as merged"), "{err}");
+        assert_eq!(merges(gh_log()), 1);
         let focus = Act::Focus {
             work,
             workspace: "w1".into(),
         };
-        run(&rw, &actor, &herdr, focus).unwrap();
+        run(&rw, &actor, &herdr, &gh, focus).unwrap();
 
         let mut stmt = db
             .prepare(
@@ -379,9 +701,9 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        // Two answers, an asked and its answer twice, the spec decision and
-        // the send-back: none left out of the check below.
-        assert_eq!(rows.len(), 7);
+        // Two answers, an asked and its answer twice, the spec decision,
+        // the send-back and the merge: none left out of the check below.
+        assert_eq!(rows.len(), 8);
         for (kind, agent, session, by, _) in &rows {
             assert_eq!(agent, AGENT, "{kind}");
             assert_eq!(session, &format!("ui:{now}"), "{kind}");
