@@ -197,8 +197,7 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
                     text.trim_end_matches('.')
                 ),
             };
-            herdr_run(herdr, &["agent", "prompt", &lane.agent, &prompt])?;
-            if let Some(c) = &confirm {
+            let decide = confirm.as_ref().map(|c| {
                 let input = DecideInput {
                     slice: c.slice,
                     key: None,
@@ -206,15 +205,27 @@ pub fn run(ledger: &Ledger, actor: &Actor, herdr: &OsString, act: Act) -> Result
                     answer: c.answer.clone(),
                     agreed_where: Some("in chat (owner-ui)".into()),
                 };
-                done(ledger.spec_decide(actor, &c.spec, &input, None, false))?;
+                (c.spec.as_str(), input)
+            });
+            // A decision the spec refuses is not told to the agent.
+            if let Some((spec, input)) = &decide {
+                done(ledger.spec_decide(actor, spec, input, None, true))?;
+            }
+            herdr_run(herdr, &["agent", "prompt", &lane.agent, &prompt])?;
+            if let Some((spec, input)) = &decide {
+                done(ledger.spec_decide(actor, spec, input, None, false))?;
             }
             let asks = match asks {
                 Some(id) => id,
                 None => {
-                    let blocker = blocker.map(|b| note(&b)).filter(|b| !b.is_empty());
+                    // An accept asks about its decision, not the blocker.
+                    let asked = match &confirm {
+                        Some(c) => Some(note(&format!("confirm: {}", c.question))),
+                        None => blocker.map(|b| note(&b)).filter(|b| !b.is_empty()),
+                    };
                     let input = AttentionInput {
                         reason: Some("question.done_ambiguous".into()),
-                        note: blocker.or_else(|| Some("the lane needs you".into())),
+                        note: asked.or_else(|| Some("the lane needs you".into())),
                         ..attention(lane.work, "asked")
                     };
                     done(ledger.attention_record(actor, &input))?.event_id
@@ -321,17 +332,22 @@ mod tests {
         let err = run(&rw, &actor, &down, answer(Some(asked), None)).unwrap_err();
         assert!(err.contains("no socket"), "{err}");
         assert_eq!(max(&db), before);
-
-        run(&rw, &actor, &herdr, answer(Some(asked), None)).unwrap();
-        // A self-blocked lane: asked, then answered.
-        run(&rw, &actor, &herdr, answer(None, None)).unwrap();
-        let confirm = Confirm {
-            spec: "o/r#1".into(),
+        let confirm = |spec: &str| Confirm {
+            spec: spec.into(),
             slice: Some(1),
             question: "which way?".into(),
             answer: "left.".into(),
         };
-        run(&rw, &actor, &herdr, answer(None, Some(confirm))).unwrap();
+        // The spec refuses the decision: the agent is told nothing.
+        let gone = answer(None, Some(confirm("o/r#9")));
+        run(&rw, &actor, &herdr, gone).unwrap_err();
+        assert!(!calls.exists());
+        assert_eq!(max(&db), before);
+
+        run(&rw, &actor, &herdr, answer(Some(asked), None)).unwrap();
+        // A self-blocked lane: asked, then answered.
+        run(&rw, &actor, &herdr, answer(None, None)).unwrap();
+        run(&rw, &actor, &herdr, answer(None, Some(confirm("o/r#1")))).unwrap();
         let back = Act::SendBack {
             lane: to.clone(),
             round: 1,
@@ -368,6 +384,18 @@ mod tests {
                 assert_eq!(by.as_deref(), Some("owner"));
             }
         }
+        // The blocker is asked for a typed answer, the decision for an accept.
+        let asked: Vec<String> = db
+            .prepare(
+                "SELECT json_extract(payload_json, '$.note') FROM events
+                  WHERE id > ?1 AND json_extract(payload_json, '$.type') = 'asked' ORDER BY id",
+            )
+            .unwrap()
+            .query_map([before], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(asked, ["stuck on the seam", "confirm: which way?"]);
         // Focus writes no row: its herdr call only.
         let calls = std::fs::read_to_string(calls).unwrap();
         assert_eq!(calls.lines().last(), Some("workspace|focus|w1|"));
