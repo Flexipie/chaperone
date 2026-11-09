@@ -24,7 +24,8 @@ colour, the files that depend on them by depth and the entry points they reach
 The Pipeline page lists each pipeline version (newest, live, first) with its changelog
 entry, engine ids and its lanes' numbers, the installed `chaperone doctor`'s drift results
 over the dotfiles' skills and scripts, and each skill and script with the version that last
-changed it and any uncommitted edit (`--dotfiles`, default `~/dotfiles`).
+changed it and any uncommitted edit (`--dotfiles`, default `~/dotfiles`). Doctor is the first
+`chaperone` on PATH, or `CHAPERONE_BIN` when set; the card names the binary it checked.
 On a lane that needs you, the page answers it (a typed answer, or Accept on a provisional
 spec decision), sends it back with a reason or opens its herdr workspace: the herdr prompt
 first, then the attention record, as agent `owner-ui`, session `ui:<start time>`, by owner.
