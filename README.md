@@ -13,7 +13,7 @@ The Rust workspace and CI are in place (`crates/chaperone-core`, `crates/chapero
 milestone 1. To build and test, see [CONTRIBUTING.md](CONTRIBUTING.md) "Setup".
 
 `chaperone-ui` is a window with every open lane, grouped by repo and spec, that
-redraws when the ledger changes: `cargo run --release -p chaperone-ui -- [--db PATH]`.
+redraws when the ledger changes: `cargo run --release -p chaperone-ui -- [--db PATH] [--dotfiles DIR]`.
 Clicking a lane opens its page: a header (state, goal, agent, branch, PR, pipeline), tiles
 for time against the repo median, tokens, peak context, reviews, people needed and gates,
 then its timeline, decisions, what to check by hand and its files with area and +/-, and
@@ -21,6 +21,10 @@ folded its handoffs, review findings, areas and diff against the base. A feed sh
 questions, answers and decisions between lanes. The change graph tab draws each lane's changed files in its
 colour, the files that depend on them by depth and the entry points they reach
 (`overlap` and `impact`), with files two lanes share ringed.
+The Pipeline page lists each pipeline version (newest, live, first) with its changelog
+entry, engine ids and its lanes' numbers, the installed `chaperone doctor`'s drift results
+over the dotfiles' skills and scripts, and each skill and script with the version that last
+changed it and any uncommitted edit (`--dotfiles`, default `~/dotfiles`).
 On a lane that needs you, the page answers it (a typed answer, or Accept on a provisional
 spec decision), sends it back with a reason or opens its herdr workspace: the herdr prompt
 first, then the attention record, as agent `owner-ui`, session `ui:<start time>`, by owner.
