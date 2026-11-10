@@ -5,14 +5,16 @@
 //!
 //! Only the intent lens is told what the change is for, and no lens is
 //! told what the lane says about its own change (its summary, merge case
-//! or what to look at): the author does not steer the review.
+//! or what to look at): the author does not steer the review. Then one more
+//! fresh session, the verifier, tries to refute each finding against the
+//! code: triage is its, not the author's.
 
 use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -23,6 +25,8 @@ use crate::runner::{Agent, Ask, CodexAsk, Run, RunError};
 
 /// The lenses, each the pipeline's check `review_<lens>`.
 pub const LENSES: [&str; 4] = ["correctness", "design_tests", "intent", "codex"];
+/// The verifier's check.
+pub const VERIFIER: &str = "review_verifier";
 /// A finding's severity, in the ledger's words (`NON_BLOCKING_SEVERITIES`
 /// says which block).
 pub const SEVERITIES: [&str; 6] = [
@@ -64,24 +68,34 @@ pub struct Planned<'a> {
 pub fn lenses(pipeline: &Pipeline) -> Result<Vec<Planned<'_>>, String> {
     LENSES
         .iter()
-        .map(|&lens| {
-            let name = format!("review_{lens}");
-            let Some(check) = pipeline.checks.get(&name) else {
-                return Err(format!("pipeline {} has no check {name}", pipeline.id));
-            };
-            // The loader refuses a check whose runner is not there.
-            let runner = &pipeline.runners[&check.runner];
-            if runner.cli == Cli::Claude && runner.model.is_none() {
-                let runner = &check.runner;
-                return Err(format!("check {name}: runner {runner} names no model"));
-            }
-            Ok(Planned {
-                lens,
-                check,
-                runner,
-            })
-        })
+        .map(|&lens| planned(pipeline, lens, &format!("review_{lens}")))
         .collect()
+}
+
+/// The verifier's check and runner, as [`lenses`] reads a lens's.
+pub fn verifier(pipeline: &Pipeline) -> Result<Planned<'_>, String> {
+    planned(pipeline, "verifier", VERIFIER)
+}
+
+fn planned<'a>(
+    pipeline: &'a Pipeline,
+    lens: &'static str,
+    name: &str,
+) -> Result<Planned<'a>, String> {
+    let Some(check) = pipeline.checks.get(name) else {
+        return Err(format!("pipeline {} has no check {name}", pipeline.id));
+    };
+    // The loader refuses a check whose runner is not there.
+    let runner = &pipeline.runners[&check.runner];
+    if runner.cli == Cli::Claude && runner.model.is_none() {
+        let runner = &check.runner;
+        return Err(format!("check {name}: runner {runner} names no model"));
+    }
+    Ok(Planned {
+        lens,
+        check,
+        runner,
+    })
 }
 
 /// The facts every lens is given, and whether the diff was cut.
@@ -200,9 +214,10 @@ pub struct Agents<'a> {
     pub codex: &'a Agent,
 }
 
-/// What one lens did.
+/// What one session did: a lens, whose outcome is its findings, or the
+/// verifier, whose outcome is its rulings.
 #[derive(Debug)]
-pub struct Lens {
+pub struct Lens<T = Vec<Finding>> {
     pub lens: &'static str,
     pub runner: String,
     pub model: Option<String>,
@@ -210,8 +225,8 @@ pub struct Lens {
     pub prompt_sha256: String,
     /// The prompt the session was given, then the CLI's whole answer.
     pub evidence_ref: String,
-    /// The findings, or why the lens did not run.
-    pub outcome: Result<Vec<Finding>, String>,
+    /// The answer, or why the session did not run.
+    pub outcome: Result<T, String>,
     /// What the session left, which still cost when it failed; none when
     /// it never answered.
     pub run: Option<Run>,
@@ -242,7 +257,8 @@ pub fn run(
             .map(|p| {
                 let prompt = prompt(p, &facts.goal, &change);
                 let schema = &schema;
-                s.spawn(move || one(p, agents, dir, prompt, schema, store))
+                let parse = |out| findings(p.lens, out);
+                s.spawn(move || one(p, agents, dir, prompt, schema, store, parse))
             })
             .collect();
         threads
@@ -260,14 +276,15 @@ pub fn run(
     })
 }
 
-fn one(
+fn one<T>(
     p: &Planned<'_>,
     agents: &Agents<'_>,
     dir: &Path,
     prompt: String,
     schema: &Value,
     store: &Evidence,
-) -> io::Result<Lens> {
+    parse: impl FnOnce(Value) -> Result<T, String>,
+) -> io::Result<Lens<T>> {
     let r = p.runner;
     let deadline = Instant::now() + Duration::from_secs(r.timeout_secs as u64);
     let model = r.model.as_deref();
@@ -296,7 +313,7 @@ fn one(
         }
     };
     let (outcome, run) = match answer {
-        Ok(a) => (findings(p.lens, a.output), Some(a.run)),
+        Ok(a) => (parse(a.output), Some(a.run)),
         Err(e) => {
             let why = Err(e.to_string());
             match e {
@@ -318,8 +335,9 @@ fn one(
     })
 }
 
-impl Lens {
-    /// The lens's row in the review's `lenses` table.
+impl<T> Lens<Vec<T>> {
+    /// The session's row in the review's `lenses` table (for the verifier,
+    /// `findings` counts its rulings).
     pub fn row(&self) -> Value {
         let mut row = json!({
             "lens": self.lens,
@@ -338,6 +356,84 @@ impl Lens {
         }
         row
     }
+}
+
+/// The verifier's word on one finding, by its key.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ruling {
+    pub key: String,
+    /// `verified` or `refuted`: the finding's status it moves to.
+    pub verdict: String,
+    pub why: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Rulings {
+    rulings: Vec<Ruling>,
+}
+
+/// One fresh session that tries to refute every finding of the review
+/// against the code in `dir`, from the same facts as the lenses but not
+/// the goal. One session for all: they share the facts and the checkout,
+/// and the runner's budget and timeout bound it like a lens; one that
+/// stops rules on nothing. A finding it does not rule on stays open.
+pub fn verify(
+    p: &Planned<'_>,
+    agents: &Agents<'_>,
+    dir: &Path,
+    facts: &Facts,
+    found: &[Finding],
+    store: &Evidence,
+) -> io::Result<Lens<Vec<Ruling>>> {
+    let mut prompt = prompt(p, "", &change(facts).0) + "\n## The findings\n\n";
+    // One JSON object a line: the finding as the ledger holds it, its key
+    // the one to rule by.
+    for f in found {
+        let mut line = f.rest.clone();
+        line.extend([
+            ("key".into(), json!(f.finding_key)),
+            ("severity".into(), json!(f.severity)),
+            ("title".into(), json!(f.title)),
+            ("body".into(), json!(f.body)),
+            ("path".into(), json!(f.path)),
+        ]);
+        prompt += &format!("{}\n", Value::Object(line));
+    }
+    let keys: BTreeSet<_> = found.iter().map(|f| f.finding_key.as_str()).collect();
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rulings"],
+        "properties": {"rulings": {"type": "array", "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "verdict", "why"],
+            "properties": {
+                "key": {"type": "string", "enum": keys},
+                "verdict": {"type": "string", "enum": ["verified", "refuted"]},
+                "why": {"type": "string"},
+            },
+        }}},
+    });
+    one(p, agents, dir, prompt, &schema, store, |out| {
+        let said: Rulings =
+            serde_json::from_value(out).map_err(|e| format!("not a verifier answer: {e}"))?;
+        let mut ruled = BTreeSet::new();
+        for r in &said.rulings {
+            if !keys.contains(r.key.as_str()) || !ruled.insert(&r.key) {
+                return Err(format!(
+                    "a ruling on {:?}, no finding or one ruled on twice",
+                    r.key
+                ));
+            }
+            if !matches!(r.verdict.as_str(), "verified" | "refuted") {
+                return Err(format!("unknown verdict {:?}", r.verdict));
+            }
+        }
+        Ok(said.rulings)
+    })
 }
 
 #[cfg(test)]
