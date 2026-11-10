@@ -603,6 +603,11 @@ pub enum CheckCmd {
         /// required there
         #[arg(long)]
         findings: Option<u64>,
+        /// smoke only: a text file the smoke wrote or showed, inside the
+        /// lane's worktree (a relative path is read from its root), not under
+        /// .git or .chaperone, at most 1 MiB; repeat for up to 12
+        #[arg(long)]
+        evidence: Vec<PathBuf>,
         #[command(flatten)]
         actor: ActorArgs,
     },
@@ -664,6 +669,9 @@ pub enum RunKind {
     /// commit that changes a code file is refused (the owner can waive the
     /// check); the same plan on the same tree replays (none before v20)
     Plan,
+    /// The base branch profile's `[smoke]` commands, run as `tests` runs
+    /// its; no `[smoke]` table is refused, never a pass
+    Smoke,
 }
 
 /// Daisy's review jobs, as recorded in the ledger. The worker stays in

@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 pub use entry::{Rules, Unmatched, glob};
 pub use worktree::{
-    BaseTests, Error, REPO_PROFILE, Tests, impact_in, profile_file, rules, rules_in, tests_in,
+    BaseTests, Error, REPO_PROFILE, Tests, commands_in, impact_in, profile_file, rules, rules_in,
 };
 
 /// Files past this size are not parsed (generated code): their references
