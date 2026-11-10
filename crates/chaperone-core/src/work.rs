@@ -825,8 +825,27 @@ impl Ledger {
                 }),
                 None => None,
             };
-            let (ready, ready_reason) =
+            let (mut ready, mut ready_reason) =
                 ready_rule(&item, handoff.as_ref(), ready_override.as_ref());
+            // The lane's word is only the prefilter: ready stands while the
+            // gate its handoff passed still holds on that commit. Few lanes
+            // get here, so the projection is read for those alone.
+            if let (true, None, Some(h)) = (ready, &ready_override, &handoff) {
+                let head = h.handoff.commit.as_deref();
+                let held = engine::decide(self.conn(), item.id, HANDOFF, Phase::Ready, head)?;
+                let lost = match held {
+                    Ok(Ok(())) => None,
+                    Ok(Err(d)) => Some(format!("{} no longer holds", d.gate)),
+                    Err(Refusal::PipelineUnknown { pipeline_id, .. }) => {
+                        Some(format!("this binary does not know pipeline {pipeline_id}"))
+                    }
+                    Err(r) => Some(format!("its gate could not be read ({r:?})")),
+                };
+                if let Some(why) = lost {
+                    ready = false;
+                    ready_reason = format!("the lane said ready, but {why}");
+                }
+            }
             let mut shared: Vec<SharedPath> = match r.get::<_, Option<String>>(42)? {
                 Some(raw) => serde_json::from_str(&raw).map_err(std::io::Error::other)?,
                 None => Vec::new(),
@@ -1045,7 +1064,8 @@ fn norm_path(value: &str, wt: &str) -> String {
 
 /// Daisy's ready rule, as far as the ledger knows it: the owner's override
 /// wins; else the item is in `review` and its newest handoff says ready (a
-/// ready handoff only exists past the `handoff` gate). Daisy also wants a
+/// ready handoff only exists past the `handoff` gate; the board then asks
+/// the gate again, so a later record can unsay it). Daisy also wants a
 /// review on the PR head and no open thread from a person; the ledger sees
 /// neither, so callers check them (cli-contract.md).
 fn ready_rule(
