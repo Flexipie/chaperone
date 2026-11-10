@@ -250,8 +250,15 @@ mod tests {
             self.apply(EventKind::CheckFinished, p, at)
         }
 
+        /// The lane's facts, each one a path `FACTS` lists.
         fn facts(&self) -> FactBundle {
-            self.ledger.project(1, None).unwrap()
+            let f = self.ledger.project(1, None).unwrap();
+            let unlisted: Vec<&str> = f
+                .paths()
+                .filter(|p| !crate::pipeline::FACTS.contains(p))
+                .collect();
+            assert_eq!(unlisted, [""; 0], "paths FACTS does not list");
+            f
         }
     }
 

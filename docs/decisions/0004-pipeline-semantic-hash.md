@@ -28,6 +28,12 @@ The hash is SHA-256, lowercase hex, of this JSON:
 4. Floats cannot reach the hash: the loader accepts only bools, integers and strings
    as values.
 
+Amended for schema 2 (2026-11-10): a schema 2 document also hashes `"schema": 2`,
+`"runners"` (each with its two limits resolved to numbers) and `"checks"` (each with
+`prompt_sha256`, the SHA-256 of its prompt file's text). A changed prompt or model is
+then a new stamp, so cohorts stay comparable. Schema 1 hashes are unchanged, and a
+schema 1 document that carries `[runners]` or `[checks]` does not load.
+
 ## Alternatives considered
 
 - **An RFC 8785 crate.** Its only gain over the writer above is the float and Unicode

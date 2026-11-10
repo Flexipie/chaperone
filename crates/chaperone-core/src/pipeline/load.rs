@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use toml::Value;
 
+use sha2::{Digest, Sha256};
+
 use super::hash::{canonical_string, semantic_hash};
 use super::{
-    EVENTS, Gate, Literal, Operand, Pipeline, PipelineError, Pred, REQUIRED_TRANSITIONS, Transition,
+    Check, Cli, EVENTS, FACTS, Gate, Literal, Operand, Pipeline, PipelineError, Pred,
+    REQUIRED_TRANSITIONS, Runner, Transition,
 };
 
 #[derive(Deserialize)]
@@ -24,6 +27,28 @@ struct RawDoc {
     gates: Vec<RawGate>,
     #[serde(default, rename = "transition")]
     transitions: Vec<Transition>,
+    #[serde(default)]
+    runners: BTreeMap<String, RawRunner>,
+    #[serde(default)]
+    checks: BTreeMap<String, RawCheck>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRunner {
+    cli: Cli,
+    model: Option<String>,
+    #[serde(default)]
+    tools: Vec<String>,
+    budget_limit: String,
+    timeout_limit: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCheck {
+    runner: String,
+    prompt: String,
 }
 
 #[derive(Deserialize)]
@@ -43,15 +68,31 @@ struct RawGate {
     args: toml::Table,
 }
 
-pub(super) fn load(src: &str) -> Result<Pipeline, PipelineError> {
+pub(super) fn load(src: &str, prompts: &[(&str, &str)]) -> Result<Pipeline, PipelineError> {
     let raw: RawDoc = toml::from_str(src)?;
-    if raw.schema != 1 {
-        return Err(PipelineError::Schema(raw.schema));
+    let v2 = match raw.schema {
+        1 => false,
+        2 => true,
+        other => return Err(PipelineError::Schema(other)),
+    };
+    // Schema 1 hashes cover neither table, so there they would be unstamped.
+    for (table, given) in [
+        ("runners", !raw.runners.is_empty()),
+        ("checks", !raw.checks.is_empty()),
+    ] {
+        if given && !v2 {
+            return Err(PipelineError::NeedsSchema2(table));
+        }
     }
+    let runners = runners(raw.runners, &raw.limits)?;
+    let checks = checks(raw.checks, &runners, prompts)?;
 
     let mut gates = BTreeMap::new();
     for g in &raw.gates {
         let pred = parse_pred(g, &raw.limits)?;
+        if v2 {
+            check_facts(&g.id, &pred)?;
+        }
         let gate = Gate {
             id: g.id.clone(),
             pred,
@@ -90,14 +131,116 @@ pub(super) fn load(src: &str) -> Result<Pipeline, PipelineError> {
         }
     }
 
-    let hash = semantic_hash(&hash_input(&raw.limits, raw.gates, &transitions));
+    let mut hashed = hash_input(&raw.limits, raw.gates, &transitions);
+    if v2 {
+        // The schema too: the same rows under schema 1 are checked less.
+        hashed["schema"] = json!(2);
+        hashed["runners"] = json!(runners);
+        hashed["checks"] = json!(checks);
+    }
     Ok(Pipeline {
         id: raw.id,
-        hash,
+        hash: semantic_hash(&hashed),
         limits: raw.limits,
         gates,
         transitions,
+        runners,
+        checks,
     })
+}
+
+/// Each runner with its two limits resolved, both at least 1.
+fn runners(
+    raw: BTreeMap<String, RawRunner>,
+    limits: &BTreeMap<String, i64>,
+) -> Result<BTreeMap<String, Runner>, PipelineError> {
+    let mut runners = BTreeMap::new();
+    for (name, r) in raw {
+        let bad = |message: String| PipelineError::BadRunner {
+            runner: name.clone(),
+            message,
+        };
+        let limit = |limit: &str| match limits.get(limit) {
+            Some(n) if *n >= 1 => Ok(*n),
+            Some(n) => Err(bad(format!("limit {limit} is {n}, not at least 1"))),
+            None => Err(bad(format!("unknown limit {limit}"))),
+        };
+        let runner = Runner {
+            cli: r.cli,
+            model: r.model,
+            tools: r.tools,
+            budget_cents: limit(&r.budget_limit)?,
+            timeout_secs: limit(&r.timeout_limit)?,
+        };
+        runners.insert(name, runner);
+    }
+    Ok(runners)
+}
+
+/// Each check with its prompt's digest; its runner and prompt must exist.
+fn checks(
+    raw: BTreeMap<String, RawCheck>,
+    runners: &BTreeMap<String, Runner>,
+    prompts: &[(&str, &str)],
+) -> Result<BTreeMap<String, Check>, PipelineError> {
+    let mut checks = BTreeMap::new();
+    for (name, c) in raw {
+        if !runners.contains_key(&c.runner) {
+            return Err(PipelineError::UnknownRunner {
+                check: name,
+                runner: c.runner,
+            });
+        }
+        let Some((_, text)) = prompts.iter().find(|(file, _)| *file == c.prompt) else {
+            return Err(PipelineError::UnknownPrompt {
+                check: name,
+                prompt: c.prompt,
+            });
+        };
+        let check = Check {
+            runner: c.runner,
+            prompt_sha256: format!("{:x}", Sha256::digest(text)),
+            prompt: c.prompt,
+        };
+        checks.insert(name, check);
+    }
+    Ok(checks)
+}
+
+/// Schema 2: every fact path `pred` reads is one the projection sets. The
+/// two `*_matches_lane` fns read paths their arguments do not name, so
+/// schema 2 has no such fn.
+fn check_facts(gate: &str, pred: &Pred) -> Result<(), PipelineError> {
+    let paths: Vec<&String> = match pred {
+        Pred::Present { field }
+        | Pred::Lte { field, .. }
+        | Pred::Gt { field, .. }
+        | Pred::OneOf { field, .. }
+        | Pred::Eq {
+            field,
+            value: Operand::Literal(_),
+        } => vec![field],
+        Pred::Eq {
+            field,
+            value: Operand::Fact(other),
+        } => vec![field, other],
+        Pred::ShaPrefixEq { left, right, .. } => vec![left, right],
+        Pred::EventBefore { earlier, later } => vec![earlier, later],
+        Pred::PlanCheckMatchesLane { .. } | Pred::QualityGateMatchesLane { .. } => {
+            return Err(PipelineError::UnknownFn {
+                gate: gate.into(),
+                func: "*_matches_lane (schema 1 only)".into(),
+            });
+        }
+        Pred::All(_) | Pred::Any(_) | Pred::Not(_) => Vec::new(),
+    };
+    match paths.into_iter().find(|p| !FACTS.contains(&p.as_str())) {
+        None => Ok(()),
+        Some(fact) => Err(PipelineError::UnknownFact {
+            gate: gate.into(),
+            fact: fact.clone(),
+        }),
+    }
 }
 
 /// The hashed document: defaults filled in (`args = {}`, `requires = []`),

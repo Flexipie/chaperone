@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub use error::PipelineError;
 pub use eval::Denied;
 pub use eval::sha_prefix_eq;
-pub use facts::{Fact, FactBundle};
+pub use facts::{FACTS, Fact, FactBundle};
 pub(crate) use hash::canonical_string;
 
 /// Transition ids the host calls by name. A document without them does not load.
@@ -42,6 +42,40 @@ pub struct Pipeline {
     /// Rows may share an id; `(id, route, to)` is unique and picks the row.
     /// Their order is not behaviour (the hash sorts them).
     pub transitions: Vec<Transition>,
+    /// Schema 2: the headless agents the harness starts, by name.
+    pub runners: BTreeMap<String, Runner>,
+    /// Schema 2: the checks the harness runs itself, by name.
+    pub checks: BTreeMap<String, Check>,
+}
+
+/// How one kind of headless session is started. Its numbers are `[limits]`
+/// entries (`budget_limit`, `timeout_limit`), resolved here.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Runner {
+    pub cli: Cli,
+    /// None is the CLI's own default.
+    pub model: Option<String>,
+    /// The built-in tools the session may use.
+    pub tools: Vec<String>,
+    pub budget_cents: i64,
+    pub timeout_secs: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cli {
+    Claude,
+    Codex,
+}
+
+/// A check the harness runs with a runner and a prompt file this binary
+/// carries. The prompt's digest is part of the semantic hash, so a changed
+/// prompt is a new, measurable pipeline.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Check {
+    pub runner: String,
+    pub prompt: String,
+    pub prompt_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,7 +191,13 @@ pub enum Phase {
 
 impl Pipeline {
     pub fn load(src: &str) -> Result<Self, PipelineError> {
-        load::load(src)
+        load::load(src, &[])
+    }
+
+    /// [`Pipeline::load`] for a schema 2 document whose checks name prompt
+    /// files: `prompts` is each file's name and text.
+    pub fn load_with_prompts(src: &str, prompts: &[(&str, &str)]) -> Result<Self, PipelineError> {
+        load::load(src, prompts)
     }
 }
 
@@ -508,7 +548,155 @@ args = { earlier = "quality_gate", later = "pr.opend" }"#,
         assert!(matches!(e, PipelineError::Toml(_)), "{e}");
         let e = load_err(r#"id = "t""#, "id = \"t\"\nextends = \"v16\"");
         assert!(matches!(e, PipelineError::Toml(_)), "{e}");
-        let e = load_err("schema = 1", "schema = 2");
-        assert!(matches!(e, PipelineError::Schema(2)), "{e}");
+        let e = load_err("schema = 1", "schema = 3");
+        assert!(matches!(e, PipelineError::Schema(3)), "{e}");
+    }
+
+    const MINI2: &str = r#"
+schema = 2
+id = "t2"
+
+[limits]
+budget = 200
+timeout = 900
+
+[runners.lens]
+cli = "claude"
+model = "opus"
+tools = ["Read", "Grep"]
+budget_limit = "budget"
+timeout_limit = "timeout"
+
+[runners.second]
+cli = "codex"
+budget_limit = "budget"
+timeout_limit = "timeout"
+
+[checks.review]
+runner = "lens"
+prompt = "review.md"
+
+[[gate]]
+id = "a"
+fn = "eq"
+args = { field = "verdict.decision", value = "yes" }
+
+[[transition]]
+id = "handoff"
+routes = ["code_pr"]
+to = "done"
+requires = ["a"]
+"#;
+    const PROMPTS: &[(&str, &str)] = &[("review.md", "Review the diff.")];
+
+    fn load2(from: &str, to: &str) -> Result<Pipeline, PipelineError> {
+        let src = MINI2.replacen(from, to, 1);
+        assert_ne!(src, MINI2, "edit did not apply: {from}");
+        Pipeline::load_with_prompts(&src, PROMPTS)
+    }
+
+    #[test]
+    fn schema_2_resolves_runners_and_checks() {
+        let p = Pipeline::load_with_prompts(MINI2, PROMPTS).unwrap();
+        let lens = Runner {
+            cli: Cli::Claude,
+            model: Some("opus".into()),
+            tools: vec!["Read".into(), "Grep".into()],
+            budget_cents: 200,
+            timeout_secs: 900,
+        };
+        assert_eq!(p.runners["lens"], lens);
+        assert_eq!(
+            (p.runners["second"].cli, &p.runners["second"].model),
+            (Cli::Codex, &None)
+        );
+        let review = &p.checks["review"];
+        assert_eq!(
+            (review.runner.as_str(), review.prompt.as_str()),
+            ("lens", "review.md")
+        );
+        // sha256 of "Review the diff."
+        let digest = "cd952634e4090147e67501128bd1b92e8a54b749568ada27af25a86a31b70059";
+        assert_eq!(review.prompt_sha256, digest);
+        assert!(Pipeline::load(V19).unwrap().runners.is_empty());
+    }
+
+    /// The prompt's text, a runner's model and the schema are behaviour;
+    /// a comment is not.
+    #[test]
+    fn schema_2_hash_covers_prompts_runners_and_the_schema() {
+        let base = Pipeline::load_with_prompts(MINI2, PROMPTS).unwrap().hash;
+        let edited = Pipeline::load_with_prompts(MINI2, &[("review.md", "Review it.")]);
+        assert_ne!(edited.unwrap().hash, base);
+        assert_ne!(load2("opus", "haiku").unwrap().hash, base);
+        assert_ne!(load2("budget = 200", "budget = 300").unwrap().hash, base);
+        assert_eq!(
+            load2("id = \"t2\"", "id = \"t2\" # note").unwrap().hash,
+            base
+        );
+        // The gates and the transition alone, as schema 1 hashes them.
+        let rows = &MINI2[MINI2.find("[[gate]]").unwrap()..];
+        let v1 = format!("schema = 1\nid = \"t\"\n[limits]\nbudget = 200\ntimeout = 900\n{rows}");
+        let no_tables = MINI2.replace(
+            "[checks.review]\nrunner = \"lens\"\nprompt = \"review.md\"\n",
+            "",
+        );
+        let no_tables = &no_tables[..no_tables.find("[runners.lens]").unwrap()];
+        let v2 = format!("{no_tables}{rows}");
+        assert_ne!(hash(&v1), Pipeline::load(&v2).unwrap().hash);
+    }
+
+    #[test]
+    fn schema_2_refuses_what_could_not_run() {
+        let err = |from: &str, to: &str| load2(from, to).unwrap_err().to_string();
+        assert_eq!(
+            err("verdict.decision", "diff.code_lines"),
+            "gate a reads diff.code_lines, a fact the projection never sets"
+        );
+        assert_eq!(
+            err(
+                r#"args = { field = "verdict.decision", value = "yes" }"#,
+                r#"args = { field = "verdict.sha", value_from = "head.sha" }"#
+            ),
+            "gate a reads head.sha, a fact the projection never sets"
+        );
+        assert_eq!(
+            err(
+                r#"fn = "eq"
+args = { field = "verdict.decision", value = "yes" }"#,
+                r#"fn = "plan_check_matches_lane"
+args = { reasons = ["no-code"] }"#
+            ),
+            "gate a: unknown fn *_matches_lane (schema 1 only)"
+        );
+        assert_eq!(
+            err(r#"runner = "lens""#, r#"runner = "lense""#),
+            "check review names unknown runner lense"
+        );
+        assert_eq!(
+            err("review.md", "verdict.md"),
+            "check review names prompt verdict.md, which this binary does not carry"
+        );
+        assert_eq!(
+            err(r#"budget_limit = "budget""#, r#"budget_limit = "cash""#),
+            "runner lens: unknown limit cash"
+        );
+        assert_eq!(
+            err("timeout = 900", "timeout = 0"),
+            "runner lens: limit timeout is 0, not at least 1"
+        );
+        assert!(matches!(
+            load2(r#"cli = "claude""#, r#"cli = "cursor""#),
+            Err(PipelineError::Toml(_))
+        ));
+        // Schema 1 hashes neither table, so it may not carry them.
+        let e = load2("schema = 2", "schema = 1").unwrap_err();
+        assert!(matches!(e, PipelineError::NeedsSchema2("runners")), "{e}");
+        let checks_only = format!(
+            "schema = 1\nid = \"t\"\n{}",
+            &MINI2[MINI2.find("[checks").unwrap()..]
+        );
+        let e = Pipeline::load_with_prompts(&checks_only, PROMPTS).unwrap_err();
+        assert!(matches!(e, PipelineError::NeedsSchema2("checks")), "{e}");
     }
 }
