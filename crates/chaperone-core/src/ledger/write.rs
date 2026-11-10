@@ -1003,14 +1003,21 @@ mod tests {
         let mut dup = Payload::default();
         dup.rest.insert("status".into(), json!("x"));
         dup.status = Some("y".into());
-        let cases: Vec<(&str, Option<&str>, Mutation)> = vec![
+        let cases: Vec<(&str, &str, Option<&str>, Mutation)> = vec![
             (
+                "at 2026-11-03 00:00:00 is not RFC 3339 UTC with",
                 "2026-11-03 00:00:00",
                 None,
                 ev(EventKind::LaneUpdated, Some(1), None, Payload::default()),
             ),
-            (AT, Some("k"), Mutation::Heartbeat { lane_id: 1 }),
             (
+                "a heartbeat takes no idempotency key",
+                AT,
+                Some("k"),
+                Mutation::Heartbeat { lane_id: 1 },
+            ),
+            (
+                "spec events name no lane and change no lane column",
                 AT,
                 None,
                 ev(
@@ -1024,6 +1031,7 @@ mod tests {
                 ),
             ),
             (
+                "spec events name no lane and change no lane column",
                 AT,
                 None,
                 ev(
@@ -1037,6 +1045,7 @@ mod tests {
                 ),
             ),
             (
+                "spec events name no lane and change no lane column",
                 AT,
                 None,
                 ev(
@@ -1051,6 +1060,7 @@ mod tests {
                 ),
             ),
             (
+                "spec events name no lane and change no lane column",
                 AT,
                 None,
                 ev(
@@ -1065,6 +1075,7 @@ mod tests {
                 ),
             ),
             (
+                "spec events name no lane and change no lane column",
                 AT,
                 None,
                 ev(
@@ -1079,6 +1090,7 @@ mod tests {
                 ),
             ),
             (
+                "spec.created assigns the spec id and version 1",
                 AT,
                 None,
                 ev(
@@ -1092,6 +1104,7 @@ mod tests {
                 ),
             ),
             (
+                "lane.created assigns the lane id and changes no column",
                 AT,
                 None,
                 ev(
@@ -1102,6 +1115,7 @@ mod tests {
                 ),
             ),
             (
+                "check.finished needs check and head_sha",
                 AT,
                 None,
                 ev(
@@ -1115,20 +1129,38 @@ mod tests {
                     },
                 ),
             ),
-            (AT, None, Mutation::Heartbeat { lane_id: 9 }),
-            (AT, None, Mutation::Heartbeat { lane_id: 1 }),
-            (AT, None, Mutation::Heartbeat { lane_id: 2 }),
             (
+                r#"NotFound { entity: "lane", id: 9 }"#,
+                AT,
+                None,
+                Mutation::Heartbeat { lane_id: 9 },
+            ),
+            (
+                "lane 1 is not held by this agent and session",
+                AT,
+                None,
+                Mutation::Heartbeat { lane_id: 1 },
+            ),
+            (
+                r#"LeaseHeld { by: "b/t", until:"#,
+                AT,
+                None,
+                Mutation::Heartbeat { lane_id: 2 },
+            ),
+            (
+                "payload does not survive a round trip",
                 AT,
                 None,
                 ev(EventKind::LaneReadyOverridden, Some(1), None, dup),
             ),
             (
+                "spec.created needs parent_key, title and body",
                 AT,
                 None,
                 ev(EventKind::SpecCreated, None, None, Payload::default()),
             ),
             (
+                "spec.created assigns the spec id and version 1",
                 AT,
                 None,
                 ev(
@@ -1141,8 +1173,14 @@ mod tests {
                     },
                 ),
             ),
-            (AT, None, ev(EventKind::SpecCreated, None, None, spec)),
             (
+                "Flexipie/harness#1 already has spec 1",
+                AT,
+                None,
+                ev(EventKind::SpecCreated, None, None, spec),
+            ),
+            (
+                "spec events name no lane and change no lane column",
                 AT,
                 None,
                 ev(
@@ -1156,6 +1194,7 @@ mod tests {
                 ),
             ),
             (
+                "spec.approved carries no lease",
                 AT,
                 None,
                 ev(
@@ -1170,16 +1209,19 @@ mod tests {
                 ),
             ),
             (
+                "this event needs a spec id",
                 AT,
                 None,
                 ev(EventKind::SpecRevised, None, None, Payload::default()),
             ),
             (
+                r#"NotFound { entity: "spec", id: 9 }"#,
                 AT,
                 None,
                 ev(EventKind::SpecApproved, None, Some(9), Payload::default()),
             ),
             (
+                "spec.revised needs a body",
                 AT,
                 None,
                 ev(
@@ -1193,6 +1235,7 @@ mod tests {
                 ),
             ),
             (
+                r#"Conflict { entity: "spec", message: "spec 1 is at"#,
                 AT,
                 None,
                 ev(
@@ -1207,12 +1250,19 @@ mod tests {
                 ),
             ),
             (
+                "lane.created assigns the lane id and changes no column",
                 AT,
                 None,
                 ev(EventKind::LaneCreated, Some(1), None, Payload::default()),
             ),
-            (AT, None, ev(EventKind::LaneCreated, None, Some(9), lane())),
             (
+                r#"NotFound { entity: "spec", id: 9 }"#,
+                AT,
+                None,
+                ev(EventKind::LaneCreated, None, Some(9), lane()),
+            ),
+            (
+                "lane.created needs a title, source",
                 AT,
                 None,
                 ev(
@@ -1226,6 +1276,7 @@ mod tests {
                 ),
             ),
             (
+                "lane.created needs a title, source",
                 AT,
                 None,
                 ev(
@@ -1239,6 +1290,7 @@ mod tests {
                 ),
             ),
             (
+                "lane.created needs a title, source",
                 AT,
                 None,
                 ev(
@@ -1252,6 +1304,7 @@ mod tests {
                 ),
             ),
             (
+                "lane.created needs a title, source",
                 AT,
                 None,
                 ev(
@@ -1265,6 +1318,7 @@ mod tests {
                 ),
             ),
             (
+                "lease_expires_at is set by the write",
                 AT,
                 None,
                 ev(
@@ -1278,16 +1332,19 @@ mod tests {
                 ),
             ),
             (
+                "only spec events and lane.created name a spec",
                 AT,
                 None,
                 ev(EventKind::LaneUpdated, Some(1), Some(1), Payload::default()),
             ),
             (
+                "this event needs a lane id",
                 AT,
                 None,
                 ev(EventKind::LaneUpdated, None, None, Payload::default()),
             ),
             (
+                "only the holder renews its lease",
                 AT,
                 None,
                 ev(
@@ -1301,16 +1358,19 @@ mod tests {
                 ),
             ),
             (
+                r#"LeaseHeld { by: "b/t", until:"#,
                 AT,
                 None,
                 ev(EventKind::LaneRenewed, Some(2), None, lease.clone()),
             ),
             (
+                "lane.taken_over must leave this agent and session",
                 AT,
                 None,
                 ev(EventKind::LaneTakenOver, Some(2), None, lease.clone()),
             ),
             (
+                "lane.updated carries no lease",
                 AT,
                 None,
                 ev(
@@ -1324,6 +1384,7 @@ mod tests {
                 ),
             ),
             (
+                "lanes has no changeable column updated_at",
                 AT,
                 None,
                 ev(
@@ -1334,6 +1395,7 @@ mod tests {
                 ),
             ),
             (
+                r#"status "ready" is not a wire status"#,
                 AT,
                 None,
                 ev(
@@ -1344,6 +1406,7 @@ mod tests {
                 ),
             ),
             (
+                "pid must be an integer or null",
                 AT,
                 None,
                 ev(
@@ -1354,6 +1417,7 @@ mod tests {
                 ),
             ),
             (
+                "branch must be text or null",
                 AT,
                 None,
                 ev(
@@ -1364,6 +1428,7 @@ mod tests {
                 ),
             ),
             (
+                "spec_id must be an integer or null",
                 AT,
                 None,
                 ev(
@@ -1374,6 +1439,7 @@ mod tests {
                 ),
             ),
             (
+                r#"NotFound { entity: "spec", id: 9 }"#,
                 AT,
                 None,
                 ev(
@@ -1384,6 +1450,7 @@ mod tests {
                 ),
             ),
             (
+                r#"Conflict { entity: "work item", message: "lane \"L\""#,
                 AT,
                 None,
                 ev(
@@ -1394,6 +1461,7 @@ mod tests {
                 ),
             ),
             (
+                "lane.updated only clears agent",
                 AT,
                 None,
                 ev(
@@ -1404,6 +1472,7 @@ mod tests {
                 ),
             ),
             (
+                "check.finished changes no lane column",
                 AT,
                 None,
                 ev(
@@ -1414,11 +1483,13 @@ mod tests {
                 ),
             ),
             (
+                "check.finished needs check and head_sha",
                 AT,
                 None,
                 ev(EventKind::CheckFinished, Some(1), None, Payload::default()),
             ),
             (
+                "check.finished outcome is ran or skipped",
                 AT,
                 None,
                 ev(
@@ -1434,6 +1505,7 @@ mod tests {
                 ),
             ),
             (
+                "finding keys repeat",
                 AT,
                 None,
                 ev(
@@ -1450,12 +1522,14 @@ mod tests {
                 ),
             ),
             (
+                "finding.updated needs check_event_id and finding_key",
                 AT,
                 None,
                 ev(EventKind::FindingUpdated, Some(1), None, Payload::default()),
             ),
             // The host runs only handoff, and a phase.entered needs a `to`.
             (
+                r#"phase.entered runs only ["handoff"]"#,
                 AT,
                 None,
                 ev(
@@ -1470,6 +1544,7 @@ mod tests {
                 ),
             ),
             (
+                "phase.entered needs a phase to, got ''",
                 AT,
                 None,
                 ev(
@@ -1483,6 +1558,7 @@ mod tests {
                 ),
             ),
             (
+                "finding.updated status is fixed or answered",
                 AT,
                 None,
                 ev(
@@ -1498,6 +1574,7 @@ mod tests {
                 ),
             ),
             (
+                r#"NotFound { entity: "finding", id: 1 }"#,
                 AT,
                 None,
                 ev(
@@ -1513,6 +1590,7 @@ mod tests {
                 ),
             ),
             (
+                "redactions is set by the write",
                 AT,
                 None,
                 ev(
@@ -1526,6 +1604,7 @@ mod tests {
                 ),
             ),
             (
+                "lane_key holds what looks like a github_token",
                 AT,
                 None,
                 ev(
@@ -1560,66 +1639,89 @@ mod tests {
         };
         let ok = order("o/r", json!({"order": [], "after": null}));
         let backlog = [
-            ev(EventKind::BacklogPrioritised, Some(1), None, ok.clone()),
-            ev(EventKind::BacklogPrioritised, None, Some(1), ok.clone()),
-            ev(
-                EventKind::BacklogPrioritised,
-                None,
-                None,
-                Payload {
-                    changed: change("status", json!("queued"), json!("done")).changed,
-                    ..ok
-                },
+            (
+                "backlog.prioritised names no lane or spec and changes",
+                ev(EventKind::BacklogPrioritised, Some(1), None, ok.clone()),
             ),
-            ev(
-                EventKind::BacklogPrioritised,
-                None,
-                None,
-                order("O/r", json!({"order": [], "after": null})),
+            (
+                "backlog.prioritised names no lane or spec and changes",
+                ev(EventKind::BacklogPrioritised, None, Some(1), ok.clone()),
             ),
-            ev(
-                EventKind::BacklogPrioritised,
-                None,
-                None,
-                order("o/r", json!({"order": {}, "after": null})),
+            (
+                "backlog.prioritised names no lane or spec and changes",
+                ev(
+                    EventKind::BacklogPrioritised,
+                    None,
+                    None,
+                    Payload {
+                        changed: change("status", json!("queued"), json!("done")).changed,
+                        ..ok
+                    },
+                ),
             ),
-            ev(
-                EventKind::BacklogPrioritised,
-                None,
-                None,
-                order("o/r", json!({"order": []})),
+            (
+                "backlog.prioritised needs a lowercased repo, an order",
+                ev(
+                    EventKind::BacklogPrioritised,
+                    None,
+                    None,
+                    order("O/r", json!({"order": [], "after": null})),
+                ),
+            ),
+            (
+                "backlog.prioritised needs a lowercased repo, an order",
+                ev(
+                    EventKind::BacklogPrioritised,
+                    None,
+                    None,
+                    order("o/r", json!({"order": {}, "after": null})),
+                ),
+            ),
+            (
+                "backlog.prioritised needs a lowercased repo, an order",
+                ev(
+                    EventKind::BacklogPrioritised,
+                    None,
+                    None,
+                    order("o/r", json!({"order": []})),
+                ),
             ),
         ];
         let cases = cases
             .into_iter()
-            .map(|(at, key, m)| (&me, at, key, m))
-            .chain(backlog.map(|m| (&me, AT, None, m)))
+            .map(|(want, at, key, m)| (want, &me, at, key, m))
+            .chain(backlog.map(|(want, m)| (want, &me, AT, None, m)))
             .chain([
                 (
+                    r#"LeaseHeld { by: "b/t", until:"#,
                     &ui,
                     AT,
                     None,
                     ev(EventKind::LaneUpdated, Some(2), None, pause),
                 ),
                 (
+                    "a write needs an agent and a session",
                     &no_session,
                     AT,
                     None,
                     ev(EventKind::LaneClaimed, Some(1), None, lease),
                 ),
                 (
+                    "agent must match [a-z0-9._-]{1,40}, got 'Codex'",
                     &bad_agent,
                     AT,
                     None,
                     ev(EventKind::LaneCreated, None, None, lane()),
                 ),
                 (
+                    "session must match [A-Za-z0-9._:-]{1,120}, got 's 1'",
                     &bad_session,
                     AT,
                     None,
                     ev(EventKind::LaneCreated, None, None, lane()),
                 ),
                 (
+                    "lane.updated clears agent and session together",
                     &other,
                     AT,
                     None,
@@ -1631,6 +1733,7 @@ mod tests {
                     ),
                 ),
                 (
+                    "lane.updated clears agent and session together",
                     &other,
                     AT,
                     None,
@@ -1642,12 +1745,17 @@ mod tests {
                     ),
                 ),
             ]);
-        for (i, (who, at, key, m)) in cases.enumerate() {
-            let applied = ledger.apply(who, key, at, m).unwrap();
-            assert!(
-                matches!(applied, Applied::Refused(_)),
-                "case {i}: {applied:?}"
-            );
+        for (i, (want, who, at, key, m)) in cases.enumerate() {
+            let Applied::Refused(refusal) = ledger.apply(who, key, at, m).unwrap() else {
+                panic!("case {i} ({want}) was not refused");
+            };
+            // An `invalid_input` by its message, any other refusal as it
+            // prints: a case refused for another reason than its own fails.
+            let got = match refusal {
+                Refusal::InvalidInput(message) => message,
+                other => format!("{other:?}"),
+            };
+            assert!(got.starts_with(want), "case {i}: want {want}, got {got}");
             assert_eq!(events(&ledger), 4, "case {i}");
         }
     }
