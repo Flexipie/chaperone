@@ -631,6 +631,11 @@ pub enum RunKind {
     /// the CLI its pipeline runner names, then a verifier that tries to
     /// refute each finding; the lane's pipeline names them (none before v20)
     Review,
+    /// One fresh session on whether the commit should merge, from the
+    /// change, the lane's goal and the harness's own diff, tests and
+    /// complete review of it; a verdict stands for its tree, so the same
+    /// tree and results replay it, yes or no (none before v20)
+    Verdict,
 }
 
 /// Daisy's review jobs, as recorded in the ledger. The worker stays in
