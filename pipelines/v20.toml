@@ -6,12 +6,12 @@
 #
 # What changed from v19, and why:
 # - Ready on a lane that changes code needs, on the handed-off commit: a harness `diff` of at
-#   most `code_lines` (now 400, from 750), harness `tests` that passed, a complete harness
-#   review (one carried from a commit with the same tree counts), no finding of that review
-#   still blocking, the plan check run before code or waived by the owner, a smoke (the
-#   harness's pass when it ran one, else the lane's claim with evidence), and a harness
-#   verdict `yes`. Whether the lane changes code is measured by that `diff`
-#   (`commit.changes_code`), not the lane's declared kind.
+#   most `code_lines` (now 400, from 750) and no file it could not count, harness `tests`
+#   that passed, a complete harness review (one carried from a commit with the same tree
+#   counts), no finding of that review still blocking, the plan check run before code or
+#   waived by the owner, a smoke (the harness's pass when it ran one, else the lane's claim
+#   with evidence), and a harness verdict `yes`. Whether the lane changes code is measured
+#   by that `diff` (`commit.changes_code`), not the lane's declared kind.
 # - A lane whose diff changes no code (docs, a measurement) skips the plan check and the
 #   smoke: a plan attacks code before it exists, and a smoke shows code running. It still
 #   needs the tests, the review and the verdict, because a merge needs a harness verdict on
@@ -142,7 +142,13 @@ id = "stamp_ok"
 fn = "eq"
 args = { field = "pipeline.id", value = "v20" }
 
-# Absent without a harness diff on the commit, so it also requires one.
+# Absent without a harness diff on the commit, so it also requires one. A file git counts no
+# lines of (binary, or hidden by `-diff`) is in no line total.
+[[gate]]
+id = "no_uncounted_files"
+fn = "eq"
+args = { field = "commit.uncounted_files", value = 0 }
+
 [[gate]]
 id = "code_lines_at_most"
 fn = "lte"
@@ -249,15 +255,16 @@ args = { of = ["no_code_change", "verdict_yes_on_head"] }
 
 # A handoff with ready: true enters ready; a handoff to done, or `work update --status
 # done`, enters done. Any phase. An investigation or no_pr lane has no ready row, so it is
-# denied. The first gate that does not hold is the denial, so the order is the order a lane
-# runs its checks in.
+# denied. The first gate that does not hold is the denial. The plan check runs first, before
+# any code, but sits after the measurements of the commit, next to the smoke it is skipped with.
 [[transition]]
 id = "handoff"
 routes = ["code_pr", "direct"]
 to = "ready"
 requires = [
-  "stamp_ok", "code_lines_at_most", "tests_passed", "review_complete", "no_blocking_findings",
-  "plan_or_no_code", "smoke_or_no_code", "verdict_is_yes", "verdict_on_head",
+  "stamp_ok", "no_uncounted_files", "code_lines_at_most", "tests_passed", "review_complete",
+  "no_blocking_findings", "plan_or_no_code", "smoke_or_no_code", "verdict_is_yes",
+  "verdict_on_head",
 ]
 
 [[transition]]

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::LedgerError;
 use super::event::{Event, EventKind, Payload};
-use super::write::{EVENT_COLUMNS, event_from_row};
+use super::write::{EVENT_COLUMNS, event_from_row, plan_waiver};
 use crate::checks::blocking;
 use crate::pipeline::{Fact, FactBundle};
 
@@ -38,11 +38,16 @@ pub(crate) fn project(
         [lane_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
+    // The write rule alone does not cover a record from before the claim or
+    // from an older binary.
+    let mut harness_only = false;
     if let (Some(id), Some(hash)) = (id, hash) {
+        harness_only = crate::pipeline::by_stamp(&id, &hash).is_some_and(|d| d.schema == 2);
         f.set("pipeline.id", id.as_str())
             .set("pipeline.hash", hash.as_str());
     }
-    // Until a pipeline reads the `diff` check, only a code lane changes code.
+    // The declared kind; pipeline v20 reads the harness diff's
+    // `commit.changes_code` instead.
     f.set("lane.changes_code", kind == "code");
     if let Some(head) = head {
         f.set("commit.sha", head);
@@ -74,9 +79,9 @@ pub(crate) fn project(
     while let Some(row) = rows.next()? {
         let e: Event = event_from_row(row)?;
         let p = &e.payload;
+        let producer = p.rest.get("producer").and_then(|v| v.get("kind"));
+        let harness = producer == Some(&json!("harness"));
         if e.kind == EventKind::CheckFinished {
-            let producer = p.rest.get("producer").and_then(|v| v.get("kind"));
-            let harness = producer == Some(&json!("harness"));
             let check = p.check.clone().unwrap_or_default();
             if harness && check == "review" && p.rest.get("complete") == Some(&json!(true)) {
                 complete.insert(e.id);
@@ -111,6 +116,8 @@ pub(crate) fn project(
                 let ran = p.outcome.as_deref() == Some("ran");
                 let text = |key: &str| p.rest.get(key).and_then(Value::as_str);
                 match check {
+                    "plan_check" | "merge_verdict"
+                        if harness_only && !harness && !plan_waiver(p) => {}
                     "plan_check" | "quality_gate" => {
                         set(&mut f, &format!("{check}.outcome"), p.outcome.as_deref());
                         set(&mut f, &format!("{check}.reason"), text("reason"));
@@ -182,8 +189,13 @@ pub(crate) fn project(
     }
     if head.is_some() {
         let field = |check: &str, key: &str| on_head.get(check).and_then(|p| p.rest.get(key));
-        let int = field("diff", "code_lines").and_then(Value::as_i64);
-        f.set("commit.code_lines", int.map_or(Fact::Absent, Fact::Int));
+        for key in ["code_lines", "uncounted_files"] {
+            let int = field("diff", key).and_then(Value::as_i64);
+            f.set(
+                &format!("commit.{key}"),
+                int.map_or(Fact::Absent, Fact::Int),
+            );
+        }
         let code = field("diff", "changes_code").and_then(Value::as_bool);
         f.set("commit.changes_code", code.map_or(Fact::Absent, Fact::Bool));
         for check in ["tests", "smoke"] {

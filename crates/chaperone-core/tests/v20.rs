@@ -190,6 +190,20 @@ struct V20 {
 
 impl V20 {
     fn new(kind: &str) -> V20 {
+        let lane = V20::unclaimed(kind);
+        let claim = ClaimInput {
+            pipeline: Some("v20".into()),
+            ..ClaimInput::default()
+        };
+        lane.ledger
+            .work_claim(&lane.lane, 1, &claim, None, false)
+            .unwrap()
+            .unwrap();
+        lane
+    }
+
+    /// Lane 1 of `kind`, created by the lane session and not yet claimed.
+    fn unclaimed(kind: &str) -> V20 {
         let (dir, ledger) = open();
         let create = CreateInput {
             title: "t".into(),
@@ -200,14 +214,6 @@ impl V20 {
         let me = pair("lane", "s1");
         ledger
             .work_create(&me, &create, None, false)
-            .unwrap()
-            .unwrap();
-        let claim = ClaimInput {
-            pipeline: Some("v20".into()),
-            ..ClaimInput::default()
-        };
-        ledger
-            .work_claim(&me, 1, &claim, None, false)
             .unwrap()
             .unwrap();
         V20 {
@@ -249,7 +255,8 @@ impl V20 {
     }
 
     fn diff(&self, head: &str, code_lines: i64, changes_code: bool) {
-        let fields = json!({"code_lines": code_lines, "changes_code": changes_code});
+        let fields = json!({"code_lines": code_lines, "changes_code": changes_code,
+            "uncounted_files": 0});
         self.run("diff", head, fields);
     }
 
@@ -358,6 +365,12 @@ const PLAN: [&str; 3] = [
     "plan_check.reason",
 ];
 const SMOKE: [&str; 3] = ["commit.changes_code", "smoke.passed", "smoke.claimed"];
+const DONE: [&str; 4] = [
+    "commit.changes_code",
+    "verdict.decision",
+    "verdict.sha",
+    "commit.sha",
+];
 
 /// A code lane climbs the ready row: each gate denies, with its id and the
 /// facts it read, until the harness fact it needs is recorded, then the
@@ -367,9 +380,12 @@ const SMOKE: [&str; 3] = ["commit.changes_code", "smoke.passed", "smoke.claimed"
 #[test]
 fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
     let lane = V20::new("code");
-    let lines = denied("code_lines_at_most", &["commit.code_lines"]);
-    assert_eq!(lane.ready(HEAD), lines);
+    let binary = json!({"code_lines": 1, "changes_code": true, "uncounted_files": 1});
+    lane.run("diff", THIRD, binary);
+    let uncounted = denied("no_uncounted_files", &["commit.uncounted_files"]);
+    assert_eq!(lane.ready(THIRD), uncounted);
     lane.diff(OTHER, 401, true);
+    let lines = denied("code_lines_at_most", &["commit.code_lines"]);
     assert_eq!(lane.ready(OTHER), lines);
     lane.diff(HEAD, 400, true);
     let tests = denied("tests_passed", &["tests.passed"]);
@@ -464,15 +480,11 @@ fn a_carried_review_and_verdict_pass_on_the_amend() {
 
 /// A lane whose harness diff changes no code needs no plan check and no
 /// smoke for ready, and no verdict for done; its declared kind does not
-/// decide that, the diff does.
+/// decide that, the diff does, and without one done needs both.
 #[test]
 fn a_lane_that_changes_no_code_skips_the_plan_and_the_smoke() {
     let lane = V20::new("code");
-    lane.run(
-        "diff",
-        HEAD,
-        json!({"code_lines": 0, "changes_code": false}),
-    );
+    lane.diff(HEAD, 0, false);
     lane.run("tests", HEAD, json!({"result": "pass"}));
     let review = lane.run("review", HEAD, json!({"complete": true})).event_id;
     for key in ["correctness-blocker", "correctness-risk"] {
@@ -484,20 +496,58 @@ fn a_lane_that_changes_no_code_skips_the_plan_and_the_smoke() {
     );
     lane.handoff(HEAD, "done").unwrap();
 
-    // Declared docs, but its diff changes code: the full row applies.
+    // Declared docs, with no harness diff and then one that changes code:
+    // the full row applies.
     let docs = V20::new("docs");
-    docs.run("diff", HEAD, json!({"code_lines": 5, "changes_code": true}));
-    let done = [
-        "commit.changes_code",
-        "verdict.decision",
-        "verdict.sha",
-        "commit.sha",
-    ];
     assert_eq!(docs.handoff(HEAD, "done"), denied("plan_or_no_code", &PLAN));
     docs.run("plan_check", OTHER, json!({}));
-    assert_eq!(docs.handoff(HEAD, "done"), denied("done_verdict", &done));
+    assert_eq!(docs.handoff(HEAD, "done"), denied("done_verdict", &DONE));
+    docs.diff(HEAD, 5, true);
+    assert_eq!(docs.handoff(HEAD, "done"), denied("done_verdict", &DONE));
     docs.run("merge_verdict", HEAD, json!({"decision": "yes"}));
     docs.handoff(HEAD, "done").unwrap();
+}
+
+/// A plan check and a verdict a session wrote before the v20 claim, when
+/// no rule refused them, satisfy no gate; the owner's waiver still does.
+#[test]
+fn a_session_plan_check_or_verdict_is_no_harness_fact() {
+    let lane = V20::unclaimed("code");
+    let fresh = pair("fresh", "s2");
+    for (check, decision, findings) in [
+        ("plan_check", None, Some(0)),
+        ("merge_verdict", Some("yes"), None),
+    ] {
+        let input = CheckInput {
+            work: 1,
+            check: check.into(),
+            head: HEAD.into(),
+            outcome: "ran".into(),
+            decision: decision.map(String::from),
+            findings,
+            ..CheckInput::default()
+        };
+        lane.ledger.check_record(&fresh, &input).unwrap().unwrap();
+    }
+    let claim = ClaimInput {
+        pipeline: Some("v20".into()),
+        ..ClaimInput::default()
+    };
+    let claimed = lane.ledger.work_claim(&lane.lane, 1, &claim, None, false);
+    claimed.unwrap().unwrap();
+    lane.diff(HEAD, 10, true);
+    lane.run("tests", HEAD, json!({"result": "pass"}));
+    let review = lane.run("review", HEAD, json!({"complete": true})).event_id;
+    for key in ["correctness-blocker", "correctness-risk"] {
+        lane.rule(&lane.owner, review, key, "refuted");
+    }
+    assert_eq!(lane.ready(HEAD), denied("plan_or_no_code", &PLAN));
+    let waive = lane.ledger.plan_waive(&lane.owner, 1, HEAD, "coded first");
+    waive.unwrap().unwrap();
+    lane.claim(HEAD);
+    let yes = denied("verdict_is_yes", &["verdict.decision"]);
+    assert_eq!(lane.ready(HEAD), yes);
+    assert_eq!(lane.handoff(HEAD, "done"), denied("done_verdict", &DONE));
 }
 
 /// `stamp_ok` holds on every v20 lane (the climb above); its denial is the

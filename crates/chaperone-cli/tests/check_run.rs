@@ -66,8 +66,8 @@ fn lane(db: &Path, claim: &[&str]) -> String {
 
 /// The branch tip is measured exactly against the remote base, past a
 /// local branch named like it, while a later layer is checked out; the same
-/// commit replays, a reworded one and a return to the first append; docs,
-/// lock files and lines git does not count are no code lines.
+/// commit replays, a reworded one and a return to the first append; docs
+/// and lines git does not count are no code lines, a lock file's are.
 #[test]
 fn a_run_measures_the_lane_commit() {
     let dir = tempfile::tempdir().unwrap();
@@ -159,7 +159,7 @@ fn a_run_measures_the_lane_commit() {
     let id = lane(&db, &claim("docs"));
     let p = &run(&db, &["check", "run", "diff", "--work", &id]).1["payload"];
     let got = ["files", "uncounted_files", "code_lines", "changes_code"].map(|k| &p[k]);
-    assert_eq!(got, [&json!(3), &json!(1), &json!(0), &json!(false)]);
+    assert_eq!(got, [&json!(3), &json!(1), &json!(1), &json!(true)]);
 }
 
 /// Nothing to measure, git that fails and a run already on the lane are
