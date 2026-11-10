@@ -1,6 +1,7 @@
 //! The lane page's data (#111): `lane_page` (timeline, decisions with who
 //! made them, review rounds, gates required vs passed), the per-repo
-//! median (`repo_median`), and `git::lane_files` on a temp repo.
+//! median (`repo_median`), and `git::lane_files`, `head` and `commit_files`
+//! on a temp repo.
 
 mod common;
 
@@ -9,7 +10,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use chaperone_core::checks::{AttentionInput, CheckInput, MergedInput};
-use chaperone_core::git::{git_bin, head, head_files, lane_files};
+use chaperone_core::git::{commit_files, git_bin, head, lane_files};
 use chaperone_core::ledger::Ledger;
 use chaperone_core::pipeline::Phase;
 use chaperone_core::work::{Brief, ClaimInput, CreateInput, HandoffInput, UpdateInput};
@@ -254,6 +255,7 @@ fn rev_parse(dir: &Path, rev: &str) -> String {
         .args(["rev-parse", rev])
         .output()
         .unwrap();
+    assert!(out.status.success(), "git rev-parse {rev}");
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
@@ -285,7 +287,6 @@ fn lane_files_against_the_merge_base() {
     git(wt, &["rm", "-q", "gone.md"]);
     git(wt, &["add", "."]);
     git(wt, &["commit", "-qm", "lane"]);
-    let lane_head = rev_parse(wt, "HEAD");
     std::fs::write(wt.join("a.rs"), "1\nnew\n3\n4\n5\n").unwrap();
     std::fs::write(wt.join("new.rs"), "a\nb").unwrap();
     std::fs::write(wt.join("blob.bin"), [0u8, 1, 2]).unwrap();
@@ -325,25 +326,48 @@ fn lane_files_against_the_merge_base() {
             "new.rs core +2 -0 untracked",
         ]
     );
+}
 
-    // HEAD only: the commit's counts, without the uncommitted line or the
-    // untracked files.
+/// `head` is the worktree's commit; `commit_files` counts that commit
+/// against the merge base, without main's later commit, the uncommitted
+/// line or the untracked file.
+#[test]
+fn commit_files_are_the_commits_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let wt = dir.path();
+    git(wt, &["init", "-q", "-b", "main"]);
+    std::fs::write(wt.join("a.rs"), "1\n2\n3\n").unwrap();
+    git(wt, &["add", "."]);
+    git(wt, &["commit", "-qm", "base"]);
+    git(wt, &["switch", "-qc", "lane"]);
+    std::fs::write(wt.join("a.rs"), "1\nnew\n3\n4\n").unwrap();
+    git(wt, &["commit", "-qam", "lane"]);
+    let lane_head = rev_parse(wt, "HEAD");
+    // Main moves on after the lane branched.
+    git(wt, &["switch", "-q", "main"]);
+    std::fs::write(wt.join("main.rs"), "m\n").unwrap();
+    git(wt, &["add", "."]);
+    git(wt, &["commit", "-qm", "main moves"]);
+    let main = rev_parse(wt, "HEAD");
+    git(wt, &["switch", "-q", "lane"]);
+    std::fs::write(wt.join("a.rs"), "uncommitted\n").unwrap();
+    std::fs::write(wt.join("new.rs"), "a\n").unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
     let bin = git_bin(deadline);
-    assert_eq!(head(&bin, wt, deadline).unwrap(), lane_head);
-    let (_, committed) = head_files(&bin, wt, Some(base.as_str()), deadline, 1 << 20).unwrap();
-    let rows: Vec<_> = committed
+    let at = head(&bin, wt, deadline).unwrap();
+    assert_eq!(at, lane_head);
+    let (base, files) = commit_files(&bin, wt, Some(&main), &at, deadline, 1 << 20).unwrap();
+    assert_eq!(base, main);
+    let rows: Vec<_> = files
         .iter()
         .map(|f| (f.path.as_str(), f.added, f.removed, f.untracked))
         .collect();
-    assert_eq!(
-        rows,
-        [
-            ("a.rs", Some(2), Some(1), false),
-            ("gone.md", Some(0), Some(1), false),
-        ]
-    );
+    assert_eq!(rows, [("a.rs", Some(2), Some(1), false)]);
+
     // A repository with no commit has no head.
     let empty = tempfile::tempdir().unwrap();
     git(empty.path(), &["init", "-q", "-b", "main"]);
-    assert!(head(&bin, empty.path(), deadline).is_err());
+    let e = head(&bin, empty.path(), deadline).unwrap_err();
+    assert!(e.starts_with("git rev-parse:"), "{e}");
 }

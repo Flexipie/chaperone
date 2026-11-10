@@ -103,9 +103,9 @@ pub struct ChangedFile {
     pub path: String,
     /// The repo profile's area, as the caller of [`lane_files`] maps it.
     pub area: Option<String>,
-    /// Lines, worktree against the merge base (the change graph's count
-    /// is `HEAD`'s). None for a binary file, and for an untracked one past
-    /// 1 MiB or not counted.
+    /// Lines against the merge base: the worktree's from [`changed_files`],
+    /// a commit's from [`commit_files`]. None for a binary file, and for an
+    /// untracked one past 1 MiB or not counted.
     pub added: Option<u64>,
     pub removed: Option<u64>,
     pub untracked: bool,
@@ -127,7 +127,7 @@ pub fn changed_files(
     deadline: Instant,
     cap: usize,
 ) -> Result<(String, Vec<ChangedFile>), String> {
-    let (base, mut files) = numstat(bin, wt, base_sha, false, deadline, cap)?;
+    let (base, mut files) = numstat(bin, wt, base_sha, None, deadline, cap)?;
     let args = [
         "ls-files",
         "-z",
@@ -148,23 +148,30 @@ pub fn changed_files(
     Ok((base, files))
 }
 
-/// [`changed_files`] for what `HEAD` has committed only: no uncommitted
-/// edit and no untracked file, so the counts are the commit's.
-pub fn head_files(
+/// [`changed_files`] for what the commit `rev` holds: no uncommitted edit
+/// and no untracked file. `rev` is a sha from [`head`], so the counts are
+/// that commit's even when the worktree's `HEAD` has moved since.
+pub fn commit_files(
     bin: &Path,
     wt: &Path,
     base_sha: Option<&str>,
+    rev: &str,
     deadline: Instant,
     cap: usize,
 ) -> Result<(String, Vec<ChangedFile>), String> {
-    numstat(bin, wt, base_sha, true, deadline, cap)
+    numstat(bin, wt, base_sha, Some(rev), deadline, cap)
 }
 
-/// The commit `wt`'s `HEAD` is at, as a full sha.
+/// The commit `wt`'s `HEAD` is at, as a full sha. A repository with no
+/// commit yet fails with git's own line.
 pub fn head(bin: &Path, wt: &Path, deadline: Instant) -> Result<String, String> {
     let args = ["rev-parse", "--verify", "HEAD^{commit}"];
-    let out = whole(bin, wt, &args, deadline, 4096)?.ok_or("git rev-parse: no HEAD commit")?;
-    Ok(String::from_utf8_lossy(&out).trim().to_string())
+    match git(bin, wt, &args, deadline, 4096) {
+        Ok((out, _)) => Ok(String::from_utf8_lossy(&out).trim().to_string()),
+        Err(Failure::TimedOut) => Err("git rev-parse: timed out".into()),
+        Err(Failure::BadRevision) => Err("git rev-parse: no HEAD commit".into()),
+        Err(Failure::Other(e)) => Err(e),
+    }
 }
 
 /// One call's whole output, None for a revision this clone lacks. Output
@@ -185,13 +192,13 @@ fn whole(
     }
 }
 
-/// The numstat of the worktree, or of `HEAD` when `committed`, against
-/// the merge base with the first base this clone has.
+/// The numstat of the worktree, or of the commit `rev`, against the merge
+/// base with the first base this clone has.
 fn numstat(
     bin: &Path,
     wt: &Path,
     base_sha: Option<&str>,
-    committed: bool,
+    rev: Option<&str>,
     deadline: Instant,
     cap: usize,
 ) -> Result<(String, Vec<ChangedFile>), String> {
@@ -209,9 +216,7 @@ fn numstat(
             "--end-of-options",
             base,
         ];
-        if committed {
-            args.push("HEAD");
-        }
+        args.extend(rev);
         args.push("--");
         // A base this clone lacks: try the next one.
         if let Some(out) = whole(bin, wt, &args, deadline, cap)? {
