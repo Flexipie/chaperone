@@ -574,10 +574,12 @@ impl Ledger {
     /// handoff the gated `phase.entered` (or `gate.denied`).
     ///
     /// `observed_head` is the commit the caller read in the lane's worktree
-    /// just before this write (the ledger makes no git call). A ready
-    /// handoff must name it as its `commit`, so the checks on that commit
-    /// are checks on what the worktree holds. None is not checked: the
-    /// worktree is gone, or the caller has none to read.
+    /// just before this write (the ledger makes no git call): the tip of
+    /// the lane's branch, or `HEAD` when it has none. A handoff that enters
+    /// ready must name it as its `commit`, so the checks on that commit are
+    /// checks on what the branch holds. A handoff to `done` is not checked
+    /// (the branch may have moved on after the merge), and neither is None:
+    /// the worktree is gone, or the caller has none to read.
     pub fn work_handoff(
         &self,
         actor: &Actor,
@@ -590,13 +592,16 @@ impl Ledger {
         if let Err(r) = input.validate() {
             return Ok(Err(r));
         }
-        if let (Some(true), Some(head)) = (input.ready, observed_head) {
-            let commit = input.commit.as_deref().unwrap_or_default();
-            if !sha_prefix_eq(commit, head, 7..=40, false) {
+        let enters_ready = input.ready == Some(true) && input.status.as_deref() != Some("done");
+        if let (true, Some(head)) = (enters_ready, observed_head) {
+            let said = match input.commit.as_deref() {
+                Some(c) if sha_prefix_eq(c, head, 7..=64, false) => None,
+                Some(c) => Some(format!("says '{c}'")),
+                None => Some("names no commit".into()),
+            };
+            if let Some(said) = said {
                 return Ok(Err(Refusal::InvalidInput(format!(
-                    "a ready handoff names the worktree's HEAD as its commit: HEAD is {head}, \
-                     the handoff says '{commit}'; commit the work, or hand off the commit that \
-                     was checked"
+                    "a ready handoff names the commit the lane is on: that is {head}, the                      handoff {said}; record the checks on {head} and hand it off, or check                      out the commit that was checked"
                 ))));
             }
         }

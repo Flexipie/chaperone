@@ -609,18 +609,18 @@ fn a_v17_1_lane_keeps_the_v17_1_rule() {
 
 /// A ready handoff names the commit its worktree is on: another commit is
 /// refused before the gate, with nothing written. A short sha of the head
-/// passes on to the gate, and a handoff that does not say ready, or a lane
-/// whose worktree is gone, is not checked.
+/// passes on to the gate, and a handoff that does not say ready, one to
+/// `done`, or a lane whose worktree is gone, is not checked.
 #[test]
 fn a_ready_handoff_names_the_observed_head() {
     const HEAD: &str = "abc1234def0000000000000000000000000000aa";
     let lane = Lane::new();
     lane.stamps();
     lane.smoke_and_kept();
-    let handoff = |commit: Option<&str>, ready: Option<bool>, head: Option<&str>| {
+    let send = |status: &str, commit: Option<&str>, ready: Option<bool>, head: Option<&str>| {
         let input = HandoffInput {
             summary: "s".into(),
-            status: Some("review".into()),
+            status: Some(status.into()),
             commit: commit.map(String::from),
             ready,
             ..HandoffInput::default()
@@ -629,6 +629,9 @@ fn a_ready_handoff_names_the_observed_head() {
             .ledger
             .work_handoff(&lane.lane, 1, &input, head, Some(T2), false);
         h.unwrap().map(|h| h.id)
+    };
+    let handoff = |commit: Option<&str>, ready: Option<bool>, head: Option<&str>| {
+        send("review", commit, ready, head)
     };
     for stale in [Some("def5678"), Some("abc1234dee"), None] {
         let r = handoff(stale, Some(true), Some(HEAD));
@@ -646,6 +649,11 @@ fn a_ready_handoff_names_the_observed_head() {
     // The worktree is gone: nothing to compare, and the gate still decides.
     assert!(matches!(
         handoff(Some("def5678"), Some(true), None),
+        Err(Refusal::GateDenied { .. })
+    ));
+    // A done handoff that still says ready: the branch may have moved on.
+    assert!(matches!(
+        send("done", Some("def5678"), Some(true), Some(HEAD)),
         Err(Refusal::GateDenied { .. })
     ));
 }

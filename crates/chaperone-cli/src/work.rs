@@ -153,14 +153,16 @@ pub fn run(
             };
             let input: HandoffInput = serde_json::from_str(&raw)
                 .map_err(|e| Refusal::InvalidInput(format!("handoff JSON: {e}")))?;
-            // Only a ready handoff is checked against the worktree.
-            let head = match input.ready {
-                Some(true) => {
-                    // An unknown item is the write's to refuse.
-                    let item = ledger.work_get(id, &ledger.now()?)?.ok();
-                    observed_head(item.and_then(|i| i.worktree_path).as_deref())?
-                }
-                _ => None,
+            // Only a handoff that enters ready is checked against the worktree.
+            let head = if input.ready == Some(true) && input.status.as_deref() != Some("done") {
+                // An unknown item is the write's to refuse.
+                let item = ledger.work_get(id, &ledger.now()?)?.ok();
+                let (wt, branch) = item
+                    .map(|i| (i.worktree_path, i.branch))
+                    .unwrap_or_default();
+                observed_head(wt.as_deref(), branch.as_deref())?
+            } else {
+                None
             };
             let actor = actor.resolve();
             one(ledger.work_handoff(&actor, id, &input, head.as_deref(), None, dry(dry_run))??)
@@ -282,18 +284,42 @@ fn items(v: Vec<impl Serialize>) -> Result<Outcome, CliError> {
     }))
 }
 
-/// The commit the lane's worktree is on, read just before a ready handoff
-/// is written. None when the lane has no worktree or it is gone (removed
-/// after a merge): there is nothing to compare with. A worktree that is
-/// there and cannot be read refuses, so a broken checkout is not a pass.
-fn observed_head(worktree: Option<&str>) -> Result<Option<String>, Refusal> {
-    let Some(wt) = worktree.map(Path::new).filter(|wt| wt.is_dir()) else {
+/// The commit the lane is on, read just before a ready handoff is written:
+/// the tip of its `branch` (stack layers share one worktree, so `HEAD` may
+/// be a later layer's), or `HEAD` when the item names no branch or the
+/// worktree does not have it. None when the lane has no worktree or it is
+/// gone (removed after a merge): there is nothing to compare with. A
+/// worktree that is there and cannot be read refuses, so a broken checkout
+/// is not a pass.
+fn observed_head(worktree: Option<&str>, branch: Option<&str>) -> Result<Option<String>, Refusal> {
+    // A relative path would be read against this process's directory.
+    let Some(wt) = worktree
+        .map(Path::new)
+        .filter(|wt| wt.is_absolute() && wt.is_dir())
+    else {
         return Ok(None);
     };
-    // One call, so plain `git`: finding the real binary costs a call too.
-    git::head(Path::new("git"), wt, Instant::now() + HEAD_TIMEOUT)
-        .map(Some)
-        .map_err(|e| Refusal::InvalidInput(format!("could not read HEAD in {}: {e}", wt.display())))
+    // One or two calls, so plain `git`: finding the real binary costs one too.
+    let deadline = Instant::now() + HEAD_TIMEOUT;
+    let read = |rev: &str| {
+        let args = ["rev-parse", "--verify", "--end-of-options", rev];
+        match git::git(Path::new("git"), wt, &args, deadline, 4096) {
+            Ok((out, _)) => Ok(Some(String::from_utf8_lossy(&out).trim().to_string())),
+            Err(git::Failure::BadRevision) => Ok(None),
+            Err(git::Failure::TimedOut) => Err("git rev-parse: timed out, retry".to_string()),
+            Err(git::Failure::Other(e)) => Err(e),
+        }
+    };
+    let tip = match branch {
+        Some(b) => read(&format!("refs/heads/{b}^{{commit}}")),
+        None => Ok(None),
+    };
+    tip.and_then(|tip| match tip {
+        Some(tip) => Ok(tip),
+        None => git::head(Path::new("git"), wt, deadline),
+    })
+    .map(Some)
+    .map_err(|e| Refusal::InvalidInput(format!("could not read HEAD in {}: {e}", wt.display())))
 }
 
 pub(crate) fn value(v: impl Serialize) -> Result<Value, CliError> {
@@ -310,8 +336,9 @@ mod tests {
 
     use super::*;
 
-    /// A worktree's commit is read; a lane with no worktree, or one that is
-    /// gone, has none; a directory that is no repository refuses.
+    /// The lane's branch tip is read, else the worktree's HEAD; a lane with
+    /// no worktree, one that is gone or a relative path has none; a
+    /// directory that is no repository refuses.
     #[test]
     fn observed_head_reads_the_worktree() {
         let dir = tempfile::tempdir().unwrap();
@@ -327,18 +354,25 @@ mod tests {
             assert!(out.status.success(), "git {args:?}");
             String::from_utf8(out.stdout).unwrap().trim().to_string()
         };
-        assert_eq!(observed_head(None).unwrap(), None);
+        assert_eq!(observed_head(None, None).unwrap(), None);
         let gone = dir.path().join("gone");
-        assert_eq!(observed_head(gone.to_str()).unwrap(), None);
-        let Err(Refusal::InvalidInput(why)) = observed_head(Some(wt)) else {
+        assert_eq!(observed_head(gone.to_str(), None).unwrap(), None);
+        assert_eq!(observed_head(Some("."), None).unwrap(), None);
+        let Err(Refusal::InvalidInput(why)) = observed_head(Some(wt), None) else {
             panic!("a directory that is no repository was read");
         };
         assert!(why.starts_with("could not read HEAD in "), "{why}");
-        git(&["init", "-q"]);
+        git(&["init", "-q", "-b", "layer-1"]);
         git(&["commit", "-q", "--allow-empty", "-m", "one"]);
-        assert_eq!(
-            observed_head(Some(wt)).unwrap(),
-            Some(git(&["rev-parse", "HEAD"]))
-        );
+        let one = git(&["rev-parse", "HEAD"]);
+        assert_eq!(observed_head(Some(wt), None).unwrap(), Some(one.clone()));
+        // A stack's next layer is checked out: the lower layer is still at
+        // its own tip, and a branch the worktree lacks reads HEAD.
+        git(&["checkout", "-q", "-b", "layer-2"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "two"]);
+        let two = git(&["rev-parse", "HEAD"]);
+        assert_ne!(one, two);
+        assert_eq!(observed_head(Some(wt), Some("layer-1")).unwrap(), Some(one));
+        assert_eq!(observed_head(Some(wt), Some("gone")).unwrap(), Some(two));
     }
 }

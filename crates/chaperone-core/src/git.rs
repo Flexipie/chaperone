@@ -77,10 +77,14 @@ pub fn git(
     })?;
     if !done.status.success() {
         let err = String::from_utf8_lossy(&done.err);
-        if ["unknown revision", "bad revision", "Invalid revision range"]
-            .iter()
-            .any(|m| err.contains(m))
-        {
+        // The last is `rev-parse --verify`'s.
+        let missing = [
+            "unknown revision",
+            "bad revision",
+            "Invalid revision range",
+            "Needed a single revision",
+        ];
+        if missing.iter().any(|m| err.contains(m)) {
             return Err(Failure::BadRevision);
         }
         // The fatal line is last; warnings come before it.
