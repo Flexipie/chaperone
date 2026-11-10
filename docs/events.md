@@ -68,7 +68,8 @@ These rules keep every write small, single and fail-closed.
   `merge_case`, `decisions`, `description`, `check_by_hand`, `why`, `proven`, `not_proven`, `verdict`,
   `shape`, `message`, `question`, `answer`, `where`, at any depth) have R13's patterns
   replaced with `[redacted:<kind>]` (`private_key`, `github_token`, `aws_key`,
-  `slack_token`, `bearer`, `api_key`, `assignment`), and the payload gets `redactions`,
+  `slack_token`, `gitlab_token`, `bearer`, `api_key`, `url_credentials`,
+  `assignment`), and the payload gets `redactions`,
   the count. `changed.<column>.to` counts as `<column>`; `.from`, the value compared with
   the row, is left as sent. A match in any other string is an identifier of the wrong
   type, and a match in an object key is a bad key: both are `invalid_input`, naming the
