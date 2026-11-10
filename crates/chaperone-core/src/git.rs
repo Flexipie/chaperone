@@ -127,18 +127,78 @@ pub fn changed_files(
     deadline: Instant,
     cap: usize,
 ) -> Result<(String, Vec<ChangedFile>), String> {
-    let run = |args: &[&str]| match git(bin, wt, args, deadline, cap) {
+    let (base, mut files) = numstat(bin, wt, base_sha, false, deadline, cap)?;
+    let args = [
+        "ls-files",
+        "-z",
+        "-o",
+        "--exclude-standard",
+        "--full-name",
+        "--",
+        ":/",
+    ];
+    let untracked = whole(bin, wt, &args, deadline, cap)?.unwrap_or_default();
+    files.extend(split_z(&untracked).map(|path| ChangedFile {
+        path: path.to_string(),
+        area: None,
+        added: None,
+        removed: None,
+        untracked: true,
+    }));
+    Ok((base, files))
+}
+
+/// [`changed_files`] for what `HEAD` has committed only: no uncommitted
+/// edit and no untracked file, so the counts are the commit's.
+pub fn head_files(
+    bin: &Path,
+    wt: &Path,
+    base_sha: Option<&str>,
+    deadline: Instant,
+    cap: usize,
+) -> Result<(String, Vec<ChangedFile>), String> {
+    numstat(bin, wt, base_sha, true, deadline, cap)
+}
+
+/// The commit `wt`'s `HEAD` is at, as a full sha.
+pub fn head(bin: &Path, wt: &Path, deadline: Instant) -> Result<String, String> {
+    let args = ["rev-parse", "--verify", "HEAD^{commit}"];
+    let out = whole(bin, wt, &args, deadline, 4096)?.ok_or("git rev-parse: no HEAD commit")?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// One call's whole output, None for a revision this clone lacks. Output
+/// past `cap` fails.
+fn whole(
+    bin: &Path,
+    wt: &Path,
+    args: &[&str],
+    deadline: Instant,
+    cap: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    match git(bin, wt, args, deadline, cap) {
         Ok((_, true)) => Err(format!("git {}: past {cap} bytes", args[0])),
         Ok((out, false)) => Ok(Some(out)),
-        // A base this clone lacks: try the next one.
         Err(Failure::BadRevision) => Ok(None),
         Err(Failure::TimedOut) => Err(format!("git {}: timed out", args[0])),
         Err(Failure::Other(e)) => Err(e),
-    };
+    }
+}
+
+/// The numstat of the worktree, or of `HEAD` when `committed`, against
+/// the merge base with the first base this clone has.
+fn numstat(
+    bin: &Path,
+    wt: &Path,
+    base_sha: Option<&str>,
+    committed: bool,
+    deadline: Instant,
+    cap: usize,
+) -> Result<(String, Vec<ChangedFile>), String> {
     let mut found = None;
     for base in BASES.iter().copied().chain(base_sha) {
         // `--end-of-options`: a claimed base_sha is not checked as hex.
-        let args = [
+        let mut args = vec![
             "diff",
             "--no-ext-diff",
             "--no-textconv",
@@ -148,9 +208,13 @@ pub fn changed_files(
             "--merge-base",
             "--end-of-options",
             base,
-            "--",
         ];
-        if let Some(out) = run(&args)? {
+        if committed {
+            args.push("HEAD");
+        }
+        args.push("--");
+        // A base this clone lacks: try the next one.
+        if let Some(out) = whole(bin, wt, &args, deadline, cap)? {
             found = Some((base.to_string(), out));
             break;
         }
@@ -162,7 +226,7 @@ pub fn changed_files(
         ));
     };
     // `<added>\t<removed>\t<path>\0`, `-` for a binary file's counts.
-    let mut files: Vec<ChangedFile> = split_z(&out)
+    let files = split_z(&out)
         .filter_map(|row| {
             let mut cols = row.splitn(3, '\t');
             let (added, removed) = (cols.next()?.parse().ok(), cols.next()?.parse().ok());
@@ -175,23 +239,6 @@ pub fn changed_files(
             })
         })
         .collect();
-    let args = [
-        "ls-files",
-        "-z",
-        "-o",
-        "--exclude-standard",
-        "--full-name",
-        "--",
-        ":/",
-    ];
-    let untracked = run(&args)?.unwrap_or_default();
-    files.extend(split_z(&untracked).map(|path| ChangedFile {
-        path: path.to_string(),
-        area: None,
-        added: None,
-        removed: None,
-        untracked: true,
-    }));
     Ok((base, files))
 }
 

@@ -9,7 +9,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use chaperone_core::checks::{AttentionInput, CheckInput, MergedInput};
-use chaperone_core::git::{git_bin, lane_files};
+use chaperone_core::git::{git_bin, head, head_files, lane_files};
 use chaperone_core::ledger::Ledger;
 use chaperone_core::pipeline::Phase;
 use chaperone_core::work::{Brief, ClaimInput, CreateInput, HandoffInput, UpdateInput};
@@ -247,6 +247,16 @@ fn repo_median_is_per_repo_over_30_days() {
     assert_eq!(median("Z/W")["claim_to_merge_h_median"], Value::Null);
 }
 
+fn rev_parse(dir: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", rev])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let ok = Command::new("git")
         .arg("-C")
@@ -270,20 +280,12 @@ fn lane_files_against_the_merge_base() {
     std::fs::write(wt.join("gone.md"), "x\n").unwrap();
     git(wt, &["add", "."]);
     git(wt, &["commit", "-qm", "base"]);
-    let base = String::from_utf8(
-        Command::new("git")
-            .arg("-C")
-            .arg(wt)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
+    let base = rev_parse(wt, "HEAD");
     std::fs::write(wt.join("a.rs"), "1\nnew\n3\n4\n").unwrap();
     git(wt, &["rm", "-q", "gone.md"]);
     git(wt, &["add", "."]);
     git(wt, &["commit", "-qm", "lane"]);
+    let lane_head = rev_parse(wt, "HEAD");
     std::fs::write(wt.join("a.rs"), "1\nnew\n3\n4\n5\n").unwrap();
     std::fs::write(wt.join("new.rs"), "a\nb").unwrap();
     std::fs::write(wt.join("blob.bin"), [0u8, 1, 2]).unwrap();
@@ -293,13 +295,13 @@ fn lane_files_against_the_merge_base() {
     let (got_base, files) = lane_files(
         &git_bin(deadline),
         wt,
-        Some(base.trim()),
+        Some(base.as_str()),
         deadline,
         1 << 20,
         area,
     )
     .unwrap();
-    assert_eq!(got_base, base.trim());
+    assert_eq!(got_base, base);
     let rows: Vec<String> = files
         .iter()
         .map(|f| {
@@ -323,4 +325,25 @@ fn lane_files_against_the_merge_base() {
             "new.rs core +2 -0 untracked",
         ]
     );
+
+    // HEAD only: the commit's counts, without the uncommitted line or the
+    // untracked files.
+    let bin = git_bin(deadline);
+    assert_eq!(head(&bin, wt, deadline).unwrap(), lane_head);
+    let (_, committed) = head_files(&bin, wt, Some(base.as_str()), deadline, 1 << 20).unwrap();
+    let rows: Vec<_> = committed
+        .iter()
+        .map(|f| (f.path.as_str(), f.added, f.removed, f.untracked))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("a.rs", Some(2), Some(1), false),
+            ("gone.md", Some(0), Some(1), false),
+        ]
+    );
+    // A repository with no commit has no head.
+    let empty = tempfile::tempdir().unwrap();
+    git(empty.path(), &["init", "-q", "-b", "main"]);
+    assert!(head(&bin, empty.path(), deadline).is_err());
 }
