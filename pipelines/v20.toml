@@ -1,0 +1,267 @@
+# v20, the first schema 2 pipeline (M2 PR 17, 2026-11-10): every gate reads a fact the
+# harness produced by doing the work itself (`check run diff|tests|smoke|review|verdict|plan`),
+# never a record the lane wrote. On a lane stamped v20 the write refuses a `diff`, `tests`,
+# `review`, `merge_verdict` or `plan_check` from any producer but the harness (the owner's
+# plan waiver aside), so `plan_check.*` and `verdict.*` read the harness's there.
+#
+# What changed from v19, and why:
+# - Ready on a lane that changes code needs, on the handed-off commit: a harness `diff` of at
+#   most `code_lines` (now 400, from 750), harness `tests` that passed, a complete harness
+#   review (one carried from a commit with the same tree counts), no finding of that review
+#   still blocking, the plan check run before code or waived by the owner, a smoke (the
+#   harness's pass when it ran one, else the lane's claim with evidence), and a harness
+#   verdict `yes`. Whether the lane changes code is measured by that `diff`
+#   (`commit.changes_code`), not the lane's declared kind.
+# - A lane whose diff changes no code (docs, a measurement) skips the plan check and the
+#   smoke: a plan attacks code before it exists, and a smoke shows code running. It still
+#   needs the tests, the review and the verdict, because a merge needs a harness verdict on
+#   the head, and the verdict runs only on a commit with all three.
+# - Done keeps v19's shape on harness facts: the plan check (or no code), then a YES verdict
+#   on the commit, or no code by the diff.
+# - Dropped: every transition but the two `handoff` rows. The write runs no other
+#   transition (it refuses a `phase.entered` for any id but `handoff`), so 20 of v19's 22
+#   rows could never run, and with them the gates only they read. Also dropped: the quality
+#   gate, kept tests and review rounds (the lane's own records; the harness review replaces
+#   them), daisy's review state (optional, and not the harness's), and `stamp_hash`: it reads
+#   `loaded.hash`, which is no projection fact, and the engine finds a lane's document by its
+#   id and hash before any gate runs, so the hash always matched.
+# - [runners] and [checks] name the sessions the harness starts, by the names the code asks
+#   for (`review_<lens>`, `review_verifier`, `verdict`, `plan`), and the prompt files in
+#   pipelines/prompts/, whose digests are in the hash.
+#
+# Runners. The lenses, the verifier, the verdict and the plan check run on the strongest
+# Claude model, named by its full id (`claude-fable-5-2`, not the `fable` alias) so the hash
+# names one model; the Codex lens runs on Codex's default model. Claude sessions get only the
+# read tools (Read, Grep, Glob): the runner starts them with `--permission-mode dontAsk` and a
+# sandbox, under which a Bash call that is not allow-listed is denied, so listing Bash would
+# be a control that does nothing. The budgets (US cents) and timeouts (seconds) are
+# placeholders to tune once the pilot measures real cost: one Claude session spent $0.26
+# answering a one-word prompt. Codex takes no spending cap, so the Codex lens's budget is
+# recorded but only its timeout bounds it.
+#
+# Arguments are as in v19: `field` and `left`/`right` are fact paths; a compared value is
+# exactly one of `value`, `value_from` or `limit`; `all`/`any` take `of` (gate ids), `not`
+# takes `of` (one gate id). Under schema 2 a gate may read only a fact the projection sets
+# (`FACTS`), so a gate that could never pass does not load.
+#
+# Published ids are immutable. A fix is a new file (v20.1), not an edit of this one. The
+# semantic hash covers the schema, [limits], [runners], [checks] with each prompt's sha256,
+# the gates and the transitions. Comments, key order, `published` and [cohort] do not change it.
+
+schema = 2
+id = "v20"
+published = "2026-11-10T12:00:00Z"
+
+[cohort]
+target_lanes = 25
+
+[limits]
+code_lines = 400
+sha_min = 7
+sha_max = 40
+review_attempts = 2
+verdict_attempts = 2
+plan_attempts = 2
+lens_budget = 400
+lens_timeout = 900
+verifier_budget = 400
+verifier_timeout = 900
+verdict_budget = 400
+verdict_timeout = 900
+plan_budget = 300
+plan_timeout = 600
+
+# --- runners and checks ----------------------------------------------------
+
+[runners.lens]
+cli = "claude"
+model = "claude-fable-5-2"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "lens_budget"
+timeout_limit = "lens_timeout"
+
+[runners.codex_lens]
+cli = "codex"
+budget_limit = "lens_budget"
+timeout_limit = "lens_timeout"
+
+[runners.verifier]
+cli = "claude"
+model = "claude-fable-5-2"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "verifier_budget"
+timeout_limit = "verifier_timeout"
+
+[runners.verdict]
+cli = "claude"
+model = "claude-fable-5-2"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "verdict_budget"
+timeout_limit = "verdict_timeout"
+
+[runners.plan]
+cli = "claude"
+model = "claude-fable-5-2"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "plan_budget"
+timeout_limit = "plan_timeout"
+
+[checks.review_correctness]
+runner = "lens"
+prompt = "review_correctness.md"
+
+[checks.review_design_tests]
+runner = "lens"
+prompt = "review_design_tests.md"
+
+[checks.review_intent]
+runner = "lens"
+prompt = "review_intent.md"
+
+[checks.review_codex]
+runner = "codex_lens"
+prompt = "review_codex.md"
+
+[checks.review_verifier]
+runner = "verifier"
+prompt = "review_verifier.md"
+
+[checks.verdict]
+runner = "verdict"
+prompt = "verdict.md"
+
+[checks.plan]
+runner = "plan"
+prompt = "plan.md"
+
+# --- gates -------------------------------------------------------------------
+
+# The engine found this document by the lane's id and hash, so the id is the stamp.
+[[gate]]
+id = "stamp_ok"
+fn = "eq"
+args = { field = "pipeline.id", value = "v20" }
+
+# Absent without a harness diff on the commit, so it also requires one.
+[[gate]]
+id = "code_lines_at_most"
+fn = "lte"
+args = { field = "commit.code_lines", limit = "code_lines" }
+
+[[gate]]
+id = "no_code_change"
+fn = "eq"
+args = { field = "commit.changes_code", value = false }
+
+[[gate]]
+id = "tests_passed"
+fn = "eq"
+args = { field = "tests.passed", value = true }
+
+[[gate]]
+id = "review_complete"
+fn = "eq"
+args = { field = "review.complete", value = true }
+
+[[gate]]
+id = "no_blocking_findings"
+fn = "eq"
+args = { field = "findings.open_blocking", value = 0 }
+
+[[gate]]
+id = "plan_ran"
+fn = "eq"
+args = { field = "plan_check.outcome", value = "ran" }
+
+[[gate]]
+id = "plan_waived"
+fn = "eq"
+args = { field = "plan_check.reason", value = "waived" }
+
+[[gate]]
+id = "plan_ok"
+fn = "any"
+args = { of = ["plan_ran", "plan_waived"] }
+
+[[gate]]
+id = "plan_or_no_code"
+fn = "any"
+args = { of = ["no_code_change", "plan_ok"] }
+
+[[gate]]
+id = "smoke_passed"
+fn = "eq"
+args = { field = "smoke.passed", value = true }
+
+[[gate]]
+id = "smoke_harness_ran"
+fn = "present"
+args = { field = "smoke.passed" }
+
+[[gate]]
+id = "no_harness_smoke"
+fn = "not"
+args = { of = "smoke_harness_ran" }
+
+[[gate]]
+id = "smoke_claimed"
+fn = "eq"
+args = { field = "smoke.claimed", value = true }
+
+# The lane's claim stands in only when the harness ran no smoke on the commit: a harness
+# smoke that failed is not outvoted by a claim.
+[[gate]]
+id = "smoke_claim_only"
+fn = "all"
+args = { of = ["no_harness_smoke", "smoke_claimed"] }
+
+[[gate]]
+id = "smoke_ok"
+fn = "any"
+args = { of = ["smoke_passed", "smoke_claim_only"] }
+
+[[gate]]
+id = "smoke_or_no_code"
+fn = "any"
+args = { of = ["no_code_change", "smoke_ok"] }
+
+[[gate]]
+id = "verdict_is_yes"
+fn = "eq"
+args = { field = "verdict.decision", value = "yes" }
+
+[[gate]]
+id = "verdict_on_head"
+fn = "sha_same_commit"
+args = { left = "verdict.sha", right = "commit.sha", min_limit = "sha_min", max_limit = "sha_max" }
+
+[[gate]]
+id = "verdict_yes_on_head"
+fn = "all"
+args = { of = ["verdict_is_yes", "verdict_on_head"] }
+
+[[gate]]
+id = "done_verdict"
+fn = "any"
+args = { of = ["no_code_change", "verdict_yes_on_head"] }
+
+# --- the gated handoff -------------------------------------------------------
+
+# A handoff with ready: true enters ready; a handoff to done, or `work update --status
+# done`, enters done. Any phase. An investigation or no_pr lane has no ready row, so it is
+# denied. The first gate that does not hold is the denial, so the order is the order a lane
+# runs its checks in.
+[[transition]]
+id = "handoff"
+routes = ["code_pr", "direct"]
+to = "ready"
+requires = [
+  "stamp_ok", "code_lines_at_most", "tests_passed", "review_complete", "no_blocking_findings",
+  "plan_or_no_code", "smoke_or_no_code", "verdict_is_yes", "verdict_on_head",
+]
+
+[[transition]]
+id = "handoff"
+routes = ["code_pr", "direct", "no_pr", "investigation"]
+to = "done"
+requires = ["stamp_ok", "plan_or_no_code", "done_verdict"]

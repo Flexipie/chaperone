@@ -235,22 +235,59 @@ impl Pipeline {
     }
 }
 
-/// The documents this binary can load, newest last. A claim stamps the
-/// newest; a lane stamped with anything else is `pipeline_unknown`.
+/// The prompt files a schema 2 check names, as this binary carries them.
+const PROMPT_FILES: &[(&str, &str)] = &[
+    (
+        "plan.md",
+        include_str!("../../../../pipelines/prompts/plan.md"),
+    ),
+    (
+        "review_codex.md",
+        include_str!("../../../../pipelines/prompts/review_codex.md"),
+    ),
+    (
+        "review_correctness.md",
+        include_str!("../../../../pipelines/prompts/review_correctness.md"),
+    ),
+    (
+        "review_design_tests.md",
+        include_str!("../../../../pipelines/prompts/review_design_tests.md"),
+    ),
+    (
+        "review_intent.md",
+        include_str!("../../../../pipelines/prompts/review_intent.md"),
+    ),
+    (
+        "review_verifier.md",
+        include_str!("../../../../pipelines/prompts/review_verifier.md"),
+    ),
+    (
+        "verdict.md",
+        include_str!("../../../../pipelines/prompts/verdict.md"),
+    ),
+];
+
+/// The documents this binary can load, oldest first; a lane stamped with
+/// anything else is `pipeline_unknown`.
 static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
     [
         include_str!("../../../../pipelines/v17.toml"),
         include_str!("../../../../pipelines/v17.1.toml"),
         include_str!("../../../../pipelines/v19.toml"),
+        include_str!("../../../../pipelines/v20.toml"),
     ]
     .iter()
-    .map(|src| Pipeline::load(src).expect("embedded pipelines load (*_loads_with_pinned_hash)"))
+    .map(|src| {
+        Pipeline::load_with_prompts(src, PROMPT_FILES)
+            .expect("embedded pipelines load (*_loads_with_pinned_hash)")
+    })
     .collect()
 });
 
-/// The pipeline a new claim stamps.
+/// The pipeline a new claim stamps. It stays v19 while v20 is newer: the
+/// owner moves it at the M3 cutover, with no lane running.
 pub fn current() -> &'static Pipeline {
-    &KNOWN[KNOWN.len() - 1]
+    &KNOWN[2]
 }
 
 /// The loaded document for a lane's stamp, `None` when this binary has no
@@ -294,6 +331,8 @@ mod tests {
     const V17_1_HASH: &str = "d99d9de3d9fe7e59aa046cabdb80a6d34670d5a1dfcab1873a248ba245e32fd5";
     const V19: &str = include_str!("../../../../pipelines/v19.toml");
     const V19_HASH: &str = "d45442e63a1b77001987bb5d82e987d730c26ddf4ba7c2941b6c09622287f5ea";
+    const V20: &str = include_str!("../../../../pipelines/v20.toml");
+    const V20_HASH: &str = "daeb37cde755148f1420e5900c2aa43983f1d176c84827d0c8ea124e88a0829d";
 
     const MINI: &str = r#"
 schema = 1
@@ -372,6 +411,31 @@ requires = ["a"]
         assert_eq!((p.id.as_str(), p.hash.as_str()), ("v19", V19_HASH));
         // CI is not a gate.
         assert!(!p.gates.contains_key("ci_not_red"));
+    }
+
+    /// v20 names every check the harness asks for by name, and the limits
+    /// that cap its runs.
+    #[test]
+    fn v20_loads_with_pinned_hash() {
+        let p = Pipeline::load_with_prompts(V20, PROMPT_FILES).unwrap();
+        assert_eq!((p.id.as_str(), p.hash.as_str()), ("v20", V20_HASH));
+        let review = crate::review::plan(&p).unwrap();
+        assert_eq!(review.attempts, 2);
+        crate::verdict::plan(&p).unwrap();
+        crate::plan::plan(&p).unwrap();
+        for limit in ["verdict_attempts", "plan_attempts"] {
+            assert!(p.limits[limit] >= 1, "{limit}");
+        }
+        assert_eq!(p.limits["code_lines"], 400);
+        for (name, check) in &p.checks {
+            let file = PROMPT_FILES.iter().find(|(f, _)| *f == check.prompt);
+            assert_eq!(check.text, file.unwrap().1, "{name}");
+        }
+        // Every prompt file is a check's.
+        assert_eq!(p.checks.len(), PROMPT_FILES.len());
+        // Only the gated handoff runs, so v20 has no other row.
+        assert!(p.transitions.iter().all(|t| t.id == "handoff"));
+        assert_eq!(by_stamp("v20", V20_HASH).unwrap().id, "v20");
     }
 
     #[test]
