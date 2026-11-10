@@ -1,8 +1,8 @@
 //! `chaperone check`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction. `check run` reads git in the lane's
-//! worktree, and runs tests in a checkout of its commit, before its write,
-//! under the lane's run lock.
+//! worktree, and runs tests and the review's sessions in a checkout of its
+//! commit, before its write, under the lane's run lock.
 
 use std::ffi::OsString;
 use std::fs::{DirBuilder, File};
@@ -14,10 +14,13 @@ use std::time::{Duration, Instant};
 use chaperone_core::checks::{AttentionInput, CheckInput, FindingMove, RunInput};
 use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
-use chaperone_core::git;
+use chaperone_core::git::{self, ChangedFile};
 use chaperone_core::ledger::{self, Actor, Evidence, Ledger, LedgerError, Refusal};
-use chaperone_core::runner::session_var;
+use chaperone_core::pipeline;
+use chaperone_core::review::{self, Agents, Facts};
+use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
+use chaperone_core::work::WorkItem;
 use chaperone_graph::{glob, tests_in};
 use serde_json::{Map, Value, json};
 
@@ -39,6 +42,9 @@ const NOT_CODE: [&str; 3] = ["docs/**", "**/*.md", "**/*.lock"];
 const RUN_TIMEOUT: Duration = Duration::from_secs(10);
 /// `check run tests`, when the profile names no `timeout_secs`.
 const TESTS_TIMEOUT: Duration = Duration::from_secs(1800);
+/// `check run review`'s checkout of the lane's commit, which fetches its
+/// whole history.
+const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Of each test command's stdout and stderr, the end kept as evidence.
 const TAIL_BYTES: usize = 16 * 1024;
 /// The numstat's output; a cut list would count too little, so past it the
@@ -78,16 +84,21 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             work,
             actor,
         } => run_tests(ledger, db, work, &actor.resolve()),
+        CheckCmd::Run {
+            kind: RunKind::Review,
+            work,
+            actor,
+        } => run_review(ledger, db, work, &actor.resolve()),
     }
 }
 
 /// A `check run` under way: the lane's run lock, held until it drops, the
-/// lane's worktree and claimed base, and the input with the commit the lane
+/// lane's worktree and work item, and the input with the commit the lane
 /// is on (as a ready handoff reads it), its tree and this executable.
 struct Run {
     _lock: File,
     wt: PathBuf,
-    base_sha: Option<String>,
+    item: WorkItem,
     input: RunInput,
 }
 
@@ -128,7 +139,7 @@ fn start_run(ledger: &Ledger, db: &Path, work: i64, check: &str) -> Result<Run, 
     Ok(Run {
         _lock: lock,
         wt,
-        base_sha: item.base_sha,
+        item,
         input,
     })
 }
@@ -144,14 +155,10 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     let Run {
         _lock,
         wt,
-        base_sha,
+        item,
         mut input,
     } = start_run(ledger, db, work, "diff")?;
-    let (bin, deadline) = (Path::new("git"), Instant::now() + RUN_TIMEOUT);
-    let head = &input.head;
-    let (base, files) =
-        git::commit_files(bin, &wt, base_sha.as_deref(), head, deadline, DIFF_BYTES)
-            .map_err(|e| refuse(format!("could not diff {head} in {}: {e}", wt.display())))?;
+    let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
     let code: Vec<_> = files
         .iter()
         .filter(|f| !NOT_CODE.iter().any(|g| glob(g, &f.path)))
@@ -189,6 +196,18 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     one(ledger.check_run(actor, &input)??)
 }
 
+/// The files the commit `head` changes against the merge base, and the
+/// base: `diff`'s numstat.
+fn changed(
+    wt: &Path,
+    base_sha: Option<&str>,
+    head: &str,
+) -> Result<(String, Vec<ChangedFile>), CliError> {
+    let (bin, deadline) = (Path::new("git"), Instant::now() + RUN_TIMEOUT);
+    git::commit_files(bin, wt, base_sha, head, deadline, DIFF_BYTES)
+        .map_err(|e| refuse(format!("could not diff {head} in {}: {e}", wt.display())))
+}
+
 /// `check run tests`: the `[tests]` commands of the base branch's profile,
 /// in order until one fails, in a fresh checkout of the lane's commit that
 /// the harness makes and removes, then the checkout must still be at that
@@ -214,11 +233,9 @@ fn run_tests(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Out
         .timeout_secs
         .map_or(TESTS_TIMEOUT, Duration::from_secs);
     let deadline = Instant::now() + timeout;
-    // Beside the ledger, one per lane: the lane's lock keeps it to one run.
     let db = std::path::absolute(db).map_err(LedgerError::from)?;
     let home = db.parent().unwrap_or(Path::new("/"));
-    let dir = home.join("checkouts").join(format!("lane-{work}"));
-    let checkout = Checkout::fresh(&wt, dir, &input.head, deadline)?;
+    let checkout = lane_checkout(&db, &wt, work, &input.head, deadline)?;
     let target = tests.target_dir.as_ref().map(|var| {
         let lane_target = home.join("targets").join(format!("lane-{work}"));
         (OsString::from(var), lane_target.into_os_string())
@@ -262,6 +279,118 @@ fn run_tests(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Out
     ]);
     input.fields.extend(after);
     one(ledger.check_run(actor, &input)??)
+}
+
+/// `check run review`: the lane's pipeline's lenses and verifier
+/// (`review::record`) in the harness's checkout of the lane's commit, on
+/// the files `diff` counts and the diff from their merge base, with the
+/// lane's goal from the ledger. First the rulings a crash left unwritten
+/// (`review::replay`); then a complete review of the commit replays
+/// before anything runs. A lane whose pipeline has no review checks (v17
+/// to v19) writes nothing; a CLI that cannot start, a checkout that
+/// cannot be made and a diff past 16 MiB write nothing more.
+fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
+    let Run {
+        _lock,
+        wt,
+        item,
+        mut input,
+    } = start_run(ledger, db, work, "review")?;
+    let (id, hash) = (item.pipeline_id.as_deref(), item.pipeline_hash.as_deref());
+    let found = pipeline::by_stamp(id.unwrap_or_default(), hash.unwrap_or_default());
+    let pipeline = found.ok_or_else(|| {
+        refuse(format!(
+            "work item {work} has no pipeline this binary loads"
+        ))
+    })?;
+    let plan = review::plan(pipeline).map_err(|e| {
+        refuse(format!(
+            "{e}; a lane on it records reviews with `check record` and `reviews record`"
+        ))
+    })?;
+    if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
+        return one(stored);
+    }
+    // By its full path, as a shell finds it, so the event names the binary.
+    let probe = |bin: &str| {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let found = std::env::split_paths(&path)
+            .map(|d| d.join(bin))
+            .find(|p| p.is_file());
+        let deadline = Instant::now() + RUN_TIMEOUT;
+        // As for test commands: no variable points its git elsewhere.
+        let env = std::env::vars_os().filter(|(k, _)| !git::repo_var(k));
+        Agent::probe(found.unwrap_or(bin.into()), env, deadline)
+            .map_err(|e| refuse(format!("could not start {bin}: {e}")))
+    };
+    let (claude, codex) = (probe("claude")?, probe("codex")?);
+    let head = input.head.clone();
+    let (base, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
+    let args = [
+        "merge-base",
+        "--end-of-options",
+        &git::base_rev(&base),
+        &head,
+    ];
+    let (base, _) = harness_git(&wt, &args, Instant::now() + RUN_TIMEOUT)?;
+    let base = base.trim().to_string();
+    let checkout = lane_checkout(db, &wt, work, &head, Instant::now() + CHECKOUT_TIMEOUT)?;
+    // In the harness's checkout, so the lane's config shapes nothing.
+    let args = [
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+    ];
+    let args = [&args[..], &[&base, &head, "--"]].concat();
+    let deadline = Instant::now() + RUN_TIMEOUT;
+    let diff = match git::git(Path::new("git"), &checkout.dir, &args, deadline, DIFF_BYTES) {
+        Ok((out, false)) => String::from_utf8_lossy(&out).into_owned(),
+        Ok((_, true)) => return Err(refuse(format!("the diff is past {DIFF_BYTES} bytes"))),
+        Err(_) => {
+            return Err(refuse(format!(
+                "could not diff {base} {head} in the checkout"
+            )));
+        }
+    };
+    let facts = Facts {
+        base,
+        head,
+        files,
+        diff,
+        goal: review::goal(ledger, &item)?,
+    };
+    let agents = Agents {
+        claude: &claude,
+        codex: &codex,
+    };
+    let store = Evidence::beside(db);
+    one(review::record(
+        ledger,
+        actor,
+        input,
+        &plan,
+        &agents,
+        &checkout.dir,
+        &facts,
+        &store,
+    )??)
+}
+
+/// The harness's fresh checkout of the lane's commit, `checkouts/lane-<id>`
+/// beside the ledger: one per lane, which the lane's lock keeps to one run.
+fn lane_checkout(
+    db: &Path,
+    wt: &Path,
+    work: i64,
+    head: &str,
+    deadline: Instant,
+) -> Result<Checkout, CliError> {
+    let db = std::path::absolute(db).map_err(LedgerError::from)?;
+    let home = db.parent().unwrap_or(Path::new("/"));
+    let dir = home.join("checkouts").join(format!("lane-{work}"));
+    Checkout::fresh(wt, dir, head, deadline)
 }
 
 /// A fresh repository the harness owns at `dir` with the lane's commit

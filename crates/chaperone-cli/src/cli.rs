@@ -627,6 +627,10 @@ pub enum RunKind {
     /// the commit the harness makes and removes each run; the checkout
     /// must stay at the commit and clean
     Tests,
+    /// Three Claude lenses and a Codex lens on the commit's diff, in that
+    /// checkout, then a verifier that tries to refute each finding; the
+    /// lane's pipeline names them (none before v20)
+    Review,
 }
 
 /// Daisy's review jobs, as recorded in the ledger. The worker stays in

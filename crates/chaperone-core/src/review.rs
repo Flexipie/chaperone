@@ -21,9 +21,10 @@ use sha2::{Digest, Sha256};
 
 use crate::checks::{BODY_CHARS, FindingMove, Recorded, RunInput};
 use crate::git::ChangedFile;
-use crate::ledger::{Actor, Checked, Evidence, Finding, Findings, Ledger, Payload};
+use crate::ledger::{Actor, Checked, Evidence, Finding, Findings, Ledger, LedgerError, Payload};
 use crate::pipeline::{Check, Cli, Pipeline, Runner};
 use crate::runner::{Agent, Ask, CodexAsk, Run, RunError};
+use crate::work::WorkItem;
 
 /// The lenses, each the pipeline's check `review_<lens>`.
 pub const LENSES: [&str; 4] = ["correctness", "design_tests", "intent", "codex"];
@@ -467,23 +468,45 @@ pub fn verify(
     })
 }
 
-/// `check run review` once the CLI has read the lane, under its run lock:
-/// `input` the lane's commit, `dir` a checkout of it, `facts` what it
-/// changes. First the rulings a crash left unwritten on the lane's newest
-/// review; then, unless a complete review of this commit by this pipeline
-/// replays, the sessions and [`finish`], then one `finding.updated` per
-/// ruling.
-#[allow(clippy::too_many_arguments)]
-pub fn record(
+/// What the lane is for, as the ledger holds it, for the intent lens: its
+/// title, its slice of the spec when it has one, and the goal its newest
+/// handoff states. Nothing else the lane wrote (its summary, merge case,
+/// what to look at) reaches a lens.
+pub fn goal(ledger: &Ledger, item: &WorkItem) -> Result<String, LedgerError> {
+    let mut goal = format!("The work item: {}\n", item.title);
+    if let (Some(spec), Some(key)) = (item.spec_id, &item.lane_key)
+        && let Ok(slice) = ledger.spec_slice(Some(&spec.to_string()), key, None)?
+    {
+        let (s, v) = (&slice.section, slice.version);
+        let title = &s.title;
+        goal += &format!(
+            "\nIts slice of spec {} v{v}, {title}:\n\n{}\n",
+            slice.parent_key, s.body
+        );
+    }
+    let brief = ledger
+        .work_handoffs(item.id)?
+        .pop()
+        .and_then(|h| h.handoff.brief);
+    if let Some(brief) = brief.filter(|b| !b.goal.is_empty()) {
+        goal += &format!(
+            "\nThe goal the lane's newest handoff states:\n\n{}\n",
+            brief.goal
+        );
+    }
+    Ok(goal)
+}
+
+/// The start of `check run review`, before anything is run: the rulings a
+/// crash left unwritten on the lane's newest review, then `input` keyed
+/// for a review by `plan`, and the complete review of this commit by this
+/// pipeline when one is stored, which a run replays.
+pub fn replay(
     ledger: &Ledger,
     actor: &Actor,
-    mut input: RunInput,
+    input: &mut RunInput,
     plan: &Plan<'_>,
-    agents: &Agents<'_>,
-    dir: &Path,
-    facts: &Facts,
-    store: &Evidence,
-) -> Checked<Recorded> {
+) -> Checked<Option<Recorded>> {
     let newest: Option<(i64, String)> = ledger
         .conn()
         .query_row(
@@ -501,8 +524,28 @@ pub fn record(
     }
     input.check = "review".into();
     input.profile = Some(plan.hash.into());
-    if let Some(stored) = ledger.run_replay(&ledger.run_key(&input)?)? {
-        return Ok(Ok(stored));
+    Ok(Ok(ledger.run_replay(&ledger.run_key(input)?)?))
+}
+
+/// `check run review` once the CLI has read the lane, under its run lock:
+/// `input` the lane's commit, `dir` a checkout of it, `facts` what it
+/// changes. [`replay`], else the sessions and [`finish`], then one
+/// `finding.updated` per ruling.
+#[allow(clippy::too_many_arguments)]
+pub fn record(
+    ledger: &Ledger,
+    actor: &Actor,
+    mut input: RunInput,
+    plan: &Plan<'_>,
+    agents: &Agents<'_>,
+    dir: &Path,
+    facts: &Facts,
+    store: &Evidence,
+) -> Checked<Recorded> {
+    match replay(ledger, actor, &mut input, plan)? {
+        Ok(Some(stored)) => return Ok(Ok(stored)),
+        Ok(None) => {}
+        Err(r) => return Ok(Err(r)),
     }
     let review = run(&plan.lenses, agents, dir, facts, store)?;
     let found: Vec<Finding> = review.found().cloned().collect();
@@ -740,5 +783,66 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
         assert!(refused(json!({"findings": [extra]})).contains("unknown field"));
         assert!(refused(json!({"findings": "none"})).starts_with("not a lens answer"));
         assert!(refused(json!("Looks good to me.")).starts_with("not a lens answer"));
+    }
+
+    /// The intent lens's goal is the title, the lane's slice of the spec
+    /// and its newest handoff's goal; never what the lane says about its
+    /// change.
+    #[test]
+    fn the_goal_is_what_the_ledger_says_the_lane_is_for() {
+        use crate::work::{Brief, ClaimInput, CreateInput, HandoffInput, LookAt};
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let me = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
+        let body = "# P\n\n## slice 1: the slice  (O/R#2)\n\ndone when: SPEC\n";
+        let spec = ledger.spec_create(&me, "o/r#1", None, body, None, false);
+        spec.unwrap().unwrap();
+        let input = CreateInput {
+            title: "TITLE".into(),
+            source: Some("manual".into()),
+            kind: "code".into(),
+            pr_flow: "pr".into(),
+            spec: Some("o/r#1".into()),
+            lane_key: Some("O/R#2".into()),
+            ..CreateInput::default()
+        };
+        let item = ledger
+            .work_create(&me, &input, None, false)
+            .unwrap()
+            .unwrap();
+        let claim = ClaimInput::default();
+        ledger
+            .work_claim(&me, item.id, &claim, None, false)
+            .unwrap()
+            .unwrap();
+        for said in ["OLD", "NEW"] {
+            let look = LookAt {
+                path: "LOOK".into(),
+                ..LookAt::default()
+            };
+            let brief = Brief {
+                goal: said.into(),
+                merge_case: "MERGE".into(),
+                look_at: vec![look],
+                ..Brief::default()
+            };
+            let handoff = HandoffInput {
+                summary: "SUMMARY".into(),
+                brief: Some(brief),
+                ..HandoffInput::default()
+            };
+            let done = ledger.work_handoff(&me, item.id, &handoff, None, None, false);
+            done.unwrap().unwrap();
+        }
+        let got = goal(&ledger, &item).unwrap();
+        for said in ["TITLE", "the slice", "SPEC", "NEW"] {
+            assert!(got.contains(said), "{said}: {got}");
+        }
+        for unsaid in ["OLD", "SUMMARY", "MERGE", "LOOK"] {
+            assert!(!got.contains(unsaid), "{unsaid}: {got}");
+        }
     }
 }

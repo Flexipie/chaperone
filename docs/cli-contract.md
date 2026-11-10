@@ -120,7 +120,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
-| `check run` | `diff\|tests --work <id>` | write |
+| `check run` | `diff\|tests\|review --work <id>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -315,6 +315,46 @@ flag such as `assume-unchanged` hides a change from them. A failing command, a c
 a signal, a moved `HEAD`, a dirty tree, a cut listing and a timeout are a `check.finished` with
 `result` `fail`; a command that cannot start, or a checkout that cannot be made (git's own
 message is kept), writes nothing.
+
+`check run review` takes the same lock and reads the commit the same way. The lane's stamped
+pipeline must name the review's checks, each with a runner (`[runners]`: the CLI, model,
+tools, budget and timeout) and a prompt file: `review_correctness`, `review_design_tests`,
+`review_intent` and `review_codex` (the lenses) and `review_verifier`; a Claude runner must
+name a model. v17 to v19 name none, so a lane on them is refused (`invalid_input`, nothing
+written) and keeps recording reviews with `check record` and `reviews record`. Then it writes
+the rulings a crash left unwritten on the lane's newest review, and a complete review already
+stored under its key (events.md; `<profile>` is the pipeline's hash) is printed with
+`replayed` true and nothing runs. Else it asks `claude --version` and `codex --version`, each
+the first of that name on `PATH`, run by its full path, reads the commit's files as `diff`
+does and their merge base in the lane's worktree, makes a fresh checkout as `tests` does
+(removed when the command ends), and reads `git diff <merge base> <commit>` there, where the
+lane's config does not reach. A CLI that cannot start, a checkout that cannot be made and a
+diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings. The four lenses run at once, each a fresh headless
+session in the checkout (no lane variables, Claude Code's sandbox, Codex read-only), given its
+prompt file and then the facts: the commit, the merge base, the changed files with their
+counts and the diff, cut after 128 KiB at a line with a note saying where the rest is. Only
+`intent` is also told what the lane is for: the work item's title, its slice of the spec, and
+the `goal` of its newest handoff's brief. No lens is given the handoff's summary,
+`merge_case` or `look_at`. Each answers `{findings: [{severity, title, body, path, line}]}`.
+A lens that errors, hits its budget or timeout, or answers anything else (prose, another
+field, a severity the ledger does not know) did not run: never "no findings". When a lens
+found something, one more fresh session, the verifier, is shown every finding by key and
+answers `{rulings: [{key, verdict, why}]}`, `verified` or `refuted`: one session for all, as
+the findings share the facts and the checkout, bounded by its runner's budget and timeout
+like a lens. One that fails, or rules on a key it was not shown or twice, rules on nothing,
+and every finding stays open (still blocking). Each session's prompt and whole answer go to
+the evidence store first.
+
+It then writes, in this order: one `usage.reported` per session that left a session id
+(events.md, Usage), one `check.finished` (check `review`: the lens table, the verifier,
+`complete`, the findings), and one `finding.updated` per ruling on a finding still open,
+carrying the review's harness producer, so the verifier rules whichever session started the
+run (finding statuses). It is the second command that appends more than one event, after
+`usage report`, each event in its own transaction. A crash leaves whole events: usage rows
+without a review are what those sessions cost, and stay; a review whose rulings are missing
+is finished by the next `check run review` on the lane before anything else, with no session
+started. A review that is not `complete` runs again on the same commit. It prints the
+`check.finished` as `check record` does.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends
