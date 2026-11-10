@@ -938,7 +938,9 @@ mod tests {
         }
     }
 
-    /// Each refusal branch of the guard writes no event.
+    /// A bad event is refused for its own reason and writes no event. Not
+    /// every refusal is here: the gate, the pipeline stamp, `pr.merged`,
+    /// attention, dossier and usage have their own tests.
     #[test]
     fn refusals_write_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -1363,6 +1365,13 @@ mod tests {
                 None,
                 ev(EventKind::LaneRenewed, Some(2), None, lease.clone()),
             ),
+            // Another pair's lease is held against a renewal once expired too.
+            (
+                r#"LeaseHeld { by: "b/t", until:"#,
+                "2026-11-03T00:02:00.000Z",
+                None,
+                ev(EventKind::LaneRenewed, Some(2), None, lease.clone()),
+            ),
             (
                 "lane.taken_over must leave this agent and session",
                 AT,
@@ -1489,6 +1498,21 @@ mod tests {
                 ev(EventKind::CheckFinished, Some(1), None, Payload::default()),
             ),
             (
+                "check.finished needs check and head_sha",
+                AT,
+                None,
+                ev(
+                    EventKind::CheckFinished,
+                    Some(1),
+                    None,
+                    Payload {
+                        head_sha: Some("abc1234".into()),
+                        outcome: Some("ran".into()),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            (
                 "check.finished outcome is ran or skipped",
                 AT,
                 None,
@@ -1529,7 +1553,7 @@ mod tests {
             ),
             // The host runs only handoff, and a phase.entered needs a `to`.
             (
-                r#"phase.entered runs only ["handoff"]"#,
+                "phase.entered runs only",
                 AT,
                 None,
                 ev(
