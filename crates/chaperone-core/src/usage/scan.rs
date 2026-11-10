@@ -305,7 +305,7 @@ fn push(
 /// R13's allowlist for `raw`: the usage object's counts, and objects of
 /// counts (Claude's `cache_creation`, `server_tool_use`). Strings are
 /// dropped, so no text rides along.
-fn counts(u: &Value) -> Value {
+pub(crate) fn counts(u: &Value) -> Value {
     match u {
         Value::Object(m) => Value::Object(
             m.iter()

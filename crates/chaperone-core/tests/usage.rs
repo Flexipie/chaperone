@@ -8,10 +8,11 @@ use std::fs;
 use std::path::Path;
 
 use chaperone_core::ledger::{Applied, EventKind, Ledger, Mutation, Payload, Refusal};
+use chaperone_core::runner::Run;
 use chaperone_core::usage::Roots;
 use chaperone_core::work::{ClaimInput, CreateInput};
 use common::{actor, count, read_only};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 const WT: &str = "/work/lane";
 
@@ -322,4 +323,46 @@ fn an_idle_transcript_counts_its_last_message() {
         .unwrap()
         .unwrap();
     assert_eq!((got.written, got.pending), (7, 0));
+}
+
+/// A session the harness ran is one row, source and origin `harness`,
+/// keyed by its session id: a retry writes nothing, its counts keep no
+/// string, and a session that left no id writes nothing.
+#[test]
+fn a_harness_session_is_one_row() {
+    let (_dir, path, ledger) = common::ledger();
+    let id = lane(&ledger, None);
+    let usage = json!({"claude-x": {"inputTokens": 3, "costUSD": 0.5, "note": "not stored"}});
+    let run = Run {
+        raw: "not stored".into(),
+        cost_usd: Some(0.5),
+        model_usage: usage,
+        session_id: Some("sess".into()),
+    };
+    let labels = Map::from_iter([("phase".into(), json!("review"))]);
+    let no_id = Run {
+        raw: String::new(),
+        cost_usd: Some(1.0),
+        model_usage: Value::Null,
+        session_id: None,
+    };
+    for run in [&run, &run, &no_id] {
+        let written = ledger.usage_run(&actor("1"), id, labels.clone(), run);
+        written.unwrap().unwrap();
+    }
+    let db = read_only(&path);
+    assert_eq!(count(&db, USAGE), 1);
+    let payload: String = db
+        .query_row(
+            "SELECT payload_json FROM events WHERE kind = 'usage.reported'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let want = json!({"source": "harness", "phase": "review", "message_id": "run:sess",
+        "origin": "harness", "session_id": "sess", "cost_usd": 0.5,
+        "raw": {"claude-x": {"inputTokens": 3, "costUSD": 0.5}}});
+    assert_eq!(serde_json::from_str::<Value>(&payload).unwrap(), want);
+    let got = ledger.usage_get(id).unwrap().unwrap();
+    assert_eq!(got["totals"]["harness"]["messages"], 1);
 }
