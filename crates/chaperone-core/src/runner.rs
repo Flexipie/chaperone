@@ -43,8 +43,13 @@ const SESSION_VARS: [&str; 14] = [
     "TMUX_PANE",
 ];
 const SESSION_PREFIXES: [&str; 5] = ["ATUIN_", "CHAPERONE_", "CODEX_", "DAISY_", "HERDR_"];
-/// Kept of the prefixes above: where Codex keeps its login.
-const SESSION_KEEP: &str = "CODEX_HOME";
+/// Kept of the prefixes above: how Codex logs in.
+const SESSION_KEEP: [&str; 4] = [
+    "CODEX_ACCESS_TOKEN",
+    "CODEX_API_KEY",
+    "CODEX_CA_CERTIFICATE",
+    "CODEX_HOME",
+];
 /// An answer past this is refused, not cut: half a JSON object is none.
 const OUT_BYTES: usize = 16 * 1024 * 1024;
 /// Of a failed run's stderr, its end.
@@ -190,7 +195,8 @@ impl Agent {
         let session = |name: &OsString| {
             let name = name.to_string_lossy();
             SESSION_VARS.contains(&&*name)
-                || (SESSION_PREFIXES.iter().any(|p| name.starts_with(p)) && name != SESSION_KEEP)
+                || (SESSION_PREFIXES.iter().any(|p| name.starts_with(p))
+                    && !SESSION_KEEP.contains(&&*name))
         };
         let env = env.into_iter().filter(|(name, _)| !session(name)).collect();
         let mut agent = Agent {

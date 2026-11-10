@@ -88,9 +88,9 @@ fn a_timed_out_child_takes_what_it_started_with_it() {
     let scripts = [
         r#"sleep 30 & echo $! > "$0"; wait"#,
         // `set -m` puts the job in its own group, as the agent CLIs do.
-        r#"set -m; sleep 30 & echo $! > "$0"; trap 'kill $!; exit 0' TERM; wait"#,
+        r#"set -m; sleep 30 & echo $! > "$0"; trap 'kill $!; echo > "$0.term"; exit 0' TERM; wait"#,
     ];
-    for script in scripts {
+    for (i, script) in scripts.into_iter().enumerate() {
         let (dir, mut cmd) = sh(script);
         let deadline = Instant::now() + Duration::from_secs(2);
         assert!(matches!(
@@ -102,6 +102,10 @@ fn a_timed_out_child_takes_what_it_started_with_it() {
             !alive(pid),
             "the sleeper {pid} of {script} outlived the run"
         );
+        // The trap ran: where `set -m` does nothing (dash with no
+        // terminal), the group kill alone would also end the sleeper.
+        let termed = dir.path().join("pid.term").exists();
+        assert_eq!(termed, i == 1, "{script}");
     }
 }
 
