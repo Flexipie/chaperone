@@ -1,14 +1,16 @@
-//! `review::run`'s lenses and `review::verify` against the scripted
-//! agent, linked as both `claude` and `codex`.
+//! `review::run`'s lenses, `review::verify` and `review::record` against
+//! the scripted agent, linked as both `claude` and `codex`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use chaperone_core::checks::{Recorded, RunInput};
 use chaperone_core::git::ChangedFile;
-use chaperone_core::ledger::Evidence;
+use chaperone_core::ledger::{Actor, Evidence, Findings, Ledger};
 use chaperone_core::pipeline::Pipeline;
 use chaperone_core::review::{self, Agents, DIFF_BYTES, Facts, Lens, Review, Ruling};
 use chaperone_core::runner::Agent;
+use chaperone_core::work::{ClaimInput, CreateInput};
 use serde_json::{Value, json};
 
 const PIPELINE: &str = r#"
@@ -35,8 +37,12 @@ const PROMPTS: &[(&str, &str)] = &[
 
 /// A result as Claude Code prints it, less the fields not read.
 fn result(structured: Value) -> String {
+    session("s", structured)
+}
+
+fn session(id: &str, structured: Value) -> String {
     json!({"type": "result", "subtype": "success", "is_error": false,
-        "structured_output": structured, "total_cost_usd": 0.25, "session_id": "s"})
+        "structured_output": structured, "total_cost_usd": 0.25, "session_id": id})
     .to_string()
 }
 
@@ -292,4 +298,189 @@ fn the_verifier_rules_by_key() {
     );
     let failed = verify(json!({"when": "LENS verifier", "exit": 2})).1;
     assert_eq!(failed.row()["ran"], false);
+}
+
+/// The session that claimed lane 1.
+fn lane_session() -> Actor {
+    Actor {
+        agent: Some("a".into()),
+        session: Some("s1".into()),
+    }
+}
+
+/// The ledger beside `env`'s evidence, with lane 1 claimed by
+/// [`lane_session`].
+fn ledger(env: &Env) -> Ledger {
+    let ledger = Ledger::open_and_migrate(&env.dir.path().join("ledger.db")).unwrap();
+    let input = CreateInput {
+        title: "t".into(),
+        source: Some("manual".into()),
+        kind: "code".into(),
+        pr_flow: "pr".into(),
+        ..CreateInput::default()
+    };
+    let me = lane_session();
+    ledger
+        .work_create(&me, &input, None, false)
+        .unwrap()
+        .unwrap();
+    let claim = ClaimInput::default();
+    ledger
+        .work_claim(&me, 1, &claim, None, false)
+        .unwrap()
+        .unwrap();
+    ledger
+}
+
+/// The review of lane 1's commit, by `pipeline`.
+fn input(pipeline: &Pipeline) -> RunInput {
+    RunInput {
+        work: 1,
+        check: "review".into(),
+        head: "2".repeat(40),
+        tree: "3".repeat(40),
+        profile: Some(pipeline.hash.clone()),
+        bin: "chaperone".into(),
+        version: "0".into(),
+        ..RunInput::default()
+    }
+}
+
+/// `check run review`, started by the lane's own session.
+fn record(env: &Env, ledger: &Ledger) -> Recorded {
+    let pipeline = pipeline();
+    let plan = review::plan(&pipeline).unwrap();
+    let (dir, agents, me) = (env.checkout(), env.agents(), lane_session());
+    let input = input(&pipeline);
+    let got = review::record(
+        ledger, &me, input, &plan, &agents, &dir, &env.facts, &env.store,
+    );
+    got.unwrap().unwrap()
+}
+
+/// Sessions started so far, by both CLIs.
+fn calls(env: &Env) -> usize {
+    let log = |cli: &str| std::fs::read_to_string(env.dir.path().join(format!("{cli}.log")));
+    ["claude", "codex"]
+        .map(|c| log(c).unwrap_or_default().lines().count())
+        .iter()
+        .sum()
+}
+
+/// The lane's findings that still block, as (title, status).
+fn blocking(ledger: &Ledger) -> Vec<(String, String)> {
+    let found = ledger.blocking_findings(1).unwrap();
+    found.into_iter().map(|f| (f.title, f.status)).collect()
+}
+
+/// Scripts where correctness finds a, b and c, and the verifier (whose
+/// answer is `verifier`) is shown them; the other lenses find nothing.
+fn scripts(verifier: impl Fn(&str, &str) -> Value) -> (Value, Value) {
+    let said = json!({"findings": [found("risk", "a"), found("blocker", "b"), found("risk", "c")]});
+    let keys = review::findings("correctness", said.clone()).unwrap();
+    let (a, b) = (&keys[0].finding_key, &keys[1].finding_key);
+    let none = json!({"findings": []});
+    let ran = |lens: &str, said: &Value| json!({"when": format!("LENS {lens}"), "stdout": session(lens, said.clone())});
+    let claude = json!([
+        ran("correctness", &said),
+        ran("design_tests", &none),
+        ran("intent", &none),
+        verifier(a, b)
+    ]);
+    let codex = json!([{"when": "LENS codex", "write": {"-o": none.to_string()}}]);
+    (claude, codex)
+}
+
+fn rules(a: &str, b: &str) -> Value {
+    let rulings = json!({"rulings": [
+        {"key": a, "verdict": "verified", "why": "it reads past the end"},
+        {"key": b, "verdict": "refuted", "why": "the test covers it"},
+    ]});
+    json!({"when": "LENS verifier", "stdout": session("verifier", rulings)})
+}
+
+/// One review event with every lens's row and the findings; the verifier,
+/// run from the lane's own session, verifies a and refutes b, and c it
+/// does not rule on stays open; each session's cost is a usage row. The
+/// same commit again replays and starts no session.
+#[test]
+fn a_review_is_recorded_then_ruled() {
+    let (claude, codex) = scripts(rules);
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let first = record(&env, &ledger);
+    let p = &first.payload;
+    assert_eq!(
+        (p.check.as_deref(), &p.rest["complete"]),
+        (Some("review"), &json!(true))
+    );
+    let ran: Vec<_> = p.rest["lenses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| &l["ran"])
+        .collect();
+    assert_eq!(ran, [true; 4]);
+    assert_eq!(p.rest["verifier"]["rulings"].as_array().unwrap().len(), 2);
+    assert!(matches!(&p.findings, Some(Findings::List(l)) if l.len() == 3));
+    let want = [("a", "verified"), ("c", "open")].map(|(t, s)| (t.to_string(), s.to_string()));
+    assert_eq!(blocking(&ledger), want);
+    let usage = ledger.usage_get(1).unwrap().unwrap();
+    // Three Claude lenses and the verifier; Codex left no session id.
+    assert_eq!(usage["totals"]["harness"]["messages"], 4);
+
+    let before = calls(&env);
+    let again = record(&env, &ledger);
+    assert_eq!((again.replayed, again.event_id), (true, first.event_id));
+    assert_eq!(calls(&env), before);
+}
+
+/// A verifier that fails rules on nothing: every finding stays open and
+/// the review is not complete, so the same commit runs again.
+#[test]
+fn a_verifier_that_fails_leaves_findings_open() {
+    let (claude, codex) = scripts(|_, _| json!({"when": "LENS verifier", "exit": 2}));
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let first = record(&env, &ledger);
+    assert_eq!(first.payload.rest["complete"], false);
+    assert_eq!(first.payload.rest["verifier"]["ran"], false);
+    let open = ["a", "b", "c"].map(|t| (t.to_string(), "open".to_string()));
+    assert_eq!(blocking(&ledger)[..3], open);
+    let again = record(&env, &ledger);
+    assert!(!again.replayed && again.event_id > first.event_id);
+}
+
+/// A crash after the review event and before its rulings: the next run
+/// writes them from the event, and starts no session.
+#[test]
+fn a_crash_before_the_rulings_is_finished_by_a_rerun() {
+    let (claude, codex) = scripts(rules);
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let pipeline = pipeline();
+    let plan = review::plan(&pipeline).unwrap();
+    let (dir, agents, me) = (env.checkout(), env.agents(), lane_session());
+    let run = review::run(&plan.lenses, &agents, &dir, &env.facts, &env.store).unwrap();
+    let found: Vec<_> = run.found().cloned().collect();
+    let verified = review::verify(
+        &plan.verifier,
+        &agents,
+        &dir,
+        &env.facts,
+        &found,
+        &env.store,
+    );
+    let verified = verified.unwrap();
+    let input = input(&pipeline);
+    let written = review::finish(&ledger, &me, input, &env.facts, &run, Some(&verified));
+    let written = written.unwrap().unwrap();
+    assert_eq!(blocking(&ledger).len(), 3);
+
+    let before = calls(&env);
+    let again = record(&env, &ledger);
+    assert_eq!((again.replayed, again.event_id), (true, written.event_id));
+    let want = [("a", "verified"), ("c", "open")].map(|(t, s)| (t.to_string(), s.to_string()));
+    assert_eq!(blocking(&ledger), want);
+    assert_eq!(calls(&env), before);
 }

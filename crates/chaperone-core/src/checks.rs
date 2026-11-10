@@ -20,7 +20,7 @@ use crate::pipeline::{Fact, canonical_string};
 const ENTITY: &str = "work item";
 const JOB: &str = "job";
 /// Daisy's cut on a finding body (`REVIEW_VIEW_BODY_CHARS`).
-const BODY_CHARS: usize = 600;
+pub(crate) const BODY_CHARS: usize = 600;
 
 /// Each session check and the reasons it may be skipped for.
 pub const CHECKS: &[(&str, &[&str])] = &[
@@ -61,6 +61,8 @@ pub struct RunInput {
     pub profile: Option<String>,
     /// The check's own fields, as the payload carries them.
     pub fields: Map<String, Value>,
+    /// A review's findings.
+    pub findings: Option<Findings>,
     pub evidence_ref: Option<String>,
     pub bin: String,
     pub version: String,
@@ -228,6 +230,7 @@ impl Ledger {
             outcome: Some("ran".into()),
             head_sha: Some(input.head.clone()),
             evidence_ref: input.evidence_ref.clone(),
+            findings: input.findings.clone(),
             rest: input.fields.clone(),
             ..Payload::default()
         };
@@ -246,7 +249,7 @@ impl Ledger {
     /// `run:<lane>:<check>:<head>:<profile or ->:<attempt>`. The attempt is
     /// the id of the lane's newest result for this check that is not a pass
     /// on this commit and profile (0 for none): a pass replays, a failure
-    /// runs again, and a run back on an earlier commit after another
+    /// or a review that is not complete runs again, and a run back on an earlier commit after another
     /// appends, as `check record`'s flip back does. Read before the write
     /// lock; the lane's run lock keeps two runs from reading it at once.
     pub fn run_key(&self, input: &RunInput) -> Result<String, LedgerError> {
@@ -255,7 +258,8 @@ impl Ledger {
                AND json_extract(payload_json, '$.check') = ?2
                AND NOT (json_extract(payload_json, '$.head_sha') IS ?3
                  AND json_extract(payload_json, '$.profile') IS ?4
-                 AND json_extract(payload_json, '$.result') IS NOT 'fail')",
+                 AND json_extract(payload_json, '$.result') IS NOT 'fail'
+                 AND json_extract(payload_json, '$.complete') IS NOT 0)",
             params![input.work, input.check, input.head, input.profile],
             |r| r.get(0),
         )?;
@@ -759,6 +763,18 @@ impl Ledger {
         input: &FindingMove,
         dry_run: bool,
     ) -> Checked<Recorded> {
+        self.finding_move(actor, input, None, dry_run)
+    }
+
+    /// [`Ledger::finding_update`], or with `producer` the harness's ruling
+    /// (`check run review`'s verifier), which only that code path sets.
+    pub(crate) fn finding_move(
+        &self,
+        actor: &Actor,
+        input: &FindingMove,
+        producer: Option<&Value>,
+        dry_run: bool,
+    ) -> Checked<Recorded> {
         let mut payload = Payload {
             check_event_id: Some(input.check_event_id),
             finding_key: Some(input.finding_key.clone()),
@@ -768,6 +784,9 @@ impl Ledger {
         };
         if let Some(reason) = &input.reason {
             payload.rest.insert("reason".into(), json!(reason));
+        }
+        if let Some(producer) = producer {
+            payload.rest.insert("producer".into(), producer.clone());
         }
         let mut lane = None;
         let (applied, _) = self.apply_planned(
