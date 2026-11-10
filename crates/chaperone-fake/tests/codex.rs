@@ -91,11 +91,11 @@ fn an_answer_is_read_from_the_last_message() {
         .iter()
         .map(|a| a.as_str().unwrap())
         .collect();
-    let (schema_at, last_at) = (Path::new(args[10]), Path::new(args[12]));
-    assert_eq!(call["files"][args[10]], r#"{"type":"object"}"#);
+    let (schema_at, last_at) = (Path::new(args[12]), Path::new(args[14]));
+    assert_eq!(call["files"][args[12]], r#"{"type":"object"}"#);
     let scratch = schema_at.parent().unwrap();
     assert_eq!(last_at.parent(), Some(scratch));
-    (args[10], args[12]) = ("<schema>", "<last>");
+    (args[12], args[14]) = ("<schema>", "<last>");
     let flags = [
         "exec",
         "--json",
@@ -104,6 +104,8 @@ fn an_answer_is_read_from_the_last_message() {
         "--ignore-rules",
         "-s",
         "read-only",
+        "-c",
+        "project_doc_max_bytes=0",
         "-m",
         "gpt-5.5",
         "--output-schema",

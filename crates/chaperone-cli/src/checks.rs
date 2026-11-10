@@ -16,7 +16,7 @@ use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
 use chaperone_core::git::{self, ChangedFile};
 use chaperone_core::ledger::{self, Actor, Evidence, Ledger, LedgerError, Refusal};
-use chaperone_core::pipeline;
+use chaperone_core::pipeline::{self, Cli};
 use chaperone_core::review::{self, Agents, Facts};
 use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
@@ -311,8 +311,12 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
         return one(stored);
     }
-    // By its full path, as a shell finds it, so the event names the binary.
-    let probe = |bin: &str| {
+    // Only a CLI a runner uses, by its full path as a shell finds it, so
+    // the event names the binary.
+    let probe = |cli: Cli, bin: &str| {
+        if !plan.uses(cli) {
+            return Ok(None);
+        }
         let path = std::env::var_os("PATH").unwrap_or_default();
         let found = std::env::split_paths(&path)
             .map(|d| d.join(bin))
@@ -321,9 +325,11 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         // As for test commands: no variable points its git elsewhere.
         let env = std::env::vars_os().filter(|(k, _)| !git::repo_var(k));
         Agent::probe(found.unwrap_or(bin.into()), env, deadline)
+            .map(Some)
             .map_err(|e| refuse(format!("could not start {bin}: {e}")))
     };
-    let (claude, codex) = (probe("claude")?, probe("codex")?);
+    let claude = probe(Cli::Claude, "claude")?;
+    let codex = probe(Cli::Codex, "codex")?;
     let head = input.head.clone();
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
     let args = [
@@ -362,8 +368,8 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         goal: review::goal(ledger, &item)?,
     };
     let agents = Agents {
-        claude: &claude,
-        codex: &codex,
+        claude: claude.as_ref(),
+        codex: codex.as_ref(),
     };
     let store = Evidence::beside(db);
     one(review::record(

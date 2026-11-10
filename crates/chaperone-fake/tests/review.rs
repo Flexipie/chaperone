@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use chaperone_core::checks::{Recorded, RunInput};
 use chaperone_core::git::ChangedFile;
-use chaperone_core::ledger::{Actor, Evidence, Findings, Ledger};
+use chaperone_core::ledger::{Actor, Evidence, Findings, Ledger, Refusal};
 use chaperone_core::pipeline::Pipeline;
-use chaperone_core::review::{self, Agents, DIFF_BYTES, Facts, Lens, Review, Ruling};
+use chaperone_core::review::{self, Agents, Facts, Lens, PROMPT_DIFF_BYTES, Review, Ruling};
 use chaperone_core::runner::Agent;
 use chaperone_core::work::{ClaimInput, CreateInput};
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 const PIPELINE: &str = r#"
 schema = 2
 id = "review-test"
-limits = { budget = 150, timeout = 20 }
+limits = { budget = 150, timeout = 20, review_attempts = 2 }
 runners.lens = { cli = "claude", model = "opus", tools = ["Read", "Grep"], budget_limit = "budget", timeout_limit = "timeout" }
 runners.second = { cli = "codex", model = "gpt-5.5", budget_limit = "budget", timeout_limit = "timeout" }
 checks.review_correctness = { runner = "lens", prompt = "correctness.md" }
@@ -99,8 +99,8 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
 impl Env {
     fn agents(&self) -> Agents<'_> {
         Agents {
-            claude: &self.claude,
-            codex: &self.codex,
+            claude: Some(&self.claude),
+            codex: Some(&self.codex),
         }
     }
 
@@ -141,10 +141,11 @@ fn call(dir: &Path, cli: &str, lens: &str) -> Value {
 }
 
 /// Every lens ran at once, in the checkout, with its runner's flags; only
-/// the intent lens got the goal; each prompt and answer is stored.
+/// the intent lens got the goal; each prompt and answer is stored, and
+/// each row names the agent binary and its version.
 #[test]
 fn every_lens_reviews_the_same_facts() {
-    let ran = |lens: &str, said: Value| json!({"when": format!("LENS {lens}"), "sleep_ms": 500, "stdout": result(said)});
+    let ran = |lens: &str, said: Value| json!({"when": format!("LENS {lens}"), "sleep_ms": 800, "stdout": result(said)});
     let claude = json!([
         ran("correctness", json!({"findings": [found("risk", "r")]})),
         ran(
@@ -154,10 +155,10 @@ fn every_lens_reviews_the_same_facts() {
         ran("intent", json!({"findings": [found("question", "q")]})),
     ]);
     let said = json!({"findings": [found("improvement", "i")]}).to_string();
-    let codex = json!([{"when": "LENS codex", "sleep_ms": 500, "write": {"-o": said}}]);
-    let (env, review, took) = run(claude, codex, 2 * DIFF_BYTES);
-    // Four sessions of 500 ms each: one after another would take 2 s.
-    assert!(took < Duration::from_millis(1500), "{took:?}");
+    let codex = json!([{"when": "LENS codex", "sleep_ms": 800, "write": {"-o": said}}]);
+    let (env, review, took) = run(claude, codex, 2 * PROMPT_DIFF_BYTES);
+    // Four sessions of 800 ms each: one after another would take 3.2 s.
+    assert!(took < Duration::from_millis(2400), "{took:?}");
     let rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
     let counts: Vec<_> = rows
         .iter()
@@ -176,7 +177,7 @@ fn every_lens_reviews_the_same_facts() {
         (&rows[0]["cost_usd"], &rows[3]["model"]),
         (&json!(0.25), &json!("gpt-5.5"))
     );
-    assert!(review.diff_cut && review.diff_bytes > 2 * DIFF_BYTES - 3);
+    assert!(review.diff_cut && review.diff_bytes > 2 * PROMPT_DIFF_BYTES - 3);
 
     let checkout = env.checkout().canonicalize().unwrap();
     for (i, cli) in ["claude", "claude", "claude", "codex"]
@@ -202,11 +203,16 @@ fn every_lens_reviews_the_same_facts() {
             cli == "claude",
             args.contains(r#""--max-budget-usd","1.50""#)
         );
-        let stored = env
-            .store
-            .get(rows[i]["evidence_ref"].as_str().unwrap())
-            .unwrap();
-        assert!(stored.starts_with(prompt) && stored.contains("\n--- answer ---\n"));
+        let stored = |field: &str| env.store.get(rows[i][field].as_str().unwrap()).unwrap();
+        assert_eq!(stored("prompt_ref"), prompt);
+        assert_eq!(
+            stored("answer_ref"),
+            review.lenses[i].run.as_ref().unwrap().raw
+        );
+        assert_eq!(rows[i]["evidence_truncated"], false);
+        let bin = rows[i]["bin"].as_str().unwrap();
+        assert!(bin.ends_with(&format!("/{cli}")), "{bin}");
+        assert_eq!(rows[i]["version"], "1 (fake)");
     }
 }
 
@@ -279,6 +285,8 @@ fn the_verifier_rules_by_key() {
     let call = call(env.dir.path(), "claude", "verifier");
     let prompt = call["prompt"].as_str().unwrap();
     assert!(!prompt.contains("GOAL") && prompt.contains("```diff\n+x\n"));
+    // The findings are fenced data, and the harness's line comes last.
+    assert!(prompt.contains("```jsonl\n{") && prompt.ends_with("in the schema you were given.\n"));
     let line = format!(r#""key":"{a}","lens":"correctness","line":null,"path":"src/a.rs""#);
     assert!(prompt.contains(&line), "{prompt}");
     // The schema names the keys it may rule on, and no other.
@@ -294,6 +302,12 @@ fn the_verifier_rules_by_key() {
     let error = verify(answer(stray)).1.outcome.unwrap_err();
     assert!(
         error.starts_with(r#"a ruling on "correctness-0""#),
+        "{error}"
+    );
+    let blank = json!({"rulings": [{"key": a, "verdict": "verified", "why": " "}]});
+    let error = verify(answer(blank)).1.outcome.unwrap_err();
+    assert!(
+        error.starts_with("not a verifier answer: no why"),
         "{error}"
     );
     let failed = verify(json!({"when": "LENS verifier", "exit": 2})).1;
@@ -346,16 +360,20 @@ fn input(pipeline: &Pipeline) -> RunInput {
     }
 }
 
-/// `check run review`, started by the lane's own session.
-fn record(env: &Env, ledger: &Ledger) -> Recorded {
+/// `check run review` as the CLI runs it, started by the lane's own
+/// session: [`review::replay`], then [`review::record`].
+fn record(env: &Env, ledger: &Ledger) -> Result<Recorded, Refusal> {
     let pipeline = pipeline();
     let plan = review::plan(&pipeline).unwrap();
     let (dir, agents, me) = (env.checkout(), env.agents(), lane_session());
-    let input = input(&pipeline);
+    let mut input = input(&pipeline);
+    if let Some(stored) = review::replay(ledger, &me, &mut input, &plan).unwrap()? {
+        return Ok(stored);
+    }
     let got = review::record(
         ledger, &me, input, &plan, &agents, &dir, &env.facts, &env.store,
     );
-    got.unwrap().unwrap()
+    got.unwrap()
 }
 
 /// Sessions started so far, by both CLIs.
@@ -408,7 +426,7 @@ fn a_review_is_recorded_then_ruled() {
     let (claude, codex) = scripts(rules);
     let env = env(claude, codex, 10);
     let ledger = ledger(&env);
-    let first = record(&env, &ledger);
+    let first = record(&env, &ledger).unwrap();
     let p = &first.payload;
     assert_eq!(
         (p.check.as_deref(), &p.rest["complete"]),
@@ -430,25 +448,86 @@ fn a_review_is_recorded_then_ruled() {
     assert_eq!(usage["totals"]["harness"]["messages"], 4);
 
     let before = calls(&env);
-    let again = record(&env, &ledger);
+    let again = record(&env, &ledger).unwrap();
     assert_eq!((again.replayed, again.event_id), (true, first.event_id));
     assert_eq!(calls(&env), before);
 }
 
 /// A verifier that fails rules on nothing: every finding stays open and
-/// the review is not complete, so the same commit runs again.
+/// the review is not complete, so the same commit runs again, up to the
+/// pipeline's `review_attempts`; past it the run is refused and starts
+/// nothing.
 #[test]
 fn a_verifier_that_fails_leaves_findings_open() {
     let (claude, codex) = scripts(|_, _| json!({"when": "LENS verifier", "exit": 2}));
     let env = env(claude, codex, 10);
     let ledger = ledger(&env);
-    let first = record(&env, &ledger);
+    let first = record(&env, &ledger).unwrap();
     assert_eq!(first.payload.rest["complete"], false);
     assert_eq!(first.payload.rest["verifier"]["ran"], false);
     let open = ["a", "b", "c"].map(|t| (t.to_string(), "open".to_string()));
     assert_eq!(blocking(&ledger)[..3], open);
-    let again = record(&env, &ledger);
+    let again = record(&env, &ledger).unwrap();
     assert!(!again.replayed && again.event_id > first.event_id);
+    let before = calls(&env);
+    let Refusal::InvalidInput(said) = record(&env, &ledger).unwrap_err() else {
+        panic!("not a refusal of the input");
+    };
+    let head = "2".repeat(40);
+    assert_eq!(
+        said,
+        format!(
+            "commit {head} has had 2 reviews by this pipeline, its limit review_attempts; \
+             the owner can waive the findings, or the lane can push a new commit"
+        )
+    );
+    assert_eq!(calls(&env), before);
+}
+
+/// One lens that stops on its budget makes the review not complete, and
+/// the other lenses' findings are all in the event, ruled on; the stopped
+/// session's cost is still a usage row.
+#[test]
+fn one_lens_failing_keeps_the_others_findings() {
+    let (mut claude, codex) = scripts(rules);
+    let budget = json!({"type": "result", "subtype": "error_max_budget_usd", "is_error": true,
+        "total_cost_usd": 1.52, "session_id": "d", "errors": ["Reached maximum budget ($1.5)"]});
+    claude[1] = json!({"when": "LENS design_tests", "stdout": budget.to_string(), "exit": 1});
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let p = record(&env, &ledger).unwrap().payload;
+    assert_eq!(
+        (&p.rest["complete"], &p.rest["lenses"][1]["ran"]),
+        (&json!(false), &json!(false))
+    );
+    assert!(matches!(&p.findings, Some(Findings::List(l)) if l.len() == 3));
+    let want = [("a", "verified"), ("c", "open")].map(|(t, s)| (t.to_string(), s.to_string()));
+    assert_eq!(blocking(&ledger), want);
+    let usage = ledger.usage_get(1).unwrap().unwrap();
+    let stopped = usage["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session_id"] == "d");
+    assert_eq!(stopped.unwrap()["cost_usd"], 1.52);
+}
+
+/// A review where no lens found anything starts no verifier session and
+/// is complete.
+#[test]
+fn no_findings_start_no_verifier() {
+    let (mut claude, codex) = scripts(rules);
+    let none = json!({"findings": []});
+    claude[0] = json!({"when": "LENS correctness", "stdout": session("correctness", none)});
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let p = record(&env, &ledger).unwrap().payload;
+    assert_eq!(
+        (&p.rest["complete"], &p.rest["verifier"]),
+        (&json!(true), &Value::Null)
+    );
+    // Three Claude lenses and Codex: no fifth session.
+    assert_eq!(calls(&env), 4);
 }
 
 /// A crash after the review event and before its rulings: the next run
@@ -478,7 +557,7 @@ fn a_crash_before_the_rulings_is_finished_by_a_rerun() {
     assert_eq!(blocking(&ledger).len(), 3);
 
     let before = calls(&env);
-    let again = record(&env, &ledger);
+    let again = record(&env, &ledger).unwrap();
     assert_eq!((again.replayed, again.event_id), (true, written.event_id));
     let want = [("a", "verified"), ("c", "open")].map(|(t, s)| (t.to_string(), s.to_string()));
     assert_eq!(blocking(&ledger), want);

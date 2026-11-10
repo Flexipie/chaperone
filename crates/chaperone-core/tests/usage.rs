@@ -364,5 +364,9 @@ fn a_harness_session_is_one_row() {
         "raw": {"claude-x": {"inputTokens": 3, "costUSD": 0.5}}});
     assert_eq!(serde_json::from_str::<Value>(&payload).unwrap(), want);
     let got = ledger.usage_get(id).unwrap().unwrap();
-    assert_eq!(got["totals"]["harness"]["messages"], 1);
+    let harness = &got["totals"]["harness"];
+    assert_eq!(
+        (&harness["messages"], &harness["cost_usd"]),
+        (&json!(1), &json!(0.5))
+    );
 }

@@ -207,7 +207,8 @@ impl Ledger {
             }));
         }
         // The totals' fields, then what names a transcript row.
-        const SUMS: [&str; 7] = [
+        // `cost_usd` is the CLI's own figure, which only harness rows carry.
+        const SUMS: [&str; 8] = [
             "uncached_input",
             "cache_read",
             "cache_write",
@@ -215,6 +216,7 @@ impl Ledger {
             "reasoning",
             "input_total",
             "output_total",
+            "cost_usd",
         ];
         const NAMES: [&str; 4] = ["source", "cli", "session_id", "agent_id"];
         let f = |k: &str| format!("json_extract(payload_json, '$.{k}')");
