@@ -1,0 +1,33 @@
+Waive a check the harness runs for a lane that cannot pass it now: the plan check of a lane that coded before its plan was attacked. The owner's: refused from any session that has held the lane
+
+Usage: chaperone check waive [OPTIONS] --work <WORK> --reason <REASON> <KIND>
+
+Arguments:
+  <KIND>
+          Possible values:
+          - plan: The plan check, on the commit the lane is on (none before v20)
+
+Options:
+      --db <DB>
+          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+
+      --work <WORK>
+          
+
+      --format <FORMAT>
+          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key
+          
+          [default: json]
+          [possible values: json, jsonl]
+
+      --reason <REASON>
+          Why; one line, kept on the event and redacted at write
+
+      --agent <AGENT>
+          Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+
+      --session <SESSION>
+          Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -29,6 +29,7 @@ use serde_json::{Map, Value, json};
 
 use crate::cli::{
     AttentionCmd, CheckCmd, DossierCmd, FindingCmd, JobsCmd, ReviewsCmd, RunKind, UsageCmd,
+    WaiveKind,
 };
 use crate::output::{CliError, ErrorBody, Meta, Outcome};
 use crate::work::{observed_head, one};
@@ -96,6 +97,26 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
                 (RunKind::Review, None) => run_review(ledger, db, work, &actor),
                 (RunKind::Verdict, None) => run_verdict(ledger, db, work, &actor),
             }
+        }
+        CheckCmd::Waive {
+            kind: WaiveKind::Plan,
+            work,
+            reason,
+            actor,
+        } => {
+            let item = ledger.work_get(work, &ledger.now()?)??;
+            plan::plan(lane_pipeline(&item)?).map_err(|e| {
+                refuse(format!(
+                    "{e}; a lane on it records a skipped plan check with `check record`"
+                ))
+            })?;
+            let head = observed_head(item.worktree_path.as_deref(), item.branch.as_deref())?;
+            let head = head.ok_or_else(|| {
+                refuse(format!(
+                    "work item {work} has no worktree to read its commit in"
+                ))
+            })?;
+            one(ledger.plan_waive(&actor.resolve(), work, &head, &reason)??)
         }
     }
 }

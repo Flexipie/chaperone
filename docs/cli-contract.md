@@ -89,7 +89,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `check run`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `check run`, `check waive`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -121,6 +121,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan --work <id> [--file <plan>]` | write |
+| `check waive` | `plan --work <id> --reason <r>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -406,6 +407,16 @@ intent lens), the plan, fenced, and the commit and merge base, and answers `{fin
 as a review lens does. It writes a `usage.reported` for the session, then one `plan_check` with
 the harness producer (events.md): `ran` with the findings, or `skipped` with `reason`
 `no_answer`, never "no findings". It prints the `check.finished` as `check record` does.
+
+`check waive plan` is the owner's way past the plan check for a lane that coded before its plan
+was attacked. The lane's stamped pipeline must name a `plan` check (else `invalid_input`: a lane
+on v17 to v19 records a skipped plan check with `check record`, and a waiver there would fail its
+gate). It reads the commit the lane is on as `check run` does and appends one `plan_check`
+`skipped` with `reason` `waived` and `note` the `--reason` (one non-blank line of at most 500
+characters, redacted at write), producer `session`: refused from any session that has held the
+lane, as `work ready` and `finding waive` are. The same waiver again replays (keyed as `check
+record`, on the payload as stored). It waives the plan check only, and gates nothing by itself:
+a gate reads it as `plan_check.reason` `waived`. It prints what `check record` prints.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

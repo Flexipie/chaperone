@@ -607,7 +607,8 @@ fn a_review_or_verdict_needs_a_pipeline_that_names_one() {
 /// The plan check runs before code: a commit that changes a code file is
 /// refused and names the owner's waiver. A missing `--file` or one on
 /// another check, a plan that is no regular file, too big, not UTF-8 or
-/// blank, and a lane whose pipeline has no plan check, write nothing.
+/// blank, and a lane whose pipeline has no plan check (to run or to waive),
+/// write nothing.
 #[test]
 fn a_plan_check_needs_no_code_a_plan_file_and_a_pipeline() {
     let dir = tempfile::tempdir().unwrap();
@@ -660,4 +661,16 @@ fn a_plan_check_needs_no_code_a_plan_file_and_a_pipeline() {
          The owner can waive it with `check waive plan --work {id}`"
     );
     refused(&plan(&good), &waiver);
+    let waive = [
+        "check",
+        "waive",
+        "plan",
+        "--work",
+        &id,
+        "--reason",
+        "coded first",
+    ];
+    let v19 = "pipeline v19 has no check plan; a lane on it records a skipped plan check with \
+        `check record`";
+    refused(&waive.map(String::from), v19);
 }

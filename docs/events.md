@@ -52,7 +52,7 @@ These rules keep every write small, single and fail-closed.
   payload differs. `work create` stores its `--idempotency-key` as `create:<key>` and shows it without the prefix, so a
   caller's key can never take a derived key below and block that write; a create stored under the bare key by an older
   binary still replays under it, and a key that itself starts with `create:` is `invalid_input`. Commands that take no `--idempotency-key` derive one: `check record`
-  uses `check:` plus the sha256 of the lane id, its canonical payload and the id of the lane's newest
+  and `check waive` use `check:` plus the sha256 of the lane id, its canonical payload as the write stores it (redacted) and the id of the lane's newest
   `check.finished` for that check with a different payload (so a retry replays unless another session recorded the same check since, and a
   result that flips back, such as no, yes, no, appends), and `reviews record` uses
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
@@ -186,7 +186,7 @@ the same value, a trailing slash aside, still writes.
 | Kind | Command | Payload |
 | --- | --- | --- |
 | `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha`, `review` |
-| `check.finished` | `check record`, `check run`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
+| `check.finished` | `check record`, `check run`, `check waive`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
 | `finding.updated` | `finding dispute`, `finding waive`; the other moves are core's (`Ledger::finding_update`) for the harness | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute or waive; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits) |
 
 **Finding statuses.** A finding is folded `open`. Each `finding.updated` makes one of these
@@ -355,7 +355,7 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 
 | Check | Producer | Fields (after `check`, `outcome`, `head_sha`, `producer`) |
 | --- | --- | --- |
-| `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation`, `docs` or `tests`. |
+| `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation`, `docs` or `tests`; or, through `check waive plan` (the owner's, refused from any session that has held the lane), `reason` `waived` with `note`, the owner's one line, redacted. |
 | `plan_check` | harness | `check run plan`, before any code. `ran` with `findings[]` in the harness `review`'s shape (keys `plan-<first 12 hex of sha256(path, NUL, title)>`, title and body cut the same way), folded into `findings` like a review's, or `skipped` with `reason` `no_answer` and no findings (never "no findings"). Both carry `tree`, `profile` (the lane's pipeline hash), `base` (the merge base), `plan_ref` (the evidence hash of the plan text as stored, redacted) and `session` (the lens row for lens `plan`, as the verdict's). |
 | `quality_gate` | session | `ran`: `findings` (count). `skipped`: `reason` `no_code` or `tests`. |
 | `merge_verdict` | session | `ran` only. `decision` `yes` or `no`. The verdict sha is `head_sha`, from `--head`, never the model's prose. |
