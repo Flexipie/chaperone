@@ -57,8 +57,12 @@ These rules keep every write small, single and fail-closed.
   not a `gate.denied`, `usage.reported`, `pr.merged` or `attention.recorded` (the anchor the
   denial key uses), so a retry replays and the same record after new lane activity appends.
 - **Small payloads.** No secrets (redacted at write, [R13](research/r13-security-and-trust.md)),
-  no blobs. Evidence files sit beside the ledger, named by content hash, and the payload
-  carries only the hash (`evidence_ref`). Spec bodies are capped at 256 KiB, handoff
+  no blobs. Evidence files sit beside the ledger at `evidence/sha256/<hash>` (the directory
+  0700, each file 0600), and the payload carries only the hash (`evidence_ref`). The hash
+  is the sha256 of the bytes stored: a text is cut to its last 256 KiB, then redacted, then
+  hashed, so the raw bytes are never stored and a retry names the same file. A file is
+  written and synced before the event that names it commits, and a read hashes it again:
+  one that no longer matches its name is an error. Spec bodies are capped at 256 KiB, handoff
   summaries at 4000 characters, and finding bodies at daisy's 600 characters. Over a
   cap is `invalid_input`.
 - **Redaction.** The write redacts before it appends, so the log never holds a

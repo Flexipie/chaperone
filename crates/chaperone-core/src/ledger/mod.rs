@@ -5,6 +5,7 @@
 
 mod error;
 mod event;
+mod evidence;
 mod fold;
 mod migrate;
 pub(crate) mod projection;
@@ -23,6 +24,7 @@ pub use error::LedgerError;
 pub use event::{
     Actor, Applied, Change, Event, EventKind, Finding, Findings, Mutation, Payload, Refusal,
 };
+pub use evidence::{Evidence, Stored};
 use migrate::{Migration, user_version};
 pub(crate) use redact::payload as redact_payload;
 pub(crate) use write::{
