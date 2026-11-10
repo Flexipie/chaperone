@@ -12,6 +12,16 @@ use super::event::{Event, EventKind};
 use super::write::{EVENT_COLUMNS, event_from_row};
 use crate::pipeline::{Fact, FactBundle};
 
+/// The finding statuses that still need work. A disputed or verified
+/// finding is as unsettled as an open one, so a dispute never closes a
+/// round. Before these statuses a finding was `open`, `fixed` or
+/// `answered`, so an existing log reads as before. The finding commands
+/// work on any lane, so a v17 to v19 lane can now be disputed, which keeps
+/// its round open: that fails closed. No transition that runs today reads
+/// the fact (only `handoff` runs; `next_local_round` and
+/// `enter_final_head` list it).
+pub(crate) const UNSETTLED: &str = "status IN ('open', 'verified', 'disputed')";
+
 /// Projects lane `lane_id`. `head` is the commit the caller wants to hand
 /// off or finish (`commit.sha`): the handoff's commit, or for `update
 /// --status done` the latest handoff's. It is never read from stored
@@ -130,8 +140,10 @@ pub(crate) fn project(
     f.set("daisy_review.state", review_state);
     if let Some(round) = latest_round {
         let open: i64 = conn.query_row(
-            "SELECT count(*) FROM findings
-             WHERE lane_id = ?1 AND check_event_id = ?2 AND status = 'open'",
+            &format!(
+                "SELECT count(*) FROM findings
+                 WHERE lane_id = ?1 AND check_event_id = ?2 AND {UNSETTLED}"
+            ),
             params![lane_id, round],
             |r| r.get(0),
         )?;
@@ -454,6 +466,7 @@ requires = ["quality_gate_before_pr"]
                 check_event_id: Some(round.id),
                 finding_key: Some("f1".into()),
                 status: Some("fixed".into()),
+                head_sha: Some("def5679".into()),
                 ..Payload::default()
             },
             T[3],

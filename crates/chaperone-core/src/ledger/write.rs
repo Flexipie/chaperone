@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
 use super::{Ledger, LedgerError, check_schema, fold, redact};
+use crate::checks::{NOTE_CHARS, one_line, sha_ok};
 use crate::engine;
 use crate::pipeline::{REQUIRED_TRANSITIONS, Route};
 use crate::work::{OWNER_UI, PAUSED_BY_OWNER, SPEC_BY_KEY};
@@ -36,6 +37,34 @@ pub const SESSION_CHECKS: &[&str] = &[
     "smoke",
     "kept_tests",
     "review_round",
+];
+
+/// Who may make a finding move (events.md, finding statuses). The lane's
+/// only move on a finding is to dispute it, so it never settles its own.
+enum By {
+    /// Anyone, for a `question` only (the guard checks the severity).
+    Anyone,
+    /// A session that has held the lane.
+    Lane,
+    /// A session that never has: the verifier, or the owner (the ready
+    /// override's rule, cli-contract.md).
+    Independent,
+}
+
+/// Every move `finding.updated` may make; a status no row leaves is final.
+const FINDING_MOVES: &[(&str, &str, By)] = &[
+    ("open", "fixed", By::Independent),
+    ("open", "answered", By::Anyone),
+    ("verified", "fixed", By::Independent),
+    ("open", "verified", By::Independent),
+    ("open", "refuted", By::Independent),
+    ("disputed", "verified", By::Independent),
+    ("disputed", "refuted", By::Independent),
+    ("open", "waived", By::Independent),
+    ("verified", "waived", By::Independent),
+    ("disputed", "waived", By::Independent),
+    ("open", "disputed", By::Lane),
+    ("verified", "disputed", By::Lane),
 ];
 
 pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
@@ -706,19 +735,68 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                     "finding.updated needs check_event_id and finding_key"
                 ));
             };
-            if !matches!(p.status.as_deref(), Some("fixed" | "answered")) {
-                refuse!(invalid("finding.updated status is fixed or answered"));
+            let to = p.status.as_deref().unwrap_or_default();
+            if !FINDING_MOVES.iter().any(|m| m.1 == to) {
+                let statuses: BTreeSet<_> = FINDING_MOVES.iter().map(|m| m.1).collect();
+                refuse!(invalid(&format!(
+                    "finding.updated status is one of {statuses:?}"
+                )));
             }
-            if !exists(
-                tx,
-                "SELECT 1 FROM findings
-                 WHERE lane_id = ?1 AND check_event_id = ?2 AND finding_key = ?3",
-                rusqlite::params![lane_id, check, key],
-            )? {
-                refuse!(Refusal::NotFound {
+            let row: Option<(String, String)> = tx
+                .query_row(
+                    "SELECT status, severity FROM findings
+                     WHERE lane_id = ?1 AND check_event_id = ?2 AND finding_key = ?3",
+                    rusqlite::params![lane_id, check, key],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let Some((from, severity)) = row else {
+                refuse!(Refusal::NotFoundRef {
                     entity: "finding",
-                    id: check
+                    reference: format!("{check}/{key}"),
                 });
+            };
+            // A retry after a lost answer lands here: say so plainly.
+            if from == to {
+                refuse!(invalid(&format!("finding {check}/{key} is already {to}")));
+            }
+            let Some((.., by)) = FINDING_MOVES.iter().find(|m| m.0 == from && m.1 == to) else {
+                refuse!(invalid(&format!(
+                    "a finding cannot move from {from} to {to}"
+                )));
+            };
+            // The independence rule again: whoever has held the lane argues
+            // its findings, and someone who never has rules on them.
+            let session = event.actor.session.as_deref().unwrap_or_default();
+            let held = has_held(tx, lane_id, session)?;
+            match by {
+                By::Lane if !held => refuse!(invalid(&format!(
+                    "only the lane disputes a finding; session {session} has never held lane {lane_id}"
+                ))),
+                By::Independent if held => refuse!(invalid(&format!(
+                    "session {session} has held lane {lane_id}; a finding goes {to} from a session that never has"
+                ))),
+                _ => {}
+            }
+            if to == "answered" && severity != "question" {
+                refuse!(invalid(&format!(
+                    "only a question is answered; finding {check}/{key} is a {severity}"
+                )));
+            }
+            let reason = p.rest.get("reason").and_then(Value::as_str);
+            if matches!(to, "disputed" | "waived") && reason.is_none() {
+                refuse!(invalid(&format!("a finding goes {to} only with a reason")));
+            }
+            if reason.is_some_and(|r| !one_line(r)) {
+                refuse!(invalid(&format!(
+                    "reason is one non-blank line of at most {NOTE_CHARS} characters"
+                )));
+            }
+            // The verifier confirms a fix on a commit, so it names the commit.
+            if to == "fixed" && !p.head_sha.as_deref().is_some_and(sha_ok) {
+                refuse!(invalid(
+                    "a fixed finding needs the head_sha that fixes it, 7 to 40 lowercase hex digits"
+                ));
             }
         }
         _ => {}
@@ -1622,7 +1700,7 @@ mod tests {
                 ),
             ),
             (
-                "finding.updated status is fixed or answered",
+                "finding.updated status is one of",
                 AT,
                 None,
                 ev(
@@ -1638,7 +1716,7 @@ mod tests {
                 ),
             ),
             (
-                r#"Refused(NotFound { entity: "finding", id: 1 }"#,
+                r#"Refused(NotFoundRef { entity: "finding", reference: "1/f" }"#,
                 AT,
                 None,
                 ev(
