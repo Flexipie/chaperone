@@ -64,8 +64,19 @@ These rules keep every write small, single and fail-closed.
   commit replays, a `tests` run that failed or a `review` a lens or the verifier missed runs
   again (flaky tests, a fixed machine, an API error), a new commit appends even when its tree is the same (an amend
   that only rewords), and a lane that comes back to an earlier commit after another appends, as
-  `check record`'s flip back does. `tests` looks its key up before it runs anything. A rule that holds for a tree whatever the
-  commit is the verdict's, later.
+  `check record`'s flip back does. `tests` looks its key up before it runs anything.
+  `check run verdict` holds for a tree whatever the commit: it uses
+  `run:<lane_id>:merge_verdict:<tree>:<pipeline hash>:<facts_sha256>:<attempt>`, `<attempt>` the
+  id of the lane's newest `merge_verdict` (0 for none), and before it runs it looks up the
+  lane's newest harness `merge_verdict` that ran on the same tree, pipeline and facts digest.
+  On the same commit that one replays, yes or no; on another commit (an amend that kept the
+  tree) it is carried: a new event on this commit with the same decision and `carried_from`,
+  so `verdict.sha` is the new head, and no session starts. So a verdict is never run again
+  until it says yes. On purpose, only a change in the harness's facts lets a new session
+  run on the same tree: a different `tests` result, a newest complete `review` with another
+  finding count, or a change in the lane's blocking findings (a verifier's ruling, a
+  dispute, a waive, a new blocking finding). A skipped verdict (no answer) is not looked up,
+  so the next run starts a session.
   `attention record` scopes its `--idempotency-key` to the lane and type (`attention:<lane_id>:<type>:<key>`);
   without one it uses `attention:` plus the
   sha256 of the lane id, its canonical payload and the id of the lane's newest event that is
@@ -334,7 +345,9 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 - `{kind: "harness", bin, version}`: this binary, through `check run`, which measured
   the result itself: `bin` is the executable's path and `version` the package version, plus
   `+<commit>` when it was built in a git checkout. The session rule does not apply. Only
-  `check run` writes this producer; no write refuses another producer's `diff` yet.
+  `check run` writes this producer; no write refuses another producer's `diff` yet. A harness
+  check named like a session check (`merge_verdict`) is the binary's too, so the session rule
+  does not apply to it either.
 
 | Check | Producer | Fields (after `check`, `outcome`, `head_sha`, `producer`) |
 | --- | --- | --- |

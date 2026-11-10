@@ -17,4 +17,5 @@ pub mod runner;
 pub mod spec;
 pub mod stats;
 pub mod usage;
+pub mod verdict;
 pub mod work;
