@@ -1090,15 +1090,10 @@ impl Ledger {
     /// round: unsettled (open, verified or disputed) and of a severity not
     /// in [`NON_BLOCKING_SEVERITIES`], compared exactly.
     pub fn blocking_findings(&self, id: i64) -> Result<Vec<BlockingFinding>, LedgerError> {
-        let quiet: Vec<_> = NON_BLOCKING_SEVERITIES
-            .iter()
-            .map(|s| format!("'{s}'"))
-            .collect();
         let mut stmt = self.conn().prepare(&format!(
             "SELECT check_event_id, finding_key, severity, status, title FROM findings
-              WHERE lane_id = ?1 AND {UNSETTLED} AND severity NOT IN ({})
-              ORDER BY id",
-            quiet.join(", ")
+              WHERE lane_id = ?1 AND {} ORDER BY id",
+            blocking()
         ))?;
         let rows = stmt.query_map([id], |r| {
             Ok(BlockingFinding {
@@ -1111,6 +1106,16 @@ impl Ledger {
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
+}
+
+/// The SQL condition on a `findings` row that still blocks: unsettled and
+/// of a severity not in [`NON_BLOCKING_SEVERITIES`].
+pub(crate) fn blocking() -> String {
+    let quiet: Vec<_> = NON_BLOCKING_SEVERITIES
+        .iter()
+        .map(|s| format!("'{s}'"))
+        .collect();
+    format!("{UNSETTLED} AND severity NOT IN ({})", quiet.join(", "))
 }
 
 /// The newest of `sql`'s events (`id, payload_json`, newest first) whose
