@@ -1,4 +1,4 @@
-The pipeline a new claim stamps: {id, hash}. Skills read the version from here rather than naming one
+The pipeline a new claim stamps: {id, hash, newer}, `newer` the embedded pipelines a first claim may stamp instead (`work claim --pipeline`). Skills read the version from here rather than naming one
 
 Usage: chaperone pipeline current [OPTIONS]
 

@@ -236,6 +236,9 @@ pub struct ClaimInput {
     pub lease_secs: Option<i64>,
     /// Take an item another pair holds live.
     pub takeover: bool,
+    /// At the first claim, an embedded pipeline newer than the default to
+    /// stamp ([`crate::pipeline::newer`]).
+    pub pipeline: Option<String>,
 }
 
 /// What `update` may change; a field left None is kept.
@@ -362,6 +365,14 @@ impl Ledger {
                 }
                 Some(_) => return Ok(Err(holder_refusal(item))),
             };
+            if let Some(pipeline) = &input.pipeline {
+                if kind != LaneClaimed {
+                    return Ok(Err(Refusal::InvalidInput(format!(
+                        "work item {id} is held; --pipeline goes with its first claim only"
+                    ))));
+                }
+                p.pipeline_id = Some(pipeline.clone());
+            }
             if kind != LaneRenewed {
                 put(&mut p.changed, "agent", &item.agent, &actor.agent);
                 put(&mut p.changed, "session", &item.session, &actor.session);

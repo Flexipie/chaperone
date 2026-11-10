@@ -3,7 +3,7 @@ The pipeline documents this binary runs
 Usage: chaperone pipeline [OPTIONS] <COMMAND>
 
 Commands:
-  current  The pipeline a new claim stamps: {id, hash}. Skills read the version from here rather than naming one
+  current  The pipeline a new claim stamps: {id, hash, newer}, `newer` the embedded pipelines a first claim may stamp instead (`work claim --pipeline`). Skills read the version from here rather than naming one
   history  Each version of the pipeline changelog (`## vN <time>` in <dotfiles>/claude/pipeline-changelog.md), newest first, with its entry, engine ids and `stats`' cohort numbers over its lanes: the first `pipeline vN` a handoff summary names, else the version active at the lane's first claim
   help     Print this message or the help of the given subcommand(s)
 

@@ -39,6 +39,10 @@ pub const SESSION_CHECKS: &[&str] = &[
     "review_round",
 ];
 
+/// The checks the harness runs under a schema 2 pipeline (`check run`),
+/// which only its producer writes on a lane stamped with one.
+const HARNESS_CHECKS: &[&str] = &["diff", "tests", "review", "merge_verdict", "plan_check"];
+
 /// Who may make a finding move (events.md, finding statuses). The lane's
 /// only move on a finding is to dispute it, so it never settles its own.
 enum By {
@@ -566,11 +570,32 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 pipeline_hash: hash.clone(),
             });
         }
+        // A first claim may name a newer embedded pipeline to stamp
+        // (`work claim --pipeline`), never an older or unknown one.
+        let asked = p.pipeline_id.take();
         if event.kind == LaneClaimed && hash.is_none() {
-            let current = crate::pipeline::current();
-            p.pipeline_id = Some(current.id.clone());
-            p.pipeline_hash = Some(current.hash.clone());
+            let stamp = match &asked {
+                None => crate::pipeline::current(),
+                Some(asked) => {
+                    let newer = crate::pipeline::newer();
+                    let Some(doc) = newer.iter().find(|d| d.id == *asked) else {
+                        let ids: Vec<_> = newer.iter().map(|d| d.id.as_str()).collect();
+                        refuse!(invalid(&format!(
+                            "--pipeline names a pipeline newer than the default {}: one of {ids:?}, not {asked}",
+                            crate::pipeline::current().id
+                        )));
+                    };
+                    doc
+                }
+            };
+            p.pipeline_id = Some(stamp.id.clone());
+            p.pipeline_hash = Some(stamp.hash.clone());
             p.route = Some(Route::for_lane(&kind, &flow).as_str().into());
+        } else if asked.is_some() {
+            refuse!(invalid(&format!(
+                "work item {lane_id} is stamped {}; --pipeline goes with its first claim only",
+                id.unwrap_or_default()
+            )));
         } else {
             (p.pipeline_id, p.pipeline_hash, p.route) = (None, None, None);
         }
@@ -714,6 +739,23 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             if !matches!(p.outcome.as_deref(), Some("ran" | "skipped")) {
                 refuse!(invalid("check.finished outcome is ran or skipped"));
             }
+            // Under a schema 2 pipeline the harness runs these checks and its
+            // gates read only its results (events.md, `check.finished`
+            // producer), so no other producer writes one there. The owner's
+            // plan waiver is the one session plan check, and a session's
+            // smoke is its claim, which may not carry a harness `result`.
+            let check = p.check.as_deref().unwrap_or_default();
+            let waiver = check == "plan_check"
+                && p.outcome.as_deref() == Some("skipped")
+                && p.rest.get("reason") == Some(&Value::from("waived"));
+            let harness_only = HARNESS_CHECKS.contains(&check) && !waiver
+                || check == "smoke" && p.rest.contains_key("result");
+            if !harness && harness_only && stamped_schema(tx, lane_id)? == Some(2) {
+                refuse!(invalid(&format!(
+                    "lane {lane_id} is on a pipeline whose harness runs {check}: \
+                     run it with `check run`, not a record"
+                )));
+            }
             let findings = p.finding_list();
             let keys: BTreeSet<_> = findings.iter().map(|f| &f.finding_key).collect();
             if keys.len() != findings.len() {
@@ -848,6 +890,18 @@ fn owner_pause(event: &Event) -> bool {
                 changed: p.changed.clone(),
                 ..Payload::default()
             }
+}
+
+/// The schema of the pipeline lane `lane_id` is stamped with, `None` while
+/// it has no stamp this binary loads.
+fn stamped_schema(tx: &Transaction, lane_id: i64) -> Result<Option<i64>, LedgerError> {
+    let (id, hash): (Option<String>, Option<String>) = tx.query_row(
+        "SELECT pipeline_id, pipeline_hash FROM lanes WHERE id = ?1",
+        [lane_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let doc = crate::pipeline::by_stamp(&id.unwrap_or_default(), &hash.unwrap_or_default());
+    Ok(doc.map(|d| d.schema))
 }
 
 /// The session has held the lane: it wrote a `lane.claimed` or

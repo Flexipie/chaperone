@@ -69,6 +69,7 @@ pub fn run(
             base_sha,
             lease_secs,
             takeover,
+            pipeline,
             dry_run,
             actor,
         } => {
@@ -78,6 +79,7 @@ pub fn run(
                 base_sha,
                 lease_secs,
                 takeover,
+                pipeline,
             };
             one(ledger.work_claim(&actor.resolve(), id, &input, None, dry(dry_run))??)
         }
