@@ -100,7 +100,7 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
     let body = "# P\n\n## slice 1: the slice  (O/R#2)\n\ndone when: x\n\n## decisions\n\n\
                 - [slice 1] Q: a? A: b. (agreed: in chat, 2026-11-08)\n- [slice 2] Q: c? A: d.\n";
     ledger
-        .spec_create(&actor("1"), "o/r#1", None, body, common::AT, false)
+        .spec_create(&actor("1"), "o/r#1", None, body, Some(common::AT), false)
         .unwrap()
         .unwrap();
     // Claimed in January, its lease renewed now: minutes count from the

@@ -321,16 +321,9 @@ mod tests {
             .collect();
         let body =
             format!("# P\n\n## slice 1: one  (Flexipie/repo0#2)\n\n## decisions\n\n{decisions}");
-        rw.spec_create(
-            &checker,
-            "Flexipie/repo0#1",
-            None,
-            &body,
-            &rw.now().unwrap(),
-            false,
-        )
-        .unwrap()
-        .unwrap();
+        rw.spec_create(&checker, "Flexipie/repo0#1", None, &body, None, false)
+            .unwrap()
+            .unwrap();
         for id in 1..=LANES {
             let me = lane(&format!("s{id}"));
             let create = CreateInput {

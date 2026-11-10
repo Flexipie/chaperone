@@ -216,7 +216,7 @@ fn get_is_capped_and_cuts_notes_first() {
     let body = "# P\n\n## slice 1: the slice  (O/R#2)\n\ndone when: x\n\n## decisions\n\n\
                 - [slice 1] Q: a? A: b.\n- [slice 2] Q: c? A: d.\n- Q: e? A: f.\n";
     ledger
-        .spec_create(&a, "o/r#1", None, body, common::AT, false)
+        .spec_create(&a, "o/r#1", None, body, Some(common::AT), false)
         .unwrap()
         .unwrap();
     let slice = ledger.dossier_get("o/r#2").unwrap().unwrap().slice;

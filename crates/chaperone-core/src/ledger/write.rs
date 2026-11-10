@@ -106,9 +106,10 @@ impl Ledger {
     /// [`Ledger::apply_with`] for a command whose event depends on the row:
     /// `plan` builds the mutation inside the transaction, after the schema
     /// and actor checks, so what it read cannot change before the write.
-    /// With `at` None the clock is read once the write lock is held, so an
-    /// event is not timed before one that committed while it waited (as long
-    /// as the wall clock does not step back). `read` gets that `at`.
+    /// With `at` None the clock is read once the write lock is held and
+    /// moved past the newest event's `at` ([`write_clock`]), so clock-timed
+    /// events, and each lane's `updated_at`, only go up. `read` gets that
+    /// `at`.
     pub(crate) fn apply_planned<T>(
         &self,
         actor: &Actor,
@@ -125,7 +126,7 @@ impl Ledger {
         }
         let at = match at {
             Some(at) => at.to_string(),
-            None => self.now()?,
+            None => write_clock(&tx)?,
         };
         let applied = match plan(&tx, &at)? {
             Ok(mutation) => write(&tx, actor, key, &at, mutation)?,
@@ -140,6 +141,22 @@ impl Ledger {
         }
         Ok((applied, Some(out)))
     }
+}
+
+/// The clock for a write that passed none: now, or 1 ms past the newest
+/// event when now is not later (two commits in one millisecond, or a wall
+/// clock that stepped back). `--expected-updated-at` compares these
+/// strings, so a write in between always shows. One seek by rowid.
+fn write_clock(tx: &Transaction) -> Result<String, LedgerError> {
+    const MS: &str = "'%Y-%m-%dT%H:%M:%fZ'";
+    Ok(tx.query_row(
+        &format!(
+            "SELECT max(strftime({MS}, 'now'), coalesce(strftime({MS},
+               (SELECT at FROM events ORDER BY id DESC LIMIT 1), '+0.001 seconds'), ''))"
+        ),
+        [],
+        |r| r.get(0),
+    )?)
 }
 
 fn write(

@@ -57,13 +57,16 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
     let Err(Denied { gate, fact_paths }) = decided else {
         return Ok(Ok(None));
     };
-    // A retry with no new event on the lane replays this denial instead of
-    // appending another (events.md, write rules).
+    // A retry of the same target and commit with no new event on the lane
+    // replays this denial instead of appending another (events.md, write
+    // rules). The target and commit are gate inputs, so another one appends.
     let latest = newest_fact_event(conn, lane_id)?;
     Ok(Ok(Some(Event {
         kind: EventKind::GateDenied,
         idempotency_key: Some(format!(
-            "deny:{lane_id}:{transition}:{gate}:{}",
+            "deny:{lane_id}:{transition}:{}:{gate}:{}:{}",
+            p.to.as_deref().unwrap_or_default(),
+            p.head_sha.as_deref().unwrap_or("-"),
             latest.unwrap_or(0)
         )),
         payload: Payload {

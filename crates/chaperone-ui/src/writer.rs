@@ -569,7 +569,7 @@ mod tests {
         let body = "# P\n\n## slice 1: one  (o/r#2)\n\n## decisions\n\n\
                     - [slice 1] Q: which way? A: left. (agreed: provisional: orchestrator, 2026-11-09)\n";
         let now = rw.now().unwrap();
-        rw.spec_create(&lane, "o/r#1", None, body, &now, false)
+        rw.spec_create(&lane, "o/r#1", None, body, None, false)
             .unwrap()
             .unwrap();
         let create = CreateInput {

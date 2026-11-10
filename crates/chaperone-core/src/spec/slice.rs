@@ -233,7 +233,7 @@ mod tests {
         };
         let create = |parent: &str, b: String, n| {
             ledger
-                .spec_create(&actor, parent, Some("t"), &b, &at(n), false)
+                .spec_create(&actor, parent, Some("t"), &b, Some(&at(n)), false)
                 .unwrap()
                 .unwrap()
                 .id
@@ -251,7 +251,7 @@ mod tests {
                 &body(&["CORE-2", "CORE-4"]),
                 "r",
                 None,
-                &at(3),
+                Some(&at(3)),
                 false,
             )
             .unwrap()

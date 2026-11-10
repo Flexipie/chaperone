@@ -204,7 +204,7 @@ fn denied(gate: &str, fact_paths: &[&str]) -> Result<i64, Refusal> {
 }
 
 #[test]
-fn done_without_stamps_is_denied_once_and_moves_nothing() {
+fn done_without_stamps_is_denied_and_moves_nothing() {
     let lane = Lane::new();
     let before = lane.row();
     let no_plan = denied(
@@ -227,7 +227,8 @@ fn done_without_stamps_is_denied_once_and_moves_nothing() {
         .work_update(&lane.lane, 1, &update, None, Some(T2), false)
         .unwrap();
     assert!(matches!(r, Err(Refusal::GateDenied { .. })), "{r:?}");
-    assert_eq!(lane.count("gate.denied"), 1);
+    // No handoff was stored, so the update names no commit: another attempt.
+    assert_eq!(lane.count("gate.denied"), 2);
     assert_eq!(lane.row(), before);
 }
 
@@ -382,32 +383,113 @@ fn the_write_gates_every_path() {
     assert_eq!(lane.count("phase.entered"), 0);
 }
 
-/// A denial key another kind already took is refused, never read as a pass.
+/// A denial key another kind already took is refused, never read as a
+/// pass. `work create` cannot take one: it stores its key under `create:`
+/// and gives the caller's back; a create stored bare before that replays.
 #[test]
-fn a_taken_denial_key_is_refused() {
+fn a_create_key_cannot_take_a_denial_key() {
+    const DENY: &str = "deny:1:handoff:done:plan_check_recorded:-:2";
     let lane = Lane::new();
-    let create = CreateInput {
+    let me = &lane.lane;
+    let create = |key: &str| {
+        let input = CreateInput {
+            title: "t".into(),
+            kind: "code".into(),
+            pr_flow: "pr".into(),
+            idempotency_key: Some(key.into()),
+            ..CreateInput::default()
+        };
+        let item = lane.ledger.work_create(me, &input, Some(T0), false);
+        item.unwrap().unwrap()
+    };
+    let done = || {
+        let update = UpdateInput {
+            status: Some("done".into()),
+            ..UpdateInput::default()
+        };
+        lane.ledger
+            .work_update(me, 1, &update, None, Some(T2), false)
+            .unwrap()
+    };
+    let made = create(DENY);
+    assert_eq!(made.idempotency_key.as_deref(), Some(DENY));
+    assert_eq!(create(DENY).id, made.id);
+    let stored: String = lane
+        .db
+        .query_row(
+            "SELECT idempotency_key FROM events WHERE lane_id = ?1",
+            [made.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, format!("create:{DENY}"));
+    let taken = CreateInput {
         title: "t".into(),
         kind: "code".into(),
         pr_flow: "pr".into(),
-        idempotency_key: Some("deny:1:handoff:plan_check_recorded:2".into()),
+        idempotency_key: Some(stored),
         ..CreateInput::default()
-    };
-    let me = &lane.lane;
-    lane.ledger
-        .work_create(me, &create, Some(T0), false)
-        .unwrap()
-        .unwrap();
-    let update = UpdateInput {
-        status: Some("done".into()),
-        ..UpdateInput::default()
     };
     let r = lane
         .ledger
-        .work_update(me, 1, &update, None, Some(T2), false)
+        .work_create(me, &taken, Some(T0), false)
         .unwrap();
     assert!(matches!(r, Err(Refusal::InvalidInput(_))), "{r:?}");
-    assert_eq!(lane.count("gate.denied"), 0);
+    assert!(matches!(done(), Err(Refusal::GateDenied { .. })));
+    assert_eq!(lane.count("gate.denied"), 1);
+
+    // A new fact moves the denial key on, to a key an older binary stored
+    // bare for a create.
+    let Applied::Committed(fact) = lane.check(&lane.checker, "smoke", json!({})) else {
+        panic!("the check did not commit");
+    };
+    let payload = Payload {
+        title: Some("old".into()),
+        source: Some("manual".into()),
+        kind: Some("code".into()),
+        pr_flow: Some("pr".into()),
+        ..Payload::default()
+    };
+    let m = Mutation::Event {
+        kind: EventKind::LaneCreated,
+        lane_id: None,
+        spec_id: None,
+        payload,
+    };
+    let bare = &format!("deny:1:handoff:done:plan_check_recorded:-:{}", fact.id);
+    let Applied::Committed(old) = lane.ledger.apply(me, Some(bare), T0, m).unwrap() else {
+        panic!("the bare create did not commit");
+    };
+    assert_eq!(Some(create(bare).id), old.lane_id);
+    let r = done();
+    assert!(matches!(r, Err(Refusal::InvalidInput(_))), "{r:?}");
+    assert_eq!(lane.count("gate.denied"), 1);
+}
+
+/// A retry of a denied handoff replays its denial; the same handoff on
+/// another commit, or to another target, is a new attempt and appends its
+/// own.
+#[test]
+fn a_denial_names_the_commit_it_denied() {
+    let lane = Lane::new();
+    let denied = |commit: &str, status: &str, ready: Option<bool>| {
+        let r = lane.handoff(commit, status, ready);
+        assert!(matches!(r, Err(Refusal::GateDenied { .. })), "{r:?}");
+        lane.count("gate.denied")
+    };
+    assert_eq!(denied("abc1234", "review", Some(true)), 1);
+    assert_eq!(denied("abc1234", "review", Some(true)), 1);
+    assert_eq!(denied("def5678", "review", Some(true)), 2);
+    assert_eq!(denied("def5678", "done", None), 3);
+    let heads: Vec<String> = lane
+        .db
+        .prepare("SELECT payload_json ->> '$.head_sha' FROM events WHERE kind = 'gate.denied'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(heads, ["abc1234", "def5678", "def5678"]);
 }
 
 /// The board's ready: the owner's override, else status review and a ready
@@ -706,4 +788,33 @@ fn a_later_no_verdict_revokes_ready_on_the_board() {
         .execute("UPDATE lanes SET pipeline_hash = 'gone' WHERE id = 1", [])
         .unwrap();
     assert_eq!(board(), revoked("this binary does not know pipeline v19"));
+}
+
+/// A write on the CLI's clock is timed after the newest event, so writes
+/// in one millisecond, or after the wall clock stepped back, still move
+/// `updated_at`, and a stale `--expected-updated-at` is refused.
+#[test]
+fn clock_timed_writes_only_go_up() {
+    // The newest event is from the future: the clock has stepped back.
+    const AHEAD: &str = "2999-01-01T00:00:00.000Z";
+    let lane = Lane::new();
+    let update = |n: usize, expected: Option<&str>, at: Option<&str>| {
+        let input = UpdateInput {
+            next_action: Some(format!("step {n}")),
+            ..UpdateInput::default()
+        };
+        lane.ledger
+            .work_update(&lane.lane, 1, &input, expected, at, false)
+            .unwrap()
+    };
+    let mut last = update(0, None, Some(AHEAD)).unwrap().updated_at;
+    assert_eq!(last, AHEAD);
+    for n in 1..=20 {
+        let at = update(n, Some(&last), None).unwrap().updated_at;
+        assert!(at > last, "{at} is not after {last}");
+        last = at;
+    }
+    assert_eq!(last, "2999-01-01T00:00:00.020Z");
+    let stale = update(21, Some("2999-01-01T00:00:00.019Z"), None);
+    assert!(matches!(stale, Err(Refusal::Conflict { .. })), "{stale:?}");
 }

@@ -98,7 +98,7 @@ impl Ledger {
         parent: &str,
         title: Option<&str>,
         body: &str,
-        at: &str,
+        at: Option<&str>,
         dry_run: bool,
     ) -> Checked<Spec> {
         let Some(key) = normalize_key(parent) else {
@@ -171,7 +171,7 @@ impl Ledger {
         body: &str,
         reason: &str,
         expected_version: Option<i64>,
-        at: &str,
+        at: Option<&str>,
         dry_run: bool,
     ) -> Checked<Spec> {
         let id = match resolve_spec(self.conn(), spec)? {
@@ -206,7 +206,7 @@ impl Ledger {
         &self,
         actor: &Actor,
         spec: &str,
-        at: &str,
+        at: Option<&str>,
         dry_run: bool,
     ) -> Checked<Spec> {
         let current = match self.spec_get(spec, None)? {
@@ -228,13 +228,13 @@ impl Ledger {
     fn spec_write(
         &self,
         actor: &Actor,
-        at: &str,
+        at: Option<&str>,
         dry_run: bool,
         kind: EventKind,
         spec_id: Option<i64>,
         payload: Payload,
     ) -> Checked<Spec> {
-        self.spec_write_planned(actor, Some(at), dry_run, |_, _| {
+        self.spec_write_planned(actor, at, dry_run, |_, _| {
             Ok(Ok(Mutation::Event {
                 kind,
                 lane_id: None,
