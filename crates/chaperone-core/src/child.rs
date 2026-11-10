@@ -3,8 +3,12 @@
 //! calls of `overlap`, `impact` and the UI's diff.
 
 use std::io::{Read, Write};
-use std::process::{Command, ExitStatus, Stdio};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
+
+/// How long an agent has to stop its tools before its group is killed.
+const GRACE: Duration = Duration::from_secs(2);
 
 pub struct Done {
     pub status: ExitStatus,
@@ -24,21 +28,42 @@ pub enum Failed {
 /// Runs `cmd` with stdin closed, killing it at `deadline`. Both pipes are
 /// read to the end while it runs, so a large answer cannot fill one and
 /// stall the child until the deadline; stdout past `cap` bytes is dropped.
+/// A process the child left behind that still holds a pipe at the
+/// deadline makes the run [`Failed::TimedOut`], even after a clean exit.
 pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Failed> {
-    run_input(cmd, None, deadline, cap)
+    start(cmd, None, false, deadline, cap)
 }
 
-/// [`run`], with `input` written to the child's stdin, which is then
-/// closed: a prompt too long for an argument. A child that exits before
-/// it has read all of it is a [`Failed::Wait`], whatever it printed.
+/// [`run`] for an agent session, with `input` written to the child's
+/// stdin, which is then closed: a prompt too long for an argument. A
+/// child that exits before it has read all of it is a [`Failed::Wait`],
+/// whatever it printed. The child leads a process group of its own. At the
+/// deadline it gets SIGTERM and 2 s to stop, then its group gets
+/// SIGKILL. That reaches what the agent started in its own group; a tool
+/// it put in a group or session of its own goes only if the agent stops
+/// it on SIGTERM. The cost: a Ctrl-C at the terminal no longer reaches
+/// the session, and a chaperone that dies leaves the session running.
 pub fn run_input(
     cmd: &mut Command,
     input: Option<&[u8]>,
     deadline: Instant,
     cap: usize,
 ) -> Result<Done, Failed> {
+    start(cmd, input, true, deadline, cap)
+}
+
+fn start(
+    cmd: &mut Command,
+    input: Option<&[u8]>,
+    group: bool,
+    deadline: Instant,
+    cap: usize,
+) -> Result<Done, Failed> {
     if Instant::now() >= deadline {
         return Err(Failed::TimedOut);
+    }
+    if group {
+        cmd.process_group(0);
     }
     let mut child = cmd
         .stdin(match input {
@@ -55,7 +80,9 @@ pub fn run_input(
     if let (Some(mut pipe), Some(input)) = (child.stdin.take(), input.map(<[u8]>::to_vec)) {
         std::thread::spawn(move || sent.send(pipe.write_all(&input)));
     }
+    // Over a channel, so the wait for the end of a pipe has the deadline.
     let drain = |pipe: Option<Box<dyn Read + Send>>, cap: usize| {
+        let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let (mut buf, mut cut) = (Vec::new(), false);
             if let Some(mut pipe) = pipe {
@@ -72,8 +99,9 @@ pub fn run_input(
                     cut |= keep < n;
                 }
             }
-            (buf, cut)
-        })
+            let _ = tx.send((buf, cut));
+        });
+        rx
     };
     let out = drain(child.stdout.take().map(|p| Box::new(p) as _), cap);
     let err = drain(child.stderr.take().map(|p| Box::new(p) as _), usize::MAX);
@@ -82,9 +110,15 @@ pub fn run_input(
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
             Ok(None) => {
+                let stopped = if group { stop(&mut child) } else { Ok(()) };
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(Failed::TimedOut);
+                return Err(match stopped {
+                    Ok(()) => Failed::TimedOut,
+                    Err(e) => Failed::Wait(std::io::Error::other(format!(
+                        "timed out, and its process group was not killed: {e}"
+                    ))),
+                });
             }
             Err(e) => return Err(Failed::Wait(e)),
         }
@@ -100,12 +134,44 @@ pub fn run_input(
             Err(_) => return Err(Failed::TimedOut),
         }
     }
-    let (out, cut) = out.join().unwrap_or_default();
-    let (err, _) = err.join().unwrap_or_default();
+    // A reader only stops early by panicking, which is no result either.
+    let left = || deadline.saturating_duration_since(Instant::now());
+    let (out, cut) = out.recv_timeout(left()).map_err(|_| Failed::TimedOut)?;
+    let (err, _) = err.recv_timeout(left()).map_err(|_| Failed::TimedOut)?;
     Ok(Done {
         status,
         out,
         cut,
         err,
     })
+}
+
+/// SIGTERM to the agent, so it can stop the tools it started, then
+/// SIGKILL to its group after at most [`GRACE`]. std has no killpg and
+/// `unsafe` is forbidden, so the system's kill sends both.
+fn stop(child: &mut Child) -> std::io::Result<()> {
+    let pid = child.id();
+    let kill = |signal: &str, target: String| {
+        Command::new("/bin/kill")
+            .args([signal, "--", &target])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+    };
+    let _ = kill("-TERM", pid.to_string());
+    let until = Instant::now() + GRACE;
+    let mut alive = true;
+    while alive && Instant::now() < until {
+        alive = child.try_wait()?.is_none();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // While the agent is unreaped its group exists, so a failed kill is a
+    // real failure. Once reaped, the group may be empty and kill finds
+    // nothing; its pid names a new group only after the pids wrap around.
+    match kill("-KILL", format!("-{pid}"))? {
+        status if alive && !status.success() => Err(std::io::Error::other(format!(
+            "/bin/kill -KILL -- -{pid}: {status}"
+        ))),
+        _ => Ok(()),
+    }
 }
