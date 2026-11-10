@@ -34,8 +34,8 @@ pub const EVENTS: &[(&str, &str)] = &[
 #[derive(Debug, Clone)]
 pub struct Pipeline {
     pub id: String,
-    /// SHA-256 of the canonical JSON of the limits, gates and transitions,
-    /// lowercase hex.
+    /// SHA-256 of the canonical JSON of the limits, gates and transitions
+    /// (schema 2: and the schema, runners and checks), lowercase hex.
     pub hash: String,
     pub limits: BTreeMap<String, i64>,
     pub gates: BTreeMap<String, Gate>,
@@ -49,13 +49,14 @@ pub struct Pipeline {
 }
 
 /// How one kind of headless session is started. Its numbers are `[limits]`
-/// entries (`budget_limit`, `timeout_limit`), resolved here.
+/// entries (`budget_limit` in US cents, `timeout_limit` in seconds),
+/// resolved here.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Runner {
     pub cli: Cli,
     /// None is the CLI's own default.
     pub model: Option<String>,
-    /// The built-in tools the session may use.
+    /// The built-in tools the session may use, sorted, each once.
     pub tools: Vec<String>,
     pub budget_cents: i64,
     pub timeout_secs: i64,
@@ -133,6 +134,36 @@ pub enum Pred {
     All(Vec<String>),
     Any(Vec<String>),
     Not(String),
+}
+
+impl Pred {
+    /// The fact paths this predicate itself reads, in the order a denial
+    /// lists them. A combinator reads none: its members do.
+    pub(crate) fn fact_paths(&self) -> Vec<String> {
+        let lane = |check: &str| {
+            let (outcome, reason) = (format!("{check}.outcome"), format!("{check}.reason"));
+            vec![outcome, "lane.changes_code".into(), reason]
+        };
+        match self {
+            Pred::Present { field }
+            | Pred::Lte { field, .. }
+            | Pred::Gt { field, .. }
+            | Pred::OneOf { field, .. }
+            | Pred::Eq {
+                field,
+                value: Operand::Literal(_),
+            } => vec![field.clone()],
+            Pred::Eq {
+                field,
+                value: Operand::Fact(other),
+            } => vec![field.clone(), other.clone()],
+            Pred::ShaPrefixEq { left, right, .. } => vec![left.clone(), right.clone()],
+            Pred::EventBefore { earlier, later } => vec![earlier.clone(), later.clone()],
+            Pred::PlanCheckMatchesLane { .. } => lane("plan_check"),
+            Pred::QualityGateMatchesLane { .. } => lane("quality_gate"),
+            Pred::All(_) | Pred::Any(_) | Pred::Not(_) => Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -601,7 +632,7 @@ requires = ["a"]
         let lens = Runner {
             cli: Cli::Claude,
             model: Some("opus".into()),
-            tools: vec!["Read".into(), "Grep".into()],
+            tools: vec!["Grep".into(), "Read".into()],
             budget_cents: 200,
             timeout_secs: 900,
         };
@@ -634,16 +665,86 @@ requires = ["a"]
             load2("id = \"t2\"", "id = \"t2\" # note").unwrap().hash,
             base
         );
-        // The gates and the transition alone, as schema 1 hashes them.
-        let rows = &MINI2[MINI2.find("[[gate]]").unwrap()..];
-        let v1 = format!("schema = 1\nid = \"t\"\n[limits]\nbudget = 200\ntimeout = 900\n{rows}");
-        let no_tables = MINI2.replace(
-            "[checks.review]\nrunner = \"lens\"\nprompt = \"review.md\"\n",
-            "",
+        // The order tools are written in is not behaviour.
+        let swapped = load2(r#"["Read", "Grep"]"#, r#"["Grep", "Read", "Grep"]"#).unwrap();
+        assert_eq!(swapped.hash, base);
+        // Pinned: the hashed keys are the structs' field names, so a rename
+        // would restamp every schema 2 lane.
+        assert_eq!(
+            base,
+            "7bb88d804e9c9a831e0336800695bd466804fe55eece5eb17b2253260b633e40"
         );
-        let no_tables = &no_tables[..no_tables.find("[runners.lens]").unwrap()];
-        let v2 = format!("{no_tables}{rows}");
-        assert_ne!(hash(&v1), Pipeline::load(&v2).unwrap().hash);
+    }
+
+    /// Each fn's fact paths are checked, whichever argument names them.
+    #[test]
+    fn schema_2_checks_every_fn_s_facts() {
+        let gate = |func: &str, args: &str| {
+            let old = r#"fn = "eq"
+args = { field = "verdict.decision", value = "yes" }"#;
+            load2(old, &format!("fn = \"{func}\"\nargs = {{ {args} }}"))
+        };
+        let limits = r#"min_limit = "budget", max_limit = "timeout""#;
+        for (func, good, bad) in [
+            (
+                "present",
+                r#"field = "verdict.sha""#.to_string(),
+                r#"field = "x.y""#.to_string(),
+            ),
+            (
+                "lte",
+                r#"field = "review.local_rounds", value = 3"#.into(),
+                r#"field = "x.y", value = 3"#.into(),
+            ),
+            (
+                "gt",
+                r#"field = "review.local_rounds", value = 0"#.into(),
+                r#"field = "x.y", value = 0"#.into(),
+            ),
+            (
+                "one_of",
+                r#"field = "verdict.decision", values = ["yes"]"#.into(),
+                r#"field = "x.y", values = ["yes"]"#.into(),
+            ),
+            (
+                "eq",
+                r#"field = "verdict.sha", value_from = "commit.sha""#.into(),
+                r#"field = "verdict.sha", value_from = "x.y""#.into(),
+            ),
+            (
+                "sha_prefix_eq",
+                format!(r#"left = "verdict.sha", right = "commit.sha", {limits}"#),
+                format!(r#"left = "verdict.sha", right = "x.y", {limits}"#),
+            ),
+            (
+                "sha_same_commit",
+                format!(r#"left = "verdict.sha", right = "commit.sha", {limits}"#),
+                format!(r#"left = "x.y", right = "commit.sha", {limits}"#),
+            ),
+            (
+                "plan_check_matches_lane",
+                r#"reasons = ["no-code"]"#.into(),
+                String::new(),
+            ),
+            (
+                "event_before",
+                r#"earlier = "quality_gate", later = "pr.opened""#.into(),
+                String::new(),
+            ),
+        ] {
+            gate(func, &good).unwrap_or_else(|e| panic!("{func}: {e}"));
+            if !bad.is_empty() {
+                let e = gate(func, &bad).unwrap_err().to_string();
+                assert_eq!(
+                    e, "gate a reads x.y, a fact the projection never sets",
+                    "{func}"
+                );
+            }
+        }
+        // The paths the fixed-path fns read are the projection's too.
+        for (_, path) in EVENTS {
+            assert!(FACTS.contains(path), "{path}");
+        }
     }
 
     #[test]
@@ -659,15 +760,6 @@ requires = ["a"]
                 r#"args = { field = "verdict.sha", value_from = "head.sha" }"#
             ),
             "gate a reads head.sha, a fact the projection never sets"
-        );
-        assert_eq!(
-            err(
-                r#"fn = "eq"
-args = { field = "verdict.decision", value = "yes" }"#,
-                r#"fn = "plan_check_matches_lane"
-args = { reasons = ["no-code"] }"#
-            ),
-            "gate a: unknown fn *_matches_lane (schema 1 only)"
         );
         assert_eq!(
             err(r#"runner = "lens""#, r#"runner = "lense""#),

@@ -76,13 +76,11 @@ pub(super) fn load(src: &str, prompts: &[(&str, &str)]) -> Result<Pipeline, Pipe
         other => return Err(PipelineError::Schema(other)),
     };
     // Schema 1 hashes cover neither table, so there they would be unstamped.
-    for (table, given) in [
-        ("runners", !raw.runners.is_empty()),
-        ("checks", !raw.checks.is_empty()),
-    ] {
-        if given && !v2 {
-            return Err(PipelineError::NeedsSchema2(table));
-        }
+    if !v2 && !raw.runners.is_empty() {
+        return Err(PipelineError::NeedsSchema2("runners"));
+    }
+    if !v2 && !raw.checks.is_empty() {
+        return Err(PipelineError::NeedsSchema2("checks"));
     }
     let runners = runners(raw.runners, &raw.limits)?;
     let checks = checks(raw.checks, &runners, prompts)?;
@@ -165,10 +163,14 @@ fn runners(
             Some(n) => Err(bad(format!("limit {limit} is {n}, not at least 1"))),
             None => Err(bad(format!("unknown limit {limit}"))),
         };
+        // Their order and repeats are not behaviour, so not the hash's.
+        let mut tools = r.tools;
+        tools.sort();
+        tools.dedup();
         let runner = Runner {
             cli: r.cli,
             model: r.model,
-            tools: r.tools,
+            tools,
             budget_cents: limit(&r.budget_limit)?,
             timeout_secs: limit(&r.timeout_limit)?,
         };
@@ -207,38 +209,17 @@ fn checks(
     Ok(checks)
 }
 
-/// Schema 2: every fact path `pred` reads is one the projection sets. The
-/// two `*_matches_lane` fns read paths their arguments do not name, so
-/// schema 2 has no such fn.
+/// Schema 2: every fact path `pred` reads is one the projection sets.
 fn check_facts(gate: &str, pred: &Pred) -> Result<(), PipelineError> {
-    let paths: Vec<&String> = match pred {
-        Pred::Present { field }
-        | Pred::Lte { field, .. }
-        | Pred::Gt { field, .. }
-        | Pred::OneOf { field, .. }
-        | Pred::Eq {
-            field,
-            value: Operand::Literal(_),
-        } => vec![field],
-        Pred::Eq {
-            field,
-            value: Operand::Fact(other),
-        } => vec![field, other],
-        Pred::ShaPrefixEq { left, right, .. } => vec![left, right],
-        Pred::EventBefore { earlier, later } => vec![earlier, later],
-        Pred::PlanCheckMatchesLane { .. } | Pred::QualityGateMatchesLane { .. } => {
-            return Err(PipelineError::UnknownFn {
-                gate: gate.into(),
-                func: "*_matches_lane (schema 1 only)".into(),
-            });
-        }
-        Pred::All(_) | Pred::Any(_) | Pred::Not(_) => Vec::new(),
-    };
-    match paths.into_iter().find(|p| !FACTS.contains(&p.as_str())) {
+    match pred
+        .fact_paths()
+        .into_iter()
+        .find(|p| !FACTS.contains(&p.as_str()))
+    {
         None => Ok(()),
         Some(fact) => Err(PipelineError::UnknownFact {
             gate: gate.into(),
-            fact: fact.clone(),
+            fact,
         }),
     }
 }

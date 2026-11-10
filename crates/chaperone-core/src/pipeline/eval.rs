@@ -209,32 +209,17 @@ impl Eval<'_> {
 
     fn reads(&self, id: &str, out: &mut Vec<String>) {
         match &self.pipeline.gates[id].pred {
-            Pred::Present { field }
-            | Pred::Lte { field, .. }
-            | Pred::Gt { field, .. }
-            | Pred::OneOf { field, .. } => push(out, field),
-            Pred::Eq { field, value } => {
-                push(out, field);
-                if let Operand::Fact(other) = value {
-                    push(out, other);
-                }
-            }
-            Pred::ShaPrefixEq { left, right, .. } => {
-                push(out, left);
-                push(out, right);
-            }
-            Pred::EventBefore { earlier, later } => {
-                push(out, earlier);
-                push(out, later);
-            }
-            Pred::PlanCheckMatchesLane { .. } => lane_paths(out, "plan_check"),
-            Pred::QualityGateMatchesLane { .. } => lane_paths(out, "quality_gate"),
             Pred::All(of) | Pred::Any(of) => {
                 for g in of {
                     self.reads(g, out);
                 }
             }
             Pred::Not(of) => self.reads(of, out),
+            pred => {
+                for path in pred.fact_paths() {
+                    push(out, &path);
+                }
+            }
         }
     }
 }
@@ -243,12 +228,6 @@ fn push(out: &mut Vec<String>, path: &str) {
     if !out.iter().any(|p| p == path) {
         out.push(path.into());
     }
-}
-
-fn lane_paths(out: &mut Vec<String>, check: &str) {
-    push(out, &format!("{check}.outcome"));
-    push(out, "lane.changes_code");
-    push(out, &format!("{check}.reason"));
 }
 
 fn literal(lit: &Literal) -> Fact {

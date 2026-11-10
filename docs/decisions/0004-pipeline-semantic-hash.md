@@ -17,7 +17,7 @@ The hash is SHA-256, lowercase hex, of this JSON:
 `{"gates": [...], "limits": {...}, "transitions": [...]}`.
 
 1. Only `[limits]`, the gates and the transitions are hashed. `schema`, `id`,
-   `published`, `[cohort]` and comments are not.
+   `published`, `[cohort]` and comments are not. (Amended below for schema 2.)
 2. Defaults are filled in before hashing (`args = {}`, `requires = []`), `routes` are
    sorted, gates are sorted by id, and transitions by id and then by their canonical
    form. `requires` and `of` keep their order, because the first failing gate is
@@ -29,7 +29,8 @@ The hash is SHA-256, lowercase hex, of this JSON:
    as values.
 
 Amended for schema 2 (2026-11-10): a schema 2 document also hashes `"schema": 2`,
-`"runners"` (each with its two limits resolved to numbers) and `"checks"` (each with
+`"runners"` (each with its two limits resolved to numbers, `budget_cents` and
+`timeout_secs`, and its tools sorted with repeats dropped) and `"checks"` (each with
 `prompt_sha256`, the SHA-256 of its prompt file's text). A changed prompt or model is
 then a new stamp, so cohorts stay comparable. Schema 1 hashes are unchanged, and a
 schema 1 document that carries `[runners]` or `[checks]` does not load.

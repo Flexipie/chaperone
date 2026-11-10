@@ -2,7 +2,8 @@
 //! transitions as JSON with object keys sorted here (not by serde_json's map,
 //! whose order depends on a Cargo feature any crate can turn on), gates and
 //! transitions sorted, `requires` and `of` order kept. `published`, `cohort`
-//! and comments are not part of it.
+//! and comments are not part of it. A schema 2 document adds its schema,
+//! runners and checks (ADR 0004).
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};

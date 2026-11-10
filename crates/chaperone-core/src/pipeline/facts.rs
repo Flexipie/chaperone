@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 /// Every path the projection sets (`ledger/projection.rs`; its tests hold
 /// it to this list). A schema 2 gate that reads any other path does not
-/// load: it could never pass.
+/// load: it could never pass. Listed is not always set: `commit.sha` is
+/// the head the caller passes, which only a handoff does today.
 pub const FACTS: &[&str] = &[
     "commit.sha",
     "daisy_review.state",
