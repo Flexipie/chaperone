@@ -2,8 +2,18 @@
 pub enum PipelineError {
     #[error(transparent)]
     Toml(#[from] toml::de::Error),
-    #[error("pipeline schema {0} is not supported; this binary reads schema 1")]
+    #[error("pipeline schema {0} is not supported; this binary reads schemas 1 and 2")]
     Schema(i64),
+    #[error("[{0}] needs schema 2")]
+    NeedsSchema2(&'static str),
+    #[error("gate {gate} reads {fact}, a fact the projection never sets")]
+    UnknownFact { gate: String, fact: String },
+    #[error("runner {runner}: {message}")]
+    BadRunner { runner: String, message: String },
+    #[error("check {check} names unknown runner {runner}")]
+    UnknownRunner { check: String, runner: String },
+    #[error("check {check} names prompt {prompt}, which this binary does not carry")]
+    UnknownPrompt { check: String, prompt: String },
     #[error("gate {gate}: unknown fn {func}")]
     UnknownFn { gate: String, func: String },
     #[error("gate {gate}: {message}")]

@@ -250,8 +250,19 @@ mod tests {
             self.apply(EventKind::CheckFinished, p, at)
         }
 
+        /// The lane's facts, each one a path `FACTS` lists.
         fn facts(&self) -> FactBundle {
-            self.ledger.project(1, None).unwrap()
+            self.facts_at(None)
+        }
+
+        fn facts_at(&self, head: Option<&str>) -> FactBundle {
+            let f = self.ledger.project(1, head).unwrap();
+            let unlisted: Vec<&str> = f
+                .paths()
+                .filter(|p| !crate::pipeline::FACTS.contains(p))
+                .collect();
+            assert!(unlisted.is_empty(), "FACTS does not list {unlisted:?}");
+            f
         }
     }
 
@@ -268,7 +279,7 @@ mod tests {
         assert_eq!(f.get("commit.sha"), &Fact::Absent);
         lane.claim();
         let newest = crate::pipeline::current();
-        let f = lane.ledger.project(1, Some("abc1234def")).unwrap();
+        let f = lane.facts_at(Some("abc1234def"));
         assert_eq!(f.get("pipeline.id"), &s(&newest.id));
         assert_eq!(f.get("pipeline.hash"), &s(&newest.hash));
         assert_eq!(f.get("commit.sha"), &s("abc1234def"));
