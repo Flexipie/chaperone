@@ -52,6 +52,17 @@ fn the_lane_disputes_and_the_owner_waives() {
         .unwrap();
     let dispute = ["finding", "dispute", "3", "f1", "--reason", "not a bug"];
     let waive = ["finding", "waive", "3", "f1", "--reason", "owner's call"];
+    // The verifier's moves are the harness's (`check run review`): no
+    // command makes them and none takes a producer, so the lane's session
+    // cannot rule on its own finding.
+    let smuggled = [&dispute[..], &["--producer", "harness"]].concat();
+    for args in [
+        &["finding", "verify", "3", "f1"][..],
+        &["finding", "refute", "3", "f1"],
+        &smuggled,
+    ] {
+        assert_eq!(run("lane", args)["error"]["code"], "usage", "{args:?}");
+    }
     assert_eq!(run("owner", &dispute)["error"]["code"], "invalid_input");
     assert_eq!(run("lane", &waive)["error"]["code"], "invalid_input");
     // A dry run writes nothing, so the real dispute is not a repeat.

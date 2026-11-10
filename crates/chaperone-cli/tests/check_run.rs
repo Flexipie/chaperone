@@ -575,3 +575,20 @@ fn tests_check_the_checkout_after() {
         (&json!("fail"), &json!(true))
     );
 }
+
+/// A lane on v17 to v19 has no review checks in its pipeline: `review` is
+/// refused, says what such a lane records with, and writes nothing.
+#[test]
+fn a_review_needs_a_pipeline_that_names_one() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path());
+    let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
+    let id = lane(&db, &["--worktree", wt.to_str().unwrap()]);
+    let before = events(&db);
+    let (code, error) = run(&db, &["check", "run", "review", "--work", &id]);
+    assert_eq!((code, &error["code"]), (1, &json!("invalid_input")));
+    let said = "pipeline v19 has no check review_correctness; a lane on it records reviews \
+        with `check record` and `reviews record`";
+    assert_eq!(error["message"], said);
+    assert_eq!(events(&db), before);
+}
