@@ -669,6 +669,9 @@ pub enum RunKind {
     /// commit that changes a code file is refused (the owner can waive the
     /// check); the same plan on the same tree replays (none before v20)
     Plan,
+    /// The base branch profile's `[smoke]` commands, run as `tests` runs
+    /// its; no `[smoke]` table is refused, never a pass
+    Smoke,
 }
 
 /// Daisy's review jobs, as recorded in the ledger. The worker stays in

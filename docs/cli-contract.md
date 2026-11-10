@@ -120,7 +120,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]...` | write |
-| `check run` | `diff\|tests\|review\|verdict\|plan --work <id> [--file <plan>]` | write |
+| `check run` | `diff\|tests\|review\|verdict\|plan\|smoke --work <id> [--file <plan>]` | write |
 | `check waive` | `plan --work <id> --reason <r>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
@@ -323,6 +323,13 @@ flag such as `assume-unchanged` hides a change from them. A failing command, a c
 a signal, a moved `HEAD`, a dirty tree, a cut listing and a timeout are a `check.finished` with
 `result` `fail`; a command that cannot start, or a checkout that cannot be made (git's own
 message is kept), writes nothing.
+
+`check run smoke` is `check run tests` on the base profile's `[smoke]` table, which has the
+same keys and rules as `[tests]`, recorded as check `smoke` with the harness producer (events.md).
+A profile with no `[smoke]` is refused (`invalid_input`, nothing written), never a pass: whether
+a lane needs a smoke is a gate's to say, not this command's. It needs no pipeline check, as
+`tests` does not. The lane's own account of its smoke stays a session's `check record --check
+smoke`, with its evidence files.
 
 `check run review` takes the same lock and reads the commit the same way. The lane's stamped
 pipeline must name the review's checks, each with a runner (`[runners]`: the CLI, model,

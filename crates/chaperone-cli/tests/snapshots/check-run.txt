@@ -10,6 +10,7 @@ Arguments:
           - review:  Four review lenses on the commit's diff, in that checkout, each on the CLI its pipeline runner names, then a verifier that tries to refute each finding; the lane's pipeline names them (none before v20)
           - verdict: One fresh session on whether the commit should merge, from the change, the lane's goal and the harness's own diff, tests and complete review of it; a verdict stands for its tree, so the same tree and results replay it, yes or no (none before v20)
           - plan:    One fresh session attacking the plan in --file, before any code: a commit that changes a code file is refused (the owner can waive the check); the same plan on the same tree replays (none before v20)
+          - smoke:   The base branch profile's `[smoke]` commands, run as `tests` runs its; no `[smoke]` table is refused, never a pass
 
 Options:
       --db <DB>

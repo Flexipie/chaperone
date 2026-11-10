@@ -24,7 +24,7 @@ use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
 use chaperone_core::work::WorkItem;
-use chaperone_graph::{glob, tests_in};
+use chaperone_graph::{commands_in, glob};
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
@@ -104,7 +104,8 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
                     "--file <plan> goes with plan, and is required there".into(),
                 )),
                 (RunKind::Diff, None) => run_diff(ledger, db, work, &actor),
-                (RunKind::Tests, None) => run_tests(ledger, db, work, &actor),
+                (RunKind::Tests, None) => run_tests(ledger, db, work, &actor, "tests"),
+                (RunKind::Smoke, None) => run_tests(ledger, db, work, &actor, "smoke"),
                 (RunKind::Review, None) => run_review(ledger, db, work, &actor),
                 (RunKind::Verdict, None) => run_verdict(ledger, db, work, &actor),
             }
@@ -252,21 +253,29 @@ fn changed(
         .map_err(|e| refuse(format!("could not diff {head} in {}: {e}", wt.display())))
 }
 
-/// `check run tests`: the `[tests]` commands of the base branch's profile,
+/// `check run tests` (or `smoke`, `check` naming the profile's table and
+/// the event's check): the `[tests]` commands of the base branch's profile,
 /// in order until one fails, in a fresh checkout of the lane's commit that
 /// the harness makes and removes, then the checkout must still be at that
 /// commit with no change or new untracked file. A pass on the same commit
 /// and profile replays without running anything. A run that times out
-/// failed: the tests did not pass on that tree. No profile, a checkout that
-/// cannot be made or a command that cannot start writes nothing.
-fn run_tests(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
+/// failed: the tests did not pass on that tree. No profile or table, a
+/// checkout that cannot be made or a command that cannot start writes
+/// nothing.
+fn run_tests(
+    ledger: &Ledger,
+    db: &Path,
+    work: i64,
+    actor: &Actor,
+    check: &str,
+) -> Result<Outcome, CliError> {
     let Run {
         _lock,
         wt,
         mut input,
         ..
-    } = start_run(ledger, db, work, "tests")?;
-    let base = tests_in(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    } = start_run(ledger, db, work, check)?;
+    let base = commands_in(Path::new("git"), &wt, check, Instant::now() + RUN_TIMEOUT)?;
     input.profile = Some(base.hash.clone());
     let key = ledger.run_key(&input)?;
     if let Some(stored) = ledger.run_replay(&key)? {

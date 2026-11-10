@@ -751,3 +751,57 @@ fn smoke_evidence_stays_in_the_worktree() {
         assert_eq!(events(&db), before);
     }
 }
+
+/// `check run smoke` runs the base profile's `[smoke]` as `tests` runs its
+/// `[tests]`, in the harness's checkout, recorded as the harness's `smoke`
+/// pass or fail; a profile without `[smoke]` is refused and records
+/// nothing, never a pass.
+#[test]
+fn smoke_runs_the_base_profiles_smoke() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, id) = tests_lane(dir.path());
+    let smoke = ["check", "run", "smoke", "--work", &id];
+    base_tests(&wt, Some(r#"commands = [["true"]]"#));
+    let before = events(&db);
+    let (code, err) = run(&db, &smoke);
+    assert_eq!(
+        (code, &err["code"], events(&db)),
+        (1, &json!("invalid_input"), before)
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("no [smoke] commands"),
+        "{err}"
+    );
+    for (command, result) in [
+        (r#"["sh", "-c", "grep -qx c lib.rs"]"#, "pass"),
+        (r#"["false"]"#, "fail"),
+    ] {
+        base_tests(
+            &wt,
+            Some(&format!(
+                "commands = [[\"true\"]]\n[smoke]\ncommands = [{command}]"
+            )),
+        );
+        let (code, out) = run(&db, &smoke);
+        assert_eq!(code, 0, "{out}");
+        let p = &out["payload"];
+        let got = (
+            &p["check"],
+            &p["outcome"],
+            &p["result"],
+            &p["producer"]["kind"],
+        );
+        assert_eq!(
+            got,
+            (
+                &json!("smoke"),
+                &json!("ran"),
+                &json!(result),
+                &json!("harness")
+            )
+        );
+    }
+}

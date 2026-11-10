@@ -277,7 +277,8 @@ pub fn rules_in(
     rules(profile, origin)
 }
 
-/// The profile's `[tests]`: what `chaperone check run tests` runs.
+/// The profile's `[tests]` or `[smoke]`: what `chaperone check run tests`
+/// or `smoke` runs.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tests {
@@ -291,7 +292,7 @@ pub struct Tests {
     pub timeout_secs: Option<u64>,
 }
 
-/// The `[tests]` of a base branch's profile, the sha256 of the profile's
+/// The `[tests]` or `[smoke]` of a base branch's profile, the sha256 of the profile's
 /// text, and the base and the commit it pointed at, so a reader can compare
 /// them with the real remote: the lane's own clone holds that ref.
 #[derive(Debug)]
@@ -302,15 +303,17 @@ pub struct BaseTests {
     pub commit: String,
 }
 
-/// The `[tests]` of the base branch's [`REPO_PROFILE`] for the repo `dir`
-/// is in, never the worktree's copy. No profile, no `[tests]`, no command,
-/// a timeout out of range or a `target_dir` that is no plain variable name
-/// (or is `PATH` or `HOME`) refuses, so "not run" never reads as a pass.
-pub fn tests_in(bin: &Path, dir: &Path, deadline: Instant) -> Result<BaseTests, Error> {
-    #[derive(Deserialize)]
-    struct Profile {
-        tests: Option<Tests>,
-    }
+/// The `[<table>]` (`tests` or `smoke`) of the base branch's
+/// [`REPO_PROFILE`] for the repo `dir` is in, never the worktree's copy.
+/// No profile, no such table, no command, a timeout out of range or a
+/// `target_dir` that is no plain variable name (or is `PATH` or `HOME`)
+/// refuses, so "not run" never reads as a pass.
+pub fn commands_in(
+    bin: &Path,
+    dir: &Path,
+    table: &str,
+    deadline: Instant,
+) -> Result<BaseTests, Error> {
     let Some(found) = base_profile(bin, dir, deadline)? else {
         return Err(Error::Invalid(format!(
             "no {REPO_PROFILE} on the base branch ({})",
@@ -319,21 +322,25 @@ pub fn tests_in(bin: &Path, dir: &Path, deadline: Instant) -> Result<BaseTests, 
     };
     let at = found.at();
     let bad = |why: &str| Err(Error::Invalid(format!("profile {at}: {why}")));
-    let profile: Profile = match toml::from_str(&found.text) {
+    let mut profile: toml::Table = match toml::from_str(&found.text) {
         Ok(p) => p,
         Err(e) => return bad(e.message()),
     };
-    let Some(tests) = profile
-        .tests
-        .filter(|t| !t.commands.is_empty() && t.commands.iter().all(|c| !c.is_empty()))
+    let tests = profile.remove(table).map(toml::Value::try_into::<Tests>);
+    let tests = match tests.transpose() {
+        Ok(t) => t,
+        Err(e) => return bad(e.message()),
+    };
+    let Some(tests) =
+        tests.filter(|t| !t.commands.is_empty() && t.commands.iter().all(|c| !c.is_empty()))
     else {
-        return bad("no [tests] commands (each a non-empty argv)");
+        return bad(&format!("no [{table}] commands (each a non-empty argv)"));
     };
     if tests
         .timeout_secs
         .is_some_and(|t| !(1..=86_400).contains(&t))
     {
-        return bad("[tests] timeout_secs must be 1 to 86400");
+        return bad(&format!("[{table}] timeout_secs must be 1 to 86400"));
     }
     let name = |v: &str| {
         v.starts_with(|c: char| c.is_ascii_uppercase() || c == '_')
@@ -342,9 +349,9 @@ pub fn tests_in(bin: &Path, dir: &Path, deadline: Instant) -> Result<BaseTests, 
             && !matches!(v, "PATH" | "HOME")
     };
     if tests.target_dir.as_deref().is_some_and(|v| !name(v)) {
-        return bad(
-            "[tests] target_dir must be a variable name, [A-Z_][A-Z0-9_]*, not PATH or HOME",
-        );
+        return bad(&format!(
+            "[{table}] target_dir must be a variable name, [A-Z_][A-Z0-9_]*, not PATH or HOME"
+        ));
     }
     Ok(BaseTests {
         tests,
