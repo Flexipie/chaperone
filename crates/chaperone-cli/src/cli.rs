@@ -173,6 +173,7 @@ impl Cmd {
             Cmd::Migrate => Some("migrate"),
             Cmd::Check(CheckCmd::Record { .. }) => Some("check record"),
             Cmd::Check(CheckCmd::Run { .. }) => Some("check run"),
+            Cmd::Check(CheckCmd::Waive { .. }) => Some("check waive"),
             Cmd::Reviews(ReviewsCmd::Record { .. }) => Some("reviews record"),
             Cmd::Reviews(ReviewsCmd::Get { .. }) | Cmd::Jobs(JobsCmd::Get { .. }) => None,
             Cmd::Work(WorkCmd::Create { .. }) => Some("work create"),
@@ -619,6 +620,26 @@ pub enum CheckCmd {
         #[command(flatten)]
         actor: ActorArgs,
     },
+    /// Waive a check the harness runs for a lane that cannot pass it now:
+    /// the plan check of a lane that coded before its plan was attacked.
+    /// The owner's: refused from any session that has held the lane
+    Waive {
+        kind: WaiveKind,
+        #[arg(long)]
+        work: i64,
+        /// Why; one line, kept on the event and redacted at write
+        #[arg(long)]
+        reason: String,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+}
+
+/// The checks the owner may waive
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum WaiveKind {
+    /// The plan check, on the commit the lane is on (none before v20)
+    Plan,
 }
 
 /// The checks `check run` does itself

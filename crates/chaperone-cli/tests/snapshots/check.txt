@@ -5,6 +5,7 @@ Usage: chaperone check [OPTIONS] <COMMAND>
 Commands:
   record  Record one check result on a work item. Refused from any session that has held it: pass your own --session. The same result again replays and writes nothing
   run     Run one check on the lane's commit in its worktree and record the result as the harness's. One run per lane at a time: a second is a conflict (exit 4). A run that fails records nothing; the same tree again replays
+  waive   Waive a check the harness runs for a lane that cannot pass it now: the plan check of a lane that coded before its plan was attacked. The owner's: refused from any session that has held the lane
   help    Print this message or the help of the given subcommand(s)
 
 Options:

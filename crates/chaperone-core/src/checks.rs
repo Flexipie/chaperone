@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use crate::ledger::projection::{UNSETTLED, project};
 use crate::ledger::{
     Actor, Applied, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation, Payload,
-    Refusal, canonical_at, exists,
+    Refusal, canonical_at, exists, redact_payload,
 };
 use crate::pipeline::{Fact, canonical_string};
 
@@ -156,9 +156,7 @@ fn invalid<T>(msg: String) -> Checked<T> {
 
 impl Ledger {
     /// One `check.finished` from a session check. The write refuses a
-    /// session that has held the lane. The key covers the payload and the
-    /// lane's newest different result for this check, so a retry replays
-    /// but a result that flips back (no, yes, no) is appended.
+    /// session that has held the lane. Keyed as `session_check` says.
     pub fn check_record(&self, actor: &Actor, input: &CheckInput) -> Checked<Recorded> {
         let Some((_, reasons)) = CHECKS.iter().find(|(c, _)| *c == input.check) else {
             return invalid(format!("check {} is not a session check", input.check));
@@ -203,23 +201,69 @@ impl Ledger {
                 payload.rest.insert(k.into(), json!(v));
             }
         }
+        self.session_check(actor, input.work, payload)
+    }
+
+    /// The owner's waiver of lane `work`'s plan check, on the commit `head`
+    /// the lane is on: one `plan_check` `skipped` with `reason` `waived` and
+    /// the owner's `note`, for a lane that coded before its plan was
+    /// attacked. Like `check record`, refused from any session that has
+    /// held the lane; the same waiver again replays.
+    pub fn plan_waive(
+        &self,
+        actor: &Actor,
+        work: i64,
+        head: &str,
+        note: &str,
+    ) -> Checked<Recorded> {
+        if !one_line(note) {
+            return invalid(format!(
+                "--reason is one non-blank line of at most {NOTE_CHARS} characters"
+            ));
+        }
+        let mut payload = Payload {
+            check: Some("plan_check".into()),
+            outcome: Some("skipped".into()),
+            head_sha: Some(head.into()),
+            ..Payload::default()
+        };
+        payload.rest.extend([
+            ("reason".into(), json!("waived")),
+            ("note".into(), json!(note)),
+        ]);
+        self.session_check(actor, work, payload)
+    }
+
+    /// `payload` as a session's `check.finished` on lane `work`: its
+    /// producer, then a key over the payload and the lane's newest different
+    /// result for the check, so a retry replays but a result that flips
+    /// back (no, yes, no) is appended.
+    fn session_check(&self, actor: &Actor, work: i64, mut payload: Payload) -> Checked<Recorded> {
         payload.rest.insert(
             "producer".into(),
             json!({"kind": "session", "agent": actor.agent, "session": actor.session}),
         );
+        // Hashed as the write will store it, so a waiver's note that had a
+        // secret redacted still replays (as `dossier note`).
+        let mut stored = payload.clone();
+        match redact_payload(&mut stored)? {
+            Ok(0) => {}
+            Ok(n) => stored.redactions = Some(n),
+            Err(r) => return Ok(Err(r)),
+        }
         // Read before the write lock: a result that commits in between can
         // only make a retry append a duplicate.
         let latest = newest_other(
             self.conn(),
             "SELECT id, payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
                AND json_extract(payload_json, '$.check') = ?2 ORDER BY id DESC",
-            params![input.work, input.check],
-            &payload,
+            params![work, payload.check],
+            &stored,
         )?;
         let canonical =
-            canonical_string(&json!({"work": input.work, "payload": payload, "after": latest}));
+            canonical_string(&json!({"work": work, "payload": stored, "after": latest}));
         let key = format!("check:{:x}", Sha256::digest(canonical));
-        self.finish_check(actor, &key, input.work, payload)
+        self.finish_check(actor, &key, work, payload)
     }
 
     /// One `check.finished` the harness produced (`check run`), `ran`, with
@@ -1068,5 +1112,57 @@ mod tests {
             )
             .unwrap();
         assert!(plan.contains("USING INDEX events_job"), "{plan}");
+    }
+
+    /// The plan check's waiver is the owner's: refused from the lane's own
+    /// session, written from another as a skipped `plan_check` with reason
+    /// `waived` and the note redacted, which the plan check's facts read;
+    /// the same again replays, and a note that is not one line is refused.
+    #[test]
+    fn a_plan_waiver_is_the_owners() {
+        use crate::pipeline::Fact;
+        use crate::work::{ClaimInput, CreateInput};
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let actor = |s: &str| Actor {
+            agent: Some("a".into()),
+            session: Some(s.into()),
+        };
+        let input = CreateInput {
+            title: "t".into(),
+            source: Some("manual".into()),
+            kind: "code".into(),
+            pr_flow: "pr".into(),
+            ..CreateInput::default()
+        };
+        ledger
+            .work_create(&actor("lane"), &input, None, false)
+            .unwrap()
+            .unwrap();
+        let claim = ClaimInput::default();
+        ledger
+            .work_claim(&actor("lane"), 1, &claim, None, false)
+            .unwrap()
+            .unwrap();
+        let waive = |s: &str, note: &str| ledger.plan_waive(&actor(s), 1, "abc1234", note).unwrap();
+        let refused = |s: &str, note: &str| match waive(s, note) {
+            Err(Refusal::InvalidInput(why)) => why,
+            other => format!("{other:?}"),
+        };
+        let said = refused("lane", "coded first");
+        assert!(said.starts_with("session lane has held lane 1"), "{said}");
+        let token = format!("ghp_{}", "a".repeat(20));
+        let note = format!("a hotfix, {token}");
+        let first = waive("owner", &note).unwrap();
+        let p = &first.payload;
+        let got = (p.check.as_deref(), p.outcome.as_deref(), &p.rest["reason"]);
+        assert_eq!(got, (Some("plan_check"), Some("skipped"), &json!("waived")));
+        assert_eq!(p.rest["note"], "a hotfix, [redacted:github_token]");
+        assert_eq!(p.rest["producer"]["session"], "owner");
+        let again = waive("owner", &note).unwrap();
+        assert_eq!((again.replayed, again.event_id), (true, first.event_id));
+        assert!(refused("owner", "a\nb").starts_with("--reason is one non-blank line"));
+        let facts = ledger.project(1, None).unwrap();
+        assert_eq!(facts.get("plan_check.reason"), &Fact::Str("waived".into()));
     }
 }
