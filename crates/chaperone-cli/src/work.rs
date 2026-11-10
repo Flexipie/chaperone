@@ -291,7 +291,10 @@ fn items(v: Vec<impl Serialize>) -> Result<Outcome, CliError> {
 /// gone (removed after a merge): there is nothing to compare with. A
 /// worktree that is there and cannot be read refuses, so a broken checkout
 /// is not a pass.
-fn observed_head(worktree: Option<&str>, branch: Option<&str>) -> Result<Option<String>, Refusal> {
+pub(crate) fn observed_head(
+    worktree: Option<&str>,
+    branch: Option<&str>,
+) -> Result<Option<String>, Refusal> {
     // A relative path would be read against this process's directory.
     let Some(wt) = worktree
         .map(Path::new)

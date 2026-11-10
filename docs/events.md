@@ -53,6 +53,13 @@ These rules keep every write small, single and fail-closed.
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
   recorded on another lane is `invalid_input`. `work merged` uses `merged:<lane_id>:<pr>`
   (the PR lowercased), and a PR already merged on another lane is `invalid_input`.
+  `check run` uses `run:<lane_id>:<check>:<head_sha>:-:<attempt>`: `<head_sha>` is the measured
+  commit, `-` stands where a profile hash goes once a run check reads the profile, and
+  `<attempt>` is the id of the lane's newest `check.finished` for that check on another commit
+  (0 for none). So a run on the same commit replays, a new commit appends even when its tree is
+  the same (an amend that only rewords), and a lane that comes back to an earlier commit after
+  another appends, as `check record`'s flip back does. A rule that holds for a tree whatever the
+  commit is the verdict's, later.
   `attention record` scopes its `--idempotency-key` to the lane and type (`attention:<lane_id>:<type>:<key>`);
   without one it uses `attention:` plus the
   sha256 of the lane id, its canonical payload and the id of the lane's newest event that is
@@ -138,6 +145,10 @@ field is `invalid_input`. A takeover keeps it. A claim, renewal or takeover on a
 stamped with a hash this binary cannot load is refused (`pipeline_unknown`) and writes
 nothing.
 
+`worktree_path` is frozen once the lane has a harness check (`producer.kind` `harness`): a
+claim, renewal or takeover that changes it is `invalid_input` and writes nothing, so a later
+run reads the folder the earlier one measured. One that names the same path, a trailing slash aside, still writes.
+
 ### Engine
 
 | Kind | Written when | Payload |
@@ -152,7 +163,7 @@ nothing.
 | Kind | Command | Payload |
 | --- | --- | --- |
 | `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha`, `review` |
-| `check.finished` | `check record`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
+| `check.finished` | `check record`, `check run`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
 | `finding.updated` | none in M1 (folded and tested through `Ledger::apply`, #16) | `check_event_id`, `finding_key`, `status` (`fixed` with `commit`, or `answered` with one line) |
 
 A requested review with no finish projects the fact `daisy_review.state` as `running`, never `absent`, and `reviews get` reports it running.
@@ -280,6 +291,10 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 - `{kind: "daisy_worker", job}`: daisy's review worker, through `reviews record`. The
   session rule does not apply, whoever runs the command. The job is checkable with
   `daisy-cli reviews get <job>`.
+- `{kind: "harness", bin, version}`: this binary, through `check run`, which measured
+  the result itself: `bin` is the executable's path and `version` the package version, plus
+  `+<commit>` when it was built in a git checkout. The session rule does not apply. Only
+  `check run` writes this producer; no write refuses another producer's `diff` yet.
 
 | Check | Producer | Fields (after `check`, `outcome`, `head_sha`, `producer`) |
 | --- | --- | --- |
@@ -290,6 +305,7 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 | `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
 | `review_round` | session | `ran` only. One review round daisy did not run (a review agent's, `ship-wait round`). It adds a round and nothing else: no `review.local_head`, no findings, no `daisy_review.state`. |
 | `local_review` | daisy_worker | `job`, `round`, `score`, `verdict`, `findings[]` of `finding_key`, `severity` (`blocker`, `convention`, `risk`, `nit`, `question`), `path`, `line`, `title`, `body`, `verified`, `lenses`, `body_truncated`; `review` |
+| `diff` | harness | `ran` only. `tree` (the commit's tree), `base` (the first of `origin/HEAD`, `origin/main`, `origin/master` that this clone has as a remote-tracking ref, never a local branch of that name, else the claimed `base_sha`), `files`, `added`, `removed`, `code_lines` (added plus removed over code files), `changes_code` (some changed file is code), `uncounted_files` (changed files git gave no line counts for: binary, or text an attributes rule such as `-diff` hides; they add nothing to the line totals, so a size gate should not trust them while this is above 0), `files_truncated` (the evidence kept only the end of the list). A file is code unless it is under `docs/`, ends in `.md` or ends in `.lock`. `evidence_ref`: the per-file list, one JSON object `{path, added, removed}` per line, so a list cut to its end still reads line by line once a partial first line is skipped. |
 | `pr_review` | daisy_worker | Same as `local_review`, without `round`, plus `pr`. |
 | `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. `review`. No score or findings. It sets no `review.local_head`, adds no round, and projects `daisy_review.state` as `failed`, which no gate accepts. |
 
@@ -314,7 +330,7 @@ reasons) are reserved for a `--file` input after M1.
 
 R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` and `pipeline_version`, and its `findings.review_event_id` name are replaced by the ones above.
 
-**Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr`, `direct` or `none`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `no_pr` if the flow is `none`, else `direct` if the flow is `direct`, else `code_pr`. The first claim also stamps the newest pipeline (`v19`); a lane keeps the stamp it has, so a lane stamped `v17` or `v17.1` stays on it. Until `diff_measured` exists, `lane.changes_code` is true exactly when the kind is `code`. Skip reasons are checked by list membership: when `changes_code` is false, any reason the check lists is accepted, and when it is true, `skipped` fails the gate. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with an allowed reason, and a `code` lane may not. No M1 input marks a lane test-only, so a test-only lane is `code` and runs both checks; the `tests` reason waits for that input.
+**Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr`, `direct` or `none`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `no_pr` if the flow is `none`, else `direct` if the flow is `direct`, else `code_pr`. The first claim also stamps the newest pipeline (`v19`); a lane keeps the stamp it has, so a lane stamped `v17` or `v17.1` stays on it. Until a pipeline reads the `diff` check, `lane.changes_code` is true exactly when the kind is `code`. Skip reasons are checked by list membership: when `changes_code` is false, any reason the check lists is accepted, and when it is true, `skipped` fails the gate. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with an allowed reason, and a `code` lane may not. No M1 input marks a lane test-only, so a test-only lane is `code` and runs both checks; the `tests` reason waits for that input.
 
 **Facts in M1.** The projection reads the lane row's stamp and kind and the lane's
 events, never prose. `commit.sha` is the head the gated command names (the handoff's
@@ -358,7 +374,6 @@ accepted yet:
 | Check | R10 record |
 | --- | --- |
 | `verification` | `/ship` step 1 command list |
-| `diff_measured` | `diff.measured`, the step 2 numstat |
 | `commit_classified` | `commit.classified`, host classifier |
 | `ci_snapshot`, `threads_snapshot`, `pr_snapshot` | `ci.snapshot`, `threads.snapshot`, `pr.snapshot` |
 | `brief`, `decision_list` | Lane-written brief and investigation list |
@@ -381,4 +396,5 @@ Not event kinds, though research spells them with a dot:
 | `review.finished` | R11 | `check.finished` with `check` `local_review` or `pr_review` |
 | `finding.opened`, `finding.recorded` | R5, R11 | `findings[]` on `check.finished`, then `finding.updated` |
 | `lane.status_changed` | R5, R11 | `lane.updated` (`changed.status`), or `phase.entered` on a gated move |
+| `diff_measured` | R10 | `check.finished` with `check` `diff` (`check run diff`) |
 | `handoff.recorded` | R11 | `lane.handed_off`, or `phase.entered` on a gated handoff |

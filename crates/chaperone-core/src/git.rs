@@ -14,6 +14,17 @@ use crate::child;
 /// Where a lane's base is looked for, before its claimed `base_sha`.
 pub const BASES: [&str; 3] = ["origin/HEAD", "origin/main", "origin/master"];
 
+/// The revision git is given for `base`: one of [`BASES`] as its full
+/// remote-tracking ref, since a short name resolves to a local branch of
+/// that name first; anything else (a claimed `base_sha`) as it is.
+pub fn base_rev(base: &str) -> String {
+    if BASES.contains(&base) {
+        format!("refs/remotes/{base}")
+    } else {
+        base.to_string()
+    }
+}
+
 /// The git binary itself, from its exec path: macOS's `/usr/bin/git` is
 /// an xcrun shim that adds about 9 ms to every call. Else plain `git`.
 pub fn git_bin(deadline: Instant) -> PathBuf {
@@ -219,6 +230,7 @@ fn numstat(
 ) -> Result<(String, Vec<ChangedFile>), String> {
     let mut found = None;
     for base in BASES.iter().copied().chain(base_sha) {
+        let full = base_rev(base);
         // `--end-of-options`: a claimed base_sha is not checked as hex.
         let mut args = vec![
             "diff",
@@ -229,7 +241,7 @@ fn numstat(
             "--no-renames",
             "--merge-base",
             "--end-of-options",
-            base,
+            &full,
         ];
         args.extend(rev);
         args.push("--");

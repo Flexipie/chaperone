@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-pub use entry::{Rules, Unmatched};
+pub use entry::{Rules, Unmatched, glob};
 pub use worktree::{Error, REPO_PROFILE, impact_in, profile_file, rules, rules_in};
 
 /// Files past this size are not parsed (generated code): their references

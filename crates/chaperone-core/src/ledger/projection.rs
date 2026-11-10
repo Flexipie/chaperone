@@ -31,7 +31,7 @@ pub(crate) fn project(
         f.set("pipeline.id", id.as_str())
             .set("pipeline.hash", hash.as_str());
     }
-    // Until diff_measured exists, only a code lane changes code.
+    // Until a pipeline reads the `diff` check, only a code lane changes code.
     f.set("lane.changes_code", kind == "code");
     if let Some(head) = head {
         f.set("commit.sha", head);

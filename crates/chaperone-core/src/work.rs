@@ -1827,4 +1827,32 @@ mod tests {
         assert_eq!(claim(&b, false).map(|_| ()), unknown, "claim");
         assert_eq!(events(), before + 1);
     }
+
+    /// A claim moves an unchecked lane's worktree; once the harness has
+    /// checked the lane, a claim keeps the worktree but cannot move it.
+    #[test]
+    fn worktree_freezes_after_a_harness_check() {
+        let (_dir, ledger) = ledger();
+        let claim = |wt: &str| {
+            let input = ClaimInput {
+                worktree_path: Some(wt.into()),
+                ..ClaimInput::default()
+            };
+            let item = ledger.work_claim(&pair("a", "s1"), 1, &input, Some(T0), false);
+            item.unwrap().map(|i| i.worktree_path)
+        };
+        create(&ledger, None, None).unwrap();
+        assert_eq!(claim("/wt"), Ok(Some("/wt".into())));
+        let run = crate::checks::RunInput {
+            work: 1,
+            check: "diff".into(),
+            ..Default::default()
+        };
+        ledger.check_run(&pair("h", "s9"), &run).unwrap().unwrap();
+        assert_eq!(claim("/wt"), Ok(Some("/wt".into())));
+        assert_eq!(claim("/wt/"), Ok(Some("/wt/".into())));
+        let frozen =
+            "worktree_path is frozen: lane 1 has a harness check, so its worktree cannot move";
+        assert_eq!(claim("/x"), Err(Refusal::InvalidInput(frozen.into())));
+    }
 }

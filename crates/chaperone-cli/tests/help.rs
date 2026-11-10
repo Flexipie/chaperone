@@ -72,6 +72,7 @@ fn help_matches_snapshots() {
             &["check", "record"],
             include_str!("snapshots/check-record.txt"),
         ),
+        (&["check", "run"], include_str!("snapshots/check-run.txt")),
         (&["reviews"], include_str!("snapshots/reviews.txt")),
         (
             &["reviews", "record"],

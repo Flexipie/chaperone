@@ -145,7 +145,7 @@ impl Rules {
 
 /// `pattern` names `path`: `*` is any run within a segment, a `**`
 /// segment any number of segments.
-fn glob(pattern: &str, path: &str) -> bool {
+pub fn glob(pattern: &str, path: &str) -> bool {
     let p: Vec<&str> = pattern.split('/').collect();
     let s: Vec<&str> = path.split('/').collect();
     segs(&p, &s)

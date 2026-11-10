@@ -1,0 +1,30 @@
+Run one check on the lane's commit in its worktree and record the result as the harness's. One run per lane at a time: a second is a conflict (exit 4). A run that fails records nothing; the same tree again replays
+
+Usage: chaperone check run [OPTIONS] --work <WORK> <KIND>
+
+Arguments:
+  <KIND>
+          Possible values:
+          - diff: Files and lines the commit changes against the merge base
+
+Options:
+      --db <DB>
+          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+
+      --work <WORK>
+          
+
+      --agent <AGENT>
+          Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+
+      --format <FORMAT>
+          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key
+          
+          [default: json]
+          [possible values: json, jsonl]
+
+      --session <SESSION>
+          Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+
+  -h, --help
+          Print help (see a summary with '-h')

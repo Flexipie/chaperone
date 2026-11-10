@@ -120,7 +120,7 @@ impl Ledger {
             .create(true)
             .truncate(false)
             .write(true)
-            .open(lock_path(path))?;
+            .open(lock_path(path, ".lock"))?;
         lock.lock()?;
         // Read-only, under the lock: a read-write close would checkpoint a
         // newer binary's WAL into the file we are refusing.
@@ -291,9 +291,28 @@ fn probe(path: &Path) -> Result<Option<(i64, bool, i64)>, LedgerError> {
     }
 }
 
-fn lock_path(path: &Path) -> PathBuf {
+/// Holds lane `lane`'s run lock, a file beside the ledger at `ledger`,
+/// until the file is dropped (or the process ends), as `migrate` holds its
+/// own. Taken without waiting: a run already holding it is a conflict.
+pub fn lock_lane(ledger: &Path, lane: i64) -> Result<Result<File, Refusal>, LedgerError> {
+    let lock = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path(ledger, &format!(".lane-{lane}.lock")))?;
+    match lock.try_lock() {
+        Ok(()) => Ok(Ok(lock)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(Err(Refusal::Conflict {
+            entity: "work item",
+            message: format!("lane {lane} has a check run in progress; wait for it to end"),
+        })),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+fn lock_path(path: &Path, suffix: &str) -> PathBuf {
     let mut name = OsString::from(path.as_os_str());
-    name.push(".lock");
+    name.push(suffix);
     name.into()
 }
 

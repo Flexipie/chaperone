@@ -1,7 +1,8 @@
-//! Check events: `check record` (a fresh session's checks), `reviews
-//! record` (a daisy review job's result, as `daisy-cli reviews get` read
-//! it), and `reviews get` / `jobs get` answering for recorded jobs in
-//! daisy's shapes (events.md, checks).
+//! Check events: `check record` (a fresh session's checks), `check run`
+//! (the harness's, measured by the binary), `reviews record` (a daisy
+//! review job's result, as `daisy-cli reviews get` read it), and `reviews
+//! get` / `jobs get` answering for recorded jobs in daisy's shapes
+//! (events.md, checks).
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -44,6 +45,21 @@ pub struct CheckInput {
     pub reason: Option<String>,
     pub decision: Option<String>,
     pub findings: Option<u64>,
+}
+
+/// `check run`'s input: what the harness measured on the lane's commit
+/// `head`, whose tree is `tree`, and the executable that measured it.
+#[derive(Clone, Debug, Default)]
+pub struct RunInput {
+    pub work: i64,
+    pub check: String,
+    pub head: String,
+    pub tree: String,
+    /// The check's own fields, as the payload carries them.
+    pub fields: Map<String, Value>,
+    pub evidence_ref: Option<String>,
+    pub bin: String,
+    pub version: String,
 }
 
 pub const ATTENTION_TYPES: &[&str] = &["asked", "answered", "nudged", "sent_back", "revived"];
@@ -169,27 +185,72 @@ impl Ledger {
         let canonical =
             canonical_string(&json!({"work": input.work, "payload": payload, "after": latest}));
         let key = format!("check:{:x}", Sha256::digest(canonical));
+        self.finish_check(actor, &key, input.work, payload)
+    }
+
+    /// One `check.finished` the harness produced (`check run`), `ran`, with
+    /// producer `{kind: harness, bin, version}`. Keyed
+    /// `run:<lane>:<check>:<head>:-:<attempt>`, `-` where a profile hash
+    /// goes once a check reads the profile, and the attempt the id of the
+    /// lane's newest result for this check on another commit (0 for none):
+    /// a run on the same commit replays, and one back on an earlier commit
+    /// after another appends, as `check record`'s flip back does.
+    pub fn check_run(&self, actor: &Actor, input: &RunInput) -> Checked<Recorded> {
+        let mut payload = Payload {
+            check: Some(input.check.clone()),
+            outcome: Some("ran".into()),
+            head_sha: Some(input.head.clone()),
+            evidence_ref: input.evidence_ref.clone(),
+            rest: input.fields.clone(),
+            ..Payload::default()
+        };
+        payload.rest.insert("tree".into(), json!(input.tree));
+        payload.rest.insert(
+            "producer".into(),
+            json!({"kind": "harness", "bin": input.bin, "version": input.version}),
+        );
+        // Read before the write lock; the lane's run lock keeps two runs
+        // from reading it at once.
+        let attempt: i64 = self.conn().query_row(
+            "SELECT coalesce(max(id), 0) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = ?2
+               AND json_extract(payload_json, '$.head_sha') IS NOT ?3",
+            params![input.work, input.check, input.head],
+            |r| r.get(0),
+        )?;
+        let key = format!(
+            "run:{}:{}:{}:-:{attempt}",
+            input.work, input.check, input.head
+        );
+        self.finish_check(actor, &key, input.work, payload)
+    }
+
+    /// Appends `payload` as a `check.finished` on lane `work`, or replays
+    /// the event stored under `key`.
+    fn finish_check(
+        &self,
+        actor: &Actor,
+        key: &str,
+        work: i64,
+        payload: Payload,
+    ) -> Checked<Recorded> {
         let (applied, _) = self.apply_planned(
             actor,
-            Some(&key),
+            Some(key),
             None,
             false,
             |conn, _| {
-                if !lane_exists(conn, input.work)? {
+                if !lane_exists(conn, work)? {
                     return Ok(Err(Refusal::NotFound {
                         entity: ENTITY,
-                        id: input.work,
+                        id: work,
                     }));
                 }
-                Ok(Ok(check_event(
-                    EventKind::CheckFinished,
-                    input.work,
-                    payload,
-                )))
+                Ok(Ok(check_event(EventKind::CheckFinished, work, payload)))
             },
             |_, _, _| Ok(()),
         )?;
-        Ok(recorded(applied, Some(input.work)))
+        Ok(recorded(applied, Some(work)))
     }
 
     /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
