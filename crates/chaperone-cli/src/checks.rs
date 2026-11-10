@@ -1,4 +1,4 @@
-//! `chaperone check`, `reviews`, `jobs`, `usage`, `attention` and `dossier`. `reviews record` runs
+//! `chaperone check`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction. `check run` reads git in the lane's
 //! worktree before its write, under the lane's run lock.
@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{AttentionInput, CheckInput, RunInput};
+use chaperone_core::checks::{AttentionInput, CheckInput, FindingMove, RunInput};
 use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
 use chaperone_core::git;
@@ -16,8 +16,10 @@ use chaperone_core::usage::Roots;
 use chaperone_graph::glob;
 use serde_json::{Map, Value, json};
 
-use crate::cli::{AttentionCmd, CheckCmd, DossierCmd, JobsCmd, ReviewsCmd, RunKind, UsageCmd};
-use crate::output::{CliError, ErrorBody, Outcome};
+use crate::cli::{
+    AttentionCmd, CheckCmd, DossierCmd, FindingCmd, JobsCmd, ReviewsCmd, RunKind, UsageCmd,
+};
+use crate::output::{CliError, ErrorBody, Meta, Outcome};
 use crate::work::{observed_head, one};
 
 /// Where spawn and the skills call daisy (R15); `CHAPERONE_DAISY_CLI`
@@ -178,6 +180,22 @@ pub fn attention(ledger: &Ledger, cmd: AttentionCmd) -> Result<Outcome, CliError
             one(ledger.attention_record(&actor.resolve(), &input)??)
         }
     }
+}
+
+pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outcome, CliError> {
+    let (status, args) = match cmd {
+        FindingCmd::Dispute(args) => ("disputed", args),
+        FindingCmd::Waive(args) => ("waived", args),
+    };
+    meta.dry_run = args.dry_run.then_some(true);
+    let input = FindingMove {
+        check_event_id: args.event,
+        finding_key: args.key,
+        status: status.into(),
+        reason: Some(args.reason),
+        head_sha: None,
+    };
+    one(ledger.finding_update(&args.actor.resolve(), &input, args.dry_run)??)
 }
 
 pub fn dossier(ledger: &Ledger, cmd: DossierCmd) -> Result<Outcome, CliError> {

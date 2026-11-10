@@ -57,6 +57,8 @@ pub enum Cmd {
     #[command(subcommand)]
     Attention(AttentionCmd),
     #[command(subcommand)]
+    Finding(FindingCmd),
+    #[command(subcommand)]
     Dossier(DossierCmd),
     /// Per file, the open lanes touching it: each lane's newest handoff
     /// (changed_files), then the commits on its worktree's HEAD since the
@@ -197,6 +199,8 @@ impl Cmd {
             Cmd::Usage(UsageCmd::Report { .. }) => Some("usage report"),
             Cmd::Usage(UsageCmd::Get { .. }) => None,
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
+            Cmd::Finding(FindingCmd::Dispute(_)) => Some("finding dispute"),
+            Cmd::Finding(FindingCmd::Waive(_)) => Some("finding waive"),
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
             Cmd::Overlap { .. }
@@ -681,6 +685,35 @@ pub enum UsageCmd {
     /// The work item's usage: totals per source (parent, subagent) and one
     /// row per transcript. known is false when nothing was recorded
     Get { id: i64 },
+}
+
+/// A review finding's status: the lane disputes it, the owner waives it
+#[derive(Subcommand, Debug)]
+pub enum FindingCmd {
+    /// Say an open or verified finding is wrong. Only from a session that
+    /// has held the lane; it still blocks until a session that never has
+    /// rules on it
+    Dispute(FindingArgs),
+    /// Stop an open, verified or disputed finding blocking. The owner's:
+    /// refused from any session that has held the lane
+    Waive(FindingArgs),
+}
+
+/// One finding, addressed as the ledger does, and why
+#[derive(Args, Debug)]
+pub struct FindingArgs {
+    /// The event id of the check.finished that raised it (`work events`)
+    pub event: i64,
+    /// The finding's key in that check (its id in `reviews get`)
+    pub key: String,
+    /// Why; kept on the event and redacted at write
+    #[arg(long)]
+    pub reason: String,
+    /// Run the real write and roll it back; meta.dry_run is true
+    #[arg(long)]
+    pub dry_run: bool,
+    #[command(flatten)]
+    pub actor: ActorArgs,
 }
 
 /// Interventions on a lane by the orchestrator or the owner

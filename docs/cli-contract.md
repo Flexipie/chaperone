@@ -127,6 +127,8 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
 | `usage get` | `<id>` | read |
 | `attention record` | `--work <id> --type asked\|answered\|nudged\|sent_back\|revived --by orchestrator\|owner [--reason <R12 id>] [--round <k>] [--answers <event id>] [--note <one line>] [--idempotency-key]` | write |
+| `finding dispute` | `<event> <key> --reason <r>` | write |
+| `finding waive` | `<event> <key> --reason <r>` | write |
 | `dossier note` | `<key> --note <text> [--link <kind>:<ref>]... [--supersedes <event id>]` | write |
 | `dossier get` | `<key>` | read |
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
@@ -166,6 +168,20 @@ that keeps the holder and bumps `updated_at`, so the lane's next `--expected-upd
 stale and it reads the pause. Any other change from `owner-ui`, and the same pause from any
 other agent, is `conflict` (lease held). The write's lease guard checks the event itself, so
 no other path gets past it.
+
+`finding dispute` and `finding waive` are new (M2 PR 14). Each appends one `finding.updated`
+(events.md, finding statuses) on the finding's own lane, addressed as the ledger addresses it:
+`<event>` is the id of the `check.finished` that raised it (`work events`) and `<key>` its key
+there (its `id` in `reviews get`). `dispute` moves an `open` or `verified` finding to `disputed`
+and only a session that has held the lane may; it still blocks until a session that never has
+rules on it. `waive` moves an `open`, `verified` or `disputed` finding to `waived` and is the
+owner's: refused from any session that has held the lane, as `work ready` is. `--reason` is
+required, one non-blank line of at most 500 characters (as `attention record --note`), and
+redacted. A move the table does not allow, the wrong session or a bad reason is
+`invalid_input`, and an unknown finding is `not_found` with `details.reference`
+`<event>/<key>`; nothing is written. The same move again (a retry after a lost answer) is
+refused as `finding <event>/<key> is already <status>`, not replayed. Both print
+`{event_id, work_id, kind, replayed, at, payload}`.
 
 `dossier note` and `dossier get` are new (#83, [ADR 0007](decisions/0007-issue-dossier.md)).
 `<key>` is `owner/repo#N` or `TEAM-123` (`normalize_key`); a bare `#N` is `invalid_input`.
@@ -274,8 +290,8 @@ reads as null, and so does what only daisy knows in `jobs get` (cost, tokens, `j
 `round`). In `jobs get`, `work_id` is the lane the job is recorded on, `started_at` is when
 Chaperone first recorded the job, and `finished_at` is when it recorded the finish (null
 before), not daisy's times.
-Findings come from the stored payload, and each one's `outcome` is its row's `fixed` or
-`answered`, else null. `reviews record` prints the `reviews get` answer.
+Findings come from the stored payload, and each one's `outcome` is its row's status, null
+while `open`. `reviews record` prints the `reviews get` answer.
 
 `reviews record` refuses (`invalid_input`, nothing written): a view whose `job_id` is not
 `--job`, a view with no `done` or `status`, a done job with a status other than
@@ -306,6 +322,7 @@ Each command is one transaction that appends one event (events.md, write rules).
 | `work update --status cancelled`, `work cancel` | ungated | `lane.cancelled` |
 | `work update`, any other change | ungated | `lane.updated`, or `pr.opened` when the PR goes from null to set |
 | `work claim`, `release`, `ready` | ungated | the matching `lane.*` kind |
+| `finding dispute`, `finding waive` | ungated | `finding.updated` |
 | `work heartbeat` | none | none |
 | `migrate` | none | none (schema only) |
 
