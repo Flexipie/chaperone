@@ -111,12 +111,15 @@ fn says(header: &str, answer: Value) -> Value {
 }
 
 /// Claude's runs where `correctness` is the correctness lens's answer and
-/// the verifier rules `rulings`; every other lens finds nothing and the
-/// verdict says yes.
+/// the verifier rules `rulings`; the plan check raises a risk, every other
+/// lens finds nothing and the verdict says yes.
 fn claude(correctness: Value, rulings: Value) -> Value {
     let none = json!({"findings": []});
     let yes = json!({"decision": "yes", "why": "w", "proven": ["p"], "not_proven": []});
+    let risk = json!({"findings": [{"severity": "risk", "title": "r", "body": "why",
+        "path": "lib.rs", "line": null}]});
     json!([
+        says("# Plan check", risk),
         says(
             "# Verify the review's findings",
             json!({"rulings": rulings})
@@ -128,8 +131,8 @@ fn claude(correctness: Value, rulings: Value) -> Value {
     ])
 }
 
-/// Lane 1, claimed on v20 by session `lane` on branch `feat` with one code
-/// commit, its plan check waived by the owner; the base profile's tests
+/// Lane 1, claimed on v20 by session `lane` on branch `feat`, its plan
+/// checked before its one code commit; the base profile's tests
 /// pass and it declares no smoke. The fake plays `claude` for Claude and
 /// finds nothing as Codex.
 fn lane(claude: Value) -> Lane {
@@ -142,6 +145,8 @@ fn lane(claude: Value) -> Lane {
     std::fs::create_dir(&wt).unwrap();
     std::fs::create_dir(&bin).unwrap();
     let fake = Path::new(BIN).with_file_name("chaperone-fake");
+    // Else `claude` on PATH, a real one, would run.
+    assert!(fake.is_file(), "no {}: build the workspace", fake.display());
     let codex =
         json!([{"when": "# Review: a second reader", "write": {"-o": r#"{"findings": []}"#}}]);
     for (cli, runs) in [("claude", claude), ("codex", codex)] {
@@ -160,7 +165,6 @@ fn lane(claude: Value) -> Lane {
         &[],
     );
     git(&wt, &["checkout", "-qb", "feat"], &[]);
-    git(&wt, &["commit", "-qam", "feat"], &[("lib.rs", b"a\nb\n")]);
     let migrate = Command::new(BIN)
         .arg("--db")
         .arg(&db)
@@ -175,8 +179,23 @@ fn lane(claude: Value) -> Lane {
     let claim: Vec<_> = claim.split(' ').collect();
     assert_eq!(lane.run("lane", &["work", "create", "--title", "t"]).0, 0);
     assert_eq!(lane.run("lane", &claim).0, 0);
-    let waive = ["check", "waive", "plan", "--work", "1", "--reason", "r"];
-    assert_eq!(lane.run("owner", &waive).0, 0);
+    let plan = lane.dir.path().join("plan.md");
+    std::fs::write(&plan, "1. do it\n").unwrap();
+    let plan = [
+        "check",
+        "run",
+        "plan",
+        "--work",
+        "1",
+        "--file",
+        plan.to_str().unwrap(),
+    ];
+    assert_eq!(lane.run("lane", &plan).0, 0);
+    git(
+        &lane.wt,
+        &["commit", "-qam", "feat"],
+        &[("lib.rs", b"a\nb\n")],
+    );
     lane
 }
 
@@ -194,8 +213,8 @@ fn steps(out: &Value) -> Vec<(String, bool, bool)> {
         .collect()
 }
 
-/// With the plan waived and a smoke claimed, a clean verify runs every
-/// step and the ready handoff passes; the same tree again replays every
+/// With a smoke claimed, a clean verify runs every step, past the plan
+/// check's risk (no review's finding), and the ready handoff passes; the same tree again replays every
 /// step and starts no session. A new commit is refused ready until verify
 /// runs on it.
 #[test]
@@ -208,10 +227,10 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
         (steps(&out), &out["stopped"]),
         (all(false).into(), &Value::Null)
     );
-    // Four lenses and the verdict; nothing found, so no verifier.
-    assert_eq!(lane.sessions(), 5);
+    // The plan, four lenses and the verdict; nothing found, so no verifier.
+    assert_eq!(lane.sessions(), 6);
     assert_eq!(steps(&lane.verify()), all(true));
-    assert_eq!(lane.sessions(), 5);
+    assert_eq!(lane.sessions(), 6);
     let (code, err) = lane.handoff();
     assert_eq!(code, 0, "{err}");
 
@@ -239,14 +258,15 @@ fn a_blocking_finding_stops_verify_before_the_verdict() {
     let rulings = json!([{"key": key, "verdict": "verified", "why": "it is"}]);
     let lane = lane(claude(said, rulings));
     let out = lane.verify();
-    let stopped = json!({"check": "review", "why": "1 finding(s) on the lane still block"});
+    let stopped = json!({"check": "review", "why": "1 finding(s) still block"});
     assert_eq!(out["stopped"], stopped);
     assert_eq!(steps(&out).len(), 3);
     assert_eq!(lane.events("payload_json->>'check' = 'merge_verdict'"), 0);
 }
 
 /// While another run holds the lane's lock, verify is a conflict and
-/// writes nothing.
+/// writes nothing; a lane that does not exist is not_found, as for
+/// `check run`.
 #[test]
 fn a_second_verify_on_the_lane_is_a_conflict() {
     let lane = lane(json!([]));
@@ -256,4 +276,6 @@ fn a_second_verify_on_the_lane_is_a_conflict() {
     let after = lane.events("true");
     assert_eq!((code, &err["code"], after), (4, &json!("conflict"), before));
     drop(held);
+    let (code, err) = lane.run("lane", &["verify", "--work", "9"]);
+    assert_eq!((code, &err["code"]), (1, &json!("not_found")));
 }

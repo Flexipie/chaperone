@@ -479,15 +479,19 @@ a gate reads it as `plan_check.reason` `waived`. It prints what `check record` p
 and `verdict` on the lane's commit, in that order, each exactly as that command runs it (the
 same events and keys, so a step on the same tree replays and starts no session). It takes the
 lane's run lock once for all four, so a second `verify` or `check run` on the lane meanwhile is
-`conflict` (exit 4) and writes nothing. It stops at the first step that is refused (nothing more
-written), whose `tests` did not pass, whose `review` is not complete or leaves a finding on the
-lane blocking (the verdict does not run), or whose verdict is not yes. Plan and smoke are not
-steps: the plan check runs before code, and the smoke is the lane's claim or the profile's
-`check run smoke`. Like `usage report` it appends more than one event, each step's in its own
-transactions, and none of its own. It prints `{work_id, steps, stopped}`: `steps` is `{check,
-event_id, replayed, passed}` per step that wrote or replayed, and `stopped` is null when all four
-passed, else `{check, why}`, plus `code` (the error code) when the step was refused, `why` then
-being its message.
+`conflict` (exit 4) and writes nothing. It stops at the first step that is refused
+`invalid_input` (nothing more written), whose `tests` did not pass, whose `review` is not
+complete or leaves blocking findings as the gate counts them (`findings.open_blocking`, complete
+harness reviews only, so a plan check's finding does not stop it; the verdict does not run), or
+whose verdict is not yes. Before each step after `diff` it reads the commit the lane is on again,
+and stops if the lane moved off the commit `diff` measured. Any other refusal (a lane that does
+not exist is `not_found`) or error is the command's, with its exit code, as for `check run`.
+Plan and smoke are not steps: the plan check runs before code, and the smoke is the lane's claim
+or the profile's `check run smoke`. Like `usage report` it appends more than one event, each
+step's in its own transactions, and none of its own. It prints `{work_id, steps, stopped}`:
+`steps` is `{check, head, event_id, replayed, passed}` per step that wrote or replayed (`head`
+the commit it ran on), and `stopped` is null when all four passed, else `{check, why}`: the
+refusal's message, why the step did not pass, or `the lane moved from <sha> to <sha>`.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends
