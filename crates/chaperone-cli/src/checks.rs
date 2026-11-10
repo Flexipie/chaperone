@@ -1,4 +1,4 @@
-//! `chaperone check`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
+//! `chaperone check`, `verify`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction. `check run` reads git in the lane's
 //! worktree, and runs tests and the review's and the verdict's sessions in
@@ -111,6 +111,7 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             actor,
         } => {
             let actor = actor.resolve();
+            let _lock = ledger::lock_lane(db, work)??;
             match (kind, file) {
                 (RunKind::Plan, Some(file)) => run_plan(ledger, db, work, &file, &actor),
                 (RunKind::Plan, None) | (_, Some(_)) => Err(refuse(
@@ -146,18 +147,60 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
     }
 }
 
-/// A `check run` under way: the lane's run lock, held until it drops, the
+/// `verify`: `check run` diff, tests, review and verdict on the lane's
+/// commit under one hold of its run lock, until a step is refused or does
+/// not pass; the verdict runs only after a complete review that leaves no
+/// finding blocking. One result: each step, and where and why it stopped.
+pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
+    let _lock = ledger::lock_lane(db, work)??;
+    let (mut steps, mut stopped) = (Vec::new(), Value::Null);
+    for check in ["diff", "tests", "review", "verdict"] {
+        let ran = match check {
+            "diff" => run_diff(ledger, db, work, actor),
+            "tests" => run_tests(ledger, db, work, actor, check),
+            "review" => run_review(ledger, db, work, actor),
+            _ => run_verdict(ledger, db, work, actor),
+        };
+        let recorded = match ran {
+            Ok(Outcome::One(recorded)) => recorded,
+            Err(e @ CliError::Refused(_)) => {
+                let ErrorBody { code, message, .. } = ErrorBody::from_cli(&e);
+                stopped = json!({"check": check, "code": code, "why": message});
+                break;
+            }
+            other => return other,
+        };
+        let p = &recorded["payload"];
+        let why = match check {
+            "tests" if p["result"] != "pass" => "tests failed".into(),
+            "review" if p["complete"] != true => "review not complete".into(),
+            "review" => match ledger.blocking_findings(work)?.len() {
+                0 => String::new(),
+                n => format!("{n} finding(s) on the lane still block"),
+            },
+            "verdict" if p["decision"] != "yes" => "the verdict is not yes".into(),
+            _ => String::new(),
+        };
+        steps.push(json!({"check": check, "event_id": recorded["event_id"],
+            "replayed": recorded["replayed"], "passed": why.is_empty()}));
+        if !why.is_empty() {
+            stopped = json!({"check": check, "why": why});
+            break;
+        }
+    }
+    one(json!({"work_id": work, "steps": steps, "stopped": stopped}))
+}
+
+/// A `check run` under way, its caller holding the lane's run lock: the
 /// lane's worktree and work item, and the input with the commit the lane
 /// is on (as a ready handoff reads it), its tree and this executable.
 struct Run {
-    _lock: File,
     wt: PathBuf,
     item: WorkItem,
     input: RunInput,
 }
 
-fn start_run(ledger: &Ledger, db: &Path, work: i64, check: &str) -> Result<Run, CliError> {
-    let lock = ledger::lock_lane(db, work)??;
+fn start_run(ledger: &Ledger, work: i64, check: &str) -> Result<Run, CliError> {
     let item = ledger.work_get(work, &ledger.now()?)??;
     let wt = item.worktree_path.as_deref();
     let head = observed_head(wt, item.branch.as_deref())?.ok_or_else(|| {
@@ -190,12 +233,7 @@ fn start_run(ledger: &Ledger, db: &Path, work: i64, check: &str) -> Result<Run, 
         },
         ..RunInput::default()
     };
-    Ok(Run {
-        _lock: lock,
-        wt,
-        item,
-        input,
-    })
+    Ok(Run { wt, item, input })
 }
 
 fn refuse(why: String) -> CliError {
@@ -207,11 +245,10 @@ fn refuse(why: String) -> CliError {
 /// the evidence store, its totals in the payload.
 fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let Run {
-        _lock,
         wt,
         item,
         mut input,
-    } = start_run(ledger, db, work, "diff")?;
+    } = start_run(ledger, work, "diff")?;
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
     let (code, code_lines) = code(&files);
     let added: u64 = files.iter().filter_map(|f| f.added).sum();
@@ -284,11 +321,10 @@ fn run_tests(
     check: &str,
 ) -> Result<Outcome, CliError> {
     let Run {
-        _lock,
         wt,
         item,
         mut input,
-    } = start_run(ledger, db, work, check)?;
+    } = start_run(ledger, work, check)?;
     // A harness smoke is named like a session check and passes v19's
     // `smoke_recorded` from the lane's own session, so only a lane whose
     // pipeline judges with harness checks may run one.
@@ -373,11 +409,10 @@ fn run_tests(
 /// cannot be made and a diff past 16 MiB write nothing more.
 fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let Run {
-        _lock,
         wt,
         item,
         mut input,
-    } = start_run(ledger, db, work, "review")?;
+    } = start_run(ledger, work, "review")?;
     let plan = review::plan(lane_pipeline(&item)?).map_err(|e| {
         refuse(format!(
             "{e}; a lane on it records reviews with `check record` and `reviews record`"
@@ -416,11 +451,10 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
 /// nothing.
 fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let Run {
-        _lock,
         wt,
         item,
         mut input,
-    } = start_run(ledger, db, work, verdict::EVENT_CHECK)?;
+    } = start_run(ledger, work, verdict::EVENT_CHECK)?;
     let pipeline = lane_pipeline(&item)?;
     let (planned, attempts) = verdict::plan(pipeline).map_err(|e| {
         refuse(format!(
@@ -476,11 +510,10 @@ fn run_plan(
     actor: &Actor,
 ) -> Result<Outcome, CliError> {
     let Run {
-        _lock,
         wt,
         item,
         mut input,
-    } = start_run(ledger, db, work, plan::EVENT_CHECK)?;
+    } = start_run(ledger, work, plan::EVENT_CHECK)?;
     let pipeline = lane_pipeline(&item)?;
     let (planned, attempts) = plan::plan(pipeline).map_err(|e| {
         refuse(format!(

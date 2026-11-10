@@ -89,7 +89,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `check run`, `check waive`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `check run`, `check waive`, `verify`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -122,6 +122,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]...` | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan\|smoke --work <id> [--file <plan>]` | write |
 | `check waive` | `plan --work <id> --reason <r>` | write |
+| `verify` | `--work <id>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -473,6 +474,20 @@ characters, redacted at write), producer `session`: refused from any session tha
 lane, as `work ready` and `finding waive` are. The same waiver again replays (keyed as `check
 record`, on the payload as stored). It waives the plan check only, and gates nothing by itself:
 a gate reads it as `plan_check.reason` `waived`. It prints what `check record` prints.
+
+`verify --work <id>` is what a lane runs in the background: `check run diff`, `tests`, `review`
+and `verdict` on the lane's commit, in that order, each exactly as that command runs it (the
+same events and keys, so a step on the same tree replays and starts no session). It takes the
+lane's run lock once for all four, so a second `verify` or `check run` on the lane meanwhile is
+`conflict` (exit 4) and writes nothing. It stops at the first step that is refused (nothing more
+written), whose `tests` did not pass, whose `review` is not complete or leaves a finding on the
+lane blocking (the verdict does not run), or whose verdict is not yes. Plan and smoke are not
+steps: the plan check runs before code, and the smoke is the lane's claim or the profile's
+`check run smoke`. Like `usage report` it appends more than one event, each step's in its own
+transactions, and none of its own. It prints `{work_id, steps, stopped}`: `steps` is `{check,
+event_id, replayed, passed}` per step that wrote or replayed, and `stopped` is null when all four
+passed, else `{check, why}`, plus `code` (the error code) when the step was refused, `why` then
+being its message.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends
