@@ -750,15 +750,20 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                     "finding.updated status is one of {statuses:?}"
                 )));
             }
-            let row: Option<(String, String)> = tx
+            // With whether the finding is a harness review's, the only kind
+            // the harness rules on.
+            let row: Option<(String, String, bool)> = tx
                 .query_row(
-                    "SELECT status, severity FROM findings
-                     WHERE lane_id = ?1 AND check_event_id = ?2 AND finding_key = ?3",
+                    "SELECT f.status, f.severity,
+                       json_extract(e.payload_json, '$.check') IS 'review'
+                       AND json_extract(e.payload_json, '$.producer.kind') IS 'harness'
+                     FROM findings f JOIN events e ON e.id = f.check_event_id
+                     WHERE f.lane_id = ?1 AND f.check_event_id = ?2 AND f.finding_key = ?3",
                     rusqlite::params![lane_id, check, key],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
-            let Some((from, severity)) = row else {
+            let Some((from, severity, reviewed)) = row else {
                 refuse!(Refusal::NotFoundRef {
                     entity: "finding",
                     reference: format!("{check}/{key}"),
@@ -779,10 +784,11 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             let held = has_held(tx, lane_id, session)?;
             // The verifier `check run review` starts rules whoever started
             // the run: its authority is the binary's, and only that code
-            // path sets this producer. Its moves only.
+            // path sets this producer. Its moves only, on its own review's
+            // findings only (`apply` takes any payload).
             let harness =
                 p.rest.get("producer").and_then(|v| v.get("kind")) == Some(&Value::from("harness"));
-            let ruled = harness && matches!(to, "verified" | "refuted");
+            let ruled = harness && reviewed && matches!(to, "verified" | "refuted");
             match by {
                 By::Lane if !held => refuse!(invalid(&format!(
                     "only the lane disputes a finding; session {session} has never held lane {lane_id}"

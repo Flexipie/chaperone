@@ -316,9 +316,10 @@ impl Agent {
 
     /// One fresh Codex session answering `ask`, the prompt on stdin, in
     /// Codex's read-only sandbox and stored nowhere. It loads neither the
-    /// user's `config.toml` (its MCP servers run outside the sandbox) nor
-    /// any `.rules` file; the login still comes from `CODEX_HOME`. It
-    /// reports no cost.
+    /// user's `config.toml` (its MCP servers run outside the sandbox), any
+    /// `.rules` file, nor the `AGENTS.md` of the directory it runs in (the
+    /// commit under review would steer its own reviewer); the login still
+    /// comes from `CODEX_HOME`. It reports no cost.
     pub fn codex(&self, ask: &CodexAsk<'_>, deadline: Instant) -> Result<Answer, RunError> {
         let dir = scratch().map_err(|e| RunError::Io(e.to_string()))?;
         let answer = self.codex_in(&dir, ask, deadline);
@@ -336,7 +337,8 @@ impl Agent {
         std::fs::write(&schema, ask.schema.to_string()).map_err(|e| RunError::Io(e.to_string()))?;
         let mut cmd = self.command(ask.dir);
         cmd.args(["exec", "--json", "--ephemeral", "--ignore-user-config"])
-            .args(["--ignore-rules", "-s", "read-only"]);
+            .args(["--ignore-rules", "-s", "read-only"])
+            .args(["-c", "project_doc_max_bytes=0"]);
         if let Some(model) = ask.model {
             cmd.args(["-m", model]);
         }

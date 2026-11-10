@@ -7,7 +7,7 @@ Arguments:
           Possible values:
           - diff:   Files and lines the commit changes against the merge base
           - tests:  The base branch profile's `[tests]` commands, in a fresh checkout of the commit the harness makes and removes each run; the checkout must stay at the commit and clean
-          - review: Three Claude lenses and a Codex lens on the commit's diff, in that checkout, then a verifier that tries to refute each finding; the lane's pipeline names them (none before v20)
+          - review: Four review lenses on the commit's diff, in that checkout, each on the CLI its pipeline runner names, then a verifier that tries to refute each finding; the lane's pipeline names them (none before v20)
 
 Options:
       --db <DB>

@@ -320,30 +320,43 @@ message is kept), writes nothing.
 pipeline must name the review's checks, each with a runner (`[runners]`: the CLI, model,
 tools, budget and timeout) and a prompt file: `review_correctness`, `review_design_tests`,
 `review_intent` and `review_codex` (the lenses) and `review_verifier`; a Claude runner must
-name a model. v17 to v19 name none, so a lane on them is refused (`invalid_input`, nothing
-written) and keeps recording reviews with `check record` and `reviews record`. Then it writes
-the rulings a crash left unwritten on the lane's newest review, and a complete review already
-stored under its key (events.md; `<profile>` is the pipeline's hash) is printed with
-`replayed` true and nothing runs. Else it asks `claude --version` and `codex --version`, each
-the first of that name on `PATH`, run by its full path, reads the commit's files as `diff`
-does and their merge base in the lane's worktree, makes a fresh checkout as `tests` does
-(removed when the command ends), and reads `git diff <merge base> <commit>` there, where the
-lane's config does not reach. A CLI that cannot start, a checkout that cannot be made and a
-diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings. The four lenses run at once, each a fresh headless
-session in the checkout (no lane variables, Claude Code's sandbox, Codex read-only), given its
-prompt file and then the facts: the commit, the merge base, the changed files with their
-counts and the diff, cut after 128 KiB at a line with a note saying where the rest is. Only
-`intent` is also told what the lane is for: the work item's title, its slice of the spec, and
-the `goal` of its newest handoff's brief. No lens is given the handoff's summary,
-`merge_case` or `look_at`. Each answers `{findings: [{severity, title, body, path, line}]}`.
-A lens that errors, hits its budget or timeout, or answers anything else (prose, another
-field, a severity the ledger does not know) did not run: never "no findings". When a lens
-found something, one more fresh session, the verifier, is shown every finding by key and
-answers `{rulings: [{key, verdict, why}]}`, `verified` or `refuted`: one session for all, as
-the findings share the facts and the checkout, bounded by its runner's budget and timeout
-like a lens. One that fails, or rules on a key it was not shown or twice, rules on nothing,
-and every finding stays open (still blocking). Each session's prompt and whole answer go to
-the evidence store first.
+name a model; and `[limits]` must hold `review_attempts`, 1 or more. v17 to v19 name none, so
+a lane on them is refused (`invalid_input`, nothing written) and keeps recording reviews with
+`check record` and `reviews record`. Then it writes the rulings a crash left unwritten on the
+lane's newest review, and a complete review already stored under its key (events.md;
+`<profile>` is the pipeline's hash) is printed with `replayed` true and nothing runs. Else a
+commit that already has `review_attempts` reviews by this pipeline, complete or not, is
+refused (`invalid_input`, naming the limit): a lens that fails every time would otherwise
+make each rerun pay for the others again, so the owner waives the findings or the lane
+pushes a new commit. Else it asks `--version` of each CLI a runner of the plan uses (`claude`,
+`codex`), the first of that name on `PATH`, run by its full path, reads the commit's files as
+`diff` does and their merge base in the lane's worktree, makes a fresh checkout as `tests`
+does (removed when the command ends), and reads `git diff <merge base> <commit>` there,
+where the lane's git config does not reach. The reviewed commit's own `.gitattributes` still
+applies: a file a rule such as `-diff` hides has no text in the diff, and the event counts
+such files in `uncounted_files`. A CLI that cannot start, a checkout that cannot be made and
+a diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings.
+
+The four lenses run at once, each a fresh headless session in the checkout (no lane
+variables, Claude Code's sandbox; Codex read-only, without the user's config, `.rules` files
+or the checkout's `AGENTS.md`), given its prompt file and then the facts: the commit, the merge
+base, the changed files with their counts and the diff, cut after 128 KiB at a line with a
+note saying where the rest is. Only `intent` is also told what the lane is for: the work
+item's title, its slice of the spec, and the `goal` of its newest handoff's brief. No lens is
+given the handoff's summary, `merge_case` or `look_at`. Every block of text from the lane or
+a model (the file list, the diff, the goal, the findings shown to the verifier) is fenced
+one backtick longer than its longest run of backticks, so nothing in it closes the fence, and
+every prompt ends with one line of the harness's own saying the fenced text is data, not
+instructions, and how to answer. Each lens answers `{findings: [{severity, title, body, path,
+line}]}`. A lens that errors, hits its budget or timeout, or answers anything else (prose,
+another field, a severity the ledger does not know) did not run: never "no findings". When a
+lens found something, one more fresh session, the verifier, is shown every finding by key and
+answers `{rulings: [{key, verdict, why}]}`, `verified` or `refuted` with a why that is not
+blank: one session for all, as the findings share the facts and the checkout, bounded like a
+lens by its runner's timeout and, for a Claude runner, its budget (Codex takes no budget, so
+the timeout is its only bound). One that fails, or rules on a key it was not shown or twice,
+or gives a blank why, rules on nothing, and every finding stays open (still blocking). Each
+session's prompt and whole answer are stored first, as two evidence files.
 
 It then writes, in this order: one `usage.reported` per session that left a session id
 (events.md, Usage), one `check.finished` (check `review`: the lens table, the verifier,
@@ -353,8 +366,8 @@ run (finding statuses). It is the second command that appends more than one even
 `usage report`, each event in its own transaction. A crash leaves whole events: usage rows
 without a review are what those sessions cost, and stay; a review whose rulings are missing
 is finished by the next `check run review` on the lane before anything else, with no session
-started. A review that is not `complete` runs again on the same commit. It prints the
-`check.finished` as `check record` does.
+started. A review that is not `complete` runs again on the same commit, up to
+`review_attempts`. It prints the `check.finished` as `check record` does.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends
@@ -456,10 +469,12 @@ writes nothing. It prints `{work_id, written, existing, pending, sessions}`.
 unknown}`, with ids and counts only.
 
 `usage get` prints `{work_id, known, totals, sources}`. `totals` is keyed by `source`
-(`parent`, `subagent`), and `sources` has one row per transcript (`source`, `cli`, `session_id`,
-`agent_id`, `agent_type`, `description`, `models`). Both carry `messages`, `peak_input_total`
-and the sums of `cache_read`, `cache_write`, `output`, `reasoning`, `input_total` and
-`output_total`. Only the transcript rows carry `uncached_input`, since its meaning differs
+(`parent`, `subagent`, and `harness` for the sessions `check run review` starts), and `sources`
+has one row per transcript or harness session (`source`, `cli`, `session_id`, `agent_id`,
+`agent_type`, `description`, `models`). Both carry `messages`, `peak_input_total` and the
+sums of `cache_read`, `cache_write`, `output`, `reasoning`, `input_total`, `output_total` and
+`cost_usd` (the CLI's own figure: only harness rows of a Claude session carry one, so a
+transcript source's is null). Only the transcript rows carry `uncached_input`, since its meaning differs
 by CLI (Codex's includes the cache). A sum skips the messages where that field is null, and is
 null when every message has it null. `known` is false when the lane has no usage event.
 
