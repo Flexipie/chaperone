@@ -119,7 +119,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec update` | `<spec> --file <path\|-> --reason <r> [--expected-version <n>]` | write |
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
-| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
+| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]...` | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan --work <id> [--file <plan>]` | write |
 | `check waive` | `plan --work <id> --reason <r>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
@@ -256,7 +256,14 @@ lane (events.md, producer). `--head` is 7 to
 40 lowercase hex digits. `--reason` is required with `skipped` and must be one the check allows
 (events.md). `--decision` is required for `merge_verdict` and refused for every other
 check. `--findings <n>` is required for a `plan_check` or `quality_gate` that ran and
-refused elsewhere. It prints `{event_id, work_id, kind, replayed, at, payload}`.
+refused elsewhere. `--evidence <file>` (repeat for up to 12) goes with `smoke` only: the files
+the smoke wrote or showed, the claim of the session recording it, never the harness's. Each is
+read by the CLI by R13's rules: a relative path is read from the lane's worktree root, its real
+path (links resolved) must be inside the worktree and not under `.git` or `.chaperone` there,
+and it must be a regular file of at most 1 MiB of UTF-8 text with no NUL byte. Each is stored
+in the evidence store (redacted, its last 256 KiB) before the event commits, and the event
+carries `evidence_files`. A file that breaks a rule, or files on another check, are
+`invalid_input` and nothing is written. It prints `{event_id, work_id, kind, replayed, at, payload}`.
 
 `check run diff` is a check the binary runs itself rather than one a session reports
 (events.md, producer `harness`). It first takes the lane's run lock: a file

@@ -603,6 +603,11 @@ pub enum CheckCmd {
         /// required there
         #[arg(long)]
         findings: Option<u64>,
+        /// smoke only: a text file the smoke wrote or showed, inside the
+        /// lane's worktree (a relative path is read from its root), not under
+        /// .git or .chaperone, at most 1 MiB; repeat for up to 12
+        #[arg(long)]
+        evidence: Vec<PathBuf>,
         #[command(flatten)]
         actor: ActorArgs,
     },

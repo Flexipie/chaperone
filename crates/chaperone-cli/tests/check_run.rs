@@ -674,3 +674,80 @@ fn a_plan_check_needs_no_code_a_plan_file_and_a_pipeline() {
         `check record`";
     refused(&waive.map(String::from), v19);
 }
+
+/// A smoke's evidence files are the claim of the session that records it,
+/// stored by hash: a text file in the worktree is kept, by its path there.
+/// One outside it, reached through a link that leaves it, under `.git` or
+/// `.chaperone`, not text or not there, or files on another check, are
+/// refused and nothing is written.
+#[test]
+fn smoke_evidence_stays_in_the_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = setup(dir.path());
+    let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
+    let id = lane(&db, &["--worktree", wt.to_str().unwrap()]);
+    let outside = dir.path().join("outside.log");
+    for (path, bytes) in [
+        (wt.join("out/smoke.log"), &b"ran: ok\n"[..]),
+        (outside.clone(), b"secret\n"),
+        (wt.join(".chaperone/x.txt"), b"x\n"),
+        (wt.join("bin.dat"), &[0, 1]),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+    std::os::unix::fs::symlink(&outside, wt.join("link.log")).unwrap();
+    // A session that never held the lane, as `check record` needs.
+    let record = |check: &[&str], file: &str| {
+        let out = Command::new(BIN)
+            .arg("--db")
+            .arg(&db)
+            .args([
+                "check",
+                "record",
+                "--work",
+                &id,
+                "--head",
+                &base,
+                "--outcome",
+                "ran",
+            ])
+            .args(check)
+            .args(["--evidence", file, "--agent", "a", "--session", "fresh"])
+            .output()
+            .unwrap();
+        let ok = out.status.success();
+        let v: Value = serde_json::from_slice(if ok { &out.stdout } else { &out.stderr }).unwrap();
+        (ok, v[if ok { "data" } else { "error" }].clone())
+    };
+    let smoke = ["--check", "smoke"];
+    let (ok, kept) = record(&smoke, "out/smoke.log");
+    assert!(ok, "{kept}");
+    let p = &kept["payload"];
+    let file = &p["evidence_files"][0];
+    let got = (&file["path"], &file["bytes"], &p["producer"]["kind"]);
+    assert_eq!(got, (&json!("out/smoke.log"), &json!(8), &json!("session")));
+    let stored = Evidence::beside(&db).get(file["sha256"].as_str().unwrap());
+    assert_eq!(stored.unwrap(), "ran: ok\n");
+
+    let plan = ["--check", "plan_check", "--findings", "0"];
+    for (check, file, why) in [
+        (
+            &smoke[..],
+            outside.to_str().unwrap(),
+            "outside the lane's worktree",
+        ),
+        (&smoke, "link.log", "outside the lane's worktree"),
+        (&smoke, ".git/config", "under .git or .chaperone"),
+        (&smoke, ".chaperone/x.txt", "under .git or .chaperone"),
+        (&smoke, "bin.dat", "not UTF-8 text"),
+        (&smoke, "gone.log", "No such file"),
+        (&plan, "out/smoke.log", "--evidence goes with smoke only"),
+    ] {
+        let before = events(&db);
+        let (ok, err) = record(check, file);
+        assert!(!ok && err["code"] == "invalid_input", "{file}: {err}");
+        assert!(err["message"].as_str().unwrap().contains(why), "{err}");
+        assert_eq!(events(&db), before);
+    }
+}

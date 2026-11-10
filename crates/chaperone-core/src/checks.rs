@@ -48,6 +48,22 @@ pub struct CheckInput {
     pub findings: Option<u64>,
 }
 
+/// A smoke's evidence files, as many as a handoff's smoke entries.
+pub const EVIDENCE_FILES: usize = 12;
+
+/// One evidence file a session attached to its check, in the evidence
+/// store: its path in the lane's worktree, the stored text's hash and
+/// what the store did to it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Attached {
+    pub path: String,
+    pub sha256: String,
+    /// The file's size as read.
+    pub bytes: u64,
+    pub truncated: bool,
+    pub redactions: u64,
+}
+
 /// `check run`'s input: what the harness measured on the lane's commit
 /// `head`, whose tree is `tree`, and the executable that measured it.
 #[derive(Clone, Debug, Default)]
@@ -158,6 +174,23 @@ impl Ledger {
     /// One `check.finished` from a session check. The write refuses a
     /// session that has held the lane. Keyed as `session_check` says.
     pub fn check_record(&self, actor: &Actor, input: &CheckInput) -> Checked<Recorded> {
+        self.check_record_with(actor, input, &[])
+    }
+
+    /// [`Ledger::check_record`] with the evidence files a smoke attaches,
+    /// already stored: the lane's claim of what it ran and saw.
+    pub fn check_record_with(
+        &self,
+        actor: &Actor,
+        input: &CheckInput,
+        files: &[Attached],
+    ) -> Checked<Recorded> {
+        if !files.is_empty() && input.check != "smoke" {
+            return invalid("--evidence goes with smoke only".into());
+        }
+        if files.len() > EVIDENCE_FILES {
+            return invalid(format!("--evidence takes at most {EVIDENCE_FILES} files"));
+        }
         let Some((_, reasons)) = CHECKS.iter().find(|(c, _)| *c == input.check) else {
             return invalid(format!("check {} is not a session check", input.check));
         };
@@ -200,6 +233,9 @@ impl Ledger {
             if let Some(v) = v {
                 payload.rest.insert(k.into(), json!(v));
             }
+        }
+        if !files.is_empty() {
+            payload.rest.insert("evidence_files".into(), json!(files));
         }
         self.session_check(actor, input.work, payload)
     }

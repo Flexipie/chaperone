@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{AttentionInput, CheckInput, FindingMove, RunInput};
+use chaperone_core::checks::{Attached, AttentionInput, CheckInput, FindingMove, RunInput};
 use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
 use chaperone_core::git::{self, ChangedFile};
@@ -53,6 +53,8 @@ const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
 const TAIL_BYTES: usize = 16 * 1024;
 /// A plan file: a document a person reads, far above any real one.
 const PLAN_BYTES: usize = 64 * 1024;
+/// A smoke evidence file: a log or an output; the store keeps its end.
+const EVIDENCE_BYTES: usize = 1024 * 1024;
 /// The numstat's output; a cut list would count too little, so past it the
 /// run fails.
 const DIFF_BYTES: usize = 16 * 1024 * 1024;
@@ -67,6 +69,7 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             reason,
             decision,
             findings,
+            evidence,
             actor,
         } => {
             let input = CheckInput {
@@ -78,7 +81,15 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
                 decision,
                 findings,
             };
-            one(ledger.check_record(&actor.resolve(), &input)??)
+            let mut files = Vec::new();
+            if !evidence.is_empty() {
+                let item = ledger.work_get(work, &ledger.now()?)??;
+                let store = Evidence::beside(db);
+                for path in &evidence {
+                    files.push(attach(item.worktree_path.as_deref(), path, &store)?);
+                }
+            }
+            one(ledger.check_record_with(&actor.resolve(), &input, &files)??)
         }
         CheckCmd::Run {
             kind,
@@ -477,22 +488,65 @@ fn run_plan(
 /// lane's text, given to the reviewer as fenced data and stored redacted.
 fn plan_text(path: &Path) -> Result<String, CliError> {
     let bad = |why: &str| refuse(format!("plan {}: {why}", path.display()));
-    let file = File::open(path).map_err(|e| bad(&e.to_string()))?;
-    let meta = file.metadata().map_err(|e| bad(&e.to_string()))?;
-    if !meta.is_file() {
-        return Err(bad("not a regular file"));
-    }
-    let mut bytes = Vec::new();
-    let read = file.take(PLAN_BYTES as u64 + 1).read_to_end(&mut bytes);
-    read.map_err(|e| bad(&e.to_string()))?;
-    if bytes.len() > PLAN_BYTES {
-        return Err(bad(&format!("over {PLAN_BYTES} bytes")));
-    }
-    match String::from_utf8(bytes) {
+    match text_file(path, PLAN_BYTES) {
         Ok(text) if !text.trim().is_empty() => Ok(text),
         Ok(_) => Err(bad("empty")),
-        Err(_) => Err(bad("not UTF-8 text")),
+        Err(why) => Err(bad(&why)),
     }
+}
+
+/// Smoke evidence `path` for the lane whose worktree is `wt`, by R13's
+/// rules: its real path (links resolved) inside the worktree's and not
+/// under `.git` or `.chaperone` there, a regular file of at most
+/// [`EVIDENCE_BYTES`] of UTF-8 text with no NUL. A relative path is read
+/// from the worktree's root, whoever records it. Stored redacted.
+fn attach(wt: Option<&str>, path: &Path, store: &Evidence) -> Result<Attached, CliError> {
+    let bad = |why: &str| refuse(format!("evidence {}: {why}", path.display()));
+    let wt = wt.map(Path::new).filter(|w| w.is_absolute());
+    let wt = wt.and_then(|w| w.canonicalize().ok());
+    let wt = wt.ok_or_else(|| bad("the work item has no worktree to read it in"))?;
+    let real = wt
+        .join(path)
+        .canonicalize()
+        .map_err(|e| bad(&e.to_string()))?;
+    let inside = real
+        .strip_prefix(&wt)
+        .map_err(|_| bad("outside the lane's worktree"))?;
+    if inside
+        .components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some(".git" | ".chaperone")))
+    {
+        return Err(bad("under .git or .chaperone"));
+    }
+    let text = text_file(&real, EVIDENCE_BYTES).map_err(|why| bad(&why))?;
+    if text.contains('\0') {
+        return Err(bad("not UTF-8 text"));
+    }
+    let stored = store.put(&text).map_err(LedgerError::from)?;
+    Ok(Attached {
+        path: inside.display().to_string(),
+        sha256: stored.hash,
+        bytes: text.len() as u64,
+        truncated: stored.truncated,
+        redactions: stored.redactions,
+    })
+}
+
+/// The UTF-8 text of the regular file at `path`, at most `max` bytes, or
+/// why not.
+fn text_file(path: &Path, max: usize) -> Result<String, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("not a regular file".into());
+    }
+    let mut bytes = Vec::new();
+    let read = file.take(max as u64 + 1).read_to_end(&mut bytes);
+    read.map_err(|e| e.to_string())?;
+    if bytes.len() > max {
+        return Err(format!("over {max} bytes"));
+    }
+    String::from_utf8(bytes).map_err(|_| "not UTF-8 text".into())
 }
 
 /// The pipeline the lane is stamped with, as this binary loads it.
