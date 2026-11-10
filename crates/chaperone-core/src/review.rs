@@ -613,8 +613,9 @@ pub fn goal(ledger: &Ledger, item: &WorkItem) -> Result<String, LedgerError> {
 /// for a review by `plan`, and the complete review of this commit by this
 /// pipeline when one is stored, which a run replays. A complete review of
 /// the same tree on another commit is carried to this one (`carried_from`,
-/// no findings of its own: they stay the original's, so none is counted
-/// twice). Else a tree that has had the pipeline's [`ATTEMPTS`] reviews
+/// the original's verifier row without its rulings, and no findings of its
+/// own: they stay the original's, so none is counted twice), once: a later
+/// run on this commit replays it. Else a tree that has had the pipeline's [`ATTEMPTS`] reviews
 /// already is refused.
 pub fn replay(
     ledger: &Ledger,
@@ -644,11 +645,20 @@ pub fn replay(
     }
     // An amend that kept the tree gets the tree's complete review, not a
     // new one: the lenses would only word their findings anew.
-    if let Some(stored) = ledger.tree_run(input, "complete", true)? {
-        if stored.payload.head_sha.as_deref() == Some(input.head.as_str()) {
-            return Ok(Ok(Some(stored)));
+    let complete = Some(("complete", rusqlite::types::Value::Integer(1)));
+    if let Some((newest, here)) = ledger.tree_stand(input, &complete)? {
+        if let Some(here) = here {
+            return Ok(Ok(Some(here)));
         }
-        return Ok(ledger.carry(actor, input, stored, &["verifier"])?.map(Some));
+        // The original's verifier row without its rulings, which are the
+        // original's moves: never `null`, which would read as "no lens
+        // found anything" when one did.
+        let mut verifier = newest.payload.rest.get("verifier").cloned();
+        if let Some(Value::Object(row)) = &mut verifier {
+            row.remove("rulings");
+        }
+        input.fields = Map::from_iter([("verifier".into(), verifier.unwrap_or_default())]);
+        return Ok(ledger.carry(actor, input, newest)?.map(Some));
     }
     let done: i64 = ledger.conn().query_row(
         "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'

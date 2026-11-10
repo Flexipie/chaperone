@@ -48,6 +48,15 @@ pub struct CheckInput {
     pub findings: Option<u64>,
 }
 
+/// A field of a tree-keyed check and the value it must hold, or none.
+pub(crate) type TreeFilter = Option<(&'static str, rusqlite::types::Value)>;
+
+/// The event whose session ran `r`: its `carried_from`, else itself.
+pub(crate) fn session_of(r: &Recorded) -> i64 {
+    let from = r.payload.rest.get("carried_from").and_then(Value::as_i64);
+    from.unwrap_or(r.event_id)
+}
+
 /// A smoke's evidence files, as many as a handoff's smoke entries.
 pub const EVIDENCE_FILES: usize = 12;
 
@@ -383,15 +392,21 @@ impl Ledger {
     }
 
     /// The lane's newest harness `input.check` that ran on `input.tree` by
-    /// `input.profile` with `field` equal to `value` (a digest of what it
-    /// was given), replayed: a check that holds for a tree whatever the
-    /// commit (`check run verdict`, `plan`).
+    /// `input.profile`, with `filter`'s field equal to its value when there
+    /// is one (`complete`, or the digest of a plan), replayed: a check that
+    /// holds for a tree whatever the commit (`check run review`, `verdict`,
+    /// `plan`). With `here`, only one on that commit whose session
+    /// (`carried_from`, else itself) is that event.
     pub(crate) fn tree_run(
         &self,
         input: &RunInput,
-        field: &str,
-        value: impl rusqlite::ToSql,
+        filter: &TreeFilter,
+        here: Option<(&str, i64)>,
     ) -> Result<Option<Recorded>, LedgerError> {
+        let (field, value) = match filter {
+            Some((field, value)) => (Some(format!("$.{field}")), Some(value)),
+            None => (None, None),
+        };
         let row: Option<(i64, String, String)> = self
             .conn()
             .query_row(
@@ -402,15 +417,19 @@ impl Ledger {
                    AND json_extract(payload_json, '$.producer.kind') = 'harness'
                    AND json_extract(payload_json, '$.tree') = ?3
                    AND json_extract(payload_json, '$.profile') IS ?4
-                   AND json_extract(payload_json, ?5) = ?6
+                   AND (?5 IS NULL OR json_extract(payload_json, ?5) = ?6)
+                   AND (?7 IS NULL OR json_extract(payload_json, '$.head_sha') = ?7
+                     AND coalesce(json_extract(payload_json, '$.carried_from'), id) = ?8)
                  ORDER BY id DESC LIMIT 1",
                 params![
                     input.work,
                     input.check,
                     input.tree,
                     input.profile,
-                    format!("$.{field}"),
-                    value
+                    field,
+                    value,
+                    here.map(|h| h.0),
+                    here.map(|h| h.1)
                 ],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
@@ -428,30 +447,41 @@ impl Ledger {
         .transpose()
     }
 
+    /// What stands for `input.tree`: the newest [`Ledger::tree_run`], and
+    /// the event on `input.head` that already says it (from the same
+    /// session) when there is one, which replays: so a lane that flips
+    /// between two commits of one tree appends nothing after the first
+    /// carry.
+    pub(crate) fn tree_stand(
+        &self,
+        input: &RunInput,
+        filter: &TreeFilter,
+    ) -> Result<Option<(Recorded, Option<Recorded>)>, LedgerError> {
+        let Some(newest) = self.tree_run(input, filter, None)? else {
+            return Ok(None);
+        };
+        let here = Some((input.head.as_str(), session_of(&newest)));
+        let here = self.tree_run(input, filter, here)?;
+        Ok(Some((newest, here)))
+    }
+
     /// `stored`, a [`Ledger::tree_run`] result on another commit, as this
-    /// commit's (`input.head`): its fields less `drop` (what was the
-    /// session's own, such as a review's rulings) and its findings, which
-    /// stay the original's, with `input.fields` over them, plus
-    /// `carried_from`, the event whose session ran. No session starts.
+    /// commit's (`input.head`): its fields with `input.fields` over them
+    /// and without its findings, which stay the original's (a reader
+    /// follows `carried_from` for them), plus `carried_from`, the event
+    /// whose session ran. No session starts.
     pub(crate) fn carry(
         &self,
         actor: &Actor,
         input: &mut RunInput,
         stored: Recorded,
-        drop: &[&str],
     ) -> Checked<Recorded> {
+        let from = session_of(&stored);
         let mut fields = stored.payload.rest;
-        for k in ["tree", "profile", "producer", "redactions"]
-            .iter()
-            .chain(drop)
-        {
-            fields.remove(*k);
+        for k in ["tree", "profile", "producer", "redactions"] {
+            fields.remove(k);
         }
-        let from = fields.get("carried_from").cloned();
-        fields.insert(
-            "carried_from".into(),
-            from.unwrap_or(json!(stored.event_id)),
-        );
+        fields.insert("carried_from".into(), json!(from));
         fields.extend(std::mem::take(&mut input.fields));
         input.fields = fields;
         let key = self.tree_key(input, "carried")?;
@@ -459,13 +489,17 @@ impl Ledger {
     }
 
     /// How many of the lane's harness `input.check` on `input.tree` by
-    /// `input.profile` with `field` equal to `value` gave no answer.
+    /// `input.profile` (with `filter`, as [`Ledger::tree_run`]) gave no
+    /// answer.
     pub(crate) fn no_answers(
         &self,
         input: &RunInput,
-        field: &str,
-        value: &str,
+        filter: &TreeFilter,
     ) -> Result<i64, LedgerError> {
+        let (field, value) = match filter {
+            Some((field, value)) => (Some(format!("$.{field}")), Some(value)),
+            None => (None, None),
+        };
         Ok(self.conn().query_row(
             "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
                AND json_extract(payload_json, '$.check') = ?2
@@ -474,13 +508,13 @@ impl Ledger {
                AND json_extract(payload_json, '$.producer.kind') = 'harness'
                AND json_extract(payload_json, '$.tree') = ?3
                AND json_extract(payload_json, '$.profile') IS ?4
-               AND json_extract(payload_json, ?5) = ?6",
+               AND (?5 IS NULL OR json_extract(payload_json, ?5) = ?6)",
             params![
                 input.work,
                 input.check,
                 input.tree,
                 input.profile,
-                format!("$.{field}"),
+                field,
                 value
             ],
             |r| r.get(0),

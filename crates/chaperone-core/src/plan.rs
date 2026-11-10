@@ -30,21 +30,12 @@ pub fn plan(pipeline: &Pipeline) -> Result<(Planned<'_>, i64), String> {
 }
 
 /// What the plan reviewer is given: what the change is for, the plan as
-/// the evidence store holds it (redacted, so a secret in the file is not
-/// sent), that copy's hash and the merge base.
+/// the evidence store keeps it (`Kept::of`: redacted, so a secret in the
+/// file is never sent) and the merge base.
 pub struct Given<'a> {
     pub goal: &'a str,
-    pub plan: &'a str,
-    pub plan_ref: &'a str,
+    pub plan: &'a Kept,
     pub base: &'a str,
-}
-
-/// The plan written to `store` as it keeps it, redacted: that copy, not the
-/// file, is what the reviewer is sent, so a secret in the plan stays here.
-pub fn keep(store: &Evidence, text: &str) -> std::io::Result<Kept> {
-    let kept = Kept::of(text);
-    store.write(&kept)?;
-    Ok(kept)
 }
 
 /// The plan reviewer's prompt: its check's prompt, what the change is for,
@@ -74,10 +65,11 @@ pub fn replay(
 ) -> Checked<Option<Recorded>> {
     input.check = EVENT_CHECK.into();
     input.profile = Some(hash.into());
-    if let Some(stored) = ledger.tree_run(input, "plan_ref", plan_ref)? {
+    let plan = Some(("plan_ref", rusqlite::types::Value::Text(plan_ref.into())));
+    if let Some(stored) = ledger.tree_run(input, &plan, None)? {
         return Ok(Ok(Some(stored)));
     }
-    let failed = ledger.no_answers(input, "plan_ref", plan_ref)?;
+    let failed = ledger.no_answers(input, &plan)?;
     if failed >= attempts {
         return Ok(Err(Refusal::InvalidInput(format!(
             "this plan has had {failed} plan sessions with no answer on the tree {} by this \
@@ -88,8 +80,10 @@ pub fn replay(
     Ok(Ok(None))
 }
 
-/// `check run plan` once [`replay`] answered none: the session in `dir`, a
-/// checkout of the commit, on what it is `given`, then its usage row, then
+/// `check run plan` once [`replay`] answered none: the plan written to
+/// `store` (so nothing is stored for a run [`replay`] refuses), the session
+/// in `dir`, a checkout of the commit, on what it is `given`, then its
+/// usage row, then
 /// one `plan_check`: `ran` with the findings (each cut as the review's), or
 /// `skipped` with `reason` `no_answer`, never "no findings".
 #[allow(clippy::too_many_arguments)]
@@ -103,13 +97,10 @@ pub fn record(
     given: &Given<'_>,
     store: &Evidence,
 ) -> Checked<Recorded> {
-    let Given {
-        goal,
-        plan,
-        plan_ref,
-        base,
-    } = *given;
-    let prompt = prompt(p, goal, plan, &input.head, base);
+    let Given { goal, plan, base } = *given;
+    store.write(plan)?;
+    let plan_ref = &plan.stored.hash;
+    let prompt = prompt(p, goal, &plan.text, &input.head, base);
     let parse = |out| review::findings("plan", out);
     let session = review::one(p, agents, dir, prompt, &review::schema(), store, parse)?;
     let ran = (session.lens, session.cli, &session.model, &session.run);

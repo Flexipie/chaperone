@@ -293,7 +293,16 @@ fn run_tests(
     // `smoke_recorded` from the lane's own session, so only a lane whose
     // pipeline judges with harness checks may run one.
     if check == "smoke" {
-        verdict_plan(lane_pipeline(&item)?, "smoke")?;
+        let pipeline = lane_pipeline(&item)?;
+        if !pipeline.checks.contains_key(verdict::CHECK) {
+            return Err(refuse(format!(
+                "pipeline {} has no check {}, so a harness smoke would stand in for one a \
+                 session that never held the lane records; a lane on it records smoke with \
+                 `check record`",
+                pipeline.id,
+                verdict::CHECK
+            )));
+        }
     }
     let base = commands_in(Path::new("git"), &wt, check, Instant::now() + RUN_TIMEOUT)?;
     input.profile = Some(base.hash.clone());
@@ -413,13 +422,18 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         mut input,
     } = start_run(ledger, db, work, verdict::EVENT_CHECK)?;
     let pipeline = lane_pipeline(&item)?;
-    let (planned, attempts) = verdict_plan(pipeline, "verdicts")?;
+    let (planned, attempts) = verdict::plan(pipeline).map_err(|e| {
+        refuse(format!(
+            "{e}; a lane on it records verdicts with `check record`"
+        ))
+    })?;
     let (head, store) = (input.head.clone(), Evidence::beside(db));
     let smoke = declares(Path::new("git"), &wt, "smoke", Instant::now() + RUN_TIMEOUT)?;
     let harness = verdict::harness(ledger, &store, work, &head, smoke)?.map_err(|lacks| {
         refuse(format!(
-            "commit {head} has no harness {lacks}; a verdict needs `check run diff`, `tests`, \
-             a complete `review` and, when the base profile declares `[smoke]`, `smoke` on it first"
+            "commit {head} has no harness {lacks}; a verdict runs only on a clean commit: a \
+             `check run diff`, `tests` that pass, a complete `review` and, when the base \
+             profile declares `[smoke]`, a `smoke` that passes"
         ))
     })?;
     let key = (&*pipeline.hash, attempts);
@@ -476,11 +490,11 @@ fn run_plan(
     let head = input.head.clone();
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
     no_code(&files, &head, work)?;
-    let store = Evidence::beside(db);
-    let kept = plan::keep(&store, &plan_text(file)?).map_err(LedgerError::from)?;
-    let plan_ref = kept.stored.hash.clone();
+    // Named as the store keeps it, redacted; written only once a session
+    // runs on it (`plan::record`).
+    let kept = Kept::of(&plan_text(file)?);
     let key = (&*pipeline.hash, attempts);
-    if let Some(stored) = plan::replay(ledger, &mut input, key, &plan_ref)?? {
+    if let Some(stored) = plan::replay(ledger, &mut input, key, &kept.stored.hash)?? {
         return one(stored);
     }
     let cli = planned.runner.cli;
@@ -493,10 +507,10 @@ fn run_plan(
     };
     let given = plan::Given {
         goal: &review::goal(ledger, &item)?,
-        plan: &kept.text,
-        plan_ref: &plan_ref,
+        plan: &kept,
         base: &base,
     };
+    let store = Evidence::beside(db);
     one(plan::record(
         ledger,
         actor,
@@ -579,7 +593,9 @@ fn attach(wt: Option<&str>, path: &Path) -> Result<(Attached, Kept), CliError> {
 
 /// The UTF-8 text of the regular file at `path`, at most `max` bytes, or
 /// why not. The type is checked before the open: opening a FIFO would wait
-/// for a writer, with the lane's lock held.
+/// for a writer, with the lane's lock held. Between the check and the open
+/// a file could be swapped for one; this guards against accidents, not a
+/// lane racing its own check (no non-blocking open without libc).
 fn text_file(path: &Path, max: usize) -> Result<String, String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if !meta.is_file() {
@@ -593,19 +609,6 @@ fn text_file(path: &Path, max: usize) -> Result<String, String> {
         return Err(format!("over {max} bytes"));
     }
     String::from_utf8(bytes).map_err(|_| "not UTF-8 text".into())
-}
-
-/// The lane pipeline's `verdict` and its limit, or why a lane on it
-/// (v17 to v19) records its `what` with `check record` instead.
-fn verdict_plan<'a>(
-    pipeline: &'a Pipeline,
-    what: &str,
-) -> Result<(review::Planned<'a>, i64), CliError> {
-    verdict::plan(pipeline).map_err(|e| {
-        refuse(format!(
-            "{e}; a lane on it records {what} with `check record`"
-        ))
-    })
 }
 
 /// The pipeline the lane is stamped with, as this binary loads it.

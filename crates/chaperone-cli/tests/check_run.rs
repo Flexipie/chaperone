@@ -773,6 +773,7 @@ fn smoke_runs_need_a_harness_pipeline() {
         (code, &err["code"], events(&db)),
         (1, &json!("invalid_input"), before)
     );
-    let v19 = "pipeline v19 has no check verdict; a lane on it records smoke with `check record`";
+    let v19 = "pipeline v19 has no check verdict, so a harness smoke would stand in for one a \
+        session that never held the lane records; a lane on it records smoke with `check record`";
     assert_eq!(err["message"], v19);
 }
