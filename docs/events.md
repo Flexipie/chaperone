@@ -32,12 +32,14 @@ These rules keep every write small, single and fail-closed.
 
 - **One command, one event, one transaction.** Each command appends exactly one event and
   folds it inside one `BEGIN IMMEDIATE` transaction. A crash leaves the event and its
-  fold both there or both absent. The exceptions are `usage report` and `check run review`.
+  fold both there or both absent. The exceptions are `usage report`, `check run review` and
+  `check run verdict`.
   `usage report` appends one `usage.reported` per message the lane lacks, each in its own
   transaction, so a crash leaves whole events, and the next report adds the rest. `check run
   review` appends a `usage.reported` per session it started, then one `check.finished`, then
   one `finding.updated` per verifier ruling, each in its own transaction; the next run writes
-  rulings a crash left out before anything else (cli-contract.md).
+  rulings a crash left out before anything else (cli-contract.md). `check run verdict` appends a
+  `usage.reported` for its session, then one `check.finished`.
 - **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
   `gate.denied` and nothing else. Its key is
   `deny:<lane_id>:<transition>:<to>:<gate>:<head_sha, or - for none>:<id of the lane's latest event that is not a gate.denied, usage.reported, pr.merged or attention.recorded>`,
@@ -317,10 +319,10 @@ events (`usage get`), never a stored counter. Message text never enters the payl
   `parent_thread_id`, `agent_id` its own id, `agent_type` the spawn's `agent_role` and
   `description` its `agent_nickname`.
 - **Harness sessions.** A headless session the harness starts (`check run review`'s lenses
-  and verifier) is one `usage.reported` with `source` and `origin` `harness`, `message_id`
+  and verifier, `check run verdict`'s session) is one `usage.reported` with `source` and `origin` `harness`, `message_id`
   `run:<session_id>` (so the key is `usage:<lane_id>:run:<session_id>`), the session's
   `session_id` and `cost_usd` (the CLI's own figure, null for Codex, which reports none), `raw`
-  (the CLI's usage object, counts only), and labels saying what ran it: `phase` (`review`),
+  (the CLI's usage object, counts only), and labels saying what ran it: `phase` (`review` or `verdict`),
   `lens`, `cli` and `model` (the runner's). The token fields are null: unknown, never 0. A
   session that left no id (it never started, or Codex printed no `thread.started`) writes none.
 - **Cursor** and other CLIs are not read. Their lanes have no usage events, so `usage get`
@@ -354,6 +356,7 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 | `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation`, `docs` or `tests`. |
 | `quality_gate` | session | `ran`: `findings` (count). `skipped`: `reason` `no_code` or `tests`. |
 | `merge_verdict` | session | `ran` only. `decision` `yes` or `no`. The verdict sha is `head_sha`, from `--head`, never the model's prose. |
+| `merge_verdict` | harness | `check run verdict`. `ran` with `decision` `yes` or `no`, `why` (cut to 600 characters), `proven` and `not_proven` (at most 20 items, each cut to 500), or `skipped` with `reason` `no_answer` (the session errored, stopped on its budget or timeout, or answered outside the schema) and no decision, which no fact reads. Both carry `tree`, `profile` (the lane's pipeline hash), `base` (the merge base shown), `diff_cut`, `facts` (the ids of the harness `diff`, `tests` and complete `review` events read, all on `head_sha`), `facts_sha256` (the sha256 of the canonical JSON of the results the session was shown: those events' key fields and the lane's blocking findings, once each, nothing that names the commit, so a later gate can require a verdict on the current facts) and `session` (the review's lens row for lens `verdict`, without `findings`: `ran`, `error`, `bin`, `version`, `runner`, `model`, `prompt_sha256`, `prompt_ref`, `answer_ref`, `evidence_truncated`, `cost_usd`). A carried verdict copies them and adds `carried_from`, the id of the event whose session decided. |
 | `smoke` | session | `ran`, or `skipped` with `reason` `nothing_runs` or `attempt_failed`. |
 | `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
 | `review_round` | session | `ran` only. One review round daisy did not run (a review agent's, `ship-wait round`). It adds a round and nothing else: no `review.local_head`, no findings, no `daisy_review.state`. |
@@ -391,7 +394,8 @@ R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` an
 events, never prose. `commit.sha` is the head the gated command names (the handoff's
 `commit`, or for `update --status done` the latest handoff's), never a stored one.
 `plan_check.*` and `quality_gate.outcome`/`reason` come from the latest `check.finished`
-of that check, and `verdict.*` from the latest `merge_verdict` that ran.
+of that check, and `verdict.*` from the latest `merge_verdict` that ran, a session's or the
+harness's (a skipped harness verdict is none).
 `quality_gate.at` is the `at` of the first quality gate with the latest one's outcome
 and reason, so recording the same result again after the PR does not fail
 `quality_gate_before_pr`, and a skip before the PR does not time a gate that ran after

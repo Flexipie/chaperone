@@ -1,6 +1,9 @@
-//! `check run verdict`: whether the lane's commit should merge, judged
-//! from facts the harness gathered or holds, here the harness's own
-//! results on the commit.
+//! `check run verdict`: one fresh headless session decides whether the
+//! lane's commit should merge, in the harness's checkout of it, from facts
+//! the harness gathered or holds: the change (as the review shows it), what
+//! the lane is for, and the harness's own results on this commit. Nothing
+//! the lane says about its change (its summary, merge case or what to look
+//! at) reaches it.
 //!
 //! A decision stands for the tree it judged: the same tree, pipeline and
 //! harness facts replay it, yes or no, and start no session, so a verdict
@@ -8,17 +11,29 @@
 //! harness producer, so the facts and gates that read verdicts read it.
 
 use std::io;
+use std::path::Path;
 
 use rusqlite::{OptionalExtension, params};
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::checks::{Recorded, RunInput};
-use crate::ledger::{Actor, Checked, Ledger, LedgerError, Payload};
-use crate::pipeline::canonical_string;
+use crate::checks::{BODY_CHARS, NOTE_CHARS, Recorded, RunInput};
+use crate::ledger::{Actor, Checked, Evidence, Ledger, LedgerError, Payload};
+use crate::pipeline::{Pipeline, canonical_string};
+use crate::review::{self, Agents, Facts, Planned, TRAILER, cut, fenced};
 
+/// The pipeline's check that names the verdict's runner and prompt.
+pub const CHECK: &str = "verdict";
 /// The event's check: the session verdict's, with the harness producer.
 pub const EVENT_CHECK: &str = "merge_verdict";
+/// Of `proven` and `not_proven`, the items kept.
+const ITEMS: usize = 20;
+
+/// The verdict's check and runner, or why the pipeline cannot run one.
+pub fn plan(pipeline: &Pipeline) -> Result<Planned<'_>, String> {
+    review::planned(pipeline, "verdict", CHECK)
+}
 
 /// The harness's own results on one commit, as the verdict is shown them.
 pub struct Harness {
@@ -104,6 +119,59 @@ pub fn harness(
     }))
 }
 
+/// The verdict's prompt: its check's prompt, what the change is for, the
+/// change, the harness's results, then the harness's line saying the
+/// fenced text is data.
+pub fn prompt(p: &Planned<'_>, goal: &str, change: &str, harness: &Value) -> String {
+    let results = serde_json::to_string_pretty(harness).unwrap_or_default();
+    format!(
+        "{}\n\n## What the change is for\n\n{}\n{change}\n## What the harness found on this commit\n\n\
+         The harness ran these checks itself on this commit.\n\n{}\n{TRAILER}",
+        p.check.text,
+        fenced("", goal),
+        fenced("json", &results),
+    )
+}
+
+/// The verdict's answer.
+pub fn schema() -> Value {
+    let list = json!({"type": "array", "items": {"type": "string"}});
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "why", "proven", "not_proven"],
+        "properties": {
+            "decision": {"type": "string", "enum": ["yes", "no"]},
+            "why": {"type": "string"},
+            "proven": list,
+            "not_proven": list,
+        },
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Said {
+    pub decision: String,
+    pub why: String,
+    pub proven: Vec<String>,
+    pub not_proven: Vec<String>,
+}
+
+/// The session's answer, or why it is none: anything but `yes` or `no`
+/// with a why. Never read as either.
+pub fn said(output: Value) -> Result<Said, String> {
+    let said: Said =
+        serde_json::from_value(output).map_err(|e| format!("not a verdict answer: {e}"))?;
+    if !matches!(said.decision.as_str(), "yes" | "no") {
+        return Err(format!("unknown decision {:?}", said.decision));
+    }
+    if said.why.trim().is_empty() {
+        return Err("not a verdict answer: no why".into());
+    }
+    Ok(said)
+}
+
 /// The start of `check run verdict`, before anything is run: `input` keyed
 /// for a verdict by the pipeline `hash`, then the verdict that ran on the
 /// same tree, pipeline and `harness` facts when there is one. On this
@@ -138,6 +206,61 @@ pub fn replay(
     input.fields = fields;
     let key = ledger.tree_key(input, &harness.sha256)?;
     Ok(ledger.finish_run(actor, input, true, &key)?.map(Some))
+}
+
+/// `check run verdict` once [`replay`] answered none: the session in `dir`,
+/// a checkout of the commit, then its usage row, then one `merge_verdict`:
+/// `ran` with the decision, or `skipped` with `reason` `no_answer` when the
+/// session errored, stopped or answered outside the schema, which never
+/// reads as a decision. Model text is cut: `why` to 600 characters, each
+/// of at most 20 `proven` and `not_proven` items to 500.
+#[allow(clippy::too_many_arguments)]
+pub fn record(
+    ledger: &Ledger,
+    actor: &Actor,
+    mut input: RunInput,
+    p: &Planned<'_>,
+    agents: &Agents<'_>,
+    dir: &Path,
+    facts: &Facts,
+    harness: &Harness,
+    store: &Evidence,
+) -> Checked<Recorded> {
+    let (change, diff_cut) = review::change(facts);
+    let prompt = prompt(p, &facts.goal, &change, &harness.shown);
+    let session = review::one(p, agents, dir, prompt, &schema(), store, said)?;
+    let ran = (session.lens, session.cli, &session.model, &session.run);
+    if let Err(r) = review::usage(ledger, actor, input.work, "verdict", ran)? {
+        return Ok(Err(r));
+    }
+    input.fields = Map::from_iter([
+        ("base".into(), json!(facts.base)),
+        ("diff_cut".into(), json!(diff_cut)),
+        ("facts".into(), harness.read.clone()),
+        ("facts_sha256".into(), json!(harness.sha256)),
+        ("session".into(), session.session()),
+    ]);
+    let items = |l: &[String]| -> Value {
+        json!(
+            l.iter()
+                .take(ITEMS)
+                .map(|i| cut(i, NOTE_CHARS))
+                .collect::<Vec<_>>()
+        )
+    };
+    match &session.outcome {
+        Ok(said) => input.fields.extend([
+            ("decision".into(), json!(said.decision)),
+            ("why".into(), json!(cut(&said.why, BODY_CHARS))),
+            ("proven".into(), items(&said.proven)),
+            ("not_proven".into(), items(&said.not_proven)),
+        ]),
+        Err(_) => {
+            input.fields.insert("reason".into(), json!("no_answer"));
+        }
+    }
+    let key = ledger.tree_key(&input, &harness.sha256)?;
+    ledger.finish_run(actor, &input, session.outcome.is_ok(), &key)
 }
 
 #[cfg(test)]
