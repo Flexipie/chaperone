@@ -72,6 +72,7 @@ impl Ledger {
         refuse_unless_current(path)?;
         let flags = OpenFlags::default().difference(OpenFlags::SQLITE_OPEN_CREATE);
         let mut conn = Connection::open_with_flags(path, flags)?;
+        owner_only(path)?;
         apply_pragmas(&mut conn)?;
         check_schema(&conn)?;
         Ok(Self { conn })
@@ -134,6 +135,7 @@ impl Ledger {
             Some((found, ..)) => found,
         };
         let mut conn = Connection::open(path)?;
+        owner_only(path)?;
         apply_pragmas(&mut conn)?;
         if found > 0 && found < supported {
             migrate::backup(&conn, dir, path, found)?;
@@ -200,6 +202,33 @@ pub(crate) fn check_schema(conn: &Connection) -> Result<(), LedgerError> {
             found,
             supported: SCHEMA_VERSION,
         });
+    }
+    Ok(())
+}
+
+/// Makes the ledger, its `-wal` and its `-shm` readable and writable by
+/// their owner alone (0600): SQLite creates the ledger with the umask's
+/// mode, and it holds every handoff, note and prompt. Called before the
+/// first page is written; the bundled SQLite gives a `-wal` or `-shm` it
+/// creates later the ledger's mode. A file that is already private is left
+/// alone, and a read-only open changes nothing.
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn owner_only(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    for suffix in ["", "-wal", "-shm"] {
+        use std::os::unix::fs::PermissionsExt;
+        let mut file = OsString::from(path);
+        file.push(suffix);
+        let Ok(meta) = std::fs::metadata(&file) else {
+            continue;
+        };
+        if meta.permissions().mode() & 0o077 == 0 {
+            continue;
+        }
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            let file = Path::new(&file).display();
+            std::io::Error::new(e.kind(), format!("cannot make {file} owner-only: {e}"))
+        })?;
     }
     Ok(())
 }
@@ -291,6 +320,30 @@ mod tests {
 
     fn read_only(path: &Path) -> Connection {
         Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap()
+    }
+
+    /// A new ledger and its WAL files are the owner's alone, and opening
+    /// one an older binary left group-readable tightens it.
+    #[cfg(unix)]
+    #[test]
+    fn ledger_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.db");
+        let files = ["ledger.db", "ledger.db-wal", "ledger.db-shm"].map(|f| dir.path().join(f));
+        let modes = || {
+            files
+                .each_ref()
+                .map(|f| f.metadata().unwrap().permissions().mode() & 0o777)
+        };
+        let ledger = Ledger::open_and_migrate(&path).unwrap();
+        assert_eq!(modes(), [0o600; 3]);
+        for f in &files {
+            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let again = Ledger::open(&path).unwrap();
+        assert_eq!(modes(), [0o600; 3]);
+        drop((ledger, again));
     }
 
     #[test]

@@ -106,7 +106,8 @@ pub struct Actor {
 
 impl Actor {
     /// Agent `[a-z0-9._-]{1,40}`, session `[A-Za-z0-9._:-]{1,120}`, daisy's
-    /// allowlist: both land in `by` strings a consumer prints.
+    /// allowlist: both land in `by` strings a consumer prints. Neither may
+    /// look like a secret: both are stored on every event as they are.
     pub fn check(&self) -> Result<(), Refusal> {
         let (Some(agent), Some(session)) = (&self.agent, &self.session) else {
             return Err(Refusal::InvalidInput(
@@ -115,6 +116,15 @@ impl Actor {
                     .into(),
             ));
         };
+        // First, and without the value: the messages below echo it, and
+        // stderr is logged too.
+        for (name, value) in [("agent", agent), ("session", session)] {
+            if let Some(kind) = super::redact::secret(value) {
+                return Err(Refusal::InvalidInput(format!(
+                    "{name} looks like a {kind}; it is stored as it is, so pick another {name}"
+                )));
+            }
+        }
         let agent_ok = (1..=40).contains(&agent.len())
             && agent.bytes().all(|b| {
                 b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')

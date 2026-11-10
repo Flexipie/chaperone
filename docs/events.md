@@ -81,6 +81,12 @@ These rules keep every write small, single and fail-closed.
   the row, is left as sent. A match in any other string is an identifier of the wrong
   type, and a match in an object key is a bad key: both are `invalid_input`, naming the
   key, not the value. `redactions` is the write's to set.
+  The actor's `agent` and `session` and the idempotency key are columns, stored as
+  they are, so one that matches a pattern is refused the same way (`invalid_input`,
+  naming the kind, never the value) before the key is looked up.
+- **File mode.** A read-write open makes the ledger and its `-wal` and `-shm` 0600
+  (owner only) before it writes, and fails if it cannot; backups are created 0600.
+  A read-only open changes no mode.
 - **Heartbeat writes no event.** It touches only `last_heartbeat_at` and
   `lease_expires_at` on the lane row. Those two columns are outside the fold:
   `rebuild()` copies their live values from the old row and folds everything else from
