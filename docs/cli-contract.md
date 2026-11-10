@@ -556,6 +556,32 @@ missing fact fails closed. The route comes from `work create`'s `--kind` and `--
 denial exits 1 with `gate_denied`, names the failing gate id on stderr, and leaves the
 lane where it was.
 
+**Pipeline v20** (`pipelines/v20.toml`, a lane opts in with `work claim --pipeline v20`
+until the cutover) gates the same two `handoff` rows on harness facts only (events.md,
+facts for pipeline v20), each about the handed-off commit. It has no other transition:
+the write runs only `handoff`, so v19's other 20 rows could never run. The ready row's
+gates, in the order a denial names the first that fails:
+
+| Gate | Holds when | Facts a denial lists |
+| --- | --- | --- |
+| `stamp_ok` | the lane is stamped `v20` | `pipeline.id` |
+| `code_lines_at_most` | a harness `diff` on the commit counts at most 400 code lines | `commit.code_lines` |
+| `tests_passed` | the newest harness `tests` on the commit passed | `tests.passed` |
+| `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree counts) | `review.complete` |
+| `no_blocking_findings` | that review has no finding open, verified or disputed of severity `blocker`, `risk` or another blocking one; refuted, waived, fixed and answered findings, other reviews' and the plan check's never count | `findings.open_blocking` |
+| `plan_or_no_code` | the diff changes no code, or the plan check ran (`check run plan`, before code) or the owner waived it (`check waive plan`) | `commit.changes_code`, `plan_check.outcome`, `plan_check.reason` |
+| `smoke_or_no_code` | the diff changes no code, or the newest harness smoke on the commit passed, or the harness ran none there and a session's smoke claim on it ran with evidence | `commit.changes_code`, `smoke.passed`, `smoke.claimed` |
+| `verdict_is_yes` | the newest harness verdict says `yes` | `verdict.decision` |
+| `verdict_on_head` | that verdict is on the commit (a carried verdict is on the amend it was carried to) | `verdict.sha`, `commit.sha` |
+
+The done row (every route) needs `stamp_ok`, `plan_or_no_code` and `done_verdict`: the
+diff changes no code, or a harness `yes` on the commit (`commit.changes_code`,
+`verdict.decision`, `verdict.sha`, `commit.sha`). Whether a lane changes code is the
+harness diff's word, not its declared kind, so every v20 lane needs a harness `diff` on
+the commit to be ready or done, and a docs lane whose diff touches code climbs the full
+row. Ready is derived on the board as for v19: a later fact that breaks a gate (a newer
+`no` verdict, a newer failing run) takes ready back with no write.
+
 `usage report` is new (#59). It reads the transcripts that started in the lane's
 `worktree_path` and appends one `usage.reported` per provider message the lane does not
 have (events.md, Usage). `/ship` is to run it after each handoff once lanes run on Chaperone, and anyone may run it on demand.
