@@ -1,27 +1,39 @@
 //! `chaperone check`, `reviews`, `jobs`, `usage`, `attention` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
-//! write opens its transaction.
+//! write opens its transaction. `check run` reads git in the lane's
+//! worktree before its write, under the lane's run lock.
 
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{AttentionInput, CheckInput};
+use chaperone_core::checks::{AttentionInput, CheckInput, RunInput};
 use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
-use chaperone_core::ledger::Ledger;
+use chaperone_core::git;
+use chaperone_core::ledger::{self, Actor, Evidence, Ledger, LedgerError, Refusal};
 use chaperone_core::usage::Roots;
-use serde_json::{Value, json};
+use chaperone_graph::glob;
+use serde_json::{Map, Value, json};
 
-use crate::cli::{AttentionCmd, CheckCmd, DossierCmd, JobsCmd, ReviewsCmd, UsageCmd};
+use crate::cli::{AttentionCmd, CheckCmd, DossierCmd, JobsCmd, ReviewsCmd, RunKind, UsageCmd};
 use crate::output::{CliError, ErrorBody, Outcome};
-use crate::work::one;
+use crate::work::{observed_head, one};
 
 /// Where spawn and the skills call daisy (R15); `CHAPERONE_DAISY_CLI`
 /// overrides it.
 const DAISY_CLI: &str = "/Applications/daisy.app/Contents/MacOS/daisy-cli";
 const DAISY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Not code: docs and Markdown. No profile says what code is yet, so every
+/// other changed file counts.
+const NOT_CODE: [&str; 2] = ["docs/**", "**/*.md"];
+/// Every git call of one `check run diff`, together.
+const RUN_TIMEOUT: Duration = Duration::from_secs(10);
+/// The numstat's output; a cut list would count too little, so past it the
+/// run fails.
+const DIFF_BYTES: usize = 16 * 1024 * 1024;
 
-pub fn check(ledger: &Ledger, cmd: CheckCmd) -> Result<Outcome, CliError> {
+pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliError> {
     match cmd {
         CheckCmd::Record {
             work,
@@ -44,7 +56,71 @@ pub fn check(ledger: &Ledger, cmd: CheckCmd) -> Result<Outcome, CliError> {
             };
             one(ledger.check_record(&actor.resolve(), &input)??)
         }
+        CheckCmd::Run {
+            kind: RunKind::Diff,
+            work,
+            actor,
+        } => run_diff(ledger, db, work, &actor.resolve()),
     }
+}
+
+/// `check run diff`: the lane's commit (as a ready handoff reads it)
+/// against the merge base, committed files only. The per-file list goes to
+/// the evidence store, its totals in the payload.
+fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
+    let item = ledger.work_get(work, &ledger.now()?)??;
+    let _lock = ledger::lock_lane(db, work)??;
+    let refuse = |why: String| CliError::from(Refusal::InvalidInput(why));
+    let wt = item.worktree_path.as_deref();
+    let head = observed_head(wt, item.branch.as_deref())?.ok_or_else(|| {
+        refuse(format!(
+            "work item {work} has no worktree to measure (none recorded, not absolute, or gone)"
+        ))
+    })?;
+    let wt = Path::new(wt.unwrap_or_default());
+    let (bin, deadline) = (Path::new("git"), Instant::now() + RUN_TIMEOUT);
+    let base = item.base_sha.as_deref();
+    let (base, files) = git::commit_files(bin, wt, base, &head, deadline, DIFF_BYTES)
+        .map_err(|e| refuse(format!("could not diff {head} in {}: {e}", wt.display())))?;
+    let tree = format!("{head}^{{tree}}");
+    let tree = git::git(bin, wt, &["rev-parse", "--verify", &tree], deadline, 4096)
+        .map(|(out, _)| String::from_utf8_lossy(&out).trim().to_string())
+        .map_err(|_| refuse(format!("could not read {tree} in {}", wt.display())))?;
+    let code: Vec<_> = files
+        .iter()
+        .filter(|f| !NOT_CODE.iter().any(|g| glob(g, &f.path)))
+        .collect();
+    let added: u64 = files.iter().filter_map(|f| f.added).sum();
+    let removed: u64 = files.iter().filter_map(|f| f.removed).sum();
+    let code_lines: u64 = code
+        .iter()
+        .map(|f| f.added.unwrap_or(0) + f.removed.unwrap_or(0))
+        .sum();
+    let fields = Map::from_iter([
+        ("base".into(), json!(base)),
+        ("files".into(), json!(files.len())),
+        ("added".into(), json!(added)),
+        ("removed".into(), json!(removed)),
+        ("code_lines".into(), json!(code_lines)),
+        ("changes_code".into(), json!(!code.is_empty())),
+    ]);
+    let list = serde_json::to_string(&files).map_err(|e| CliError::Internal(e.to_string()))?;
+    let stored = Evidence::beside(db).put(&list).map_err(LedgerError::from)?;
+    let bin = std::env::current_exe().map_err(LedgerError::from)?;
+    let input = RunInput {
+        work,
+        check: "diff".into(),
+        head,
+        tree,
+        fields,
+        evidence_ref: Some(stored.hash),
+        bin: bin.display().to_string(),
+        version: match env!("CHAPERONE_GIT_SHA") {
+            "" => env!("CARGO_PKG_VERSION").into(),
+            sha => format!("{}+{sha}", env!("CARGO_PKG_VERSION")),
+        },
+    };
+    one(ledger.check_run(actor, &input)??)
 }
 
 pub fn reviews(ledger: &Ledger, cmd: ReviewsCmd) -> Result<Outcome, CliError> {

@@ -89,7 +89,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `check run`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -120,6 +120,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
+| `check run` | `diff --work <id>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -239,6 +240,19 @@ lane (events.md, producer). `--head` is 7 to
 (events.md). `--decision` is required for `merge_verdict` and refused for every other
 check. `--findings <n>` is required for a `plan_check` or `quality_gate` that ran and
 refused elsewhere. It prints `{event_id, work_id, kind, replayed, at, payload}`.
+
+`check run diff` is a check the binary runs itself rather than one a session reports
+(events.md, producer `harness`). It reads the lane's `worktree_path`, `branch` and
+`base_sha`, then takes the lane's run lock: a file `<ledger>.lane-<id>.lock` beside the
+ledger, locked as `migrate` locks its own but without waiting, so a second `check run` on the
+lane while one runs is `conflict` (exit 4) and writes nothing. The lock goes when the command
+ends, however it ends. In the worktree it reads the commit the lane is on (the tip of its
+`branch`, else `HEAD`, as a ready handoff reads it), that commit's tree, and its numstat
+against the merge base (committed files only, no renames), all git calls within one 10 s
+deadline. A lane with no worktree, a relative or missing one, a git call that fails or times
+out, and a numstat past 16 MiB are `invalid_input` and write nothing. The per-file list goes to
+the evidence store before the one `check.finished` that names it is written. It prints what
+`check record` prints.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

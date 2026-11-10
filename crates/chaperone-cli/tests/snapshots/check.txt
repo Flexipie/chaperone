@@ -1,9 +1,10 @@
-Check results a fresh session records for a lane: plan check, quality gate, merge verdict, smoke, kept tests and review rounds
+Check results a fresh session records for a lane: plan check, quality gate, merge verdict, smoke, kept tests and review rounds; and the checks the binary runs itself
 
 Usage: chaperone check [OPTIONS] <COMMAND>
 
 Commands:
   record  Record one check result on a work item. Refused from any session that has held it: pass your own --session. The same result again replays and writes nothing
+  run     Run one check on the lane's commit in its worktree and record the result as the harness's. One run per lane at a time: a second is a conflict (exit 4). A run that fails records nothing; the same tree again replays
   help    Print this message or the help of the given subcommand(s)
 
 Options:

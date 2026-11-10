@@ -5,7 +5,7 @@ Usage: chaperone [OPTIONS] <COMMAND>
 Commands:
   work       Leased work records. Claim an item before working on it, heartbeat while you hold it, hand it off when you stop
   spec       The dispatch spec of a parent issue, versioned. /dispatch writes it, /issue and /ship read it
-  check      Check results a fresh session records for a lane: plan check, quality gate, merge verdict, smoke, kept tests and review rounds
+  check      Check results a fresh session records for a lane: plan check, quality gate, merge verdict, smoke, kept tests and review rounds; and the checks the binary runs itself
   reviews    Daisy's review jobs, as recorded in the ledger. The worker stays in daisy; lanes keep `daisy-cli reviews local` and `reviews get --wait`
   jobs       Recorded daisy jobs
   usage      Token usage per provider message, read from a lane's transcripts

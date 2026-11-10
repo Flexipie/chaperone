@@ -170,6 +170,7 @@ impl Cmd {
         match self {
             Cmd::Migrate => Some("migrate"),
             Cmd::Check(CheckCmd::Record { .. }) => Some("check record"),
+            Cmd::Check(CheckCmd::Run { .. }) => Some("check run"),
             Cmd::Reviews(ReviewsCmd::Record { .. }) => Some("reviews record"),
             Cmd::Reviews(ReviewsCmd::Get { .. }) | Cmd::Jobs(JobsCmd::Get { .. }) => None,
             Cmd::Work(WorkCmd::Create { .. }) => Some("work create"),
@@ -570,7 +571,8 @@ pub enum SpecCmd {
 }
 
 /// Check results a fresh session records for a lane: plan check, quality
-/// gate, merge verdict, smoke, kept tests and review rounds
+/// gate, merge verdict, smoke, kept tests and review rounds; and the checks
+/// the binary runs itself
 #[derive(Subcommand, Debug)]
 pub enum CheckCmd {
     /// Record one check result on a work item. Refused from any session
@@ -599,6 +601,24 @@ pub enum CheckCmd {
         #[command(flatten)]
         actor: ActorArgs,
     },
+    /// Run one check on the lane's commit in its worktree and record the
+    /// result as the harness's. One run per lane at a time: a second is a
+    /// conflict (exit 4). A run that fails records nothing; the same tree
+    /// again replays
+    Run {
+        kind: RunKind,
+        #[arg(long)]
+        work: i64,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+}
+
+/// The checks `check run` does itself
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum RunKind {
+    /// Files and lines the commit changes against the merge base
+    Diff,
 }
 
 /// Daisy's review jobs, as recorded in the ledger. The worker stays in
