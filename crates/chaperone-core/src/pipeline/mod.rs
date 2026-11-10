@@ -77,6 +77,9 @@ pub struct Check {
     pub runner: String,
     pub prompt: String,
     pub prompt_sha256: String,
+    /// The prompt itself: the session is given it. Hashed by its digest.
+    #[serde(skip)]
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -646,6 +649,7 @@ requires = ["a"]
             (review.runner.as_str(), review.prompt.as_str()),
             ("lens", "review.md")
         );
+        assert_eq!(review.text, "Review the diff.");
         // sha256 of "Review the diff."
         let digest = "cd952634e4090147e67501128bd1b92e8a54b749568ada27af25a86a31b70059";
         assert_eq!(review.prompt_sha256, digest);

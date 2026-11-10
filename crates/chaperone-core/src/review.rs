@@ -1,0 +1,328 @@
+//! `check run review`'s lenses: four fresh headless sessions, three Claude
+//! and one Codex, each reviewing the same commit in the harness's checkout
+//! from the same facts. This builds what each lens is asked and reads what
+//! it answers: an answer outside the schema is none, never "no findings".
+//!
+//! Only the intent lens is told what the change is for, and no lens is
+//! told what the lane says about its own change (its summary, merge case
+//! or what to look at): the author does not steer the review.
+
+use std::collections::BTreeSet;
+
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+
+use crate::git::ChangedFile;
+use crate::ledger::Finding;
+use crate::pipeline::{Check, Cli, Pipeline, Runner};
+
+/// The lenses, each the pipeline's check `review_<lens>`.
+pub const LENSES: [&str; 4] = ["correctness", "design_tests", "intent", "codex"];
+/// A finding's severity, in the ledger's words (`NON_BLOCKING_SEVERITIES`
+/// says which block).
+pub const SEVERITIES: [&str; 6] = [
+    "blocker",
+    "risk",
+    "convention",
+    "question",
+    "nit",
+    "improvement",
+];
+/// Of the diff, what a prompt carries: a change under the size limit fits
+/// many times over. Past it the start is kept, cut at a line, and the
+/// prompt says so: the lens can read the rest in the checkout.
+pub const DIFF_BYTES: usize = 128 * 1024;
+
+/// What the harness gathered about the commit under review.
+pub struct Facts {
+    /// The merge base with the lane's base, a commit the checkout has.
+    pub base: String,
+    pub head: String,
+    pub files: Vec<ChangedFile>,
+    /// `git diff <base> <head>`, whole.
+    pub diff: String,
+    /// What the change is for, as the ledger holds it: the intent lens's.
+    pub goal: String,
+}
+
+/// A lens as the pipeline defines it.
+#[derive(Debug)]
+pub struct Planned<'a> {
+    pub lens: &'static str,
+    pub check: &'a Check,
+    pub runner: &'a Runner,
+}
+
+/// Each lens's check and runner, or why the pipeline cannot run a review:
+/// a check is missing, or a Claude runner names no model (`claude -p` is
+/// always given one).
+pub fn lenses(pipeline: &Pipeline) -> Result<Vec<Planned<'_>>, String> {
+    LENSES
+        .iter()
+        .map(|&lens| {
+            let name = format!("review_{lens}");
+            let Some(check) = pipeline.checks.get(&name) else {
+                return Err(format!("pipeline {} has no check {name}", pipeline.id));
+            };
+            // The loader refuses a check whose runner is not there.
+            let runner = &pipeline.runners[&check.runner];
+            if runner.cli == Cli::Claude && runner.model.is_none() {
+                let runner = &check.runner;
+                return Err(format!("check {name}: runner {runner} names no model"));
+            }
+            Ok(Planned {
+                lens,
+                check,
+                runner,
+            })
+        })
+        .collect()
+}
+
+/// The facts every lens is given, and whether the diff was cut.
+pub fn change(facts: &Facts) -> (String, bool) {
+    let (base, head, diff) = (&facts.base, &facts.head, &facts.diff);
+    let mut text = format!(
+        "## The change\n\nYou are in a checkout of commit {head}; its merge base is {base}.\n\n\
+         Files changed (lines added, removed, path; - for a binary file):\n"
+    );
+    let count = |n: Option<u64>| n.map_or("-".into(), |n| n.to_string());
+    for f in &facts.files {
+        text += &format!("{}\t{}\t{}\n", count(f.added), count(f.removed), f.path);
+    }
+    // A newline is never inside a character, so the cut is not either.
+    let end = match diff.len() > DIFF_BYTES {
+        true => diff.as_bytes()[..DIFF_BYTES]
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |i| i + 1),
+        false => diff.len(),
+    };
+    text += "\n## The diff\n\n";
+    if end < diff.len() {
+        text += &format!(
+            "Only its first {end} of {} bytes are below; read the rest with `git diff {base} {head}`.\n\n",
+            diff.len()
+        );
+    }
+    text += &format!("```diff\n{}```\n", &diff[..end]);
+    (text, end < diff.len())
+}
+
+/// Lens `p`'s prompt: its check's prompt, the goal for the intent lens
+/// only, then `change`.
+pub fn prompt(p: &Planned<'_>, goal: &str, change: &str) -> String {
+    let mut prompt = format!("{}\n\n", p.check.text);
+    if p.lens == "intent" {
+        prompt += &format!("## What the change is for\n\n{goal}\n\n");
+    }
+    prompt + change
+}
+
+/// The answer every lens gives. Codex reads it strictly: every field
+/// required, `line` null when there is none.
+pub fn schema() -> Value {
+    let finding = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "title", "body", "path", "line"],
+        "properties": {
+            "severity": {"type": "string", "enum": SEVERITIES},
+            "title": {"type": "string"},
+            "body": {"type": "string"},
+            "path": {"type": "string"},
+            "line": {"type": ["integer", "null"]},
+        },
+    });
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["findings"],
+        "properties": {"findings": {"type": "array", "items": finding}},
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Said {
+    findings: Vec<Item>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Item {
+    severity: String,
+    title: String,
+    body: String,
+    path: String,
+    line: Option<u64>,
+}
+
+/// A lens's answer as findings, or why it is none: anything but the
+/// schema's shape and words. Each is keyed `<lens>-<12 hex of its path and
+/// title>`, so the same finding has the same key on every run; a repeat
+/// in one answer takes `-2`, `-3`.
+pub fn findings(lens: &str, output: Value) -> Result<Vec<Finding>, String> {
+    let said: Said =
+        serde_json::from_value(output).map_err(|e| format!("not a lens answer: {e}"))?;
+    let mut keys = BTreeSet::new();
+    let mut out = Vec::new();
+    for f in said.findings {
+        if !SEVERITIES.contains(&f.severity.as_str()) {
+            return Err(format!("unknown severity {:?}", f.severity));
+        }
+        let hash = format!("{:x}", Sha256::digest(format!("{}\0{}", f.path, f.title)));
+        let first = format!("{lens}-{}", &hash[..12]);
+        let (mut key, mut n) = (first.clone(), 1);
+        while !keys.insert(key.clone()) {
+            n += 1;
+            key = format!("{first}-{n}");
+        }
+        out.push(Finding {
+            finding_key: key,
+            severity: f.severity,
+            title: f.title,
+            body: f.body,
+            path: Some(f.path),
+            rest: Map::from_iter([("lens".into(), json!(lens)), ("line".into(), json!(f.line))]),
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PIPELINE: &str = r#"
+schema = 2
+id = "t"
+limits = { budget = 150, timeout = 20 }
+runners.lens = { cli = "claude", model = "opus", budget_limit = "budget", timeout_limit = "timeout" }
+runners.second = { cli = "codex", budget_limit = "budget", timeout_limit = "timeout" }
+checks.review_correctness = { runner = "lens", prompt = "p.md" }
+checks.review_design_tests = { runner = "lens", prompt = "p.md" }
+checks.review_intent = { runner = "lens", prompt = "intent.md" }
+checks.review_codex = { runner = "second", prompt = "p.md" }
+gate = [{ id = "a", fn = "eq", args = { field = "verdict.decision", value = "yes" } }]
+transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["a"] }]
+"#;
+
+    fn pipeline(src: &str) -> Pipeline {
+        Pipeline::load_with_prompts(src, &[("p.md", "P"), ("intent.md", "I")]).unwrap()
+    }
+
+    fn facts(diff: String) -> Facts {
+        let file = |path: &str, lines: Option<u64>| ChangedFile {
+            path: path.into(),
+            area: None,
+            added: lines,
+            removed: lines.map(|n| n - 1),
+            untracked: false,
+        };
+        Facts {
+            base: "b".repeat(40),
+            head: "c".repeat(40),
+            files: vec![file("src/a.rs", Some(3)), file("logo.png", None)],
+            diff,
+            goal: "GOAL".into(),
+        }
+    }
+
+    #[test]
+    fn a_review_needs_every_lens_and_a_claude_model() {
+        let p = pipeline(PIPELINE);
+        let planned = lenses(&p).unwrap();
+        let named: Vec<_> = planned
+            .iter()
+            .map(|l| (l.lens, l.check.prompt.as_str(), l.runner.cli))
+            .collect();
+        let claude = |lens, prompt| (lens, prompt, Cli::Claude);
+        assert_eq!(
+            named,
+            [
+                claude("correctness", "p.md"),
+                claude("design_tests", "p.md"),
+                claude("intent", "intent.md"),
+                ("codex", "p.md", Cli::Codex),
+            ]
+        );
+        let without = pipeline(&PIPELINE.replace("review_intent", "review_goal"));
+        let e = lenses(&without).unwrap_err();
+        assert_eq!(e, "pipeline t has no check review_intent");
+        let no_model = pipeline(&PIPELINE.replace(r#"model = "opus", "#, ""));
+        let e = lenses(&no_model).unwrap_err();
+        assert_eq!(e, "check review_correctness: runner lens names no model");
+    }
+
+    /// Every lens gets the same facts after its own prompt; only the
+    /// intent lens gets the goal.
+    #[test]
+    fn only_the_intent_lens_is_told_the_goal() {
+        let facts = facts("+a\n".into());
+        let (change, cut) = change(&facts);
+        let (b, c) = (&facts.base, &facts.head);
+        let want = format!(
+            "## The change\n\nYou are in a checkout of commit {c}; its merge base is {b}.\n\n\
+             Files changed (lines added, removed, path; - for a binary file):\n\
+             3\t2\tsrc/a.rs\n-\t-\tlogo.png\n\n## The diff\n\n```diff\n+a\n```\n"
+        );
+        assert_eq!((&*change, cut), (&*want, false));
+        let p = pipeline(PIPELINE);
+        for l in lenses(&p).unwrap() {
+            let intent = "I\n\n## What the change is for\n\nGOAL\n\n";
+            let own = if l.lens == "intent" { intent } else { "P\n\n" };
+            assert_eq!(prompt(&l, &facts.goal, &change), own.to_string() + &change);
+        }
+    }
+
+    /// Past the cap the diff is cut after a whole line, never inside a
+    /// character, and the prompt says where the rest is.
+    #[test]
+    fn a_long_diff_is_cut_at_a_line() {
+        let diff = format!("x\n{}", "+é\n".repeat(40_000));
+        let (text, cut) = change(&facts(diff));
+        assert!(cut);
+        let (b, c) = ("b".repeat(40), "c".repeat(40));
+        let said = format!(
+            "Only its first 131070 of 160002 bytes are below; read the rest with `git diff {b} {c}`.\n\n```diff\nx\n+é\n"
+        );
+        assert!(text.contains(&said), "{}", &text[..400]);
+        assert!(text.ends_with("+é\n```\n") && text.len() < DIFF_BYTES + 500);
+    }
+
+    fn item(severity: &str, title: &str) -> Value {
+        json!({"severity": severity, "title": title, "body": "b", "path": "src/a.rs", "line": 3})
+    }
+
+    /// Keys are the lens's and stable; a repeat gets its own.
+    #[test]
+    fn findings_are_keyed_by_lens_path_and_title() {
+        let said = json!({"findings": [item("risk", "t"), item("nit", "t"), item("nit", "u")]});
+        let found = findings("intent", said).unwrap();
+        let keys: Vec<_> = found.iter().map(|f| f.finding_key.as_str()).collect();
+        let first = format!("{:x}", Sha256::digest("src/a.rs\0t"));
+        let first = format!("intent-{}", &first[..12]);
+        assert_eq!(keys[..2], [first.clone(), format!("{first}-2")]);
+        assert!(keys[2].starts_with("intent-") && keys[2] != first);
+        assert_eq!(
+            (&found[0].rest["line"], &found[0].rest["lens"]),
+            (&json!(3), &json!("intent"))
+        );
+        assert_eq!(found[2].path.as_deref(), Some("src/a.rs"));
+    }
+
+    /// Nothing outside the schema is coerced into an answer.
+    #[test]
+    fn an_answer_outside_the_schema_is_none() {
+        let refused = |said: Value| findings("correctness", said).unwrap_err();
+        let said = json!({"findings": [item("critical", "t")]});
+        assert_eq!(refused(said), r#"unknown severity "critical""#);
+        let mut extra = item("risk", "t");
+        extra["confidence"] = json!(0.9);
+        assert!(refused(json!({"findings": [extra]})).contains("unknown field"));
+        assert!(refused(json!({"findings": "none"})).starts_with("not a lens answer"));
+        assert!(refused(json!("Looks good to me.")).starts_with("not a lens answer"));
+    }
+}
