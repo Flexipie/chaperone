@@ -623,6 +623,10 @@ pub enum CheckCmd {
 pub enum RunKind {
     /// Files and lines the commit changes against the merge base
     Diff,
+    /// The base branch profile's `[tests]` commands, in a fresh checkout of
+    /// the commit the harness makes and removes each run; the checkout
+    /// must stay at the commit and clean
+    Tests,
 }
 
 /// Daisy's review jobs, as recorded in the ledger. The worker stays in

@@ -1,5 +1,5 @@
 //! The scripted agent itself, started as a test starts it, through
-//! `child::run_input`.
+//! `child::run_input`; and how a child in its own group ends.
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -124,4 +124,32 @@ fn a_pipe_held_past_the_deadline_times_out() {
     let _ = Command::new("/bin/kill")
         .arg(pid(&dir).to_string())
         .status();
+}
+
+/// In a group of its own, a child that exits but leaves a process holding
+/// its stdout is done at once with its output, and the process is killed.
+#[test]
+fn an_exited_child_takes_its_group_with_it() {
+    let (dir, mut cmd) = sh(r#"sleep 47 & echo $! > "$0"; echo hi"#);
+    let start = Instant::now();
+    let done = child::run_input(&mut cmd, None, start + Duration::from_secs(20), 1024);
+    let done = done.ok().unwrap();
+    assert_eq!((done.status.code(), &*done.out), (Some(0), &b"hi\n"[..]));
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "waited for the pipe"
+    );
+    assert!(!alive(pid(&dir)), "the sleeper outlived the run");
+}
+
+/// `run_tail` keeps the end of both streams, however much was printed.
+#[test]
+fn run_tail_keeps_the_end_of_both_streams() {
+    let (_dir, mut cmd) = sh("seq 1 100000; seq 1 100000 >&2");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let done = child::run_tail(&mut cmd, deadline, 7).ok().unwrap();
+    assert_eq!(
+        (&*done.out, &*done.err, done.cut),
+        (&b"100000\n"[..], &b"100000\n"[..], true)
+    );
 }

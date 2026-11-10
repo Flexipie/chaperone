@@ -1,12 +1,15 @@
 //! What `chaperone impact` runs: the tree and its blob ids from git, and
 //! the entry rules from the repo's pipeline profile, then [`impact`].
-//! Reads the worktree and git, never the ledger.
+//! Reads the worktree and git, never the ledger. The profile's `[tests]`
+//! for `check run tests` is read here too.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chaperone_core::git::{BASES, Failure, git, git_bin};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::{Entries, File, Impact, Rules, cache_file, impact};
 
@@ -17,8 +20,9 @@ const DEADLINE: Duration = Duration::from_secs(5);
 const OUT_BYTES: usize = 64 * 1024 * 1024;
 /// Dependent files listed; the rest are counted.
 const LIMIT: usize = 500;
-/// The repo's own profile: TOML, read from its base branch and never from
-/// the worktree, so a lane cannot change the rules it is checked by.
+/// The repo's own profile: TOML, read from its base branch's remote ref and
+/// never from the worktree, so an edit in a lane's change is not used. The
+/// ref lives in the lane's clone, so this is a speed bump, not a guarantee.
 pub const REPO_PROFILE: &str = ".chaperone/profile.toml";
 /// A profile past this is refused, not cut.
 const PROFILE_BYTES: usize = 1024 * 1024;
@@ -264,23 +268,112 @@ pub fn rules_in(
     origin: Option<&str>,
 ) -> Result<Rules, Error> {
     if profile.is_none()
-        && let Some((at, text)) = base_profile(bin, dir, deadline)?
+        && let Some(found) = base_profile(bin, dir, deadline)?
     {
-        return Rules::from_toml(&text).map_err(|e| Error::Invalid(format!("profile {at}: {e}")));
+        let at = found.at();
+        return Rules::from_toml(&found.text)
+            .map_err(|e| Error::Invalid(format!("profile {at}: {e}")));
     }
     rules(profile, origin)
 }
 
-/// [`REPO_PROFILE`] as the first of [`BASES`] this clone has holds it, and
-/// where that is; None when there is no base or it has no such file. The
+/// The profile's `[tests]`: what `chaperone check run tests` runs.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tests {
+    /// Run in order, each an argv: no shell reads it.
+    pub commands: Vec<Vec<String>>,
+    /// The variable (`CARGO_TARGET_DIR`) the harness points at the lane's
+    /// own build directory outside the checkout, kept between runs.
+    pub target_dir: Option<String>,
+    /// For the checkout and every command together, 1 to 86400 (default
+    /// 1800).
+    pub timeout_secs: Option<u64>,
+}
+
+/// The `[tests]` of a base branch's profile, the sha256 of the profile's
+/// text, and the base and the commit it pointed at, so a reader can compare
+/// them with the real remote: the lane's own clone holds that ref.
+#[derive(Debug)]
+pub struct BaseTests {
+    pub tests: Tests,
+    pub hash: String,
+    pub base: &'static str,
+    pub commit: String,
+}
+
+/// The `[tests]` of the base branch's [`REPO_PROFILE`] for the repo `dir`
+/// is in, never the worktree's copy. No profile, no `[tests]`, no command,
+/// a timeout out of range or a `target_dir` that is no plain variable name
+/// (or is `PATH` or `HOME`) refuses, so "not run" never reads as a pass.
+pub fn tests_in(bin: &Path, dir: &Path, deadline: Instant) -> Result<BaseTests, Error> {
+    #[derive(Deserialize)]
+    struct Profile {
+        tests: Option<Tests>,
+    }
+    let Some(found) = base_profile(bin, dir, deadline)? else {
+        return Err(Error::Invalid(format!(
+            "no {REPO_PROFILE} on the base branch ({})",
+            BASES.join(", ")
+        )));
+    };
+    let at = found.at();
+    let bad = |why: &str| Err(Error::Invalid(format!("profile {at}: {why}")));
+    let profile: Profile = match toml::from_str(&found.text) {
+        Ok(p) => p,
+        Err(e) => return bad(e.message()),
+    };
+    let Some(tests) = profile
+        .tests
+        .filter(|t| !t.commands.is_empty() && t.commands.iter().all(|c| !c.is_empty()))
+    else {
+        return bad("no [tests] commands (each a non-empty argv)");
+    };
+    if tests
+        .timeout_secs
+        .is_some_and(|t| !(1..=86_400).contains(&t))
+    {
+        return bad("[tests] timeout_secs must be 1 to 86400");
+    }
+    let name = |v: &str| {
+        v.starts_with(|c: char| c.is_ascii_uppercase() || c == '_')
+            && v.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            && !matches!(v, "PATH" | "HOME")
+    };
+    if tests.target_dir.as_deref().is_some_and(|v| !name(v)) {
+        return bad(
+            "[tests] target_dir must be a variable name, [A-Z_][A-Z0-9_]*, not PATH or HOME",
+        );
+    }
+    Ok(BaseTests {
+        tests,
+        hash: format!("{:x}", Sha256::digest(&found.text)),
+        base: found.base,
+        commit: found.commit,
+    })
+}
+
+/// A profile as a base branch holds it: the base, the commit it pointed
+/// at and the text.
+struct BaseProfile {
+    base: &'static str,
+    commit: String,
+    text: String,
+}
+
+impl BaseProfile {
+    fn at(&self) -> String {
+        format!("{}:{REPO_PROFILE}", self.base)
+    }
+}
+
+/// [`REPO_PROFILE`] at the commit the first of [`BASES`] this clone has
+/// points at; None when there is no base or it has no such file. The
 /// bases are read as remote refs by their full names, so a local branch
 /// called `origin/main` is not one, and what the worktree or the index
 /// holds at the path changes nothing.
-fn base_profile(
-    bin: &Path,
-    dir: &Path,
-    deadline: Instant,
-) -> Result<Option<(String, String)>, Error> {
+fn base_profile(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<BaseProfile>, Error> {
     let call = |args: &[&str]| match git(bin, dir, args, deadline, PROFILE_BYTES) {
         Ok((out, false)) => Ok(String::from_utf8_lossy(&out).into_owned()),
         Ok((_, true)) => Err(Error::Invalid(format!(
@@ -294,19 +387,21 @@ fn base_profile(
         ))),
         Err(Failure::Other(e)) => Err(Error::Invalid(e)),
     };
-    let refs = BASES.map(|base| format!("refs/remotes/{base}"));
-    let mut args = vec!["for-each-ref", "--format=%(refname)"];
-    args.extend(refs.iter().map(String::as_str));
+    let refs = BASES.map(|base| format!("refs/remotes/{base} "));
+    let mut args = vec!["for-each-ref", "--format=%(refname) %(objectname)"];
+    args.extend(refs.iter().map(|r| r.trim_end()));
     let have = call(&args)?;
-    let Some((base, full)) = BASES
-        .iter()
-        .zip(&refs)
-        .find(|(_, full)| have.lines().any(|l| l == full.as_str()))
-    else {
+    // The commit is read once and used below, so the profile is the one at
+    // the commit recorded even if the ref moves meanwhile.
+    let found = BASES.iter().zip(&refs).find_map(|(base, full)| {
+        let commit = have.lines().find_map(|l| l.strip_prefix(full.as_str()))?;
+        Some((*base, commit.to_string()))
+    });
+    let Some((base, commit)) = found else {
         return Ok(None);
     };
     // `<mode> <type> <id>\t<path>\0`, or nothing when the base has none.
-    let tree = call(&["ls-tree", "-z", full, "--", REPO_PROFILE])?;
+    let tree = call(&["ls-tree", "-z", &commit, "--", REPO_PROFILE])?;
     let mut cols = tree.split([' ', '\t']);
     let (mode, kind, id) = (cols.next(), cols.next(), cols.next());
     let Some(id) = id else {
@@ -316,7 +411,8 @@ fn base_profile(
     if kind != Some("blob") || mode == Some("120000") {
         return Err(Error::Invalid(format!("profile {at}: not a file")));
     }
-    Ok(Some((at, call(&["cat-file", "blob", id])?)))
+    let text = call(&["cat-file", "blob", id])?;
+    Ok(Some(BaseProfile { base, commit, text }))
 }
 
 /// The pipeline profile of repo `slug` (`owner/repo`), where [`rules`]

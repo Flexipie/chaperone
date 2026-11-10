@@ -74,6 +74,16 @@ pub enum CliError {
     Drift(Vec<Value>),
 }
 
+/// The code graph's: the caller's input, or this side's failure.
+impl From<chaperone_graph::Error> for CliError {
+    fn from(e: chaperone_graph::Error) -> Self {
+        match e {
+            chaperone_graph::Error::Invalid(why) => Refusal::InvalidInput(why).into(),
+            chaperone_graph::Error::Internal(why) => CliError::Internal(why),
+        }
+    }
+}
+
 impl From<Refusal> for CliError {
     fn from(r: Refusal) -> Self {
         CliError::Refused(r)

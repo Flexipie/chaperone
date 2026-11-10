@@ -1,9 +1,13 @@
 //! `chaperone check`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction. `check run` reads git in the lane's
-//! worktree before its write, under the lane's run lock.
+//! worktree, and runs tests in a checkout of its commit, before its write,
+//! under the lane's run lock.
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::fs::{DirBuilder, File};
+use std::os::unix::fs::DirBuilderExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -12,8 +16,9 @@ use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
 use chaperone_core::git;
 use chaperone_core::ledger::{self, Actor, Evidence, Ledger, LedgerError, Refusal};
+use chaperone_core::runner::session_var;
 use chaperone_core::usage::Roots;
-use chaperone_graph::glob;
+use chaperone_graph::{glob, tests_in};
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
@@ -30,8 +35,12 @@ const DAISY_TIMEOUT: Duration = Duration::from_secs(30);
 /// code change). No profile says what code is yet, so every other changed
 /// file counts. The profile should own this list later.
 const NOT_CODE: [&str; 3] = ["docs/**", "**/*.md", "**/*.lock"];
-/// Every git call of one `check run diff`, together.
+/// The git calls that read the lane's commit, its tree and its numstat.
 const RUN_TIMEOUT: Duration = Duration::from_secs(10);
+/// `check run tests`, when the profile names no `timeout_secs`.
+const TESTS_TIMEOUT: Duration = Duration::from_secs(1800);
+/// Of each test command's stdout and stderr, the end kept as evidence.
+const TAIL_BYTES: usize = 16 * 1024;
 /// The numstat's output; a cut list would count too little, so past it the
 /// run fails.
 const DIFF_BYTES: usize = 16 * 1024 * 1024;
@@ -64,31 +73,85 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             work,
             actor,
         } => run_diff(ledger, db, work, &actor.resolve()),
+        CheckCmd::Run {
+            kind: RunKind::Tests,
+            work,
+            actor,
+        } => run_tests(ledger, db, work, &actor.resolve()),
     }
 }
 
-/// `check run diff`: the lane's commit (as a ready handoff reads it)
-/// against the merge base, committed files only. The per-file list goes to
-/// the evidence store, its totals in the payload.
-fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
-    let _lock = ledger::lock_lane(db, work)??;
+/// A `check run` under way: the lane's run lock, held until it drops, the
+/// lane's worktree and claimed base, and the input with the commit the lane
+/// is on (as a ready handoff reads it), its tree and this executable.
+struct Run {
+    _lock: File,
+    wt: PathBuf,
+    base_sha: Option<String>,
+    input: RunInput,
+}
+
+fn start_run(ledger: &Ledger, db: &Path, work: i64, check: &str) -> Result<Run, CliError> {
+    let lock = ledger::lock_lane(db, work)??;
     let item = ledger.work_get(work, &ledger.now()?)??;
-    let refuse = |why: String| CliError::from(Refusal::InvalidInput(why));
     let wt = item.worktree_path.as_deref();
     let head = observed_head(wt, item.branch.as_deref())?.ok_or_else(|| {
         refuse(format!(
             "work item {work} has no worktree to measure (none recorded, not absolute, or gone)"
         ))
     })?;
-    let wt = Path::new(wt.unwrap_or_default());
-    let (bin, deadline) = (Path::new("git"), Instant::now() + RUN_TIMEOUT);
-    let base = item.base_sha.as_deref();
-    let (base, files) = git::commit_files(bin, wt, base, &head, deadline, DIFF_BYTES)
-        .map_err(|e| refuse(format!("could not diff {head} in {}: {e}", wt.display())))?;
+    let wt = PathBuf::from(wt.unwrap_or_default());
     let tree = format!("{head}^{{tree}}");
-    let tree = git::git(bin, wt, &["rev-parse", "--verify", &tree], deadline, 4096)
-        .map(|(out, _)| String::from_utf8_lossy(&out).trim().to_string())
-        .map_err(|_| refuse(format!("could not read {tree} in {}", wt.display())))?;
+    let args = ["rev-parse", "--verify", &tree];
+    let tree = git::git(
+        Path::new("git"),
+        &wt,
+        &args,
+        Instant::now() + RUN_TIMEOUT,
+        4096,
+    )
+    .map(|(out, _)| String::from_utf8_lossy(&out).trim().to_string())
+    .map_err(|_| refuse(format!("could not read {tree} in {}", wt.display())))?;
+    let bin = std::env::current_exe().map_err(LedgerError::from)?;
+    let input = RunInput {
+        work,
+        check: check.into(),
+        head,
+        tree,
+        bin: bin.display().to_string(),
+        version: match env!("CHAPERONE_GIT_SHA") {
+            "" => env!("CARGO_PKG_VERSION").into(),
+            sha => format!("{}+{sha}", env!("CARGO_PKG_VERSION")),
+        },
+        ..RunInput::default()
+    };
+    Ok(Run {
+        _lock: lock,
+        wt,
+        base_sha: item.base_sha,
+        input,
+    })
+}
+
+fn refuse(why: String) -> CliError {
+    Refusal::InvalidInput(why).into()
+}
+
+/// `check run diff`: the lane's commit (as a ready handoff reads it)
+/// against the merge base, committed files only. The per-file list goes to
+/// the evidence store, its totals in the payload.
+fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
+    let Run {
+        _lock,
+        wt,
+        base_sha,
+        mut input,
+    } = start_run(ledger, db, work, "diff")?;
+    let (bin, deadline) = (Path::new("git"), Instant::now() + RUN_TIMEOUT);
+    let head = &input.head;
+    let (base, files) =
+        git::commit_files(bin, &wt, base_sha.as_deref(), head, deadline, DIFF_BYTES)
+            .map_err(|e| refuse(format!("could not diff {head} in {}: {e}", wt.display())))?;
     let code: Vec<_> = files
         .iter()
         .filter(|f| !NOT_CODE.iter().any(|g| glob(g, &f.path)))
@@ -99,7 +162,7 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         .iter()
         .map(|f| f.added.unwrap_or(0) + f.removed.unwrap_or(0))
         .sum();
-    let mut fields = Map::from_iter([
+    input.fields = Map::from_iter([
         ("base".into(), json!(base)),
         ("files".into(), json!(files.len())),
         ("added".into(), json!(added)),
@@ -120,22 +183,249 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         .map(|f| json!({"path": f.path, "added": f.added, "removed": f.removed}).to_string() + "\n")
         .collect();
     let stored = Evidence::beside(db).put(&list).map_err(LedgerError::from)?;
-    fields.insert("files_truncated".into(), json!(stored.truncated));
-    let bin = std::env::current_exe().map_err(LedgerError::from)?;
-    let input = RunInput {
-        work,
-        check: "diff".into(),
-        head,
-        tree,
-        fields,
-        evidence_ref: Some(stored.hash),
-        bin: bin.display().to_string(),
-        version: match env!("CHAPERONE_GIT_SHA") {
-            "" => env!("CARGO_PKG_VERSION").into(),
-            sha => format!("{}+{sha}", env!("CARGO_PKG_VERSION")),
-        },
-    };
+    let truncated = json!(stored.truncated);
+    input.fields.insert("files_truncated".into(), truncated);
+    input.evidence_ref = Some(stored.hash);
     one(ledger.check_run(actor, &input)??)
+}
+
+/// `check run tests`: the `[tests]` commands of the base branch's profile,
+/// in order until one fails, in a fresh checkout of the lane's commit that
+/// the harness makes and removes, then the checkout must still be at that
+/// commit with no change or new untracked file. A pass on the same commit
+/// and profile replays without running anything. A run that times out
+/// failed: the tests did not pass on that tree. No profile, a checkout that
+/// cannot be made or a command that cannot start writes nothing.
+fn run_tests(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
+    let Run {
+        _lock,
+        wt,
+        mut input,
+        ..
+    } = start_run(ledger, db, work, "tests")?;
+    let base = tests_in(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    input.profile = Some(base.hash.clone());
+    let key = ledger.run_key(&input)?;
+    if let Some(stored) = ledger.run_replay(&key)? {
+        return one(stored);
+    }
+    let tests = &base.tests;
+    let timeout = tests
+        .timeout_secs
+        .map_or(TESTS_TIMEOUT, Duration::from_secs);
+    let deadline = Instant::now() + timeout;
+    // Beside the ledger, one per lane: the lane's lock keeps it to one run.
+    let db = std::path::absolute(db).map_err(LedgerError::from)?;
+    let home = db.parent().unwrap_or(Path::new("/"));
+    let dir = home.join("checkouts").join(format!("lane-{work}"));
+    let checkout = Checkout::fresh(&wt, dir, &input.head, deadline)?;
+    let target = tests.target_dir.as_ref().map(|var| {
+        let lane_target = home.join("targets").join(format!("lane-{work}"));
+        (OsString::from(var), lane_target.into_os_string())
+    });
+    let ran = run_commands(&tests.commands, &checkout.dir, target, deadline)?;
+    let mut after = Map::from_iter(
+        ["dirty", "head_moved", "ignored_files", "status_cut"].map(|k| (k.into(), Value::Null)),
+    );
+    let mut text = String::new();
+    let mut passed = ran.passed;
+    if passed {
+        let found = tree_after(&checkout.dir, &input.head, deadline)?;
+        passed = !(found.dirty || found.head_moved || found.cut);
+        after.extend([
+            ("dirty".into(), json!(found.dirty)),
+            ("head_moved".into(), json!(found.head_moved)),
+            ("ignored_files".into(), json!(found.ignored)),
+            ("status_cut".into(), json!(found.cut)),
+        ]);
+        // First: the store keeps a long text's end, the commands' output.
+        text = found.listing;
+    }
+    drop(checkout);
+    text += &ran.text;
+    let stored = Evidence::beside(&db)
+        .put(&text)
+        .map_err(LedgerError::from)?;
+    input.evidence_ref = Some(stored.hash);
+    input.fields = Map::from_iter([
+        ("result".into(), json!(if passed { "pass" } else { "fail" })),
+        ("commands".into(), json!(ran.commands)),
+        ("timed_out".into(), json!(ran.timed_out)),
+        (
+            "output_truncated".into(),
+            json!(ran.cut || stored.truncated),
+        ),
+        (
+            "profile_base".into(),
+            json!({"ref": base.base, "commit": base.commit}),
+        ),
+    ]);
+    input.fields.extend(after);
+    one(ledger.check_run(actor, &input)??)
+}
+
+/// A fresh repository the harness owns at `dir` with the lane's commit
+/// checked out, removed when it is dropped, however the run ends. Nothing
+/// is kept between runs: test commands can write a repository's `.git`
+/// (config, sparse checkout, excludes, index flags), so a kept one could
+/// make a later commit's run read another tree. The lane's repository is
+/// only read: `head` is fetched from it by sha, with no remote and no
+/// other ref, so its hooks, config, filters, excludes and replace refs
+/// never reach the checkout, and this repository runs no hook (not even
+/// one a user's `init.templateDir` copied in).
+struct Checkout {
+    dir: PathBuf,
+}
+
+impl Checkout {
+    fn fresh(
+        lane: &Path,
+        dir: PathBuf,
+        head: &str,
+        deadline: Instant,
+    ) -> Result<Checkout, CliError> {
+        // What a killed run left, first; one that cannot go refuses.
+        match std::fs::remove_dir_all(&dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(refuse(format!("could not remove {}: {e}", dir.display())));
+            }
+            _ => {}
+        }
+        let mut owner_only = DirBuilder::new();
+        owner_only.recursive(true).mode(0o700);
+        owner_only.create(&dir).map_err(LedgerError::from)?;
+        let checkout = Checkout { dir };
+        let lane = lane.to_string_lossy();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "core.hooksPath", "/dev/null"],
+            &["fetch", "-q", "--no-tags", &lane, head],
+            &["checkout", "-q", "--force", "--detach", head],
+        ] {
+            harness_git(&checkout.dir, args, deadline)?;
+        }
+        Ok(checkout)
+    }
+}
+
+impl Drop for Checkout {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// The checkout after commands that all passed: whether `HEAD` is still
+/// the commit under test, and `git status` with untracked and ignored
+/// directories as one entry each, so its length does not grow with what a
+/// build wrote. It targets accidental writes; an index flag such as
+/// `assume-unchanged` hides a change from it.
+struct After {
+    head_moved: bool,
+    dirty: bool,
+    ignored: usize,
+    /// The listing went past its cap: it is not read, and the run fails.
+    cut: bool,
+    listing: String,
+}
+
+fn tree_after(dir: &Path, head: &str, deadline: Instant) -> Result<After, CliError> {
+    let (now, _) = harness_git(dir, &["rev-parse", "--verify", "HEAD"], deadline)?;
+    let args = [
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+        "--ignored",
+    ];
+    let (status, cut) = harness_git(dir, &args, deadline)?;
+    let ignored = status.lines().filter(|l| l.starts_with("!! ")).count();
+    Ok(After {
+        head_moved: now.trim() != head,
+        dirty: !cut && status.lines().count() > ignored,
+        ignored,
+        cut,
+        listing: format!("$ git {}\n{status}", args.join(" ")),
+    })
+}
+
+/// One git call in the harness's checkout: its output and whether it was
+/// cut at 1 MiB. A failure refuses with git's own line.
+fn harness_git(dir: &Path, args: &[&str], deadline: Instant) -> Result<(String, bool), CliError> {
+    match git::git(Path::new("git"), dir, args, deadline, 1024 * 1024) {
+        Ok((out, cut)) => Ok((String::from_utf8_lossy(&out).into_owned(), cut)),
+        Err(git::Failure::TimedOut) => Err(refuse(format!("git {}: timed out", args[0]))),
+        Err(git::Failure::BadRevision) => Err(refuse(format!("git {}: no such commit", args[0]))),
+        Err(git::Failure::Other(e)) => Err(refuse(e)),
+    }
+}
+
+/// What the test commands did: a row for each that ran, the end of each
+/// one's output, and whether all passed and whether the time ran out.
+struct Ran {
+    commands: Vec<Value>,
+    text: String,
+    passed: bool,
+    timed_out: bool,
+    /// Some command's output lost its start.
+    cut: bool,
+}
+
+/// Each argv in order in `dir`, until one fails, with stdin empty and the
+/// environment less the session's variables and those that point git at
+/// another repository, plus `target` (the variable and the lane's build
+/// directory). Only the end of each stream is kept while it runs.
+fn run_commands(
+    commands: &[Vec<String>],
+    dir: &Path,
+    target: Option<(OsString, OsString)>,
+    deadline: Instant,
+) -> Result<Ran, CliError> {
+    let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
+        .filter(|(k, _)| !session_var(k) && !git::repo_var(k))
+        .collect();
+    env.extend(target);
+    let mut ran = Ran {
+        commands: Vec::new(),
+        text: String::new(),
+        passed: true,
+        timed_out: false,
+        cut: false,
+    };
+    for argv in commands {
+        let started = Instant::now();
+        let mut cmd = Command::new(&argv[0]);
+        cmd.args(&argv[1..])
+            .current_dir(dir)
+            .env_clear()
+            .envs(env.iter().cloned());
+        ran.text += &format!("$ {argv:?}\n");
+        // A command killed by a signal has no exit code: a failure.
+        let exit = match child::run_tail(&mut cmd, deadline, TAIL_BYTES) {
+            Ok(done) => {
+                ran.text += &String::from_utf8_lossy(&done.err);
+                ran.text += &String::from_utf8_lossy(&done.out);
+                ran.cut |= done.cut;
+                done.status.code()
+            }
+            Err(child::Failed::TimedOut) => {
+                ran.timed_out = true;
+                None
+            }
+            Err(child::Failed::Spawn(e)) => {
+                return Err(refuse(format!("could not start {argv:?}: {e}")));
+            }
+            Err(child::Failed::Wait(e)) => {
+                return Err(CliError::Internal(format!("{argv:?}: {e}")));
+            }
+        };
+        let ms = started.elapsed().as_millis() as u64;
+        ran.commands
+            .push(json!({"argv": argv, "exit": exit, "ms": ms}));
+        if exit != Some(0) {
+            ran.passed = false;
+            break;
+        }
+    }
+    Ok(ran)
 }
 
 pub fn reviews(ledger: &Ledger, cmd: ReviewsCmd) -> Result<Outcome, CliError> {

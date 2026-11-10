@@ -17,7 +17,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 pub use entry::{Rules, Unmatched, glob};
-pub use worktree::{Error, REPO_PROFILE, impact_in, profile_file, rules, rules_in};
+pub use worktree::{
+    BaseTests, Error, REPO_PROFILE, Tests, impact_in, profile_file, rules, rules_in, tests_in,
+};
 
 /// Files past this size are not parsed (generated code): their references
 /// are unknown, so the answer is a lower bound. A parse holds about 45

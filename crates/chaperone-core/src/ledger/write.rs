@@ -618,11 +618,19 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 message: format!("{field} is {current}, not {}", change.from),
             });
         }
-        // The harness measured the lane in this folder (`check run`), so a
-        // later run must read the same one, not one the lane points it at.
-        // A trailing slash names the same folder.
-        let folder = |v: &Value| v.as_str().map(|p| p.trim_end_matches('/').to_string());
-        if field == "worktree_path"
+        // The harness measured the lane in this folder on this branch
+        // (`check run`), so a later run must read the same ones, not ones
+        // the lane points it at. One not set yet may be set once. A
+        // trailing slash names the same folder; a branch is compared as it
+        // is (`refs/heads/feat/` is no branch).
+        let trim = field == "worktree_path";
+        let folder = |v: &Value| {
+            v.as_str()
+                .map(|p| if trim { p.trim_end_matches('/') } else { p })
+                .map(String::from)
+        };
+        if matches!(field.as_str(), "worktree_path" | "branch")
+            && !change.from.is_null()
             && folder(&change.to) != folder(&change.from)
             && exists(
                 tx,
@@ -632,7 +640,7 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             )?
         {
             refuse!(invalid(&format!(
-                "worktree_path is frozen: lane {lane_id} has a harness check, so its worktree cannot move"
+                "{field} is frozen: lane {lane_id} has a harness check, so it cannot change"
             )));
         }
         if field == "spec_id"

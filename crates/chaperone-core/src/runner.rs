@@ -12,7 +12,7 @@
 //! A session runs in a process group of its own ([`child::run_input`]), so
 //! a Ctrl-C on chaperone does not reach it: it runs on to its own end.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
@@ -176,6 +176,14 @@ fn scratch() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// A variable of the starting session, which a child the harness starts
+/// must not inherit. Lossy, so a name that is not UTF-8 is still matched.
+pub fn session_var(name: &OsStr) -> bool {
+    let name = name.to_string_lossy();
+    SESSION_VARS.contains(&&*name)
+        || (SESSION_PREFIXES.iter().any(|p| name.starts_with(p)) && !SESSION_KEEP.contains(&&*name))
+}
+
 /// The end of a failed run's stderr.
 fn tail(err: &[u8]) -> String {
     let err = String::from_utf8_lossy(err);
@@ -191,14 +199,10 @@ impl Agent {
         env: impl IntoIterator<Item = (OsString, OsString)>,
         deadline: Instant,
     ) -> Result<Agent, RunError> {
-        // Lossy, so a name that is not UTF-8 is still matched.
-        let session = |name: &OsString| {
-            let name = name.to_string_lossy();
-            SESSION_VARS.contains(&&*name)
-                || (SESSION_PREFIXES.iter().any(|p| name.starts_with(p))
-                    && !SESSION_KEEP.contains(&&*name))
-        };
-        let env = env.into_iter().filter(|(name, _)| !session(name)).collect();
+        let env = env
+            .into_iter()
+            .filter(|(name, _)| !session_var(name))
+            .collect();
         let mut agent = Agent {
             bin,
             version: String::new(),

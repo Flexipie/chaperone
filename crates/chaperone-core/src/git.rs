@@ -49,8 +49,19 @@ pub enum Failure {
     Other(String),
 }
 
-/// Variables that point git at a repository other than `-C`'s: the ones
-/// git sets for hooks and `rebase --exec`.
+/// A variable that points git at a repository other than `-C`'s, or
+/// passes it config that beats the repository's own (a caller's
+/// `GIT_CONFIG_COUNT` could turn a hook back on): none reaches a git call
+/// here or a test command the harness runs.
+pub fn repo_var(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    GIT_REPO_VARS.contains(&&*name)
+        || matches!(&*name, "GIT_CONFIG_PARAMETERS" | "GIT_CONFIG_COUNT")
+        || name.starts_with("GIT_CONFIG_KEY_")
+        || name.starts_with("GIT_CONFIG_VALUE_")
+}
+
+/// The ones git sets for hooks and `rebase --exec`.
 const GIT_REPO_VARS: [&str; 8] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -72,7 +83,7 @@ pub fn git(
     cap: usize,
 ) -> Result<(Vec<u8>, bool), Failure> {
     let mut cmd = Command::new(bin);
-    for v in GIT_REPO_VARS {
+    for (v, _) in std::env::vars_os().filter(|(v, _)| repo_var(v)) {
         cmd.env_remove(v);
     }
     cmd.arg("-C")
@@ -80,6 +91,8 @@ pub fn git(
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
+        // A replace ref would make a commit read as another's tree.
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         // Messages in English, so a missing revision is recognised.
         .env("LC_ALL", "C");
     let done = child::run(&mut cmd, deadline, cap).map_err(|e| match e {

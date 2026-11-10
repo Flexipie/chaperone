@@ -1828,31 +1828,39 @@ mod tests {
         assert_eq!(events(), before + 1);
     }
 
-    /// A claim moves an unchecked lane's worktree; once the harness has
-    /// checked the lane, a claim keeps the worktree but cannot move it.
+    /// A claim moves an unchecked lane's worktree and branch; once the
+    /// harness has checked the lane, a claim keeps them, may set a branch
+    /// the lane did not have, and changes neither once set.
     #[test]
-    fn worktree_freezes_after_a_harness_check() {
+    fn worktree_and_branch_freeze_after_a_harness_check() {
         let (_dir, ledger) = ledger();
-        let claim = |wt: &str| {
+        let claim = |wt: &str, branch: Option<&str>| {
             let input = ClaimInput {
                 worktree_path: Some(wt.into()),
+                branch: branch.map(String::from),
                 ..ClaimInput::default()
             };
             let item = ledger.work_claim(&pair("a", "s1"), 1, &input, Some(T0), false);
-            item.unwrap().map(|i| i.worktree_path)
+            item.unwrap().map(|i| (i.worktree_path, i.branch))
         };
+        let both = |wt: &str, branch: Option<&str>| Ok((Some(wt.into()), branch.map(String::from)));
         create(&ledger, None, None).unwrap();
-        assert_eq!(claim("/wt"), Ok(Some("/wt".into())));
+        assert_eq!(claim("/old", None), both("/old", None));
+        assert_eq!(claim("/wt", None), both("/wt", None));
         let run = crate::checks::RunInput {
             work: 1,
             check: "diff".into(),
             ..Default::default()
         };
         ledger.check_run(&pair("h", "s9"), &run).unwrap().unwrap();
-        assert_eq!(claim("/wt"), Ok(Some("/wt".into())));
-        assert_eq!(claim("/wt/"), Ok(Some("/wt/".into())));
-        let frozen =
-            "worktree_path is frozen: lane 1 has a harness check, so its worktree cannot move";
-        assert_eq!(claim("/x"), Err(Refusal::InvalidInput(frozen.into())));
+        assert_eq!(claim("/wt", Some("b")), both("/wt", Some("b")));
+        assert_eq!(claim("/wt/", Some("b")), both("/wt/", Some("b")));
+        let frozen = |f: &str| {
+            let why = format!("{f} is frozen: lane 1 has a harness check, so it cannot change");
+            Err(Refusal::InvalidInput(why))
+        };
+        assert_eq!(claim("/x", Some("b")), frozen("worktree_path"));
+        assert_eq!(claim("/wt", Some("c")), frozen("branch"));
+        assert_eq!(claim("/wt", Some("b/")), frozen("branch"));
     }
 }
