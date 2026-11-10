@@ -38,12 +38,14 @@ fn probe(dir: &Path, script: Option<Value>) -> Result<Agent, RunError> {
         "CHAPERONE_WORK",
         "CLAUDECODE",
         "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CODEX_THREAD_ID",
         "HERDR_PANE_ID",
     ];
     let lane = lane.map(OsString::from).into_iter();
     // A name that is not UTF-8 is still the lane's.
     let odd = OsString::from_vec(b"DAISY_\xff".to_vec());
-    let env = lane.chain([odd, "PATH".into(), "CLAUDE_CONFIG_DIR".into()]);
+    let keep = ["PATH", "CLAUDE_CONFIG_DIR", "CODEX_HOME"].map(OsString::from);
+    let env = lane.chain([odd]).chain(keep);
     Agent::probe(bin, env.map(|k| (k, "x".into())), soon())
 }
 
@@ -105,7 +107,7 @@ fn an_answer_is_read_from_a_fresh_session() {
         .map(|k| k.as_str().unwrap())
         .collect();
     env.sort();
-    assert_eq!(env, ["CLAUDE_CONFIG_DIR", "PATH"]);
+    assert_eq!(env, ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "PATH"]);
     let args = [
         "-p",
         "--output-format",
@@ -121,8 +123,9 @@ fn an_answer_is_read_from_a_fresh_session() {
         "--setting-sources",
         "user",
         "--settings",
-        r#"{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"strictAllowlist":true}}}"#,
+        r#"{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false,"network":{"strictAllowlist":true}}}"#,
         "--strict-mcp-config",
+        "--disable-slash-commands",
         "--no-session-persistence",
         "--max-budget-usd",
         "1.50",

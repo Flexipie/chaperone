@@ -1,9 +1,9 @@
 //! `runner::Agent::codex` against the scripted agent.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use chaperone_core::runner::{Agent, Ask, RunError};
+use chaperone_core::runner::{Agent, CodexAsk, RunError};
 use serde_json::{Value, json};
 
 /// The fake linked as `codex` in a new directory, with `runs` as its script.
@@ -21,15 +21,20 @@ fn soon() -> Instant {
     Instant::now() + Duration::from_secs(20)
 }
 
-fn ask<'a>(prompt: &'a str, schema: &'a Value, dir: &'a Path) -> Ask<'a> {
-    Ask {
+fn ask<'a>(prompt: &'a str, schema: &'a Value, dir: &'a Path) -> CodexAsk<'a> {
+    CodexAsk {
         prompt,
         schema,
-        model: "gpt-5.5",
-        tools: &[],
+        model: None,
         dir,
-        budget_cents: 0,
     }
+}
+
+/// The path a call was given after `flag`.
+fn after<'a>(call: &'a Value, flag: &str) -> &'a str {
+    let args = call["args"].as_array().unwrap();
+    let at = args.iter().position(|a| a == flag).unwrap();
+    args[at + 1].as_str().unwrap()
 }
 
 /// The calls the fake logged, oldest first.
@@ -40,36 +45,46 @@ fn calls(dir: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// Events as `codex exec --json` prints them, less the items.
+/// Events as codex-cli 0.165.0 printed them for a one-line answer.
 const EVENTS: &str = concat!(
-    r#"{"type":"thread.started","thread_id":"0199a213"}"#,
+    r#"{"type":"thread.started","thread_id":"01a1c4b6-2b33-7652-a401-1da736a13067"}"#,
     "\n",
     r#"{"type":"turn.started"}"#,
     "\n",
-    r#"{"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}"#,
+    r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"ok\":true}"}}"#,
+    "\n",
+    r#"{"type":"turn.completed","usage":{"input_tokens":21098,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":15,"reasoning_output_tokens":0}}"#,
     "\n",
 );
 
 /// An answer is the last message Codex wrote to its `-o` file, read under
-/// the schema it was given as a file, from a read-only session that got
-/// the prompt on stdin; the files are gone afterwards.
+/// the schema it was given as a file, from a read-only session without
+/// the user's config that got the prompt on stdin in the run's directory;
+/// the files are gone afterwards.
 #[test]
 fn an_answer_is_read_from_the_last_message() {
     let found = json!({"findings": []});
     let write = json!({"-o": found.to_string()});
     let (dir, agent) = agent(json!([{"when": "review this", "stdout": EVENTS, "write": write}]));
     let schema = json!({"type": "object"});
-    let answer = agent
-        .codex(&ask("review this", &schema, dir.path()), soon())
-        .unwrap();
+    let ask = CodexAsk {
+        model: Some("gpt-5.5"),
+        ..ask("review this", &schema, dir.path())
+    };
+    let answer = agent.codex(&ask, soon()).unwrap();
     assert_eq!(answer.output, found);
     assert_eq!(answer.run.raw, EVENTS);
-    assert_eq!(answer.run.session_id.as_deref(), Some("0199a213"));
-    assert_eq!(answer.run.model_usage["output_tokens"], 122);
+    let thread = "01a1c4b6-2b33-7652-a401-1da736a13067";
+    assert_eq!(answer.run.session_id.as_deref(), Some(thread));
+    assert_eq!(answer.run.model_usage["input_tokens"], 21098);
     assert_eq!(answer.run.cost_usd, None);
 
     let call = calls(dir.path()).pop().unwrap();
     assert_eq!(call["prompt"], "review this");
+    assert_eq!(
+        PathBuf::from(call["cwd"].as_str().unwrap()),
+        dir.path().canonicalize().unwrap()
+    );
     let mut args: Vec<&str> = call["args"]
         .as_array()
         .unwrap()
@@ -81,17 +96,16 @@ fn an_answer_is_read_from_the_last_message() {
     let scratch = schema_at.parent().unwrap();
     assert_eq!(last_at.parent(), Some(scratch));
     (args[10], args[12]) = ("<schema>", "<last>");
-    let here = dir.path().to_str().unwrap();
     let flags = [
         "exec",
         "--json",
         "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
         "-s",
         "read-only",
         "-m",
         "gpt-5.5",
-        "-C",
-        here,
         "--output-schema",
         "<schema>",
         "-o",
@@ -105,14 +119,15 @@ fn an_answer_is_read_from_the_last_message() {
 
 /// A run that exits non-zero, fails its turn, times out, or leaves no
 /// JSON in its file gave no answer, and says which; a written file never
-/// makes a failed run an answer.
+/// makes a failed run an answer, nor does an exit 0 a failed turn.
 #[test]
 fn a_run_with_no_answer_says_why() {
     let answer = json!({"-o": "{}"});
-    let failed = r#"{"type":"turn.failed","error":{"message":"stream disconnected"}}"#;
+    let failed = r#"{"type":"turn.failed","error":{"message":"The 'x' model is not supported"}}"#;
     let (dir, agent) = agent(json!([
         {"when": "crash", "stderr": "boom", "exit": 1, "write": answer},
         {"when": "turn", "stdout": failed, "exit": 1, "write": answer},
+        {"when": "unsaid", "stdout": r#"{"type":"turn.failed","error":"?"}"#, "write": answer},
         {"when": "missing", "stdout": EVENTS},
         {"when": "empty", "write": {"-o": ""}},
         {"when": "prose", "write": {"-o": "Here is my review."}},
@@ -139,9 +154,11 @@ fn a_run_with_no_answer_says_why() {
     };
     assert_eq!(
         (&*subtype, &*message),
-        ("turn.failed", "stream disconnected")
+        ("turn.failed", "The 'x' model is not supported")
     );
     assert_eq!(spent.raw, failed);
+    let said = "the session failed (turn.failed): no message";
+    assert_eq!(run("unsaid", soon()).to_string(), said);
     for prompt in ["missing", "empty", "prose"] {
         let err = run(prompt, soon());
         assert!(matches!(err, RunError::Output(_)), "{prompt}: {err:?}");
@@ -153,7 +170,8 @@ fn a_run_with_no_answer_says_why() {
     );
     assert!(start.elapsed() < Duration::from_secs(3));
     for call in calls(dir.path()) {
-        let schema = Path::new(call["args"][10].as_str().unwrap());
+        assert!(!call["args"].as_array().unwrap().contains(&json!("-m")));
+        let schema = Path::new(after(&call, "--output-schema"));
         assert!(!schema.parent().unwrap().exists(), "{call}");
     }
 }

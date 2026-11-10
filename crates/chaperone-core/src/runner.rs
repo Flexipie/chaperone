@@ -8,6 +8,9 @@
 //! and it is not handed the socket, pane or history of the session it
 //! reviews. The list is a speed bump, as every control on the same OS user
 //! is; the sandbox settings are the next one.
+//!
+//! A session runs in a process group of its own ([`child::run_input`]), so
+//! a Ctrl-C on chaperone does not reach it: it runs on to its own end.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -39,15 +42,19 @@ const SESSION_VARS: [&str; 14] = [
     "TMUX",
     "TMUX_PANE",
 ];
-const SESSION_PREFIXES: [&str; 4] = ["ATUIN_", "CHAPERONE_", "DAISY_", "HERDR_"];
+const SESSION_PREFIXES: [&str; 5] = ["ATUIN_", "CHAPERONE_", "CODEX_", "DAISY_", "HERDR_"];
+/// Kept of the prefixes above: where Codex keeps its login.
+const SESSION_KEEP: &str = "CODEX_HOME";
 /// An answer past this is refused, not cut: half a JSON object is none.
 const OUT_BYTES: usize = 16 * 1024 * 1024;
 /// Of a failed run's stderr, its end.
 const ERR_CHARS: usize = 2000;
 /// Claude Code's sandbox, as its settings reference names the keys
 /// (code.claude.com/docs/en/settings-reference, `sandbox`): a sandbox that
-/// cannot start stops the session instead of running Bash without one.
-const SANDBOX: &str = r#"{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"strictAllowlist":true}}}"#;
+/// cannot start stops the session instead of running Bash without one,
+/// and a sandboxed command still needs an allow rule, as `dontAsk` alone
+/// would let the sandbox approve it.
+const SANDBOX: &str = r#"{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false,"network":{"strictAllowlist":true}}}"#;
 
 /// The agent CLI a run starts: the path and version go in the event.
 #[derive(Debug)]
@@ -67,6 +74,15 @@ pub struct Ask<'a> {
     pub tools: &'a [&'a str],
     pub dir: &'a Path,
     pub budget_cents: u32,
+}
+
+/// One question for Codex, which takes no tool list and no budget: the
+/// deadline is its only bound. With no `model`, Codex picks its default.
+pub struct CodexAsk<'a> {
+    pub prompt: &'a str,
+    pub schema: &'a Value,
+    pub model: Option<&'a str>,
+    pub dir: &'a Path,
 }
 
 /// What a session left behind, answered or not: a failed run still cost.
@@ -136,12 +152,8 @@ struct CodexEvent {
     kind: String,
     thread_id: Option<String>,
     usage: Option<Value>,
-    error: Option<CodexError>,
-}
-
-#[derive(Deserialize)]
-struct CodexError {
-    message: String,
+    /// `{"message": ...}` on `turn.failed`; any other shape still fails.
+    error: Option<Value>,
 }
 
 /// A new owner-only directory for one run's files, as the agent reads
@@ -177,7 +189,8 @@ impl Agent {
         // Lossy, so a name that is not UTF-8 is still matched.
         let session = |name: &OsString| {
             let name = name.to_string_lossy();
-            SESSION_VARS.contains(&&*name) || SESSION_PREFIXES.iter().any(|p| name.starts_with(p))
+            SESSION_VARS.contains(&&*name)
+                || (SESSION_PREFIXES.iter().any(|p| name.starts_with(p)) && name != SESSION_KEEP)
         };
         let env = env.into_iter().filter(|(name, _)| !session(name)).collect();
         let mut agent = Agent {
@@ -226,13 +239,17 @@ impl Agent {
     }
 
     /// One fresh Claude Code session answering `ask`, the prompt on stdin.
-    /// It loads the user's settings only, no project settings, no MCP
-    /// server and no stored session, and asks nobody for permission: what
-    /// `tools` and the settings do not allow is denied. Its Bash runs in
-    /// Claude Code's sandbox or the session does not start, with no
-    /// unsandboxed retry and no host outside the allowlist; the allowlist
-    /// and the writable paths (the directory, a temp directory) are the
-    /// user settings', as lists merge and cannot be emptied here.
+    /// It loads the user's settings and `CLAUDE.md` only, no project
+    /// settings or `CLAUDE.md`, no MCP server, skill or slash command (a
+    /// prompt that starts with `/` gets no answer) and no stored session,
+    /// and asks nobody for permission: what `tools` and the settings do
+    /// not allow is denied. Its Bash runs in Claude Code's sandbox or the
+    /// session does not start, with no unsandboxed retry and no host
+    /// outside the allowlist; the allowlist, the allow rules and the
+    /// writable paths (the directory, a temp directory) are the user
+    /// settings', as lists merge and cannot be emptied here. A CLI too old
+    /// for a sandbox key drops it without a word in `-p` mode, and nothing
+    /// here checks the version yet.
     pub fn claude(&self, ask: &Ask<'_>, deadline: Instant) -> Result<Answer, RunError> {
         let budget = format!("{}.{:02}", ask.budget_cents / 100, ask.budget_cents % 100);
         let mut cmd = self.command(ask.dir);
@@ -241,8 +258,8 @@ impl Agent {
             .args(["--model", ask.model, "--tools", &ask.tools.join(",")])
             .args(["--permission-mode", "dontAsk", "--setting-sources", "user"])
             .args(["--settings", SANDBOX])
-            .args(["--strict-mcp-config", "--no-session-persistence"])
-            .args(["--max-budget-usd", &budget]);
+            .args(["--strict-mcp-config", "--disable-slash-commands"])
+            .args(["--no-session-persistence", "--max-budget-usd", &budget]);
         let done = self.run(&mut cmd, Some(ask.prompt.as_bytes()), deadline)?;
         let raw = String::from_utf8_lossy(&done.out).into_owned();
         // A failure (the budget, the turns, the API) exits 1 and its
@@ -288,36 +305,36 @@ impl Agent {
     }
 
     /// One fresh Codex session answering `ask`, the prompt on stdin, in
-    /// Codex's read-only sandbox and stored nowhere. Codex has no budget
-    /// and no tool list, so `budget_cents` and `tools` are not used and
-    /// the deadline is its only bound. It reports no cost.
-    pub fn codex(&self, ask: &Ask<'_>, deadline: Instant) -> Result<Answer, RunError> {
+    /// Codex's read-only sandbox and stored nowhere. It loads neither the
+    /// user's `config.toml` (its MCP servers run outside the sandbox) nor
+    /// any `.rules` file; the login still comes from `CODEX_HOME`. It
+    /// reports no cost.
+    pub fn codex(&self, ask: &CodexAsk<'_>, deadline: Instant) -> Result<Answer, RunError> {
         let dir = scratch().map_err(|e| RunError::Io(e.to_string()))?;
         let answer = self.codex_in(&dir, ask, deadline);
         let _ = std::fs::remove_dir_all(&dir);
         answer
     }
 
-    fn codex_in(&self, dir: &Path, ask: &Ask<'_>, deadline: Instant) -> Result<Answer, RunError> {
+    fn codex_in(
+        &self,
+        dir: &Path,
+        ask: &CodexAsk<'_>,
+        deadline: Instant,
+    ) -> Result<Answer, RunError> {
         let (schema, last) = (dir.join("schema.json"), dir.join("last.json"));
         std::fs::write(&schema, ask.schema.to_string()).map_err(|e| RunError::Io(e.to_string()))?;
         let mut cmd = self.command(ask.dir);
-        cmd.args([
-            "exec",
-            "--json",
-            "--ephemeral",
-            "-s",
-            "read-only",
-            "-m",
-            ask.model,
-        ])
-        .arg("-C")
-        .arg(ask.dir)
-        .arg("--output-schema")
-        .arg(&schema)
-        .arg("-o")
-        .arg(&last)
-        .arg("-");
+        cmd.args(["exec", "--json", "--ephemeral", "--ignore-user-config"])
+            .args(["--ignore-rules", "-s", "read-only"]);
+        if let Some(model) = ask.model {
+            cmd.args(["-m", model]);
+        }
+        cmd.arg("--output-schema")
+            .arg(&schema)
+            .arg("-o")
+            .arg(&last)
+            .arg("-");
         let done = self.run(&mut cmd, Some(ask.prompt.as_bytes()), deadline)?;
         let raw = String::from_utf8_lossy(&done.out).into_owned();
         let (mut session_id, mut model_usage, mut failed) = (None, Value::Null, None);
@@ -328,7 +345,10 @@ impl Agent {
             match event.kind.as_str() {
                 "thread.started" => session_id = event.thread_id,
                 "turn.completed" => model_usage = event.usage.unwrap_or_default(),
-                "turn.failed" => failed = event.error.map(|e| e.message),
+                "turn.failed" => {
+                    let said = event.error.as_ref().and_then(|e| e["message"].as_str());
+                    failed = Some(said.unwrap_or("no message").to_string());
+                }
                 _ => {}
             }
         }
