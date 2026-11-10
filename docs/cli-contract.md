@@ -122,6 +122,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]...` | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan\|smoke --work <id> [--file <plan>]` | write |
 | `check waive` | `plan --work <id> --reason <r>` | write |
+| `check prune` | | read, removes directories |
 | `verify` | `--work <id>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
@@ -322,7 +323,11 @@ checkout, and the lane's repository is only read. Every git call the harness mak
 `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` variables, whose config would beat the repository's
 own (the user's global config is still read). The build directory `targets/lane-<id>` is kept
 between runs for speed: it is a cache an earlier commit's build could have written, a trade-off
-under the same-user trust model.
+under the same-user trust model. It and a leftover `checkouts/lane-<id>` (exactly `lane-<digits>`, a
+directory, never a symlink) are removed once the lane is done or cancelled, or for an id the ledger
+does not have, under that lane's run lock, skipping a lane whose lock is held: at the start of every
+`check run` and `verify` (whatever is not removed is left for the next), or now with `check prune`,
+which writes nothing to the ledger and prints `{removed: [path], skipped: [{path, why}]}`.
 
 Each command runs in the checkout with stdin empty and the environment less the session's
 variables, the ones that point git at another repository and the config variables above, in

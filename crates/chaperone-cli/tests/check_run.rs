@@ -777,3 +777,78 @@ fn smoke_runs_need_a_harness_pipeline() {
         session that never held the lane records; a lane on it records smoke with `check record`";
     assert_eq!(err["message"], v19);
 }
+
+/// A run first removes the build directories and leftover checkouts of
+/// lanes that are done, cancelled or not in the ledger; a live lane's, the
+/// running one's included, stay.
+#[test]
+fn a_run_sweeps_finished_lanes_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, id) = tests_lane(dir.path());
+    base_tests(&wt, None);
+    let create = || run(&db, &["work", "create", "--title", "t"]).1["id"].to_string();
+    let (live, cancelled, done) = (create(), create(), create());
+    assert_eq!(run(&db, &["work", "cancel", &cancelled]).0, 0);
+    // No lane here passes the done gate; the sweep reads only the status.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let sql = "UPDATE lanes SET status = 'done' WHERE id = ?1";
+    assert_eq!(conn.execute(sql, [&done]).unwrap(), 1);
+    let path = |d: &str, id: &str| dir.path().join(d).join(format!("lane-{id}"));
+    let dirs = [
+        ("targets", id.as_str()),
+        ("targets", &live),
+        ("targets", &cancelled),
+        ("targets", &done),
+        ("checkouts", &done),
+        ("targets", "99"),
+    ];
+    for (d, id) in dirs {
+        std::fs::create_dir_all(path(d, id).join("deps")).unwrap();
+    }
+    assert_eq!(run(&db, &["check", "run", "diff", "--work", &id]).0, 0);
+    let kept: Vec<_> = dirs.iter().map(|(d, id)| path(d, id).exists()).collect();
+    assert_eq!(kept, [true, true, false, false, false, false]);
+}
+
+/// `check prune` removes only directories named `lane-<digits>`, never
+/// through a symlink named like one, and skips a lane whose run lock is
+/// held, saying so.
+#[test]
+fn prune_removes_only_lane_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("ledger.db");
+    assert_eq!(run(&db, &["migrate"]).0, 0);
+    let targets = dir.path().join("targets");
+    for name in ["lane-8", "lane-9", "lane-", "lane-+1", "lane-1x", "other"] {
+        std::fs::create_dir_all(targets.join(name)).unwrap();
+    }
+    let outside = dir.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("keep"), "x").unwrap();
+    std::os::unix::fs::symlink(&outside, targets.join("lane-7")).unwrap();
+    let _held = lock_lane(&db, 9).unwrap().unwrap();
+    let out = Command::new(BIN)
+        .arg("--db")
+        .arg(&db)
+        .args(["check", "prune"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let data = serde_json::from_slice::<Value>(&out.stdout).unwrap()["data"].clone();
+    let path = |name: &str| targets.join(name).display().to_string();
+    let why = "lane 9 has a check run in progress";
+    assert_eq!(
+        data,
+        json!({"removed": [path("lane-8")], "skipped": [{"path": path("lane-9"), "why": why}]})
+    );
+    let mut left: Vec<_> = std::fs::read_dir(&targets)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        ["lane-", "lane-+1", "lane-1x", "lane-7", "lane-9", "other"]
+    );
+    assert!(outside.join("keep").exists());
+}

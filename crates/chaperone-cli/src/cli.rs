@@ -188,6 +188,7 @@ impl Cmd {
             Cmd::Check(CheckCmd::Record { .. }) => Some("check record"),
             Cmd::Check(CheckCmd::Run { .. }) => Some("check run"),
             Cmd::Check(CheckCmd::Waive { .. }) => Some("check waive"),
+            Cmd::Check(CheckCmd::Prune) => None,
             Cmd::Verify { .. } => Some("verify"),
             Cmd::Reviews(ReviewsCmd::Record { .. }) => Some("reviews record"),
             Cmd::Reviews(ReviewsCmd::Get { .. }) | Cmd::Jobs(JobsCmd::Get { .. }) => None,
@@ -658,6 +659,11 @@ pub enum CheckCmd {
         #[command(flatten)]
         actor: ActorArgs,
     },
+    /// Remove the build directories and checkouts beside the ledger of lanes
+    /// that are done, cancelled or not in the ledger, as every `check run`
+    /// and `verify` does first; a lane whose run is in progress is skipped.
+    /// Writes nothing to the ledger
+    Prune,
 }
 
 /// The checks the owner may waive

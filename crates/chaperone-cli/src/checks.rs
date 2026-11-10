@@ -25,7 +25,7 @@ use chaperone_core::review::{self, Agents, Facts};
 use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
-use chaperone_core::work::WorkItem;
+use chaperone_core::work::{WorkItem, is_terminal};
 use chaperone_graph::{commands_in, declares, glob};
 use serde_json::{Map, Value, json};
 
@@ -112,6 +112,7 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
         } => {
             let actor = actor.resolve();
             let _lock = ledger::lock_lane(db, work)??;
+            let _ = sweep(ledger, db);
             match (kind, file) {
                 (RunKind::Plan, Some(file)) => run_plan(ledger, db, work, &file, &actor),
                 (RunKind::Plan, None) | (_, Some(_)) => Err(refuse(
@@ -144,6 +145,7 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             })?;
             one(ledger.plan_waive(&actor.resolve(), work, &head, &reason)??)
         }
+        CheckCmd::Prune => one(sweep(ledger, db)?),
     }
 }
 
@@ -154,6 +156,7 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
 /// counts them. One result: each step, and where and why it stopped.
 pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let _lock = ledger::lock_lane(db, work)??;
+    let _ = sweep(ledger, db);
     let (mut steps, mut stopped, mut from) = (Vec::new(), Value::Null, None::<String>);
     for check in ["diff", "tests", "review", "verdict"] {
         if let Some(from) = &from {
@@ -756,6 +759,55 @@ fn lane_checkout(
     let home = db.parent().unwrap_or(Path::new("/"));
     let dir = home.join("checkouts").join(format!("lane-{work}"));
     Checkout::fresh(wt, dir, head, deadline)
+}
+
+/// `check prune`, and the start of every `check run` and `verify`: removes
+/// each directory `targets/lane-<id>` and `checkouts/lane-<id>` beside the
+/// ledger whose lane is done, cancelled or not in the ledger, holding that
+/// lane's run lock. A done lane may still be run, so one whose lock is held
+/// (the caller's own lane included) is skipped. A symlink or file of that
+/// name is never touched; a lookup that fails ends the sweep.
+/// `{removed: [path], skipped: [{path, why}]}`.
+fn sweep(ledger: &Ledger, db: &Path) -> Result<Value, CliError> {
+    let abs = std::path::absolute(db).map_err(LedgerError::from)?;
+    let home = abs.parent().unwrap_or(Path::new("/"));
+    let now = ledger.now()?;
+    let (mut removed, mut skipped) = (Vec::new(), Vec::new());
+    for dir in ["targets", "checkouts"] {
+        let Ok(entries) = std::fs::read_dir(home.join(dir)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let id = name.to_str().and_then(|n| n.strip_prefix("lane-"));
+            let id = id.filter(|d| d.bytes().all(|b| b.is_ascii_digit()));
+            let Some(id) = id.and_then(|d| d.parse::<i64>().ok()) else {
+                continue;
+            };
+            let finished = match ledger.work_get(id, &now)? {
+                Ok(item) => is_terminal(&item.status),
+                Err(Refusal::NotFound { .. }) => true,
+                Err(refusal) => return Err(refusal.into()),
+            };
+            if !finished || !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let path = entry.path().display().to_string();
+            let why = match ledger::lock_lane(db, id) {
+                Ok(Ok(_lock)) => match std::fs::remove_dir_all(entry.path()) {
+                    Ok(()) => {
+                        removed.push(path);
+                        continue;
+                    }
+                    Err(e) => e.to_string(),
+                },
+                Ok(Err(_)) => format!("lane {id} has a check run in progress"),
+                Err(e) => e.to_string(),
+            };
+            skipped.push(json!({"path": path, "why": why}));
+        }
+    }
+    Ok(json!({"removed": removed, "skipped": skipped}))
 }
 
 /// A fresh repository the harness owns at `dir` with the lane's commit

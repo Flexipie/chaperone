@@ -1240,7 +1240,7 @@ fn action(kind: EventKind, carries_handoff: bool) -> Option<&'static str> {
     })
 }
 
-fn is_terminal(status: &str) -> bool {
+pub fn is_terminal(status: &str) -> bool {
     matches!(status, "done" | "cancelled")
 }
 
