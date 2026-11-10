@@ -1,8 +1,8 @@
 //! `chaperone check`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction. `check run` reads git in the lane's
-//! worktree, and runs tests and the review's sessions in a checkout of its
-//! commit, before its write, under the lane's run lock.
+//! worktree, and runs tests and the review's and the verdict's sessions in
+//! a checkout of its commit, before its write, under the lane's run lock.
 
 use std::ffi::OsString;
 use std::fs::{DirBuilder, File};
@@ -16,10 +16,11 @@ use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
 use chaperone_core::git::{self, ChangedFile};
 use chaperone_core::ledger::{self, Actor, Evidence, Ledger, LedgerError, Refusal};
-use chaperone_core::pipeline::{self, Cli};
+use chaperone_core::pipeline::{self, Cli, Pipeline};
 use chaperone_core::review::{self, Agents, Facts};
 use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
+use chaperone_core::verdict;
 use chaperone_core::work::WorkItem;
 use chaperone_graph::{glob, tests_in};
 use serde_json::{Map, Value, json};
@@ -89,6 +90,11 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             work,
             actor,
         } => run_review(ledger, db, work, &actor.resolve()),
+        CheckCmd::Run {
+            kind: RunKind::Verdict,
+            work,
+            actor,
+        } => run_verdict(ledger, db, work, &actor.resolve()),
     }
 }
 
@@ -296,14 +302,7 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         item,
         mut input,
     } = start_run(ledger, db, work, "review")?;
-    let (id, hash) = (item.pipeline_id.as_deref(), item.pipeline_hash.as_deref());
-    let found = pipeline::by_stamp(id.unwrap_or_default(), hash.unwrap_or_default());
-    let pipeline = found.ok_or_else(|| {
-        refuse(format!(
-            "work item {work} has no pipeline this binary loads"
-        ))
-    })?;
-    let plan = review::plan(pipeline).map_err(|e| {
+    let plan = review::plan(lane_pipeline(&item)?).map_err(|e| {
         refuse(format!(
             "{e}; a lane on it records reviews with `check record` and `reviews record`"
         ))
@@ -311,62 +310,9 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
         return one(stored);
     }
-    // Only a CLI a runner uses, by its full path as a shell finds it, so
-    // the event names the binary.
-    let probe = |cli: Cli, bin: &str| {
-        if !plan.uses(cli) {
-            return Ok(None);
-        }
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        let found = std::env::split_paths(&path)
-            .map(|d| d.join(bin))
-            .find(|p| p.is_file());
-        let deadline = Instant::now() + RUN_TIMEOUT;
-        // As for test commands: no variable points its git elsewhere.
-        let env = std::env::vars_os().filter(|(k, _)| !git::repo_var(k));
-        Agent::probe(found.unwrap_or(bin.into()), env, deadline)
-            .map(Some)
-            .map_err(|e| refuse(format!("could not start {bin}: {e}")))
-    };
-    let claude = probe(Cli::Claude, "claude")?;
-    let codex = probe(Cli::Codex, "codex")?;
-    let head = input.head.clone();
-    let (base, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
-    let args = [
-        "merge-base",
-        "--end-of-options",
-        &git::base_rev(&base),
-        &head,
-    ];
-    let (base, _) = harness_git(&wt, &args, Instant::now() + RUN_TIMEOUT)?;
-    let base = base.trim().to_string();
-    let checkout = lane_checkout(db, &wt, work, &head, Instant::now() + CHECKOUT_TIMEOUT)?;
-    // In the harness's checkout, so the lane's config shapes nothing.
-    let args = [
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-renames",
-    ];
-    let args = [&args[..], &[&base, &head, "--"]].concat();
-    let deadline = Instant::now() + RUN_TIMEOUT;
-    let diff = match git::git(Path::new("git"), &checkout.dir, &args, deadline, DIFF_BYTES) {
-        Ok((out, false)) => String::from_utf8_lossy(&out).into_owned(),
-        Ok((_, true)) => return Err(refuse(format!("the diff is past {DIFF_BYTES} bytes"))),
-        Err(_) => {
-            return Err(refuse(format!(
-                "could not diff {base} {head} in the checkout"
-            )));
-        }
-    };
-    let facts = Facts {
-        base,
-        head,
-        files,
-        diff,
-        goal: review::goal(ledger, &item)?,
-    };
+    let started = |cli| plan.uses(cli).then(|| agent(cli)).transpose();
+    let (claude, codex) = (started(Cli::Claude)?, started(Cli::Codex)?);
+    let (checkout, facts) = change(ledger, db, &wt, &item, &input.head)?;
     let agents = Agents {
         claude: claude.as_ref(),
         codex: codex.as_ref(),
@@ -382,6 +328,136 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         &facts,
         &store,
     )??)
+}
+
+/// `check run verdict`: one fresh session on the lane's pipeline's
+/// `verdict` check (`verdict::record`) in the harness's checkout, given the
+/// change as the review is, the lane's goal and the harness's own results
+/// on the commit. A verdict on the same tree, pipeline and results replays
+/// (`verdict::replay`), carried to an amended commit, and starts nothing.
+/// A lane whose pipeline has no `verdict` (v17 to v19), and a commit
+/// without a harness `diff`, `tests` result and complete `review`, write
+/// nothing.
+fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
+    let Run {
+        _lock,
+        wt,
+        item,
+        mut input,
+    } = start_run(ledger, db, work, verdict::EVENT_CHECK)?;
+    let pipeline = lane_pipeline(&item)?;
+    let planned = verdict::plan(pipeline).map_err(|e| {
+        refuse(format!(
+            "{e}; a lane on it records verdicts with `check record`"
+        ))
+    })?;
+    let head = input.head.clone();
+    let harness = verdict::harness(ledger, work, &head)?.map_err(|lacks| {
+        refuse(format!(
+            "commit {head} has no harness {lacks}; a verdict needs `check run diff`, `tests` \
+             and a complete `review` on it first"
+        ))
+    })?;
+    if let Some(stored) = verdict::replay(ledger, actor, &mut input, &pipeline.hash, &harness)?? {
+        return one(stored);
+    }
+    let cli = planned.runner.cli;
+    let started = agent(cli)?;
+    let (checkout, facts) = change(ledger, db, &wt, &item, &head)?;
+    let agents = Agents {
+        claude: (cli == Cli::Claude).then_some(&started),
+        codex: (cli == Cli::Codex).then_some(&started),
+    };
+    let store = Evidence::beside(db);
+    one(verdict::record(
+        ledger,
+        actor,
+        input,
+        &planned,
+        &agents,
+        &checkout.dir,
+        &facts,
+        &harness,
+        &store,
+    )??)
+}
+
+/// The pipeline the lane is stamped with, as this binary loads it.
+fn lane_pipeline(item: &WorkItem) -> Result<&'static Pipeline, CliError> {
+    let (id, hash) = (item.pipeline_id.as_deref(), item.pipeline_hash.as_deref());
+    pipeline::by_stamp(id.unwrap_or_default(), hash.unwrap_or_default()).ok_or_else(|| {
+        refuse(format!(
+            "work item {} has no pipeline this binary loads",
+            item.id
+        ))
+    })
+}
+
+/// The agent CLI `cli`, by its full path as a shell finds it, so the event
+/// names the binary.
+fn agent(cli: Cli) -> Result<Agent, CliError> {
+    let bin = match cli {
+        Cli::Claude => "claude",
+        Cli::Codex => "codex",
+    };
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let found = std::env::split_paths(&path)
+        .map(|d| d.join(bin))
+        .find(|p| p.is_file());
+    let deadline = Instant::now() + RUN_TIMEOUT;
+    // As for test commands: no variable points its git elsewhere.
+    let env = std::env::vars_os().filter(|(k, _)| !git::repo_var(k));
+    Agent::probe(found.unwrap_or(bin.into()), env, deadline)
+        .map_err(|e| refuse(format!("could not start {bin}: {e}")))
+}
+
+/// What a session is shown of commit `head` and the checkout it reads it
+/// in: the files `diff` counts, their merge base, and the diff read in the
+/// harness's fresh checkout (removed when it drops), where the lane's git
+/// config does not reach, with the lane's goal from the ledger.
+fn change(
+    ledger: &Ledger,
+    db: &Path,
+    wt: &Path,
+    item: &WorkItem,
+    head: &str,
+) -> Result<(Checkout, Facts), CliError> {
+    let (base, files) = changed(wt, item.base_sha.as_deref(), head)?;
+    let args = [
+        "merge-base",
+        "--end-of-options",
+        &git::base_rev(&base),
+        head,
+    ];
+    let (base, _) = harness_git(wt, &args, Instant::now() + RUN_TIMEOUT)?;
+    let base = base.trim().to_string();
+    let checkout = lane_checkout(db, wt, item.id, head, Instant::now() + CHECKOUT_TIMEOUT)?;
+    let args = [
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+    ];
+    let args = [&args[..], &[&base, head, "--"]].concat();
+    let deadline = Instant::now() + RUN_TIMEOUT;
+    let diff = match git::git(Path::new("git"), &checkout.dir, &args, deadline, DIFF_BYTES) {
+        Ok((out, false)) => String::from_utf8_lossy(&out).into_owned(),
+        Ok((_, true)) => return Err(refuse(format!("the diff is past {DIFF_BYTES} bytes"))),
+        Err(_) => {
+            return Err(refuse(format!(
+                "could not diff {base} {head} in the checkout"
+            )));
+        }
+    };
+    let facts = Facts {
+        base,
+        head: head.into(),
+        files,
+        diff,
+        goal: review::goal(ledger, item)?,
+    };
+    Ok((checkout, facts))
 }
 
 /// The harness's fresh checkout of the lane's commit, `checkouts/lane-<id>`

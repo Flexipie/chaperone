@@ -5,9 +5,10 @@ Usage: chaperone check run [OPTIONS] --work <WORK> <KIND>
 Arguments:
   <KIND>
           Possible values:
-          - diff:   Files and lines the commit changes against the merge base
-          - tests:  The base branch profile's `[tests]` commands, in a fresh checkout of the commit the harness makes and removes each run; the checkout must stay at the commit and clean
-          - review: Four review lenses on the commit's diff, in that checkout, each on the CLI its pipeline runner names, then a verifier that tries to refute each finding; the lane's pipeline names them (none before v20)
+          - diff:    Files and lines the commit changes against the merge base
+          - tests:   The base branch profile's `[tests]` commands, in a fresh checkout of the commit the harness makes and removes each run; the checkout must stay at the commit and clean
+          - review:  Four review lenses on the commit's diff, in that checkout, each on the CLI its pipeline runner names, then a verifier that tries to refute each finding; the lane's pipeline names them (none before v20)
+          - verdict: One fresh session on whether the commit should merge, from the change, the lane's goal and the harness's own diff, tests and complete review of it; a verdict stands for its tree, so the same tree and results replay it, yes or no (none before v20)
 
 Options:
       --db <DB>

@@ -120,7 +120,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
-| `check run` | `diff\|tests\|review --work <id>` | write |
+| `check run` | `diff\|tests\|review\|verdict --work <id>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -368,6 +368,28 @@ without a review are what those sessions cost, and stay; a review whose rulings 
 is finished by the next `check run review` on the lane before anything else, with no session
 started. A review that is not `complete` runs again on the same commit, up to
 `review_attempts`. It prints the `check.finished` as `check record` does.
+
+`check run verdict` takes the same lock and reads the commit the same way. The lane's stamped
+pipeline must name a `verdict` check with a runner and a prompt file (a Claude runner naming a
+model); v17 to v19 do not, so a lane on them is refused (`invalid_input`, nothing written) and
+keeps recording verdicts with `check record`. The commit must have a harness `diff`, a harness
+`tests` result (pass or fail) and a harness `review` that is `complete`, or it is refused and
+nothing is written: the verdict judges the harness's results, so it cannot run before them and
+lock in an answer on less. Then a verdict on the same tree, pipeline and facts replays, or is
+carried to an amended commit (events.md, the key), and nothing runs. Else it asks `--version`
+of the runner's CLI, reads the change and makes a checkout as `review` does, and starts one
+fresh session there, given its prompt file, what the lane is for (as the intent lens is
+told), the change (as every lens is shown it) and the harness's results as JSON: the key fields
+of the newest `diff`, `tests` and complete `review` on the commit and the lane's findings that
+still block, each fenced, then the harness's closing line. It is told nothing else the lane
+wrote: no summary, `merge_case` or `look_at`. It answers `{decision, why, proven,
+not_proven}`, `decision` `yes` or `no` and a why that is not blank. It writes a
+`usage.reported` for the session, then one `merge_verdict` with the harness producer: `ran`
+with the decision, or `skipped` with `reason` `no_answer` when the session errored, stopped or
+answered anything else, never a default yes or no. A verdict stands for its tree: the same
+tree and results replay it, so a NO is not run again until the harness's facts change (a new
+tests result, a new complete review, a ruling, dispute or waive of a blocking finding), which
+is deliberate. It prints the `check.finished` as `check record` does.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends
