@@ -1132,7 +1132,7 @@ mod tests {
                 ),
             ),
             (
-                r#"NotFound { entity: "lane", id: 9 }"#,
+                r#"Refused(NotFound { entity: "lane", id: 9 }"#,
                 AT,
                 None,
                 Mutation::Heartbeat { lane_id: 9 },
@@ -1144,7 +1144,7 @@ mod tests {
                 Mutation::Heartbeat { lane_id: 1 },
             ),
             (
-                r#"LeaseHeld { by: "b/t", until:"#,
+                r#"Refused(LeaseHeld { by: "b/t", until:"#,
                 AT,
                 None,
                 Mutation::Heartbeat { lane_id: 2 },
@@ -1217,7 +1217,7 @@ mod tests {
                 ev(EventKind::SpecRevised, None, None, Payload::default()),
             ),
             (
-                r#"NotFound { entity: "spec", id: 9 }"#,
+                r#"Refused(NotFound { entity: "spec", id: 9 }"#,
                 AT,
                 None,
                 ev(EventKind::SpecApproved, None, Some(9), Payload::default()),
@@ -1237,7 +1237,7 @@ mod tests {
                 ),
             ),
             (
-                r#"Conflict { entity: "spec", message: "spec 1 is at"#,
+                r#"Refused(Conflict { entity: "spec", message: "spec 1 is at"#,
                 AT,
                 None,
                 ev(
@@ -1258,7 +1258,7 @@ mod tests {
                 ev(EventKind::LaneCreated, Some(1), None, Payload::default()),
             ),
             (
-                r#"NotFound { entity: "spec", id: 9 }"#,
+                r#"Refused(NotFound { entity: "spec", id: 9 }"#,
                 AT,
                 None,
                 ev(EventKind::LaneCreated, None, Some(9), lane()),
@@ -1360,14 +1360,14 @@ mod tests {
                 ),
             ),
             (
-                r#"LeaseHeld { by: "b/t", until:"#,
+                r#"Refused(LeaseHeld { by: "b/t", until:"#,
                 AT,
                 None,
                 ev(EventKind::LaneRenewed, Some(2), None, lease.clone()),
             ),
             // Another pair's lease is held against a renewal once expired too.
             (
-                r#"LeaseHeld { by: "b/t", until:"#,
+                r#"Refused(LeaseHeld { by: "b/t", until:"#,
                 "2026-11-03T00:02:00.000Z",
                 None,
                 ev(EventKind::LaneRenewed, Some(2), None, lease.clone()),
@@ -1448,7 +1448,7 @@ mod tests {
                 ),
             ),
             (
-                r#"NotFound { entity: "spec", id: 9 }"#,
+                r#"Refused(NotFound { entity: "spec", id: 9 }"#,
                 AT,
                 None,
                 ev(
@@ -1459,7 +1459,7 @@ mod tests {
                 ),
             ),
             (
-                r#"Conflict { entity: "work item", message: "lane \"L\""#,
+                r#"Refused(Conflict { entity: "work item", message: "lane \"L\""#,
                 AT,
                 None,
                 ev(
@@ -1598,7 +1598,7 @@ mod tests {
                 ),
             ),
             (
-                r#"NotFound { entity: "finding", id: 1 }"#,
+                r#"Refused(NotFound { entity: "finding", id: 1 }"#,
                 AT,
                 None,
                 ev(
@@ -1717,7 +1717,7 @@ mod tests {
             .chain(backlog.map(|(want, m)| (want, &me, AT, None, m)))
             .chain([
                 (
-                    r#"LeaseHeld { by: "b/t", until:"#,
+                    r#"Refused(LeaseHeld { by: "b/t", until:"#,
                     &ui,
                     AT,
                     None,
@@ -1770,13 +1770,11 @@ mod tests {
                 ),
             ]);
         for (i, (want, who, at, key, m)) in cases.enumerate() {
-            let Applied::Refused(refusal) = ledger.apply(who, key, at, m).unwrap() else {
-                panic!("case {i} ({want}) was not refused");
-            };
-            // An `invalid_input` by its message, any other refusal as it
-            // prints: a case refused for another reason than its own fails.
-            let got = match refusal {
-                Refusal::InvalidInput(message) => message,
+            // An `invalid_input` by its message, anything else as it prints:
+            // a case refused for another reason than its own, or not
+            // refused, fails. A `match`, so a passing run takes every branch.
+            let got = match ledger.apply(who, key, at, m).unwrap() {
+                Applied::Refused(Refusal::InvalidInput(message)) => message,
                 other => format!("{other:?}"),
             };
             assert!(got.starts_with(want), "case {i}: want {want}, got {got}");
