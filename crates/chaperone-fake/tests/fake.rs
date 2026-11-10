@@ -49,34 +49,75 @@ fn the_fake_plays_its_script() {
     assert!(matches!(run(&[], &long), Err(Failed::Wait(_))));
 }
 
-/// At the deadline the child's whole process group goes, so a tool the
-/// agent left running in the background does not outlive the run.
-#[test]
-fn a_timed_out_child_takes_what_it_started_with_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let pid_at = dir.path().join("pid");
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c")
-        .arg(r#"sleep 30 & echo $! > "$0"; wait"#)
-        .arg(&pid_at);
-    let deadline = Instant::now() + Duration::from_millis(300);
-    assert!(matches!(
-        child::run_input(&mut cmd, Some(b""), deadline, 1024),
-        Err(Failed::TimedOut)
-    ));
-    let pid = std::fs::read_to_string(&pid_at).unwrap();
-    // Killed, it is gone once it has been reaped.
-    let alive = || {
+/// Whether `pid` is still running, waiting up to 5 s for a killed
+/// process to be reaped.
+fn alive(pid: u32) -> bool {
+    let up = || {
         Command::new("/bin/kill")
-            .args(["-0", pid.trim()])
+            .args(["-0", &pid.to_string()])
             .stderr(std::process::Stdio::null())
             .status()
             .unwrap()
             .success()
     };
     let start = Instant::now();
-    while alive() && start.elapsed() < Duration::from_secs(5) {
+    while up() && start.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert!(!alive(), "the sleeper {pid} outlived the deadline");
+    up()
+}
+
+/// `script` under `/bin/sh -c`, with `$0` a file for the pid it writes.
+fn sh(script: &str) -> (tempfile::TempDir, Command) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c").arg(script).arg(dir.path().join("pid"));
+    (dir, cmd)
+}
+
+fn pid(dir: &tempfile::TempDir) -> u32 {
+    let pid = std::fs::read_to_string(dir.path().join("pid")).unwrap();
+    pid.trim().parse().unwrap()
+}
+
+/// At the deadline the agent gets SIGTERM, so a tool it put in a group of
+/// its own is stopped by the agent, and then its group is killed, so a
+/// tool left in that group goes too.
+#[test]
+fn a_timed_out_child_takes_what_it_started_with_it() {
+    let scripts = [
+        r#"sleep 30 & echo $! > "$0"; wait"#,
+        // `set -m` puts the job in its own group, as the agent CLIs do.
+        r#"set -m; sleep 30 & echo $! > "$0"; trap 'kill $!; exit 0' TERM; wait"#,
+    ];
+    for script in scripts {
+        let (dir, mut cmd) = sh(script);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        assert!(matches!(
+            child::run_input(&mut cmd, Some(b""), deadline, 1024),
+            Err(Failed::TimedOut)
+        ));
+        let pid = pid(&dir);
+        assert!(
+            !alive(pid),
+            "the sleeper {pid} of {script} outlived the run"
+        );
+    }
+}
+
+/// A child that exits but leaves a process holding its stdout times out
+/// at the deadline instead of waiting for that process.
+#[test]
+fn a_pipe_held_past_the_deadline_times_out() {
+    let (dir, mut cmd) = sh(r#"sleep 6 & echo $! > "$0"; echo hi"#);
+    let start = Instant::now();
+    let done = child::run(&mut cmd, start + Duration::from_secs(1), 1024);
+    assert!(matches!(done, Err(Failed::TimedOut)));
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "waited for the pipe"
+    );
+    let _ = Command::new("/bin/kill")
+        .arg(pid(&dir).to_string())
+        .status();
 }
