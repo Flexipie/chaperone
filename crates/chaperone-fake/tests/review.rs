@@ -1,16 +1,18 @@
-//! `review::run`'s lenses, `review::verify` and `review::record` against
-//! the scripted agent, linked as both `claude` and `codex`.
+//! `review::run`'s lenses, `review::verify`, `review::record` and
+//! `verdict::record` against the scripted agent, linked as both `claude`
+//! and `codex`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{Recorded, RunInput};
+use chaperone_core::checks::{FindingMove, Recorded, RunInput};
 use chaperone_core::git::ChangedFile;
 use chaperone_core::ledger::{Actor, Evidence, Findings, Ledger, Refusal};
-use chaperone_core::pipeline::Pipeline;
+use chaperone_core::pipeline::{Fact, Pipeline};
 use chaperone_core::review::{self, Agents, Facts, Lens, PROMPT_DIFF_BYTES, Review, Ruling};
 use chaperone_core::runner::Agent;
-use chaperone_core::work::{ClaimInput, CreateInput};
+use chaperone_core::verdict;
+use chaperone_core::work::{Brief, ClaimInput, CreateInput, HandoffInput, LookAt};
 use serde_json::{Value, json};
 
 const PIPELINE: &str = r#"
@@ -24,6 +26,7 @@ checks.review_design_tests = { runner = "lens", prompt = "design_tests.md" }
 checks.review_intent = { runner = "lens", prompt = "intent.md" }
 checks.review_codex = { runner = "second", prompt = "codex.md" }
 checks.review_verifier = { runner = "lens", prompt = "verifier.md" }
+checks.verdict = { runner = "lens", prompt = "verdict.md" }
 gate = [{ id = "a", fn = "eq", args = { field = "verdict.decision", value = "yes" } }]
 transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["a"] }]
 "#;
@@ -33,6 +36,7 @@ const PROMPTS: &[(&str, &str)] = &[
     ("intent.md", "LENS intent"),
     ("codex.md", "LENS codex"),
     ("verifier.md", "LENS verifier"),
+    ("verdict.md", "LENS verdict"),
 ];
 
 /// A result as Claude Code prints it, less the fields not read.
@@ -562,4 +566,261 @@ fn a_crash_before_the_rulings_is_finished_by_a_rerun() {
     let want = [("a", "verified"), ("c", "open")].map(|(t, s)| (t.to_string(), s.to_string()));
     assert_eq!(blocking(&ledger), want);
     assert_eq!(calls(&env), before);
+}
+
+/// The fake `cli`'s script, replaced.
+fn rescript(env: &Env, cli: &str, runs: Value) {
+    let script = json!({"version": "1 (fake)", "runs": runs}).to_string();
+    std::fs::write(env.dir.path().join(format!("{cli}.json")), script).unwrap();
+}
+
+fn says(decision: &str) -> Value {
+    let said = json!({"decision": decision, "why": "because", "proven": ["p"], "not_proven": []});
+    json!([{"when": "LENS verdict", "stdout": session("v", said)}])
+}
+
+/// The harness's `checks` on lane 1's commit `head` of `tree`, as `check
+/// run` records them from the lane's own session: a diff, passing tests,
+/// and a complete review with one blocker.
+fn measured(ledger: &Ledger, head: &str, tree: &str, checks: &[&str]) {
+    for &check in checks {
+        let mut input = RunInput {
+            check: check.into(),
+            head: head.into(),
+            tree: tree.into(),
+            ..input(&pipeline())
+        };
+        input.fields = match check {
+            "diff" => json!({"files": 1, "added": 3, "removed": 1, "code_lines": 4}),
+            "tests" => json!({"result": "pass", "commands": [{"argv": ["t"], "exit": 0, "ms": 9}]}),
+            _ => json!({"complete": true}),
+        }
+        .as_object()
+        .unwrap()
+        .clone();
+        if check == "review" {
+            let said = json!({"findings": [found("blocker", "BLOCKER")]});
+            let list = review::findings("correctness", said).unwrap();
+            input.findings = Some(Findings::List(list));
+        }
+        ledger.check_run(&lane_session(), &input).unwrap().unwrap();
+    }
+}
+
+/// `check run verdict` on lane 1's `head` of `tree`, as the CLI runs it
+/// from the lane's own session: the harness's facts, [`verdict::replay`],
+/// then [`verdict::record`].
+fn judge(env: &Env, ledger: &Ledger, head: &str, tree: &str) -> Recorded {
+    let pipeline = pipeline();
+    let p = verdict::plan(&pipeline).unwrap();
+    let me = lane_session();
+    let harness = verdict::harness(ledger, 1, head).unwrap().unwrap();
+    let mut input = RunInput {
+        head: head.into(),
+        tree: tree.into(),
+        ..input(&pipeline)
+    };
+    let stored = verdict::replay(ledger, &me, &mut input, &pipeline.hash, &harness);
+    if let Some(r) = stored.unwrap().unwrap() {
+        return r;
+    }
+    let item = ledger.work_get(1, &ledger.now().unwrap()).unwrap().unwrap();
+    let file = ChangedFile {
+        path: "src/a.rs".into(),
+        area: None,
+        added: Some(1),
+        removed: Some(0),
+        untracked: false,
+    };
+    let facts = Facts {
+        base: "1".repeat(40),
+        head: head.into(),
+        files: vec![file],
+        diff: "+x\n".into(),
+        goal: review::goal(ledger, &item).unwrap(),
+    };
+    let (dir, agents) = (env.checkout(), env.agents());
+    let got = verdict::record(
+        ledger, &me, input, &p, &agents, &dir, &facts, &harness, &env.store,
+    );
+    got.unwrap().unwrap()
+}
+
+/// The verdict is told the goal, the change and the harness's own results
+/// (tests, review, the finding that blocks), never the lane's summary,
+/// merge case or what to look at; it is recorded from the lane's own
+/// session as the harness's `merge_verdict`, naming the events it read,
+/// the agent and both evidence files, and its cost is a usage row.
+#[test]
+fn the_verdict_judges_from_the_harness_facts() {
+    let env = env(says("yes"), json!([]), 10);
+    let ledger = ledger(&env);
+    let brief = Brief {
+        goal: "GOAL ship it".into(),
+        merge_case: "MERGE".into(),
+        look_at: vec![LookAt {
+            path: "LOOK".into(),
+            ..LookAt::default()
+        }],
+        ..Brief::default()
+    };
+    let handoff = HandoffInput {
+        summary: "SUMMARY".into(),
+        brief: Some(brief),
+        ..HandoffInput::default()
+    };
+    let me = lane_session();
+    let done = ledger.work_handoff(&me, 1, &handoff, None, None, false);
+    done.unwrap().unwrap();
+    let (head, tree) = ("2".repeat(40), "3".repeat(40));
+    measured(&ledger, &head, &tree, &["diff", "tests", "review"]);
+    let p = judge(&env, &ledger, &head, &tree).payload;
+    let got = (
+        p.check.as_deref(),
+        p.outcome.as_deref(),
+        &p.rest["decision"],
+    );
+    assert_eq!(got, (Some("merge_verdict"), Some("ran"), &json!("yes")));
+    assert_eq!(p.rest["producer"]["kind"], "harness");
+    assert_eq!(p.rest["facts"], json!({"diff": 4, "tests": 5, "review": 6}));
+    assert_eq!(p.rest["facts_sha256"].as_str().unwrap().len(), 64);
+    let row = &p.rest["session"];
+    assert!(row["bin"].as_str().unwrap().ends_with("/claude"));
+    assert_eq!(
+        (&row["version"], &row["ran"]),
+        (&json!("1 (fake)"), &json!(true))
+    );
+
+    let call = call(env.dir.path(), "claude", "verdict");
+    let prompt = call["prompt"].as_str().unwrap();
+    assert_eq!(
+        env.store.get(row["prompt_ref"].as_str().unwrap()).unwrap(),
+        prompt
+    );
+    for said in [
+        "GOAL ship it",
+        "```diff\n+x\n",
+        "\"result\": \"pass\"",
+        "BLOCKER",
+    ] {
+        assert!(prompt.contains(said), "{said}: {prompt}");
+    }
+    for unsaid in ["SUMMARY", "MERGE", "LOOK"] {
+        assert!(!prompt.contains(unsaid), "{unsaid}: {prompt}");
+    }
+    assert!(prompt.ends_with("in the schema you were given.\n"));
+    let usage = ledger.usage_get(1).unwrap().unwrap();
+    assert_eq!(usage["totals"]["harness"]["messages"], 1);
+}
+
+/// A NO stands for its tree: the same tree replays it whatever the model
+/// would say now, and an amend that keeps the tree (its tests and review
+/// run again) carries it to the new commit. Only a change in the harness's
+/// facts, here the owner waiving the blocker, or a new tree starts a
+/// session.
+#[test]
+fn a_no_stands_for_its_tree() {
+    let env = env(says("no"), json!([]), 10);
+    let ledger = ledger(&env);
+    let (h1, h2, h3) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
+    let (t1, t2) = ("d".repeat(40), "e".repeat(40));
+    let all = ["diff", "tests", "review"];
+    measured(&ledger, &h1, &t1, &all);
+    let no = judge(&env, &ledger, &h1, &t1);
+    let decided = |r: &Recorded| r.payload.rest["decision"].as_str().map(String::from);
+    assert_eq!((decided(&no), calls(&env)), (Some("no".into()), 1));
+    rescript(&env, "claude", says("yes"));
+    let again = judge(&env, &ledger, &h1, &t1);
+    assert_eq!((again.replayed, again.event_id), (true, no.event_id));
+
+    measured(&ledger, &h2, &t1, &all);
+    let carried = judge(&env, &ledger, &h2, &t1);
+    let p = &carried.payload;
+    assert!(!carried.replayed && carried.event_id > no.event_id);
+    assert_eq!(
+        (p.head_sha.as_deref(), decided(&carried)),
+        (Some(&*h2), Some("no".into()))
+    );
+    assert_eq!(p.rest["carried_from"], no.event_id);
+    assert_eq!(p.rest["facts_sha256"], no.payload.rest["facts_sha256"]);
+    assert_eq!(calls(&env), 1);
+    let replayed = judge(&env, &ledger, &h2, &t1);
+    assert_eq!(
+        (replayed.replayed, replayed.event_id),
+        (true, carried.event_id)
+    );
+
+    let owner = Actor {
+        agent: Some("owner".into()),
+        session: Some("o".into()),
+    };
+    for f in ledger.blocking_findings(1).unwrap() {
+        let waive = FindingMove {
+            check_event_id: f.check_event_id,
+            finding_key: f.finding_key,
+            status: "waived".into(),
+            reason: Some("not for this PR".into()),
+            head_sha: None,
+        };
+        ledger
+            .finding_update(&owner, &waive, false)
+            .unwrap()
+            .unwrap();
+    }
+    let waived = judge(&env, &ledger, &h2, &t1);
+    assert_eq!((decided(&waived), calls(&env)), (Some("yes".into()), 2));
+    measured(&ledger, &h3, &t2, &all);
+    judge(&env, &ledger, &h3, &t2);
+    assert_eq!(calls(&env), 3);
+}
+
+/// A commit without a harness diff, tests result and complete review has
+/// no facts to judge. A session that errors or answers outside the schema
+/// records a skipped verdict with no decision, which no fact reads as one
+/// and the next run does not replay.
+#[test]
+fn no_answer_is_no_decision() {
+    let env = env(json!([]), json!([]), 10);
+    let ledger = ledger(&env);
+    let (head, tree) = ("2".repeat(40), "3".repeat(40));
+    let lacks = || verdict::harness(&ledger, 1, &head).unwrap().err();
+    assert_eq!(lacks(), Some("diff"));
+    measured(&ledger, &head, &tree, &["diff"]);
+    assert_eq!(lacks(), Some("tests"));
+    measured(&ledger, &head, &tree, &["tests"]);
+    assert_eq!(lacks(), Some("complete review"));
+    let mut partial = input(&pipeline());
+    partial.fields = json!({"complete": false}).as_object().unwrap().clone();
+    ledger
+        .check_run(&lane_session(), &partial)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lacks(), Some("complete review"));
+    measured(&ledger, &head, &tree, &["review"]);
+    let said = |s: Value| json!([{"when": "LENS verdict", "stdout": session("v", s)}]);
+    let answer = |decision: &str, why: &str| json!({"decision": decision, "why": why, "proven": [], "not_proven": []});
+    let mut extra = answer("yes", "w");
+    extra["score"] = json!(9);
+    for (runs, error) in [
+        (said(json!("Looks good.")), "not a verdict answer"),
+        (said(answer("maybe", "w")), "unknown decision"),
+        (said(extra), "unknown field"),
+        (said(answer("yes", " ")), "no why"),
+        (json!([{"when": "LENS verdict", "exit": 2}]), "exit Some(2)"),
+    ] {
+        rescript(&env, "claude", runs);
+        let p = judge(&env, &ledger, &head, &tree).payload;
+        let got = (p.outcome.as_deref(), &p.rest["reason"]);
+        assert_eq!(got, (Some("skipped"), &json!("no_answer")));
+        assert!(!p.rest.contains_key("decision"), "{error}");
+        let row = &p.rest["session"];
+        assert!(row["error"].as_str().unwrap().contains(error), "{row}");
+        let facts = ledger.project(1, None).unwrap();
+        assert_eq!(facts.get("verdict.decision"), &Fact::Absent);
+    }
+    rescript(&env, "claude", says("yes"));
+    let p = judge(&env, &ledger, &head, &tree).payload;
+    assert_eq!((p.outcome.as_deref(), calls(&env)), (Some("ran"), 6));
+    let facts = ledger.project(1, None).unwrap();
+    assert_eq!(facts.get("verdict.decision"), &Fact::Str("yes".into()));
 }
