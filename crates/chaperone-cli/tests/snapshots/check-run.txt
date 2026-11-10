@@ -5,7 +5,8 @@ Usage: chaperone check run [OPTIONS] --work <WORK> <KIND>
 Arguments:
   <KIND>
           Possible values:
-          - diff: Files and lines the commit changes against the merge base
+          - diff:  Files and lines the commit changes against the merge base
+          - tests: The base branch profile's `[tests]` commands, in a checkout of the commit the harness makes and removes; the tree must stay clean
 
 Options:
       --db <DB>

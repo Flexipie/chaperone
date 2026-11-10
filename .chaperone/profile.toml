@@ -28,6 +28,17 @@ enabled = true
 [ledger]
 kind = "chaperone"
 
+# What `chaperone check run tests` runs, in order, in a checkout of the
+# lane's commit: each an argv, never a shell string. `target_dir` names the
+# variable the harness points at the lane's own build directory.
+[tests]
+commands = [
+  ["cargo", "fmt", "--check"],
+  ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"],
+  ["cargo", "nextest", "run", "--workspace", "--locked"],
+]
+target_dir = "CARGO_TARGET_DIR"
+
 # Entry points: what `chaperone impact --entry-points` reports (#44).
 # Each command names the file that implements it, not main.rs: the
 # dispatcher depends on every command, so a rule on it is reached by all.

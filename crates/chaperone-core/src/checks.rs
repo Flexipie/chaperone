@@ -56,6 +56,9 @@ pub struct RunInput {
     pub check: String,
     pub head: String,
     pub tree: String,
+    /// The sha256 of the profile the check ran by, for a check that reads
+    /// one: a changed profile is a different run.
+    pub profile: Option<String>,
     /// The check's own fields, as the payload carries them.
     pub fields: Map<String, Value>,
     pub evidence_ref: Option<String>,
@@ -218,12 +221,7 @@ impl Ledger {
     }
 
     /// One `check.finished` the harness produced (`check run`), `ran`, with
-    /// producer `{kind: harness, bin, version}`. Keyed
-    /// `run:<lane>:<check>:<head>:-:<attempt>`, `-` where a profile hash
-    /// goes once a check reads the profile, and the attempt the id of the
-    /// lane's newest result for this check on another commit (0 for none):
-    /// a run on the same commit replays, and one back on an earlier commit
-    /// after another appends, as `check record`'s flip back does.
+    /// producer `{kind: harness, bin, version}`, under [`Ledger::run_key`].
     pub fn check_run(&self, actor: &Actor, input: &RunInput) -> Checked<Recorded> {
         let mut payload = Payload {
             check: Some(input.check.clone()),
@@ -234,24 +232,61 @@ impl Ledger {
             ..Payload::default()
         };
         payload.rest.insert("tree".into(), json!(input.tree));
+        if let Some(profile) = &input.profile {
+            payload.rest.insert("profile".into(), json!(profile));
+        }
         payload.rest.insert(
             "producer".into(),
             json!({"kind": "harness", "bin": input.bin, "version": input.version}),
         );
-        // Read before the write lock; the lane's run lock keeps two runs
-        // from reading it at once.
+        let key = self.run_key(input)?;
+        self.finish_check(actor, &key, input.work, payload)
+    }
+
+    /// `run:<lane>:<check>:<head>:<profile or ->:<attempt>`. The attempt is
+    /// the id of the lane's newest result for this check that is not a pass
+    /// on this commit and profile (0 for none): a pass replays, a failure
+    /// runs again, and a run back on an earlier commit after another
+    /// appends, as `check record`'s flip back does. Read before the write
+    /// lock; the lane's run lock keeps two runs from reading it at once.
+    pub fn run_key(&self, input: &RunInput) -> Result<String, LedgerError> {
         let attempt: i64 = self.conn().query_row(
             "SELECT coalesce(max(id), 0) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
                AND json_extract(payload_json, '$.check') = ?2
-               AND json_extract(payload_json, '$.head_sha') IS NOT ?3",
-            params![input.work, input.check, input.head],
+               AND NOT (json_extract(payload_json, '$.head_sha') IS ?3
+                 AND json_extract(payload_json, '$.profile') IS ?4
+                 AND json_extract(payload_json, '$.result') IS NOT 'fail')",
+            params![input.work, input.check, input.head, input.profile],
             |r| r.get(0),
         )?;
-        let key = format!(
-            "run:{}:{}:{}:-:{attempt}",
-            input.work, input.check, input.head
-        );
-        self.finish_check(actor, &key, input.work, payload)
+        let (work, check, head) = (input.work, &input.check, &input.head);
+        let profile = input.profile.as_deref().unwrap_or("-");
+        Ok(format!("run:{work}:{check}:{head}:{profile}:{attempt}"))
+    }
+
+    /// The result stored under a [`Ledger::run_key`], replayed, so a check
+    /// that costs minutes is looked up before it runs.
+    pub fn run_replay(&self, key: &str) -> Result<Option<Recorded>, LedgerError> {
+        let row: Option<(i64, i64, String, String)> = self
+            .conn()
+            .query_row(
+                "SELECT id, lane_id, at, payload_json FROM events
+                 WHERE idempotency_key = ?1 AND kind = 'check.finished'",
+                [key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        row.map(|(event_id, work, at, payload)| {
+            Ok(Recorded {
+                event_id,
+                work_id: Some(work),
+                kind: EventKind::CheckFinished.as_str(),
+                replayed: true,
+                at,
+                payload: serde_json::from_str(&payload).map_err(std::io::Error::other)?,
+            })
+        })
+        .transpose()
     }
 
     /// Appends `payload` as a `check.finished` on lane `work`, or replays

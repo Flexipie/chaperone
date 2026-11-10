@@ -120,7 +120,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
-| `check run` | `diff --work <id>` | write |
+| `check run` | `diff\|tests --work <id>` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -271,6 +271,28 @@ its tree, those two within one 10 s deadline. A lane with no worktree, a relativ
 one, a git call that fails or times out (not marked retryable yet), and a numstat past 16 MiB
 are `invalid_input` and write nothing. The per-file list goes to the evidence store before the
 one `check.finished` that names it is written. It prints what `check record` prints.
+
+`check run tests` takes the same lock and reads the commit the same way, then the `[tests]`
+table of `.chaperone/profile.toml` on the base branch (the first of `origin/HEAD`,
+`origin/main`, `origin/master` as remote-tracking refs), never the lane's copy, so a lane cannot
+change what it is checked by: `commands`, a list of argv arrays run in order with no shell;
+`target_dir`, optional, the name of a variable (`CARGO_TARGET_DIR`) the harness sets to
+`targets/lane-<id>` beside the ledger, the lane's own build directory, kept between runs and
+never shared with another lane, whose builds would replace the binaries its tests run; and
+`timeout_secs`, optional, default 1800, for the checkout and every command together. Unknown
+keys in `[tests]` are refused. No profile, no `[tests]`, or no command is `invalid_input` and
+writes nothing. A result already stored under its key (events.md) is printed with `replayed`
+true and nothing runs. Else it makes a detached checkout of the commit with `git worktree add`
+at `checkouts/lane-<id>` beside the ledger (the same path each run, so a build cache matches
+it), runs each command there with stdin empty, the environment less the session's variables
+and the ones that point git at another repository, in its own process group (SIGTERM, then the
+group killed 2 s later, at the deadline), and stops at the first that fails. If all pass,
+`git status --porcelain --untracked-files=all` in the checkout must be empty. The checkout is
+removed (`git worktree remove --force`, then `prune`) on every way out; one a killed run left is
+removed before the next. A failing command, a dirty tree and a timeout are a `check.finished`
+with `result` `fail`; a command that cannot start or a checkout that cannot be made writes
+nothing. The lane's worktree is never written, though its repository records the checkout
+while it exists.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

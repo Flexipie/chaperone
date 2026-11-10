@@ -1,12 +1,15 @@
 //! What `chaperone impact` runs: the tree and its blob ids from git, and
 //! the entry rules from the repo's pipeline profile, then [`impact`].
-//! Reads the worktree and git, never the ledger.
+//! Reads the worktree and git, never the ledger. The profile's `[tests]`
+//! for `check run tests` is read here too.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chaperone_core::git::{BASES, Failure, git, git_bin};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::{Entries, File, Impact, Rules, cache_file, impact};
 
@@ -269,6 +272,46 @@ pub fn rules_in(
         return Rules::from_toml(&text).map_err(|e| Error::Invalid(format!("profile {at}: {e}")));
     }
     rules(profile, origin)
+}
+
+/// The profile's `[tests]`: what `chaperone check run tests` runs.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tests {
+    /// Run in order, each an argv: no shell reads it.
+    pub commands: Vec<Vec<String>>,
+    /// The variable (`CARGO_TARGET_DIR`) the harness points at the lane's
+    /// own build directory outside the checkout, kept between runs.
+    pub target_dir: Option<String>,
+    /// For the checkout and every command together (default 1800).
+    pub timeout_secs: Option<u64>,
+}
+
+/// The `[tests]` of the base branch's [`REPO_PROFILE`] for the repo `dir`
+/// is in, and the sha256 of that profile's text. Never the worktree's
+/// copy: a lane cannot change the commands it is checked by. No profile,
+/// no `[tests]` or no command refuses, so "not run" never reads as a pass.
+pub fn tests_in(bin: &Path, dir: &Path, deadline: Instant) -> Result<(Tests, String), Error> {
+    #[derive(Deserialize)]
+    struct Profile {
+        tests: Option<Tests>,
+    }
+    let Some((at, text)) = base_profile(bin, dir, deadline)? else {
+        return Err(Error::Invalid(format!(
+            "no {REPO_PROFILE} on the base branch ({})",
+            BASES.join(", ")
+        )));
+    };
+    let profile: Profile = toml::from_str(&text)
+        .map_err(|e| Error::Invalid(format!("profile {at}: {}", e.message())))?;
+    match profile.tests {
+        Some(t) if !t.commands.is_empty() && t.commands.iter().all(|c| !c.is_empty()) => {
+            Ok((t, format!("{:x}", Sha256::digest(&text))))
+        }
+        _ => Err(Error::Invalid(format!(
+            "profile {at}: no [tests] commands (each a non-empty argv)"
+        ))),
+    }
 }
 
 /// [`REPO_PROFILE`] as the first of [`BASES`] this clone has holds it, and

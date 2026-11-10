@@ -51,7 +51,7 @@ pub enum Failure {
 
 /// Variables that point git at a repository other than `-C`'s: the ones
 /// git sets for hooks and `rebase --exec`.
-const GIT_REPO_VARS: [&str; 8] = [
+pub const GIT_REPO_VARS: [&str; 8] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",

@@ -1828,31 +1828,36 @@ mod tests {
         assert_eq!(events(), before + 1);
     }
 
-    /// A claim moves an unchecked lane's worktree; once the harness has
-    /// checked the lane, a claim keeps the worktree but cannot move it.
+    /// A claim moves an unchecked lane's worktree and branch; once the
+    /// harness has checked the lane, a claim keeps them but changes neither.
     #[test]
-    fn worktree_freezes_after_a_harness_check() {
+    fn worktree_and_branch_freeze_after_a_harness_check() {
         let (_dir, ledger) = ledger();
-        let claim = |wt: &str| {
+        let claim = |wt: &str, branch: &str| {
             let input = ClaimInput {
                 worktree_path: Some(wt.into()),
+                branch: Some(branch.into()),
                 ..ClaimInput::default()
             };
             let item = ledger.work_claim(&pair("a", "s1"), 1, &input, Some(T0), false);
-            item.unwrap().map(|i| i.worktree_path)
+            item.unwrap().map(|i| (i.worktree_path, i.branch))
         };
+        let both = |wt: &str, branch: &str| Ok((Some(wt.into()), Some(branch.into())));
         create(&ledger, None, None).unwrap();
-        assert_eq!(claim("/wt"), Ok(Some("/wt".into())));
+        assert_eq!(claim("/wt", "b"), both("/wt", "b"));
         let run = crate::checks::RunInput {
             work: 1,
             check: "diff".into(),
             ..Default::default()
         };
         ledger.check_run(&pair("h", "s9"), &run).unwrap().unwrap();
-        assert_eq!(claim("/wt"), Ok(Some("/wt".into())));
-        assert_eq!(claim("/wt/"), Ok(Some("/wt/".into())));
-        let frozen =
-            "worktree_path is frozen: lane 1 has a harness check, so its worktree cannot move";
-        assert_eq!(claim("/x"), Err(Refusal::InvalidInput(frozen.into())));
+        assert_eq!(claim("/wt", "b"), both("/wt", "b"));
+        assert_eq!(claim("/wt/", "b"), both("/wt/", "b"));
+        let frozen = |f: &str| {
+            let why = format!("{f} is frozen: lane 1 has a harness check, so it cannot change");
+            Err(Refusal::InvalidInput(why))
+        };
+        assert_eq!(claim("/x", "b"), frozen("worktree_path"));
+        assert_eq!(claim("/wt", "c"), frozen("branch"));
     }
 }
