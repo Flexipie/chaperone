@@ -225,9 +225,22 @@ impl Ledger {
     /// One `check.finished` the harness produced (`check run`), `ran`, with
     /// producer `{kind: harness, bin, version}`, under [`Ledger::run_key`].
     pub fn check_run(&self, actor: &Actor, input: &RunInput) -> Checked<Recorded> {
+        let key = self.run_key(input)?;
+        self.finish_run(actor, input, true, &key)
+    }
+
+    /// [`Ledger::check_run`] under `key`, `skipped` when it did not `ran`
+    /// (a session that gave no answer: its fields say why).
+    pub(crate) fn finish_run(
+        &self,
+        actor: &Actor,
+        input: &RunInput,
+        ran: bool,
+        key: &str,
+    ) -> Checked<Recorded> {
         let mut payload = Payload {
             check: Some(input.check.clone()),
-            outcome: Some("ran".into()),
+            outcome: Some(if ran { "ran" } else { "skipped" }.into()),
             head_sha: Some(input.head.clone()),
             evidence_ref: input.evidence_ref.clone(),
             findings: input.findings.clone(),
@@ -242,8 +255,7 @@ impl Ledger {
             "producer".into(),
             json!({"kind": "harness", "bin": input.bin, "version": input.version}),
         );
-        let key = self.run_key(input)?;
-        self.finish_check(actor, &key, input.work, payload)
+        self.finish_check(actor, key, input.work, payload)
     }
 
     /// `run:<lane>:<check>:<head>:<profile or ->:<attempt>`. The attempt is
@@ -266,6 +278,70 @@ impl Ledger {
         let (work, check, head) = (input.work, &input.check, &input.head);
         let profile = input.profile.as_deref().unwrap_or("-");
         Ok(format!("run:{work}:{check}:{head}:{profile}:{attempt}"))
+    }
+
+    /// The lane's newest harness `input.check` that ran on `input.tree` by
+    /// `input.profile` with `field` equal to `value` (a digest of what it
+    /// was given), replayed: a check that holds for a tree whatever the
+    /// commit (`check run verdict`).
+    pub(crate) fn tree_run(
+        &self,
+        input: &RunInput,
+        field: &str,
+        value: &str,
+    ) -> Result<Option<Recorded>, LedgerError> {
+        let row: Option<(i64, String, String)> = self
+            .conn()
+            .query_row(
+                "SELECT id, at, payload_json FROM events
+                 WHERE lane_id = ?1 AND kind = 'check.finished'
+                   AND json_extract(payload_json, '$.check') = ?2
+                   AND json_extract(payload_json, '$.outcome') = 'ran'
+                   AND json_extract(payload_json, '$.producer.kind') = 'harness'
+                   AND json_extract(payload_json, '$.tree') = ?3
+                   AND json_extract(payload_json, '$.profile') IS ?4
+                   AND json_extract(payload_json, ?5) = ?6
+                 ORDER BY id DESC LIMIT 1",
+                params![
+                    input.work,
+                    input.check,
+                    input.tree,
+                    input.profile,
+                    format!("$.{field}"),
+                    value
+                ],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        row.map(|(event_id, at, payload)| {
+            Ok(Recorded {
+                event_id,
+                work_id: Some(input.work),
+                kind: EventKind::CheckFinished.as_str(),
+                replayed: true,
+                at,
+                payload: serde_json::from_str(&payload).map_err(std::io::Error::other)?,
+            })
+        })
+        .transpose()
+    }
+
+    /// `run:<lane>:<check>:<tree>:<profile>:<digest>:<attempt>` for a
+    /// [`Ledger::tree_run`] check, the attempt the id of the lane's newest
+    /// result for the check (0 for none): a retry after a crash keys the
+    /// same, and a run after a session that gave no answer runs again.
+    pub(crate) fn tree_key(&self, input: &RunInput, digest: &str) -> Result<String, LedgerError> {
+        let attempt: i64 = self.conn().query_row(
+            "SELECT coalesce(max(id), 0) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = ?2",
+            params![input.work, input.check],
+            |r| r.get(0),
+        )?;
+        let (work, check, tree) = (input.work, &input.check, &input.tree);
+        let profile = input.profile.as_deref().unwrap_or("-");
+        Ok(format!(
+            "run:{work}:{check}:{tree}:{profile}:{digest}:{attempt}"
+        ))
     }
 
     /// The result stored under a [`Ledger::run_key`], replayed, so a check

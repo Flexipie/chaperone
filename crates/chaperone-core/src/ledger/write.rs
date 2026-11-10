@@ -687,14 +687,21 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             });
         }
     }
+    // Only `check run` sets this producer, and only core's harness paths
+    // write a `finding.updated` with it; no command takes it as input.
+    let harness =
+        p.rest.get("producer").and_then(|v| v.get("kind")) == Some(&Value::from("harness"));
     match event.kind {
         CheckFinished => {
             // The independence rule (R10): a session that has held the lane
             // never reports its session checks, so a lane cannot stamp its
-            // own handoff. Reviews are daisy's worker's (events.md).
+            // own handoff. Reviews are daisy's worker's (events.md). The
+            // harness's run of one (`check run verdict`) is the binary's
+            // whoever started it, as with the verifier's rulings below.
             // Actor::check has made sure there is a session.
             let session = event.actor.session.as_deref().unwrap_or_default();
             if SESSION_CHECKS.contains(&p.check.as_deref().unwrap_or_default())
+                && !harness
                 && has_held(tx, lane_id, session)?
             {
                 refuse!(invalid(&format!(
@@ -786,8 +793,6 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // the run: its authority is the binary's, and only that code
             // path sets this producer. Its moves only, on its own review's
             // findings only (`apply` takes any payload).
-            let harness =
-                p.rest.get("producer").and_then(|v| v.get("kind")) == Some(&Value::from("harness"));
             let ruled = harness && reviewed && matches!(to, "verified" | "refuted");
             match by {
                 By::Lane if !held => refuse!(invalid(&format!(
