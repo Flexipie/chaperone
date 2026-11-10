@@ -8,10 +8,11 @@
 # - Ready on a lane that changes code needs, on the handed-off commit: a harness `diff` of at
 #   most `code_lines` (now 400, from 750) and no file it could not count, harness `tests`
 #   that passed, a complete harness review (one carried from a commit with the same tree
-#   counts), no finding of that review still blocking, the plan check run before code or
-#   waived by the owner, a smoke (the harness's pass when it ran one, else the lane's claim
-#   with evidence), and a harness verdict `yes`. Whether the lane changes code is measured
-#   by that `diff` (`commit.changes_code`), not the lane's declared kind.
+#   counts), no finding of any complete harness review on the lane still blocking, the plan
+#   check run before code or waived by the owner, a smoke (the harness's pass when it ran
+#   one, else the lane's claim with evidence), and a harness verdict `yes`. Whether the lane
+#   changes code is measured by that `diff` (`commit.changes_code`), not the lane's declared
+#   kind.
 # - A lane whose diff changes no code (docs, a measurement) skips the plan check and the
 #   smoke: a plan attacks code before it exists, and a smoke shows code running. It still
 #   needs the tests, the review and the verdict, because a merge needs a harness verdict on

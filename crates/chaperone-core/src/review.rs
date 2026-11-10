@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::checks::{BODY_CHARS, FindingMove, NOTE_CHARS, Recorded, RunInput};
+use crate::checks::{BODY_CHARS, FindingMove, NOTE_CHARS, Recorded, RunInput, blocking};
 use crate::git::ChangedFile;
 use crate::ledger::{
     Actor, Checked, Evidence, Finding, Findings, Ledger, LedgerError, Payload, Refusal,
@@ -500,7 +500,8 @@ impl<T> Lens<T> {
 #[serde(deny_unknown_fields)]
 pub struct Ruling {
     pub key: String,
-    /// `verified` or `refuted`: the finding's status it moves to.
+    /// `verified` or `refuted`, or `fixed` for an earlier finding (keyed
+    /// `<review>/<key>`): the finding's status it moves to.
     pub verdict: String,
     pub why: String,
 }
@@ -516,32 +517,45 @@ struct Rulings {
 /// the goal. One session for all: they share the facts and the checkout,
 /// and its runner's timeout (and for Claude its budget) bounds it like a
 /// lens; one that stops, or answers a ruling with no why, rules on
-/// nothing. A finding it does not rule on stays open.
+/// nothing. A finding it does not rule on stays open. On `earlier`
+/// findings it may only rule `fixed`.
 pub fn verify(
     p: &Planned<'_>,
     agents: &Agents<'_>,
     dir: &Path,
     facts: &Facts,
     found: &[Finding],
+    earlier: &[Finding],
     store: &Evidence,
 ) -> io::Result<Lens<Vec<Ruling>>> {
     // One JSON object a line: the finding as the ledger holds it, its key
     // the one to rule by.
-    let mut lines = String::new();
-    for f in found {
-        let mut line = f.rest.clone();
-        line.extend([
-            ("key".into(), json!(f.finding_key)),
-            ("severity".into(), json!(f.severity)),
-            ("title".into(), json!(f.title)),
-            ("body".into(), json!(f.body)),
-            ("path".into(), json!(f.path)),
-        ]);
-        lines += &format!("{}\n", Value::Object(line));
+    let lines = |found: &[Finding]| {
+        let mut lines = String::new();
+        for f in found {
+            let mut line = f.rest.clone();
+            line.extend([
+                ("key".into(), json!(f.finding_key)),
+                ("severity".into(), json!(f.severity)),
+                ("title".into(), json!(f.title)),
+                ("body".into(), json!(f.body)),
+                ("path".into(), json!(f.path)),
+            ]);
+            lines += &format!("{}\n", Value::Object(line));
+        }
+        fenced("jsonl", &lines)
+    };
+    let mut findings = format!("\n## The findings\n\n{}", lines(found));
+    if !earlier.is_empty() {
+        findings += &format!("\n## Earlier findings\n\n{}", lines(earlier));
     }
-    let findings = format!("\n## The findings\n\n{}", fenced("jsonl", &lines));
     let prompt = prompt(p, "", &Value::Null, &(change(facts).0 + &findings));
     let keys: BTreeSet<_> = found.iter().map(|f| f.finding_key.as_str()).collect();
+    let fixable: BTreeSet<_> = earlier.iter().map(|f| f.finding_key.as_str()).collect();
+    let mut verdicts = vec!["verified", "refuted"];
+    if !earlier.is_empty() {
+        verdicts.push("fixed");
+    }
     let schema = json!({
         "type": "object",
         "additionalProperties": false,
@@ -551,8 +565,8 @@ pub fn verify(
             "additionalProperties": false,
             "required": ["key", "verdict", "why"],
             "properties": {
-                "key": {"type": "string", "enum": keys},
-                "verdict": {"type": "string", "enum": ["verified", "refuted"]},
+                "key": {"type": "string", "enum": keys.union(&fixable).collect::<Vec<_>>()},
+                "verdict": {"type": "string", "enum": verdicts},
                 "why": {"type": "string"},
             },
         }}},
@@ -562,14 +576,16 @@ pub fn verify(
             serde_json::from_value(out).map_err(|e| format!("not a verifier answer: {e}"))?;
         let mut ruled = BTreeSet::new();
         for r in &said.rulings {
-            if !keys.contains(r.key.as_str()) || !ruled.insert(&r.key) {
+            let fits = match r.verdict.as_str() {
+                "verified" | "refuted" => keys.contains(r.key.as_str()),
+                "fixed" => fixable.contains(r.key.as_str()),
+                _ => return Err(format!("unknown verdict {:?}", r.verdict)),
+            };
+            if !fits || !ruled.insert(&r.key) {
                 return Err(format!(
-                    "a ruling on {:?}, no finding or one ruled on twice",
-                    r.key
+                    "a ruling on {:?}, no finding it may rule {} or one ruled on twice",
+                    r.key, r.verdict
                 ));
-            }
-            if !matches!(r.verdict.as_str(), "verified" | "refuted") {
-                return Err(format!("unknown verdict {:?}", r.verdict));
             }
             if r.why.trim().is_empty() {
                 return Err(format!("not a verifier answer: no why for {:?}", r.key));
@@ -577,6 +593,34 @@ pub fn verify(
         }
         Ok(said.rulings)
     })
+}
+
+/// The lane's blocking findings from complete harness reviews that a fix
+/// can settle (open or verified; no move goes from disputed to fixed),
+/// keyed `<review>/<key>`, as two reviews may raise the same key.
+pub fn earlier(ledger: &Ledger, work: i64) -> Result<Vec<Finding>, LedgerError> {
+    let mut stmt = ledger.conn().prepare(&format!(
+        "SELECT check_event_id, finding_key, severity, title, body, path, head_sha FROM findings
+         WHERE lane_id = ?1 AND {} AND status != 'disputed' AND check_event_id IN (
+           SELECT id FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+             AND json_extract(payload_json, '$.check') = 'review'
+             AND json_extract(payload_json, '$.producer.kind') = 'harness'
+             AND json_extract(payload_json, '$.complete') = 1)
+         ORDER BY id",
+        blocking()
+    ))?;
+    let rows = stmt.query_map([work], |r| {
+        let raised_on: Option<String> = r.get(6)?;
+        Ok(Finding {
+            finding_key: format!("{}/{}", r.get::<_, i64>(0)?, r.get::<_, String>(1)?),
+            severity: r.get(2)?,
+            title: r.get(3)?,
+            body: r.get(4)?,
+            path: r.get(5)?,
+            rest: Map::from_iter([("raised_on".into(), json!(raised_on))]),
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// What the lane is for, as the ledger holds it, for the intent lens: its
@@ -696,10 +740,19 @@ pub fn record(
 ) -> Checked<Recorded> {
     let review = run(&plan.lenses, agents, dir, facts, store)?;
     let found: Vec<Finding> = review.found().cloned().collect();
+    let earlier = earlier(ledger, input.work)?;
     // Nothing to rule on starts no session.
-    let verifier = match found.is_empty() {
+    let verifier = match found.is_empty() && earlier.is_empty() {
         true => None,
-        false => Some(verify(&plan.verifier, agents, dir, facts, &found, store)?),
+        false => Some(verify(
+            &plan.verifier,
+            agents,
+            dir,
+            facts,
+            &found,
+            &earlier,
+            store,
+        )?),
     };
     let recorded = match finish(ledger, actor, input, facts, &review, verifier.as_ref())? {
         Ok(recorded) => recorded,
@@ -792,28 +845,40 @@ pub(crate) fn cut(text: &str, chars: usize) -> String {
 }
 
 /// The verifier's rulings stored on review `id`, each a `finding.updated`
-/// with the review's harness producer. A finding no longer open is
-/// skipped: ruled already (a rerun after a crash), or moved by its lane or
-/// the owner since. Its status is read before the write, so a dispute that
-/// lands in between is ruled on, a move the verifier may make.
+/// with the review's harness producer (a `fixed` one on the review its key
+/// names, on this review's commit). A finding no longer open (for `fixed`,
+/// open or verified) is skipped: ruled already (a rerun after a crash), or
+/// moved by its lane or the owner since. Its status is read before the
+/// write, so a dispute that lands in between is ruled on, a move the
+/// verifier may make.
 fn rule(ledger: &Ledger, actor: &Actor, id: i64, payload: &Payload) -> Checked<()> {
     let verifier = payload.rest.get("verifier");
     let rulings = verifier.and_then(|v| v.get("rulings")).cloned();
     let rulings: Vec<Ruling> =
         serde_json::from_value(rulings.unwrap_or(json!([]))).map_err(io::Error::other)?;
     for r in rulings {
-        let open: bool = ledger.conn().query_row(
-            "SELECT status = 'open' FROM findings WHERE check_event_id = ?1 AND finding_key = ?2",
-            params![id, r.key],
+        let fixed = r.verdict == "fixed";
+        let (review, key) = match fixed {
+            true => r
+                .key
+                .split_once('/')
+                .and_then(|(review, key)| Some((review.parse().ok()?, key.to_string())))
+                .ok_or_else(|| io::Error::other(format!("a fixed ruling on {:?}", r.key)))?,
+            false => (id, r.key),
+        };
+        let status: String = ledger.conn().query_row(
+            "SELECT status FROM findings WHERE check_event_id = ?1 AND finding_key = ?2",
+            params![review, key],
             |row| row.get(0),
         )?;
-        if !open {
+        if !(status == "open" || fixed && status == "verified") {
             continue;
         }
         let input = FindingMove {
-            check_event_id: id,
-            finding_key: r.key,
+            check_event_id: review,
+            finding_key: key,
             status: r.verdict,
+            head_sha: payload.head_sha.clone().filter(|_| fixed),
             ..FindingMove::default()
         };
         let producer = payload.rest.get("producer");

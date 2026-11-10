@@ -831,9 +831,9 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             let held = has_held(tx, lane_id, session)?;
             // The verifier `check run review` starts rules whoever started
             // the run: its authority is the binary's, and only that code
-            // path sets this producer. Its moves only, on its own review's
+            // path sets this producer. Its moves only, on harness reviews'
             // findings only (`apply` takes any payload).
-            let ruled = harness && reviewed && matches!(to, "verified" | "refuted");
+            let ruled = harness && reviewed && matches!(to, "verified" | "refuted" | "fixed");
             match by {
                 By::Lane if !held => refuse!(invalid(&format!(
                     "only the lane disputes a finding; session {session} has never held lane {lane_id}"
