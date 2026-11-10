@@ -103,9 +103,9 @@ pub struct ChangedFile {
     pub path: String,
     /// The repo profile's area, as the caller of [`lane_files`] maps it.
     pub area: Option<String>,
-    /// Lines, worktree against the merge base (the change graph's count
-    /// is `HEAD`'s). None for a binary file, and for an untracked one past
-    /// 1 MiB or not counted.
+    /// Lines against the merge base: the worktree's from [`changed_files`],
+    /// a commit's from [`commit_files`]. None for a binary file, and for an
+    /// untracked one past 1 MiB or not counted.
     pub added: Option<u64>,
     pub removed: Option<u64>,
     pub untracked: bool,
@@ -127,18 +127,85 @@ pub fn changed_files(
     deadline: Instant,
     cap: usize,
 ) -> Result<(String, Vec<ChangedFile>), String> {
-    let run = |args: &[&str]| match git(bin, wt, args, deadline, cap) {
+    let (base, mut files) = numstat(bin, wt, base_sha, None, deadline, cap)?;
+    let args = [
+        "ls-files",
+        "-z",
+        "-o",
+        "--exclude-standard",
+        "--full-name",
+        "--",
+        ":/",
+    ];
+    let untracked = whole(bin, wt, &args, deadline, cap)?.unwrap_or_default();
+    files.extend(split_z(&untracked).map(|path| ChangedFile {
+        path: path.to_string(),
+        area: None,
+        added: None,
+        removed: None,
+        untracked: true,
+    }));
+    Ok((base, files))
+}
+
+/// [`changed_files`] for what the commit `rev` holds: no uncommitted edit
+/// and no untracked file. `rev` is a sha from [`head`], so the counts are
+/// that commit's even when the worktree's `HEAD` has moved since.
+pub fn commit_files(
+    bin: &Path,
+    wt: &Path,
+    base_sha: Option<&str>,
+    rev: &str,
+    deadline: Instant,
+    cap: usize,
+) -> Result<(String, Vec<ChangedFile>), String> {
+    numstat(bin, wt, base_sha, Some(rev), deadline, cap)
+}
+
+/// The commit `wt`'s `HEAD` is at, as a full sha. A repository with no
+/// commit yet fails with git's own line.
+pub fn head(bin: &Path, wt: &Path, deadline: Instant) -> Result<String, String> {
+    let args = ["rev-parse", "--verify", "HEAD^{commit}"];
+    match git(bin, wt, &args, deadline, 4096) {
+        Ok((out, _)) => Ok(String::from_utf8_lossy(&out).trim().to_string()),
+        Err(Failure::TimedOut) => Err("git rev-parse: timed out".into()),
+        Err(Failure::BadRevision) => Err("git rev-parse: no HEAD commit".into()),
+        Err(Failure::Other(e)) => Err(e),
+    }
+}
+
+/// One call's whole output, None for a revision this clone lacks. Output
+/// past `cap` fails.
+fn whole(
+    bin: &Path,
+    wt: &Path,
+    args: &[&str],
+    deadline: Instant,
+    cap: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    match git(bin, wt, args, deadline, cap) {
         Ok((_, true)) => Err(format!("git {}: past {cap} bytes", args[0])),
         Ok((out, false)) => Ok(Some(out)),
-        // A base this clone lacks: try the next one.
         Err(Failure::BadRevision) => Ok(None),
         Err(Failure::TimedOut) => Err(format!("git {}: timed out", args[0])),
         Err(Failure::Other(e)) => Err(e),
-    };
+    }
+}
+
+/// The numstat of the worktree, or of the commit `rev`, against the merge
+/// base with the first base this clone has.
+fn numstat(
+    bin: &Path,
+    wt: &Path,
+    base_sha: Option<&str>,
+    rev: Option<&str>,
+    deadline: Instant,
+    cap: usize,
+) -> Result<(String, Vec<ChangedFile>), String> {
     let mut found = None;
     for base in BASES.iter().copied().chain(base_sha) {
         // `--end-of-options`: a claimed base_sha is not checked as hex.
-        let args = [
+        let mut args = vec![
             "diff",
             "--no-ext-diff",
             "--no-textconv",
@@ -148,9 +215,11 @@ pub fn changed_files(
             "--merge-base",
             "--end-of-options",
             base,
-            "--",
         ];
-        if let Some(out) = run(&args)? {
+        args.extend(rev);
+        args.push("--");
+        // A base this clone lacks: try the next one.
+        if let Some(out) = whole(bin, wt, &args, deadline, cap)? {
             found = Some((base.to_string(), out));
             break;
         }
@@ -162,7 +231,7 @@ pub fn changed_files(
         ));
     };
     // `<added>\t<removed>\t<path>\0`, `-` for a binary file's counts.
-    let mut files: Vec<ChangedFile> = split_z(&out)
+    let files = split_z(&out)
         .filter_map(|row| {
             let mut cols = row.splitn(3, '\t');
             let (added, removed) = (cols.next()?.parse().ok(), cols.next()?.parse().ok());
@@ -175,23 +244,6 @@ pub fn changed_files(
             })
         })
         .collect();
-    let args = [
-        "ls-files",
-        "-z",
-        "-o",
-        "--exclude-standard",
-        "--full-name",
-        "--",
-        ":/",
-    ];
-    let untracked = run(&args)?.unwrap_or_default();
-    files.extend(split_z(&untracked).map(|path| ChangedFile {
-        path: path.to_string(),
-        area: None,
-        added: None,
-        removed: None,
-        untracked: true,
-    }));
     Ok((base, files))
 }
 
