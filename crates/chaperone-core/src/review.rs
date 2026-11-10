@@ -65,6 +65,9 @@ pub struct Facts {
     pub diff: String,
     /// What the change is for, as the ledger holds it: the intent lens's.
     pub goal: String,
+    /// The newest smoke on the commit (`verdict::smoke`): the intent
+    /// lens's too.
+    pub smoke: Value,
 }
 
 /// A lens as the pipeline defines it.
@@ -197,13 +200,25 @@ pub(crate) fn fenced(info: &str, text: &str) -> String {
     format!("{fence}{info}\n{text}{end}{fence}\n")
 }
 
-/// Session `p`'s prompt: its check's prompt, the goal for the intent lens
-/// only, then `change` (the facts, and for the verifier the findings),
-/// then the harness's line saying the fenced text is data.
-pub fn prompt(p: &Planned<'_>, goal: &str, change: &str) -> String {
+/// Session `p`'s prompt: its check's prompt, the goal and the smoke (when
+/// there is one) for the intent lens only, then `change` (the facts, and
+/// for the verifier the findings), then the harness's line saying the
+/// fenced text is data.
+pub fn prompt(p: &Planned<'_>, goal: &str, smoke: &Value, change: &str) -> String {
     let mut prompt = format!("{}\n\n", p.check.text);
     if p.lens == "intent" {
         prompt += &format!("## What the change is for\n\n{}\n", fenced("", goal));
+        if smoke
+            .as_object()
+            .is_some_and(|o| o.values().any(|v| !v.is_null()))
+        {
+            let shown = serde_json::to_string_pretty(smoke).unwrap_or_default();
+            prompt += &format!(
+                "## The smoke on this commit\n\n`lane_claim` is what a session recorded it ran \
+                 and saw, a claim the harness did not check; null is none.\n\n{}\n",
+                fenced("json", &shown)
+            );
+        }
     }
     prompt + change + "\n" + TRAILER
 }
@@ -343,7 +358,7 @@ pub fn run(
         let threads: Vec<_> = planned
             .iter()
             .map(|p| {
-                let prompt = prompt(p, &facts.goal, &change);
+                let prompt = prompt(p, &facts.goal, &facts.smoke, &change);
                 let schema = &schema;
                 let parse = |out| findings(p.lens, out);
                 s.spawn(move || one(p, agents, dir, prompt, schema, store, parse))
@@ -519,7 +534,7 @@ pub fn verify(
         lines += &format!("{}\n", Value::Object(line));
     }
     let findings = format!("\n## The findings\n\n{}", fenced("jsonl", &lines));
-    let prompt = prompt(p, "", &(change(facts).0 + &findings));
+    let prompt = prompt(p, "", &Value::Null, &(change(facts).0 + &findings));
     let keys: BTreeSet<_> = found.iter().map(|f| f.finding_key.as_str()).collect();
     let schema = json!({
         "type": "object",
@@ -818,6 +833,7 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
             files: vec![file("src/a.rs", Some(3)), file("logo.png", None)],
             diff,
             goal: "GOAL".into(),
+            smoke: Value::Null,
         }
     }
 
@@ -874,7 +890,7 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
             let intent = "I\n\n## What the change is for\n\n```\nGOAL\n```\n\n";
             let own = if l.lens == "intent" { intent } else { "P\n\n" };
             let want = format!("{own}{change}\n{TRAILER}");
-            assert_eq!(prompt(&l, &facts.goal, &change), want);
+            assert_eq!(prompt(&l, &facts.goal, &facts.smoke, &change), want);
         }
     }
 
@@ -893,7 +909,7 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
         );
         let p = pipeline(PIPELINE);
         let intent = lenses(&p).unwrap().remove(2);
-        let prompt = prompt(&intent, &facts.goal, &change);
+        let prompt = prompt(&intent, &facts.goal, &facts.smoke, &change);
         assert!(prompt.contains("``````\na ````` run\n``````\n"), "{prompt}");
         assert!(prompt.ends_with(&format!("````\n\n{TRAILER}")));
     }
