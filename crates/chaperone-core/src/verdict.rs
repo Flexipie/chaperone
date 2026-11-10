@@ -29,6 +29,8 @@ pub const CHECK: &str = "verdict";
 pub const EVENT_CHECK: &str = "merge_verdict";
 /// Of `proven` and `not_proven`, the items kept.
 const ITEMS: usize = 20;
+/// Of each file a smoke claim attached, the end shown.
+const CLAIM_BYTES: usize = 4 * 1024;
 
 /// The verdict's check and runner, or why the pipeline cannot run one.
 pub fn plan(pipeline: &Pipeline) -> Result<Planned<'_>, String> {
@@ -51,36 +53,22 @@ pub struct Harness {
 /// What the harness holds on lane `work`'s commit `head`, or the check it
 /// still lacks there: a verdict needs a `diff`, a `tests` result (pass or
 /// fail) and a `complete` review, so its facts can only change by the
-/// harness doing more work, never by the lane running it early.
+/// harness doing more work, never by the lane running it early. The smoke
+/// is shown as [`smoke`] reads it; the lane's claim is left out of the
+/// digest, so a new claim cannot buy a new session.
 pub fn harness(
     ledger: &Ledger,
+    store: &Evidence,
     work: i64,
     head: &str,
 ) -> Result<Result<Harness, &'static str>, LedgerError> {
-    let newest = |check: &str, complete: bool| -> Result<Option<(i64, Payload)>, LedgerError> {
-        let row: Option<(i64, String)> = ledger
-            .conn()
-            .query_row(
-                "SELECT id, payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
-                   AND json_extract(payload_json, '$.check') = ?2
-                   AND json_extract(payload_json, '$.head_sha') = ?3
-                   AND json_extract(payload_json, '$.producer.kind') = 'harness'
-                   AND (NOT ?4 OR json_extract(payload_json, '$.complete') IS 1)
-                 ORDER BY id DESC LIMIT 1",
-                params![work, check, head, complete],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        row.map(|(id, p)| Ok((id, serde_json::from_str(&p).map_err(io::Error::other)?)))
-            .transpose()
-    };
-    let Some(diff) = newest("diff", false)? else {
+    let Some(diff) = newest(ledger, work, "diff", head, false)? else {
         return Ok(Err("diff"));
     };
-    let Some(tests) = newest("tests", false)? else {
+    let Some(tests) = newest(ledger, work, "tests", head, false)? else {
         return Ok(Err("tests"));
     };
-    let Some(review) = newest("review", true)? else {
+    let Some(review) = newest(ledger, work, "review", head, true)? else {
         return Ok(Err("complete review"));
     };
     let pick = |p: &Payload, keys: &[&str]| -> Value {
@@ -89,12 +77,6 @@ pub fn harness(
             .map(|k| (k.to_string(), p.rest.get(*k).cloned()));
         Value::Object(got.map(|(k, v)| (k, v.unwrap_or(Value::Null))).collect())
     };
-    let mut tests_shown = pick(&tests.1, &["result", "timed_out"]);
-    // Without `ms`, which differs on every run of the same tests.
-    let ran = tests.1.rest.get("commands").and_then(Value::as_array);
-    let ran = ran.into_iter().flatten();
-    let ran = ran.map(|c| json!({"argv": c["argv"], "exit": c["exit"]}));
-    tests_shown["commands"] = Value::Array(ran.collect());
     // Once each: an amend's review raises the same findings again.
     let mut blocking: Vec<_> = ledger
         .blocking_findings(work)?
@@ -108,15 +90,100 @@ pub fn harness(
     });
     let shown = json!({
         "diff": pick(&diff.1, &["files", "added", "removed", "code_lines", "changes_code", "uncounted_files"]),
-        "tests": tests_shown,
+        "tests": ran(&tests.1),
         "review": {"complete": true, "findings": review.1.finding_list().len()},
         "blocking_findings": blocking.collect::<Vec<_>>(),
+        "smoke": smoke(ledger, store, work, head)?,
     });
+    let mut hashed = shown.clone();
+    hashed["smoke"]["lane_claim"] = Value::Null;
     Ok(Ok(Harness {
-        sha256: format!("{:x}", Sha256::digest(canonical_string(&shown))),
+        sha256: format!("{:x}", Sha256::digest(canonical_string(&hashed))),
         read: json!({"diff": diff.0, "tests": tests.0, "review": review.0}),
         shown,
     }))
+}
+
+/// The newest harness `check` on lane `work`'s commit `head`, a complete
+/// one when `complete`.
+fn newest(
+    ledger: &Ledger,
+    work: i64,
+    check: &str,
+    head: &str,
+    complete: bool,
+) -> Result<Option<(i64, Payload)>, LedgerError> {
+    let row: Option<(i64, String)> = ledger
+        .conn()
+        .query_row(
+            "SELECT id, payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = ?2
+               AND json_extract(payload_json, '$.head_sha') = ?3
+               AND json_extract(payload_json, '$.producer.kind') = 'harness'
+               AND (NOT ?4 OR json_extract(payload_json, '$.complete') IS 1)
+             ORDER BY id DESC LIMIT 1",
+            params![work, check, head, complete],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    row.map(|(id, p)| Ok((id, serde_json::from_str(&p).map_err(io::Error::other)?)))
+        .transpose()
+}
+
+/// What a `tests` or `smoke` run did, without `ms`, which differs on
+/// every run of the same commands.
+fn ran(p: &Payload) -> Value {
+    let commands = p.rest.get("commands").and_then(Value::as_array);
+    let commands = commands.into_iter().flatten();
+    let commands = commands.map(|c| json!({"argv": c["argv"], "exit": c["exit"]}));
+    let field = |k: &str| p.rest.get(k).cloned().unwrap_or(Value::Null);
+    json!({"result": field("result"), "timed_out": field("timed_out"), "commands": commands.collect::<Vec<_>>()})
+}
+
+/// The newest smoke on lane `work`'s commit `head`, as the verdict and the
+/// intent lens are shown it: `harness`, what `check run smoke` ran, and
+/// `lane_claim`, what a session recorded with `check record --check smoke`
+/// (on `head` or a short form of it) and the end of each evidence file it
+/// attached, read from `store`; null for none.
+pub fn smoke(
+    ledger: &Ledger,
+    store: &Evidence,
+    work: i64,
+    head: &str,
+) -> Result<Value, LedgerError> {
+    let harness = newest(ledger, work, "smoke", head, false)?.map(|(_, p)| ran(&p));
+    let claim: Option<String> = ledger
+        .conn()
+        .query_row(
+            "SELECT payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = 'smoke'
+               AND json_extract(payload_json, '$.producer.kind') = 'session'
+               AND substr(?2, 1, length(json_extract(payload_json, '$.head_sha')))
+                 = json_extract(payload_json, '$.head_sha')
+             ORDER BY id DESC LIMIT 1",
+            params![work, head],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let claim = match claim {
+        Some(p) => {
+            let p: Payload = serde_json::from_str(&p).map_err(io::Error::other)?;
+            let files = p.rest.get("evidence_files").and_then(Value::as_array);
+            let mut shown = Vec::new();
+            for f in files.into_iter().flatten() {
+                let text = store.get(f["sha256"].as_str().unwrap_or_default())?;
+                let mut from = text.len().saturating_sub(CLAIM_BYTES);
+                while !text.is_char_boundary(from) {
+                    from += 1;
+                }
+                shown.push(json!({"path": f["path"], "end": &text[from..]}));
+            }
+            let reason = p.rest.get("reason").cloned();
+            json!({"outcome": p.outcome, "reason": reason, "evidence_files": shown})
+        }
+        None => Value::Null,
+    };
+    Ok(json!({"harness": harness, "lane_claim": claim}))
 }
 
 /// The verdict's prompt: its check's prompt, what the change is for, the
@@ -126,7 +193,8 @@ pub fn prompt(p: &Planned<'_>, goal: &str, change: &str, harness: &Value) -> Str
     let results = serde_json::to_string_pretty(harness).unwrap_or_default();
     format!(
         "{}\n\n## What the change is for\n\n{}\n{change}\n## What the harness found on this commit\n\n\
-         The harness ran these checks itself on this commit.\n\n{}\n{TRAILER}",
+         The harness ran these checks itself on this commit. `smoke.lane_claim` is what a session \
+         recorded it ran and saw, a claim the harness did not check; null is none.\n\n{}\n{TRAILER}",
         p.check.text,
         fenced("", goal),
         fenced("json", &results),
@@ -361,8 +429,9 @@ mod tests {
     /// raising the same finding again) read the same.
     #[test]
     fn the_facts_need_diff_tests_and_a_complete_review() {
-        let (_dir, ledger) = lane();
-        let lacks = |head: &str| harness(&ledger, 1, head).unwrap().err();
+        let (dir, ledger) = lane();
+        let store = Evidence::beside(&dir.path().join("ledger.db"));
+        let lacks = |head: &str| harness(&ledger, &store, 1, head).unwrap().err();
         assert_eq!(lacks("abc1234"), Some("diff"));
         measured(
             &ledger,
@@ -376,18 +445,19 @@ mod tests {
         measured(&ledger, "review", "abc1234", json!({"complete": false}));
         assert_eq!(lacks("abc1234"), Some("complete review"));
         all(&ledger, "abc1234");
-        let first = harness(&ledger, 1, "abc1234").unwrap().unwrap();
+        let first = harness(&ledger, &store, 1, "abc1234").unwrap().unwrap();
         let want = json!({
             "diff": {"files": 1, "added": null, "removed": null, "code_lines": 4,
                      "changes_code": null, "uncounted_files": null},
             "tests": {"result": "pass", "timed_out": null, "commands": [{"argv": ["t"], "exit": 0}]},
             "review": {"complete": true, "findings": 1},
             "blocking_findings": [{"key": "k", "severity": "blocker", "status": "open", "title": "T"}],
+            "smoke": {"harness": null, "lane_claim": null},
         });
         assert_eq!(first.shown, want);
         assert_eq!(first.read, json!({"diff": 3, "tests": 6, "review": 7}));
         all(&ledger, "fed4321");
-        let amend = harness(&ledger, 1, "fed4321").unwrap().unwrap();
+        let amend = harness(&ledger, &store, 1, "fed4321").unwrap().unwrap();
         assert_eq!(
             (amend.sha256, amend.read["diff"].clone()),
             (first.sha256, json!(8))
@@ -399,9 +469,10 @@ mod tests {
     /// find none.
     #[test]
     fn a_verdict_stands_for_its_tree() {
-        let (_dir, ledger) = lane();
+        let (dir, ledger) = lane();
+        let store = Evidence::beside(&dir.path().join("ledger.db"));
         all(&ledger, "abc1234");
-        let facts = harness(&ledger, 1, "abc1234").unwrap().unwrap();
+        let facts = harness(&ledger, &store, 1, "abc1234").unwrap().unwrap();
         let mut input = run("", "abc1234", json!({}));
         assert!(
             replay(&ledger, &me(), &mut input, "p", &facts)
@@ -459,5 +530,50 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(none.is_none());
+    }
+
+    /// A session's smoke claim is shown with the end of each file it
+    /// attached, labelled a claim, and leaves the digest as it was; the
+    /// harness's own smoke is a fact like the tests.
+    #[test]
+    fn a_smoke_claim_is_shown_not_hashed() {
+        let (dir, ledger) = lane();
+        let store = Evidence::beside(&dir.path().join("ledger.db"));
+        all(&ledger, "abc1234");
+        let before = harness(&ledger, &store, 1, "abc1234").unwrap().unwrap();
+        let log = format!("{}SAW", "x".repeat(5000));
+        let stored = store.put(&log).unwrap();
+        let file = crate::checks::Attached {
+            path: "out.log".into(),
+            sha256: stored.hash,
+            bytes: log.len() as u64,
+            truncated: false,
+            redactions: 0,
+        };
+        let claim = CheckInput {
+            work: 1,
+            check: "smoke".into(),
+            head: "abc1234".into(),
+            outcome: "ran".into(),
+            ..CheckInput::default()
+        };
+        let fresh = Actor {
+            agent: Some("a".into()),
+            session: Some("fresh".into()),
+        };
+        ledger
+            .check_record_with(&fresh, &claim, &[file])
+            .unwrap()
+            .unwrap();
+        let claimed = harness(&ledger, &store, 1, "abc1234").unwrap().unwrap();
+        let shown = &claimed.shown["smoke"]["lane_claim"];
+        let end = shown["evidence_files"][0]["end"].as_str().unwrap();
+        assert_eq!((&shown["outcome"], end.len()), (&json!("ran"), CLAIM_BYTES));
+        assert!(end.ends_with("SAW"));
+        assert_eq!(claimed.sha256, before.sha256);
+        measured(&ledger, "smoke", "abc1234", json!({"result": "pass"}));
+        let ran = harness(&ledger, &store, 1, "abc1234").unwrap().unwrap();
+        assert_eq!(ran.shown["smoke"]["harness"]["result"], "pass");
+        assert_ne!(ran.sha256, before.sha256);
     }
 }

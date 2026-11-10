@@ -357,7 +357,9 @@ variables, Claude Code's sandbox; Codex read-only, without the user's config, `.
 or the checkout's `AGENTS.md`), given its prompt file and then the facts: the commit, the merge
 base, the changed files with their counts and the diff, cut after 128 KiB at a line with a
 note saying where the rest is. Only `intent` is also told what the lane is for: the work
-item's title, its slice of the spec, and the `goal` of its newest handoff's brief. No lens is
+item's title, its slice of the spec, and the `goal` of its newest handoff's brief; and, when
+there is one, the newest smoke on the commit as the verdict is shown it, the session's claim
+labelled as one. No lens is
 given the handoff's summary, `merge_case` or `look_at`. Every block of text from the lane or
 a model (the file list, the diff, the goal, the findings shown to the verifier) is fenced
 one backtick longer than its longest run of backticks, so nothing in it closes the fence, and
@@ -395,8 +397,11 @@ carried to an amended commit (events.md, the key), and nothing runs. Else it ask
 of the runner's CLI, reads the change and makes a checkout as `review` does, and starts one
 fresh session there, given its prompt file, what the lane is for (as the intent lens is
 told), the change (as every lens is shown it) and the harness's results as JSON: the key fields
-of the newest `diff`, `tests` and complete `review` on the commit and the lane's findings that
-still block, each fenced, then the harness's closing line. It is told nothing else the lane
+of the newest `diff`, `tests` and complete `review` on the commit, the lane's findings that
+still block, and the newest smoke on the commit: the harness's `check run smoke` and, labelled a
+claim the harness did not check, a session's `check record --check smoke` on the commit (or a
+short form of it) with the last 4 KiB of each evidence file; each fenced, then the harness's
+closing line. It is told nothing else the lane
 wrote: no summary, `merge_case` or `look_at`. It answers `{decision, why, proven,
 not_proven}`, `decision` `yes` or `no` and a why that is not blank. It writes a
 `usage.reported` for the session, then one `merge_verdict` with the harness producer: `ran`

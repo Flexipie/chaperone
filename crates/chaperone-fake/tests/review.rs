@@ -91,6 +91,8 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
         files: vec![file],
         diff: "+x\n".repeat(diff_bytes / 3),
         goal: "GOAL add a widget".into(),
+        smoke: json!({"harness": null, "lane_claim": {"outcome": "ran", "evidence_files": [
+            {"path": "out.log", "end": "SMOKE SAW"}]}}),
     };
     let store = Evidence::beside(&dir.path().join("ledger.db"));
     Env {
@@ -199,6 +201,7 @@ fn every_lens_reviews_the_same_facts() {
             lens == "intent",
             "{lens}"
         );
+        assert_eq!(prompt.contains("SMOKE SAW"), lens == "intent", "{lens}");
         let args = call["args"].to_string();
         let flags = match cli {
             "claude" => r#""--model","opus","--tools","Grep,Read""#,
@@ -616,7 +619,8 @@ fn judge(env: &Env, ledger: &Ledger, head: &str, tree: &str) -> Recorded {
     let pipeline = pipeline();
     let p = verdict::plan(&pipeline).unwrap();
     let me = lane_session();
-    let harness = verdict::harness(ledger, 1, head).unwrap().unwrap();
+    let harness = verdict::harness(ledger, &env.store, 1, head);
+    let harness = harness.unwrap().unwrap();
     let mut input = RunInput {
         head: head.into(),
         tree: tree.into(),
@@ -640,6 +644,7 @@ fn judge(env: &Env, ledger: &Ledger, head: &str, tree: &str) -> Recorded {
         files: vec![file],
         diff: "+x\n".into(),
         goal: review::goal(ledger, &item).unwrap(),
+        smoke: Value::Null,
     };
     let (dir, agents) = (env.checkout(), env.agents());
     let got = verdict::record(
@@ -704,6 +709,7 @@ fn the_verdict_judges_from_the_harness_facts() {
         "```diff\n+x\n",
         "\"result\": \"pass\"",
         "BLOCKER",
+        "\"lane_claim\": null",
     ] {
         assert!(prompt.contains(said), "{said}: {prompt}");
     }
@@ -785,7 +791,11 @@ fn no_answer_is_no_decision() {
     let env = env(json!([]), json!([]), 10);
     let ledger = ledger(&env);
     let (head, tree) = ("2".repeat(40), "3".repeat(40));
-    let lacks = || verdict::harness(&ledger, 1, &head).unwrap().err();
+    let lacks = || {
+        verdict::harness(&ledger, &env.store, 1, &head)
+            .unwrap()
+            .err()
+    };
     assert_eq!(lacks(), Some("diff"));
     measured(&ledger, &head, &tree, &["diff"]);
     assert_eq!(lacks(), Some("tests"));

@@ -398,8 +398,8 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
             "{e}; a lane on it records verdicts with `check record`"
         ))
     })?;
-    let head = input.head.clone();
-    let harness = verdict::harness(ledger, work, &head)?.map_err(|lacks| {
+    let (head, store) = (input.head.clone(), Evidence::beside(db));
+    let harness = verdict::harness(ledger, &store, work, &head)?.map_err(|lacks| {
         refuse(format!(
             "commit {head} has no harness {lacks}; a verdict needs `check run diff`, `tests` \
              and a complete `review` on it first"
@@ -415,7 +415,6 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         claude: (cli == Cli::Claude).then_some(&started),
         codex: (cli == Cli::Codex).then_some(&started),
     };
-    let store = Evidence::beside(db);
     one(verdict::record(
         ledger,
         actor,
@@ -590,7 +589,8 @@ fn agent(cli: Cli) -> Result<Agent, CliError> {
 /// What a session is shown of commit `head` and the checkout it reads it
 /// in: the files `diff` counts, their merge base, and the diff read in the
 /// harness's fresh checkout (removed when it drops), where the lane's git
-/// config does not reach, with the lane's goal from the ledger.
+/// config does not reach, with the lane's goal and the commit's smoke from
+/// the ledger.
 fn change(
     ledger: &Ledger,
     db: &Path,
@@ -632,6 +632,7 @@ fn change(
         files,
         diff,
         goal: review::goal(ledger, item)?,
+        smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
     };
     Ok((checkout, facts))
 }
