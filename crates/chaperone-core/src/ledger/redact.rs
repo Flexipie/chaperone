@@ -97,6 +97,13 @@ pub(crate) fn payload(p: &mut Payload) -> Checked<u64> {
     Ok(Ok(count))
 }
 
+/// `s` with every match replaced, and how many there were: text that is
+/// stored outside the log (an evidence file).
+pub(crate) fn text(s: &str) -> (String, u64) {
+    let (out, kinds) = redact(s);
+    (out, kinds.len() as u64)
+}
+
 /// The payload object. `changed.<column>.from` is a compare value, checked
 /// against the row, so it is left as sent; `.to` is new text for its column.
 fn root(v: &mut Value, count: &mut u64) -> Result<(), Refusal> {
