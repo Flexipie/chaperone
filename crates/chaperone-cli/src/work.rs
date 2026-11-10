@@ -154,7 +154,7 @@ pub fn run(
             let input: HandoffInput = serde_json::from_str(&raw)
                 .map_err(|e| Refusal::InvalidInput(format!("handoff JSON: {e}")))?;
             // Only a handoff that enters ready is checked against the worktree.
-            let head = if input.ready == Some(true) && input.status.as_deref() != Some("done") {
+            let head = if input.enters_ready() {
                 // An unknown item is the write's to refuse.
                 let item = ledger.work_get(id, &ledger.now()?)?.ok();
                 let (wt, branch) = item
@@ -300,26 +300,22 @@ fn observed_head(worktree: Option<&str>, branch: Option<&str>) -> Result<Option<
         return Ok(None);
     };
     // One or two calls, so plain `git`: finding the real binary costs one too.
-    let deadline = Instant::now() + HEAD_TIMEOUT;
-    let read = |rev: &str| {
-        let args = ["rev-parse", "--verify", "--end-of-options", rev];
-        match git::git(Path::new("git"), wt, &args, deadline, 4096) {
-            Ok((out, _)) => Ok(Some(String::from_utf8_lossy(&out).trim().to_string())),
-            Err(git::Failure::BadRevision) => Ok(None),
-            Err(git::Failure::TimedOut) => Err("git rev-parse: timed out, retry".to_string()),
-            Err(git::Failure::Other(e)) => Err(e),
-        }
-    };
+    let (bin, deadline) = (Path::new("git"), Instant::now() + HEAD_TIMEOUT);
     let tip = match branch {
-        Some(b) => read(&format!("refs/heads/{b}^{{commit}}")),
+        Some(b) => git::commit(bin, wt, &format!("refs/heads/{b}"), deadline),
         None => Ok(None),
     };
     tip.and_then(|tip| match tip {
         Some(tip) => Ok(tip),
-        None => git::head(Path::new("git"), wt, deadline),
+        None => git::head(bin, wt, deadline),
     })
     .map(Some)
-    .map_err(|e| Refusal::InvalidInput(format!("could not read HEAD in {}: {e}", wt.display())))
+    .map_err(|e| {
+        Refusal::InvalidInput(format!(
+            "could not read the commit in {}: {e}",
+            wt.display()
+        ))
+    })
 }
 
 pub(crate) fn value(v: impl Serialize) -> Result<Value, CliError> {
@@ -361,7 +357,7 @@ mod tests {
         let Err(Refusal::InvalidInput(why)) = observed_head(Some(wt), None) else {
             panic!("a directory that is no repository was read");
         };
-        assert!(why.starts_with("could not read HEAD in "), "{why}");
+        assert!(why.starts_with("could not read the commit in "), "{why}");
         git(&["init", "-q", "-b", "layer-1"]);
         git(&["commit", "-q", "--allow-empty", "-m", "one"]);
         let one = git(&["rev-parse", "HEAD"]);

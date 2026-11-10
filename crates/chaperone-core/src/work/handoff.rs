@@ -113,6 +113,12 @@ fn invalid<T>(msg: String) -> Result<T, Refusal> {
 }
 
 impl HandoffInput {
+    /// It moves the lane to ready: `ready: true`, and not a `done` handoff
+    /// (which may still carry the flag after a merge).
+    pub fn enters_ready(&self) -> bool {
+        self.ready == Some(true) && self.status.as_deref() != Some("done")
+    }
+
     /// Daisy's rules, in daisy's order and words.
     pub fn validate(&self) -> Result<(), Refusal> {
         let summary = self.summary.trim();

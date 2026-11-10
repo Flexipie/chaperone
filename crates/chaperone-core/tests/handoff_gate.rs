@@ -638,7 +638,7 @@ fn a_ready_handoff_names_the_observed_head() {
         let Err(Refusal::InvalidInput(why)) = r else {
             panic!("{stale:?}: {r:?}");
         };
-        assert!(why.contains(HEAD), "{why}");
+        assert!(why.contains(HEAD) && !why.contains("  "), "{why}");
     }
     assert_eq!(lane.count("gate.denied") + lane.count("phase.entered"), 0);
     assert_eq!(lane.ledger.work_handoffs(1).unwrap().len(), 0);

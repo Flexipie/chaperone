@@ -575,7 +575,8 @@ impl Ledger {
     ///
     /// `observed_head` is the commit the caller read in the lane's worktree
     /// just before this write (the ledger makes no git call): the tip of
-    /// the lane's branch, or `HEAD` when it has none. A handoff that enters
+    /// the lane's branch, or `HEAD` when the item names none or the
+    /// worktree does not have it. A handoff that enters
     /// ready must name it as its `commit`, so the checks on that commit are
     /// checks on what the branch holds. A handoff to `done` is not checked
     /// (the branch may have moved on after the merge), and neither is None:
@@ -592,8 +593,7 @@ impl Ledger {
         if let Err(r) = input.validate() {
             return Ok(Err(r));
         }
-        let enters_ready = input.ready == Some(true) && input.status.as_deref() != Some("done");
-        if let (true, Some(head)) = (enters_ready, observed_head) {
+        if let (true, Some(head)) = (input.enters_ready(), observed_head) {
             let said = match input.commit.as_deref() {
                 Some(c) if sha_prefix_eq(c, head, 7..=64, false) => None,
                 Some(c) => Some(format!("says '{c}'")),
@@ -601,7 +601,9 @@ impl Ledger {
             };
             if let Some(said) = said {
                 return Ok(Err(Refusal::InvalidInput(format!(
-                    "a ready handoff names the commit the lane is on: that is {head}, the                      handoff {said}; record the checks on {head} and hand it off, or check                      out the commit that was checked"
+                    "a ready handoff names the commit the lane is on: that is {head}, the \
+                     handoff {said}; record the checks on {head} and hand it off, or check \
+                     out the commit that was checked"
                 ))));
             }
         }
@@ -650,7 +652,7 @@ impl Ledger {
                 // Ready and done are gated (cli-contract.md, commands and
                 // transitions); a needs-you or progress handoff is not.
                 let done = input.status.as_deref() == Some("done");
-                if done || input.ready == Some(true) {
+                if done || input.enters_ready() {
                     let to = if done { Phase::Done } else { Phase::Ready };
                     let status = input.status.as_deref().unwrap_or(&item.status);
                     let head = input.commit.clone();
