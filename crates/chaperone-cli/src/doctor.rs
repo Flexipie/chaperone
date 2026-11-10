@@ -666,7 +666,8 @@ fn repo_checks(dir: &Path, profile: Option<PathBuf>, scan: &mut Scan) -> Option<
         Err(Failure::Other(e)) => Err(e),
     };
     let origin = call(&["config", "--get", "remote.origin.url"]).ok();
-    match chaperone_graph::rules(profile, origin.as_deref().map(str::trim)) {
+    let origin = origin.as_deref().map(str::trim);
+    match chaperone_graph::rules_in(&bin, dir, deadline, profile, origin) {
         Err(Error::Invalid(e) | Error::Internal(e)) => scan.add(dir, None, "profile", e),
         Ok(rules) => match call(&["ls-files", "-z", "--full-name", "--", ":/"]) {
             Err(e) => scan.add(dir, None, "profile", e),

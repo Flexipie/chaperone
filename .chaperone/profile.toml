@@ -1,0 +1,105 @@
+# The pipeline profile of this repo. Chaperone reads it from the base
+# branch (origin), never from a worktree, so a lane cannot change the
+# rules it is checked by: an edit takes effect once it is merged.
+slug = "Flexipie/chaperone"
+name = "chaperone"
+
+[tracker]
+kind = "github"
+key = "#[0-9]+"
+
+[git]
+base = "main"
+branch = "{short}"
+
+[pr]
+flow = "pr"
+create = "gh"
+address = "builtin"
+merge = "squash"
+stack = "none"
+
+[review]
+daisy = false
+
+[lanes]
+enabled = true
+
+[ledger]
+kind = "chaperone"
+
+# Entry points: what `chaperone impact --entry-points` reports (#44).
+# Each command names the file that implements it, not main.rs: the
+# dispatcher depends on every command, so a rule on it is reached by all.
+[[entry_points]]
+kind = "command"
+name = "work"
+path = "crates/chaperone-cli/src/work.rs"
+
+[[entry_points]]
+kind = "command"
+name = "spec"
+path = "crates/chaperone-cli/src/spec.rs"
+
+[[entry_points]]
+kind = "command"
+name = "check"
+path = "crates/chaperone-cli/src/checks.rs"
+
+[[entry_points]]
+kind = "command"
+name = "reviews"
+path = "crates/chaperone-cli/src/checks.rs"
+
+[[entry_points]]
+kind = "command"
+name = "jobs"
+path = "crates/chaperone-cli/src/checks.rs"
+
+[[entry_points]]
+kind = "command"
+name = "usage"
+path = "crates/chaperone-cli/src/checks.rs"
+
+[[entry_points]]
+kind = "command"
+name = "attention"
+path = "crates/chaperone-cli/src/checks.rs"
+
+[[entry_points]]
+kind = "command"
+name = "dossier"
+path = "crates/chaperone-cli/src/checks.rs"
+
+[[entry_points]]
+kind = "command"
+name = "stats"
+path = "crates/chaperone-core/src/stats.rs"
+
+[[entry_points]]
+kind = "command"
+name = "migrate"
+path = "crates/chaperone-core/src/ledger/migrate.rs"
+
+[[entry_points]]
+kind = "command"
+name = "impact"
+path = "crates/chaperone-cli/src/impact.rs"
+
+[[entry_points]]
+kind = "command"
+name = "overlap"
+path = "crates/chaperone-cli/src/overlap.rs"
+
+# Every tracked file must be in exactly one area, or impact --entry-points refuses.
+[areas]
+cli = ["crates/chaperone-cli/**"]
+lanes = ["crates/chaperone-core/src/*.rs", "crates/chaperone-core/src/spec/**", "crates/chaperone-core/src/usage/**", "crates/chaperone-core/src/work/**"]
+ledger = ["crates/chaperone-core/src/ledger/**", "crates/chaperone-core/migrations/**"]
+engine = ["crates/chaperone-core/src/pipeline/**", "pipelines/**"]
+graph = ["crates/chaperone-graph/**"]
+ui = ["crates/chaperone-ui/**"]
+tests = ["crates/chaperone-core/tests/**", "crates/chaperone-fake/**"]
+build = ["Cargo.toml", "Cargo.lock", "crates/chaperone-core/Cargo.toml", "rust-toolchain.toml", "rustfmt.toml", "deny.toml", ".gitignore", ".config/**", ".github/**", ".chaperone/**"]
+docs = ["docs/**", "README.md", "CONTRIBUTING.md", "LICENSE-APACHE", "LICENSE-MIT"]
+spikes = ["spikes/**"]

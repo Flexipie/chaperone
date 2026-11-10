@@ -50,9 +50,14 @@ impl Rules {
             .and_then(|t| t.split_once("\n+++"))
             .map(|(t, _)| t)
             .ok_or("no +++ TOML front matter")?;
+        Rules::from_toml(toml)
+    }
+
+    /// The rules in a repo's own profile, a TOML file. The same refusal.
+    pub fn from_toml(toml: &str) -> Result<Rules, String> {
         let rules: Rules = toml::from_str(toml).map_err(|e| e.message().to_string())?;
         if rules.entry_points.is_empty() {
-            return Err("no [[entry_points]] in the front matter".into());
+            return Err("no [[entry_points]]".into());
         }
         Ok(rules)
     }

@@ -102,7 +102,8 @@ pub enum Cmd {
         /// profile's `[[entry_points]]` and `[areas]`
         #[arg(long)]
         entry_points: bool,
-        /// The profile (default: the origin's in
+        /// The profile (default: .chaperone/profile.toml on the repo's
+        /// base branch, else the origin's in
         /// ~/dotfiles/claude/pipeline/profiles)
         #[arg(long, requires = "entry_points")]
         profile: Option<PathBuf>,
@@ -130,7 +131,8 @@ pub enum Cmd {
         /// commit against its origin/main
         #[arg(long)]
         repo: Option<PathBuf>,
-        /// The profile (default: the --repo origin's in
+        /// The profile (default: .chaperone/profile.toml on the --repo
+        /// base branch, else its origin's in
         /// ~/dotfiles/claude/pipeline/profiles)
         #[arg(long, requires = "repo")]
         profile: Option<PathBuf>,

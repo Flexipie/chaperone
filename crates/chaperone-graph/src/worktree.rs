@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use chaperone_core::git::{Failure, git, git_bin};
+use chaperone_core::git::{BASES, Failure, git, git_bin};
 
 use crate::{Entries, File, Impact, Rules, cache_file, impact};
 
@@ -17,6 +17,11 @@ const DEADLINE: Duration = Duration::from_secs(5);
 const OUT_BYTES: usize = 64 * 1024 * 1024;
 /// Dependent files listed; the rest are counted.
 const LIMIT: usize = 500;
+/// The repo's own profile: TOML, read from its base branch and never from
+/// the worktree, so a lane cannot change the rules it is checked by.
+pub const REPO_PROFILE: &str = ".chaperone/profile.toml";
+/// A profile past this is refused, not cut.
+const PROFILE_BYTES: usize = 1024 * 1024;
 
 /// Why [`impact_in`] gave no answer: the caller's input (the CLI's
 /// `invalid_input`), or this side's failure (`internal`).
@@ -122,7 +127,7 @@ pub fn impact_in(
         .ok()
         .filter(|o| !o.is_empty());
     let rules = match entry_points {
-        true => Some(rules(profile, origin.as_deref())?),
+        true => Some(rules_in(&bin, dir, deadline, profile, origin.as_deref())?),
         false => None,
     };
     let head = String::from_utf8_lossy(&head?).trim().to_string();
@@ -248,10 +253,73 @@ pub fn impact_in(
     ))
 }
 
-/// The entry rules: from `profile`, or the origin's pipeline profile, by
-/// the origin URL in git config (an `insteadOf` alias is not expanded). No
-/// rules is a refusal, never an empty answer.
-/// The pipeline profile of repo `slug` (`owner/repo`), where [`impact_in`]
+/// The entry rules of the repo `dir` is in: the file `profile` names, else
+/// the base branch's [`REPO_PROFILE`], else [`rules`] by `origin` (a repo
+/// that does not carry its profile yet).
+pub fn rules_in(
+    bin: &Path,
+    dir: &Path,
+    deadline: Instant,
+    profile: Option<PathBuf>,
+    origin: Option<&str>,
+) -> Result<Rules, Error> {
+    if profile.is_none()
+        && let Some((at, text)) = base_profile(bin, dir, deadline)?
+    {
+        return Rules::from_toml(&text).map_err(|e| Error::Invalid(format!("profile {at}: {e}")));
+    }
+    rules(profile, origin)
+}
+
+/// [`REPO_PROFILE`] as the first of [`BASES`] this clone has holds it, and
+/// where that is; None when there is no base or it has no such file. The
+/// bases are read as remote refs by their full names, so a local branch
+/// called `origin/main` is not one, and what the worktree or the index
+/// holds at the path changes nothing.
+fn base_profile(
+    bin: &Path,
+    dir: &Path,
+    deadline: Instant,
+) -> Result<Option<(String, String)>, Error> {
+    let call = |args: &[&str]| match git(bin, dir, args, deadline, PROFILE_BYTES) {
+        Ok((out, false)) => Ok(String::from_utf8_lossy(&out).into_owned()),
+        Ok((_, true)) => Err(Error::Invalid(format!(
+            "profile: git {} output past {PROFILE_BYTES} bytes",
+            args[0]
+        ))),
+        Err(Failure::TimedOut) => Err(Error::Internal(format!("git {}: timed out", args[0]))),
+        Err(Failure::BadRevision) => Err(Error::Invalid(format!(
+            "git {}: a commit this clone lacks",
+            args[0]
+        ))),
+        Err(Failure::Other(e)) => Err(Error::Invalid(e)),
+    };
+    let refs = BASES.map(|base| format!("refs/remotes/{base}"));
+    let mut args = vec!["for-each-ref", "--format=%(refname)"];
+    args.extend(refs.iter().map(String::as_str));
+    let have = call(&args)?;
+    let Some((base, full)) = BASES
+        .iter()
+        .zip(&refs)
+        .find(|(_, full)| have.lines().any(|l| l == full.as_str()))
+    else {
+        return Ok(None);
+    };
+    // `<mode> <type> <id>\t<path>\0`, or nothing when the base has none.
+    let tree = call(&["ls-tree", "-z", full, "--", REPO_PROFILE])?;
+    let mut cols = tree.split([' ', '\t']);
+    let (mode, kind, id) = (cols.next(), cols.next(), cols.next());
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let at = format!("{base}:{REPO_PROFILE}");
+    if kind != Some("blob") || mode == Some("120000") {
+        return Err(Error::Invalid(format!("profile {at}: not a file")));
+    }
+    Ok(Some((at, call(&["cat-file", "blob", id])?)))
+}
+
+/// The pipeline profile of repo `slug` (`owner/repo`), where [`rules`]
 /// looks for it when it is not passed.
 pub fn profile_file(slug: &str) -> Option<PathBuf> {
     let file = format!("{}.md", slug.replace('/', "-").to_lowercase());
@@ -262,6 +330,9 @@ pub fn profile_file(slug: &str) -> Option<PathBuf> {
     )
 }
 
+/// The entry rules: from `profile`, or the origin's pipeline profile, by
+/// the origin URL in git config (an `insteadOf` alias is not expanded). No
+/// rules is a refusal, never an empty answer.
 pub fn rules(profile: Option<PathBuf>, origin: Option<&str>) -> Result<Rules, Error> {
     let refuse = Error::Invalid;
     let (path, slug) = match profile {
@@ -316,4 +387,86 @@ fn repo_path(t: &str, top: &Path, prefix: &str) -> String {
         .zip(p.file_name())
         .and_then(|(d, n)| Some(d.join(n).strip_prefix(top).ok()?.display().to_string()))
         .unwrap_or_else(|| t.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::*;
+
+    const PROFILE: &str = "[[entry_points]]\nkind = \"command\"\npath = \"src/main.rs\"\n";
+
+    /// The repo's profile is its base branch's: an edit in the worktree or
+    /// a later commit does not change it, a broken one refuses by name,
+    /// and a repo that carries none is looked up by its origin.
+    #[test]
+    fn rules_come_from_the_base_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path();
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(wt)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        let commit = |text: &str| {
+            std::fs::create_dir_all(wt.join(".chaperone")).unwrap();
+            std::fs::write(wt.join(REPO_PROFILE), text).unwrap();
+            run(&["add", "-A"]);
+            run(&["commit", "-q", "-m", "profile"]);
+        };
+        let rules = || {
+            let deadline = Instant::now() + DEADLINE;
+            rules_in(Path::new("git"), wt, deadline, None, None)
+        };
+        let kinds = |r: Rules| {
+            r.at("src/main.rs")
+                .map(|(k, _)| k.to_string())
+                .collect::<Vec<_>>()
+        };
+        run(&["init", "-q"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        // The lane adds a profile, and a local branch takes the base's
+        // name: the base has none, so the origin's is looked for.
+        commit(PROFILE);
+        run(&["branch", "origin/main"]);
+        let Err(Error::Invalid(why)) = rules() else {
+            panic!("a profile the base does not have was read");
+        };
+        assert!(why.contains("no GitHub origin"), "{why}");
+
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        // The lane rewrites its rules, committed and not: the base's hold.
+        commit(&PROFILE.replace("command", "weakened"));
+        std::fs::write(wt.join(REPO_PROFILE), "not toml").unwrap();
+        assert_eq!(kinds(rules().unwrap()), ["command"]);
+
+        commit("[areas]\n");
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        let Err(Error::Invalid(why)) = rules() else {
+            panic!("a profile with no entry points answered");
+        };
+        let named = "profile origin/main:.chaperone/profile.toml: no [[entry_points]]";
+        assert_eq!(why, named);
+
+        // A link is not followed: its target would be the lane's to choose.
+        std::fs::remove_file(wt.join(REPO_PROFILE)).unwrap();
+        std::os::unix::fs::symlink("elsewhere.toml", wt.join(REPO_PROFILE)).unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "link"]);
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        let Err(Error::Invalid(why)) = rules() else {
+            panic!("a link answered");
+        };
+        assert_eq!(
+            why,
+            "profile origin/main:.chaperone/profile.toml: not a file"
+        );
+    }
 }

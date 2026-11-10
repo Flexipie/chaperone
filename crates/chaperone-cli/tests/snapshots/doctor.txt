@@ -7,5 +7,5 @@ Options:
       --skills <SKILLS>...  Directories (searched recursively) or files to read: .md, .sh, .py, and scripts with a shell or python shebang
       --format <FORMAT>     Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
       --repo <REPO>         A checkout of the repo: check its profile's `[areas]` and `[[entry_points]]` against its tracked files, and this binary's commit against its origin/main
-      --profile <PROFILE>   The profile (default: the --repo origin's in ~/dotfiles/claude/pipeline/profiles)
+      --profile <PROFILE>   The profile (default: .chaperone/profile.toml on the --repo base branch, else its origin's in ~/dotfiles/claude/pipeline/profiles)
   -h, --help                Print help
