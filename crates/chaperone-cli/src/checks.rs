@@ -6,6 +6,7 @@
 
 use std::ffi::OsString;
 use std::fs::{DirBuilder, File};
+use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,6 +18,7 @@ use chaperone_core::dossier::NoteInput;
 use chaperone_core::git::{self, ChangedFile};
 use chaperone_core::ledger::{self, Actor, Evidence, Ledger, LedgerError, Refusal};
 use chaperone_core::pipeline::{self, Cli, Pipeline};
+use chaperone_core::plan;
 use chaperone_core::review::{self, Agents, Facts};
 use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
@@ -48,6 +50,8 @@ const TESTS_TIMEOUT: Duration = Duration::from_secs(1800);
 const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Of each test command's stdout and stderr, the end kept as evidence.
 const TAIL_BYTES: usize = 16 * 1024;
+/// A plan file: a document a person reads, far above any real one.
+const PLAN_BYTES: usize = 64 * 1024;
 /// The numstat's output; a cut list would count too little, so past it the
 /// run fails.
 const DIFF_BYTES: usize = 16 * 1024 * 1024;
@@ -76,25 +80,23 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             one(ledger.check_record(&actor.resolve(), &input)??)
         }
         CheckCmd::Run {
-            kind: RunKind::Diff,
+            kind,
             work,
+            file,
             actor,
-        } => run_diff(ledger, db, work, &actor.resolve()),
-        CheckCmd::Run {
-            kind: RunKind::Tests,
-            work,
-            actor,
-        } => run_tests(ledger, db, work, &actor.resolve()),
-        CheckCmd::Run {
-            kind: RunKind::Review,
-            work,
-            actor,
-        } => run_review(ledger, db, work, &actor.resolve()),
-        CheckCmd::Run {
-            kind: RunKind::Verdict,
-            work,
-            actor,
-        } => run_verdict(ledger, db, work, &actor.resolve()),
+        } => {
+            let actor = actor.resolve();
+            match (kind, file) {
+                (RunKind::Plan, Some(file)) => run_plan(ledger, db, work, &file, &actor),
+                (RunKind::Plan, None) | (_, Some(_)) => Err(refuse(
+                    "--file <plan> goes with plan, and is required there".into(),
+                )),
+                (RunKind::Diff, None) => run_diff(ledger, db, work, &actor),
+                (RunKind::Tests, None) => run_tests(ledger, db, work, &actor),
+                (RunKind::Review, None) => run_review(ledger, db, work, &actor),
+                (RunKind::Verdict, None) => run_verdict(ledger, db, work, &actor),
+            }
+        }
     }
 }
 
@@ -165,23 +167,16 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         mut input,
     } = start_run(ledger, db, work, "diff")?;
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
-    let code: Vec<_> = files
-        .iter()
-        .filter(|f| !NOT_CODE.iter().any(|g| glob(g, &f.path)))
-        .collect();
+    let (code, code_lines) = code(&files);
     let added: u64 = files.iter().filter_map(|f| f.added).sum();
     let removed: u64 = files.iter().filter_map(|f| f.removed).sum();
-    let code_lines: u64 = code
-        .iter()
-        .map(|f| f.added.unwrap_or(0) + f.removed.unwrap_or(0))
-        .sum();
     input.fields = Map::from_iter([
         ("base".into(), json!(base)),
         ("files".into(), json!(files.len())),
         ("added".into(), json!(added)),
         ("removed".into(), json!(removed)),
         ("code_lines".into(), json!(code_lines)),
-        ("changes_code".into(), json!(!code.is_empty())),
+        ("changes_code".into(), json!(code > 0)),
         // Binary, or text an attributes rule (`-diff`) hides: no lines
         // counted, so a size gate can refuse rather than trust the totals.
         (
@@ -200,6 +195,17 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     input.fields.insert("files_truncated".into(), truncated);
     input.evidence_ref = Some(stored.hash);
     one(ledger.check_run(actor, &input)??)
+}
+
+/// Of `files`, how many are code (not [`NOT_CODE`]), and their lines
+/// added plus removed.
+fn code(files: &[ChangedFile]) -> (usize, u64) {
+    let code = files
+        .iter()
+        .filter(|f| !NOT_CODE.iter().any(|g| glob(g, &f.path)));
+    code.fold((0, 0), |(n, lines), f| {
+        (n + 1, lines + f.added.unwrap_or(0) + f.removed.unwrap_or(0))
+    })
 }
 
 /// The files the commit `head` changes against the merge base, and the
@@ -380,6 +386,92 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         &harness,
         &store,
     )??)
+}
+
+/// `check run plan`: the lane's commit must change no code file against
+/// its base, as `diff` counts code, or the run is refused and names the
+/// owner's waiver. Then the plan file is read here, the pipeline must name
+/// a `plan` check, and the plan is stored as evidence; the same plan on the
+/// same tree and pipeline replays. Else one fresh
+/// session on the pipeline's `plan` check (`plan::record`) in the
+/// harness's checkout attacks it. A lane whose pipeline has no `plan`
+/// (v17 to v19) writes nothing.
+fn run_plan(
+    ledger: &Ledger,
+    db: &Path,
+    work: i64,
+    file: &Path,
+    actor: &Actor,
+) -> Result<Outcome, CliError> {
+    let Run {
+        _lock,
+        wt,
+        item,
+        mut input,
+    } = start_run(ledger, db, work, plan::EVENT_CHECK)?;
+    let head = input.head.clone();
+    let (_, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
+    let (code, lines) = code(&files);
+    if code > 0 {
+        return Err(refuse(format!(
+            "commit {head} changes {code} code files ({lines} lines) against its base: the plan \
+             check runs before any code. The owner can waive it with `check waive plan --work {work}`"
+        )));
+    }
+    let text = plan_text(file)?;
+    let pipeline = lane_pipeline(&item)?;
+    let planned = plan::plan(pipeline).map_err(|e| {
+        refuse(format!(
+            "{e}; a lane on it records plan checks with `check record`"
+        ))
+    })?;
+    let store = Evidence::beside(db);
+    let plan_ref = store.put(&text).map_err(LedgerError::from)?.hash;
+    if let Some(stored) = plan::replay(ledger, &mut input, &pipeline.hash, &plan_ref)? {
+        return one(stored);
+    }
+    let cli = planned.runner.cli;
+    let started = agent(cli)?;
+    let (checkout, facts) = change(ledger, db, &wt, &item, &head)?;
+    let agents = Agents {
+        claude: (cli == Cli::Claude).then_some(&started),
+        codex: (cli == Cli::Codex).then_some(&started),
+    };
+    let given = (&*facts.goal, &*text, &*plan_ref, &*facts.base);
+    one(plan::record(
+        ledger,
+        actor,
+        input,
+        &planned,
+        &agents,
+        &checkout.dir,
+        given,
+        &store,
+    )??)
+}
+
+/// The plan at `path`: a regular file (a link to one is followed) of at
+/// most [`PLAN_BYTES`] of UTF-8 text that is not blank. It may sit outside
+/// the worktree, as plans are kept in the agent's own folder; it is the
+/// lane's text, given to the reviewer as fenced data and stored redacted.
+fn plan_text(path: &Path) -> Result<String, CliError> {
+    let bad = |why: &str| refuse(format!("plan {}: {why}", path.display()));
+    let file = File::open(path).map_err(|e| bad(&e.to_string()))?;
+    let meta = file.metadata().map_err(|e| bad(&e.to_string()))?;
+    if !meta.is_file() {
+        return Err(bad("not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    let read = file.take(PLAN_BYTES as u64 + 1).read_to_end(&mut bytes);
+    read.map_err(|e| bad(&e.to_string()))?;
+    if bytes.len() > PLAN_BYTES {
+        return Err(bad(&format!("over {PLAN_BYTES} bytes")));
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) if !text.trim().is_empty() => Ok(text),
+        Ok(_) => Err(bad("empty")),
+        Err(_) => Err(bad("not UTF-8 text")),
+    }
 }
 
 /// The pipeline the lane is stamped with, as this binary loads it.

@@ -613,6 +613,9 @@ pub enum CheckCmd {
         kind: RunKind,
         #[arg(long)]
         work: i64,
+        /// The plan file, for plan only: regular UTF-8 text of at most 64 KiB
+        #[arg(long)]
+        file: Option<PathBuf>,
         #[command(flatten)]
         actor: ActorArgs,
     },
@@ -636,6 +639,10 @@ pub enum RunKind {
     /// complete review of it; a verdict stands for its tree, so the same
     /// tree and results replay it, yes or no (none before v20)
     Verdict,
+    /// One fresh session attacking the plan in --file, before any code: a
+    /// commit that changes a code file is refused (the owner can waive the
+    /// check); the same plan on the same tree replays (none before v20)
+    Plan,
 }
 
 /// Daisy's review jobs, as recorded in the ledger. The worker stays in

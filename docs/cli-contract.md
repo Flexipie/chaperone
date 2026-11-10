@@ -120,7 +120,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>]` | write |
-| `check run` | `diff\|tests\|review\|verdict --work <id>` | write |
+| `check run` | `diff\|tests\|review\|verdict\|plan --work <id> [--file <plan>]` | write |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -390,6 +390,22 @@ answered anything else, never a default yes or no. A verdict stands for its tree
 tree and results replay it, so a NO is not run again until the harness's facts change (a new
 tests result, a new complete review, a ruling, dispute or waive of a blocking finding), which
 is deliberate. It prints the `check.finished` as `check record` does.
+
+`check run plan --file <plan>` takes the same lock and reads the commit the same way. `--file` is
+required here and refused on every other check. The commit must change no code file against its
+base, as `diff` counts code (any file not under `docs/`, ending in `.md` or in `.lock`, with or
+without counted lines): the plan is attacked before code exists, so a commit with code is refused
+(`invalid_input`, naming the files, the lines and the owner's waiver). The plan file must be a
+regular file (a link to one is followed) of at most 64 KiB of UTF-8 text that is not blank; it
+may sit outside the worktree, where agents keep their plans. Then the lane's stamped pipeline
+must name a `plan` check with a runner and a prompt (none before v20, so a lane on v17 to v19 is
+refused and keeps `check record`). All of these write nothing. The plan is stored as evidence
+(redacted); a plan check that ran on the same tree, pipeline and plan replays. Else one fresh
+session in the harness's checkout of the commit is given its prompt, what the lane is for (as the
+intent lens), the plan, fenced, and the commit and merge base, and answers `{findings: [...]}`
+as a review lens does. It writes a `usage.reported` for the session, then one `plan_check` with
+the harness producer (events.md): `ran` with the findings, or `skipped` with `reason`
+`no_answer`, never "no findings". It prints the `check.finished` as `check record` does.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

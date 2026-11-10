@@ -9,6 +9,7 @@ Arguments:
           - tests:   The base branch profile's `[tests]` commands, in a fresh checkout of the commit the harness makes and removes each run; the checkout must stay at the commit and clean
           - review:  Four review lenses on the commit's diff, in that checkout, each on the CLI its pipeline runner names, then a verifier that tries to refute each finding; the lane's pipeline names them (none before v20)
           - verdict: One fresh session on whether the commit should merge, from the change, the lane's goal and the harness's own diff, tests and complete review of it; a verdict stands for its tree, so the same tree and results replay it, yes or no (none before v20)
+          - plan:    One fresh session attacking the plan in --file, before any code: a commit that changes a code file is refused (the owner can waive the check); the same plan on the same tree replays (none before v20)
 
 Options:
       --db <DB>
@@ -17,14 +18,17 @@ Options:
       --work <WORK>
           
 
-      --agent <AGENT>
-          Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --file <FILE>
+          The plan file, for plan only: regular UTF-8 text of at most 64 KiB
 
       --format <FORMAT>
           Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key
           
           [default: json]
           [possible values: json, jsonl]
+
+      --agent <AGENT>
+          Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
 
       --session <SESSION>
           Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)

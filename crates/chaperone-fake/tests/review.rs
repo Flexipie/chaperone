@@ -1,6 +1,6 @@
-//! `review::run`'s lenses, `review::verify`, `review::record` and
-//! `verdict::record` against the scripted agent, linked as both `claude`
-//! and `codex`.
+//! `review::run`'s lenses, `review::verify`, `review::record`,
+//! `verdict::record` and `plan::record` against the scripted agent, linked
+//! as both `claude` and `codex`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -11,8 +11,8 @@ use chaperone_core::ledger::{Actor, Evidence, Findings, Ledger, Refusal};
 use chaperone_core::pipeline::{Fact, Pipeline};
 use chaperone_core::review::{self, Agents, Facts, Lens, PROMPT_DIFF_BYTES, Review, Ruling};
 use chaperone_core::runner::Agent;
-use chaperone_core::verdict;
 use chaperone_core::work::{Brief, ClaimInput, CreateInput, HandoffInput, LookAt};
+use chaperone_core::{plan, verdict};
 use serde_json::{Value, json};
 
 const PIPELINE: &str = r#"
@@ -27,6 +27,7 @@ checks.review_intent = { runner = "lens", prompt = "intent.md" }
 checks.review_codex = { runner = "second", prompt = "codex.md" }
 checks.review_verifier = { runner = "lens", prompt = "verifier.md" }
 checks.verdict = { runner = "lens", prompt = "verdict.md" }
+checks.plan = { runner = "lens", prompt = "plan.md" }
 gate = [{ id = "a", fn = "eq", args = { field = "verdict.decision", value = "yes" } }]
 transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["a"] }]
 "#;
@@ -37,6 +38,7 @@ const PROMPTS: &[(&str, &str)] = &[
     ("codex.md", "LENS codex"),
     ("verifier.md", "LENS verifier"),
     ("verdict.md", "LENS verdict"),
+    ("plan.md", "LENS plan"),
 ];
 
 /// A result as Claude Code prints it, less the fields not read.
@@ -823,4 +825,96 @@ fn no_answer_is_no_decision() {
     assert_eq!((p.outcome.as_deref(), calls(&env)), (Some("ran"), 6));
     let facts = ledger.project(1, None).unwrap();
     assert_eq!(facts.get("verdict.decision"), &Fact::Str("yes".into()));
+}
+
+/// `check run plan` on lane 1's commit for `text`, as the CLI runs it from
+/// the lane's own session: the plan stored, [`plan::replay`], then
+/// [`plan::record`].
+fn attack(env: &Env, ledger: &Ledger, text: &str) -> Recorded {
+    let pipeline = pipeline();
+    let p = plan::plan(&pipeline).unwrap();
+    let plan_ref = env.store.put(text).unwrap().hash;
+    let mut input = input(&pipeline);
+    if let Some(stored) = plan::replay(ledger, &mut input, &pipeline.hash, &plan_ref).unwrap() {
+        return stored;
+    }
+    let (dir, agents) = (env.checkout(), env.agents());
+    let given = ("GOAL add a widget", text, &*plan_ref, "1111111");
+    let got = plan::record(
+        ledger,
+        &lane_session(),
+        input,
+        &p,
+        &agents,
+        &dir,
+        given,
+        &env.store,
+    );
+    got.unwrap().unwrap()
+}
+
+/// The plan reviewer is given the goal and the plan, fenced, and its
+/// findings are the plan check's, recorded from the lane's own session as
+/// the harness's `plan_check` with the plan as evidence and a usage row;
+/// the same plan replays without a session and a new one runs; a session
+/// with no answer records a skipped check with no findings.
+#[test]
+fn the_plan_check_attacks_the_plan() {
+    let said = json!({"findings": [found("risk", "it races")]});
+    let runs = json!([{"when": "LENS plan", "stdout": session("p", said)}]);
+    let env = env(runs, json!([]), 10);
+    let ledger = ledger(&env);
+    let first = attack(&env, &ledger, "PLAN step one");
+    let p = &first.payload;
+    let got = (
+        p.check.as_deref(),
+        p.outcome.as_deref(),
+        &p.rest["producer"]["kind"],
+    );
+    assert_eq!(got, (Some("plan_check"), Some("ran"), &json!("harness")));
+    let Some(Findings::List(found)) = &p.findings else {
+        panic!("no findings list: {p:?}");
+    };
+    assert_eq!((found.len(), &*found[0].title), (1, "it races"));
+    assert!(found[0].finding_key.starts_with("plan-"));
+    let stored = env.store.get(p.rest["plan_ref"].as_str().unwrap()).unwrap();
+    assert_eq!(stored, "PLAN step one");
+    let call = call(env.dir.path(), "claude", "plan");
+    let prompt = call["prompt"].as_str().unwrap();
+    for said in [
+        "```\nGOAL add a widget\n```",
+        "```\nPLAN step one\n```",
+        "merge base is 1111111",
+    ] {
+        assert!(prompt.contains(said), "{said}: {prompt}");
+    }
+    assert!(prompt.ends_with("in the schema you were given.\n"));
+    assert_eq!(
+        ledger.usage_get(1).unwrap().unwrap()["totals"]["harness"]["messages"],
+        1
+    );
+
+    let again = attack(&env, &ledger, "PLAN step one");
+    assert_eq!(
+        (again.replayed, again.event_id, calls(&env)),
+        (true, first.event_id, 1)
+    );
+    rescript(
+        &env,
+        "claude",
+        json!([{"when": "LENS plan", "stdout": "not json"}]),
+    );
+    let failed = attack(&env, &ledger, "PLAN step two").payload;
+    let got = (
+        failed.outcome.as_deref(),
+        &failed.rest["reason"],
+        &failed.findings,
+    );
+    assert_eq!(got, (Some("skipped"), &json!("no_answer"), &None));
+    assert_eq!(calls(&env), 2);
+    let facts = ledger.project(1, None).unwrap();
+    assert_eq!(
+        facts.get("plan_check.outcome"),
+        &Fact::Str("skipped".into())
+    );
 }
