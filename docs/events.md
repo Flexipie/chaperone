@@ -400,7 +400,7 @@ reasons) are reserved for a `--file` input after M1.
 | --- | --- |
 | `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the `work ready` override, which wins over every handoff until `--clear`; else a lane not in `review` is not ready; else the latest handoff's `ready` field, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). `work board` applies it (cli-contract.md). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `kind`, `pr_flow`, `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `id` is the lane id, `idempotency_key` comes from `lane.created` (less the `create:` it is stored under), `lease_state` is computed at read time, and `linear_outbox` and `repo_id` are always null. `phase` is null until the first `phase.entered`, then its `to`; M1's `handoff` has no `from` constraint. `head_event_id` is the id of the lane's latest event of any kind. `spec_id`, `lane_key` and the pipeline columns are nullable until set. One item per `(spec_id, lane_key, lane_pos)` slot (a null `lane_pos` is one slot), so a stack's layers share a lane. `events.idempotency_key` is nullable. |
 | `gate_results` | One row per `(lane_id, gate, head_sha)`, where column `gate` holds the `check.finished` payload's `check` (named `gate` because `CHECK` is an SQL keyword). `status` is `ran` or `skipped`. The latest `check.finished` on that key wins. |
-| `findings` | One row per `(check_event_id, finding_key)`. `status` is one of the finding statuses (checks, above). `Ledger::blocking_findings` reads a lane's unsettled findings from every round whose severity is not `nit`, `improvement`, `question` or `convention` (compared exactly, so an unknown or misspelt severity blocks; `convention` may block under a stricter profile later). This is not `review.previous_round_closed`, which reads every severity but only the newest round. Which of the two a v20 gate reads, and whether a superseded round's unsettled blocker still blocks, is decided with pipeline v20. |
+| `findings` | One row per `(check_event_id, finding_key)`. `status` is one of the finding statuses (checks, above). `Ledger::blocking_findings` reads a lane's unsettled findings from every round whose severity is not `nit`, `improvement`, `question` or `convention` (compared exactly, so an unknown or misspelt severity blocks; `convention` may block under a stricter profile later). This is not `review.previous_round_closed`, which reads every severity but only the newest round. Pipeline v20 reads neither: its `findings.open_blocking` counts the same findings of one review only, the one that covers the commit handed off (facts for pipeline v20, below), so a superseded review's findings and a plan check's do not block ready. |
 | `spec_keys` | Since ledger v3. One row per `(spec_id, key)`: the slice keys of the spec's head version, as the spec parser reads them, replaced on every `spec.created` and `spec.revised`. Keys match in any ASCII case (`COLLATE NOCASE`), so two sections naming one key in different cases are one row. `spec get --key` without `--spec` reads it. |
 | handoffs | A handoff is a `lane.handed_off`, or a `phase.entered` that carries `handoff`. `work handoffs`, "the latest handoff" (ready, `pr.opened.head_sha`, the `update --status done` commit) and lane-stats read both. |
 
@@ -432,6 +432,27 @@ reads one denies: `kept_tests.bar_ok`, `verification.unexplained_failures`,
 gate reads it: CI is shown, never a gate),
 `threads.human_open`, `pr.is_draft`, `pr.conflicting`, `human.merge_yes`,
 `handoff.decisions`.
+
+**Facts for pipeline v20.** Each is about the commit handed off (`commit.sha`, which may be
+a short form of the harness's whole sha) and is set only when there is one. Each reads only
+`check.finished` events whose producer is the harness, except `smoke.claimed`, which reads
+the session's claim and is told apart from a harness smoke by its producer. No v17 to v19
+gate reads one, so those pipelines mean what they did. `commit.code_lines` and
+`commit.changes_code` are the newest harness `diff`'s `code_lines` and `changes_code` on
+the commit, absent without one: measured, where `lane.changes_code` is the declared kind.
+`tests.passed` and `smoke.passed` are true when the newest harness `tests` or `smoke` on the
+commit has `result` `pass`, false for `fail`, absent without one. `smoke.claimed` is true
+when the newest session smoke on the commit `ran` with at least one evidence file.
+`review.complete` is true when a complete harness review covers the commit: the newest one
+on the commit, or a carried one (`carried_from`), read as the review it names.
+`findings.open_blocking` counts that covering review's findings that still block, as
+`blocking_findings` reads them (open, verified or disputed, and not `nit`, `improvement`,
+`question` or `convention`); a refuted, fixed, answered or waived finding stops counting. It
+is absent while no review covers the commit, and findings of other reviews (another tree,
+an incomplete run, the plan check) never count. Plan checks and verdicts get no new fact:
+the write refuses a session's on a lane stamped with a schema 2 pipeline (`check.finished`
+producer, above), so there `plan_check.*` and `verdict.*` read the harness's, and the
+owner's plan waiver.
 
 ## Reserved
 

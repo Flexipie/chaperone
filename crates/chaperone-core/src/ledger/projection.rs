@@ -5,11 +5,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{Connection, params};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::LedgerError;
-use super::event::{Event, EventKind};
+use super::event::{Event, EventKind, Payload};
 use super::write::{EVENT_COLUMNS, event_from_row};
+use crate::checks::blocking;
 use crate::pipeline::{Fact, FactBundle};
 
 /// The finding statuses that still need work. A disputed or verified
@@ -64,9 +65,39 @@ pub(crate) fn project(
     // the latest one's key.
     let (mut qg_first, mut qg_latest) = (BTreeMap::new(), None);
     let mut review_state = "absent";
+    // What pipeline v20 reads: the harness's newest result of each check on
+    // the commit handed off, the newest smoke a session claimed there, the
+    // complete harness reviews of any commit (a carried review names one),
+    // and the complete review that covers the commit.
+    let mut on_head: BTreeMap<String, Payload> = BTreeMap::new();
+    let (mut claim, mut complete, mut covering) = (None, BTreeSet::new(), None);
     while let Some(row) = rows.next()? {
         let e: Event = event_from_row(row)?;
         let p = &e.payload;
+        if e.kind == EventKind::CheckFinished {
+            let producer = p.rest.get("producer").and_then(|v| v.get("kind"));
+            let harness = producer == Some(&json!("harness"));
+            let check = p.check.clone().unwrap_or_default();
+            if harness && check == "review" && p.rest.get("complete") == Some(&json!(true)) {
+                complete.insert(e.id);
+            }
+            if let Some(head) = head
+                && p.head_sha.as_deref().is_some_and(|s| same_commit(head, s))
+            {
+                if harness && check == "review" {
+                    // A carried review's findings are its original's.
+                    let from = p.rest.get("carried_from").and_then(Value::as_i64);
+                    let original = from.unwrap_or(e.id);
+                    if complete.contains(&original) {
+                        covering = Some(original);
+                    }
+                } else if harness {
+                    on_head.insert(check, p.clone());
+                } else if check == "smoke" && producer == Some(&json!("session")) {
+                    claim = Some(p.clone());
+                }
+            }
+        }
         let pr_set = p.changed.get("pr_ref").is_some_and(|c| !c.to.is_null());
         if pr_set && matches!(f.get("pr.opened_at"), Fact::Absent) {
             f.set("pr.opened_at", Fact::Time(e.at.clone()));
@@ -149,7 +180,42 @@ pub(crate) fn project(
         )?;
         f.set("review.previous_round_closed", open == 0);
     }
+    if head.is_some() {
+        let field = |check: &str, key: &str| on_head.get(check).and_then(|p| p.rest.get(key));
+        let int = field("diff", "code_lines").and_then(Value::as_i64);
+        f.set("commit.code_lines", int.map_or(Fact::Absent, Fact::Int));
+        let code = field("diff", "changes_code").and_then(Value::as_bool);
+        f.set("commit.changes_code", code.map_or(Fact::Absent, Fact::Bool));
+        for check in ["tests", "smoke"] {
+            let passed = field(check, "result").map(|r| *r == json!("pass"));
+            let passed = passed.map_or(Fact::Absent, Fact::Bool);
+            f.set(&format!("{check}.passed"), passed);
+        }
+        let claimed = claim.is_some_and(|p: Payload| {
+            let files = p.rest.get("evidence_files").and_then(Value::as_array);
+            p.outcome.as_deref() == Some("ran") && files.is_some_and(|f| !f.is_empty())
+        });
+        f.set("smoke.claimed", claimed);
+        f.set("review.complete", covering.is_some());
+        if let Some(review) = covering {
+            let open: i64 = conn.query_row(
+                &format!(
+                    "SELECT count(*) FROM findings WHERE check_event_id = ?1 AND {}",
+                    blocking()
+                ),
+                [review],
+                |r| r.get(0),
+            )?;
+            f.set("findings.open_blocking", open);
+        }
+    }
     Ok(f)
+}
+
+/// A harness result on `sha` is one on the commit handed off, `head`: the
+/// handoff may name a short form of the commit the harness read whole.
+fn same_commit(head: &str, sha: &str) -> bool {
+    crate::pipeline::sha_prefix_eq(head, sha, 7..=64, true)
 }
 
 /// A text fact, absent when the field is.
@@ -515,6 +581,138 @@ requires = ["quality_gate_before_pr"]
         );
         lane.check("local_review", "ran", json!({"job": 9}), T[3]);
         assert_eq!(lane.facts().get("daisy_review.state"), &s("running"));
+    }
+
+    const HEAD: &str = "abc1234abc1234abc1234abc1234abc1234abc12";
+    const OTHER: &str = "def5678def5678def5678def5678def5678def56";
+
+    fn finding(key: &str, severity: &str) -> Finding {
+        Finding {
+            finding_key: key.into(),
+            severity: severity.into(),
+            title: "t".into(),
+            body: "b".into(),
+            path: None,
+            rest: Default::default(),
+        }
+    }
+
+    impl Lane {
+        /// A `check.finished` `ran` on `head` with `rest`, from `producer`.
+        fn on(&self, check: &str, head: &str, producer: &str, rest: Value) -> Event {
+            let mut p = Payload {
+                check: Some(check.into()),
+                outcome: Some("ran".into()),
+                head_sha: Some(head.into()),
+                ..Payload::default()
+            };
+            if let Value::Object(rest) = rest {
+                p.rest = rest;
+            }
+            p.rest.insert("producer".into(), json!({"kind": producer}));
+            if check == "review" && p.rest.get("carried_from").is_none() {
+                let found = ["blocker", "risk", "nit"].map(|s| finding(s, s));
+                p.findings = Some(Findings::List(found.into()));
+            }
+            self.apply(EventKind::CheckFinished, p, T[1])
+        }
+
+        fn rule(&self, review: i64, key: &str, status: &str) {
+            let mut p = Payload {
+                check_event_id: Some(review),
+                finding_key: Some(key.into()),
+                status: Some(status.into()),
+                ..Payload::default()
+            };
+            p.rest.insert("reason".into(), json!("r"));
+            self.apply(EventKind::FindingUpdated, p, T[2]);
+        }
+    }
+
+    /// v20's facts are the harness's results on the commit handed off (a
+    /// short form of it matches), absent without one.
+    #[test]
+    fn harness_results_on_the_commit() {
+        let lane = Lane::new("docs");
+        let at = |head| lane.facts_at(Some(head));
+        let paths = [
+            "commit.code_lines",
+            "commit.changes_code",
+            "tests.passed",
+            "smoke.passed",
+        ];
+        for path in paths {
+            assert_eq!(at(HEAD).get(path), &Fact::Absent, "{path}");
+        }
+        assert_eq!(at(HEAD).get("smoke.claimed"), &Fact::Bool(false));
+        assert_eq!(at(HEAD).get("review.complete"), &Fact::Bool(false));
+        let diff = json!({"code_lines": 12, "changes_code": true});
+        lane.on("diff", HEAD, "harness", diff);
+        lane.on("diff", OTHER, "harness", json!({"code_lines": 900}));
+        // A session's word on a harness check is no harness result.
+        lane.on("tests", HEAD, "session", json!({"result": "pass"}));
+        let f = at("abc1234");
+        assert_eq!(f.get("commit.code_lines"), &Fact::Int(12));
+        assert_eq!(f.get("commit.changes_code"), &Fact::Bool(true));
+        assert_eq!(f.get("tests.passed"), &Fact::Absent);
+        assert_eq!(lane.facts().get("commit.code_lines"), &Fact::Absent);
+        // The newest run on the commit is the one read.
+        lane.on("tests", HEAD, "harness", json!({"result": "pass"}));
+        assert_eq!(at(HEAD).get("tests.passed"), &Fact::Bool(true));
+        lane.on("tests", HEAD, "harness", json!({"result": "fail"}));
+        assert_eq!(at(HEAD).get("tests.passed"), &Fact::Bool(false));
+        // Smoke: the harness's run, or a session's claim with evidence.
+        lane.on("smoke", HEAD, "session", json!({}));
+        assert_eq!(at(HEAD).get("smoke.claimed"), &Fact::Bool(false));
+        let files = json!({"evidence_files": [{"path": "out.txt"}]});
+        lane.on("smoke", OTHER, "session", files.clone());
+        assert_eq!(at(HEAD).get("smoke.claimed"), &Fact::Bool(false));
+        lane.on("smoke", HEAD, "session", files);
+        let f = at(HEAD);
+        assert_eq!(f.get("smoke.claimed"), &Fact::Bool(true));
+        assert_eq!(f.get("smoke.passed"), &Fact::Absent);
+        lane.on("smoke", HEAD, "harness", json!({"result": "fail"}));
+        assert_eq!(at(HEAD).get("smoke.passed"), &Fact::Bool(false));
+    }
+
+    /// The review that covers the commit is its newest complete harness
+    /// review, a carried one read as its original; only that review's
+    /// unsettled blocking findings count.
+    #[test]
+    fn the_covering_review_and_its_blocking_findings() {
+        let lane = Lane::new("code");
+        let at = |head| lane.facts_at(Some(head));
+        lane.on("review", HEAD, "harness", json!({"complete": false}));
+        let f = at(HEAD);
+        assert_eq!(f.get("review.complete"), &Fact::Bool(false));
+        assert_eq!(f.get("findings.open_blocking"), &Fact::Absent);
+        let old = lane.on("review", OTHER, "harness", json!({"complete": true}));
+        assert_eq!(at(HEAD).get("review.complete"), &Fact::Bool(false));
+        let review = lane.on("review", HEAD, "harness", json!({"complete": true}));
+        let f = at(HEAD);
+        assert_eq!(f.get("review.complete"), &Fact::Bool(true));
+        // The blocker and the risk; the nit and the other commit's never.
+        assert_eq!(f.get("findings.open_blocking"), &Fact::Int(2));
+        lane.rule(review.id, "blocker", "refuted");
+        lane.rule(review.id, "risk", "verified");
+        assert_eq!(at(HEAD).get("findings.open_blocking"), &Fact::Int(1));
+        lane.rule(review.id, "risk", "waived");
+        assert_eq!(at(HEAD).get("findings.open_blocking"), &Fact::Int(0));
+        assert_eq!(at(OTHER).get("findings.open_blocking"), &Fact::Int(2));
+        // Carried to a commit with the same tree: the original's findings.
+        let carried = "0123456789abcdef0123456789abcdef01234567";
+        let from = json!({"carried_from": old.id});
+        lane.on("review", carried, "harness", from);
+        let f = at(carried);
+        assert_eq!(f.get("review.complete"), &Fact::Bool(true));
+        assert_eq!(f.get("findings.open_blocking"), &Fact::Int(2));
+        // A session's review and an incomplete one carried cover nothing.
+        let fresh = "1123456789abcdef0123456789abcdef01234567";
+        lane.on("review", fresh, "session", json!({"complete": true}));
+        let incomplete = lane.on("review", OTHER, "harness", json!({"complete": false}));
+        let from = json!({"carried_from": incomplete.id});
+        lane.on("review", fresh, "harness", from);
+        assert_eq!(at(fresh).get("review.complete"), &Fact::Bool(false));
     }
 
     /// Older jobs that finish after a newer one close their requests and

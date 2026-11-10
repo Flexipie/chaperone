@@ -3,10 +3,15 @@ use std::collections::BTreeMap;
 /// Every path the projection sets (`ledger/projection.rs`; its tests hold
 /// it to this list). A schema 2 gate that reads any other path does not
 /// load: it could never pass. Listed is not always set: `commit.sha` is
-/// the head the caller passes, which only a handoff does today.
+/// the head the caller passes, which only a handoff does today, and the
+/// harness's results on that commit (`commit.code_lines`, `tests.passed`,
+/// `review.complete`, ...) are set only with it.
 pub const FACTS: &[&str] = &[
+    "commit.changes_code",
+    "commit.code_lines",
     "commit.sha",
     "daisy_review.state",
+    "findings.open_blocking",
     "kept_tests.recorded",
     "lane.changes_code",
     "pipeline.hash",
@@ -19,8 +24,12 @@ pub const FACTS: &[&str] = &[
     "quality_gate.reason",
     "review.local_head",
     "review.local_rounds",
+    "review.complete",
     "review.previous_round_closed",
+    "smoke.claimed",
+    "smoke.passed",
     "smoke.recorded",
+    "tests.passed",
     "verdict.decision",
     "verdict.sha",
 ];
