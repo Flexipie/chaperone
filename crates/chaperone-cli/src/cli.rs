@@ -670,7 +670,7 @@ pub enum RunKind {
     /// check); the same plan on the same tree replays (none before v20)
     Plan,
     /// The base branch profile's `[smoke]` commands, run as `tests` runs
-    /// its; no `[smoke]` table is refused, never a pass
+    /// its; no `[smoke]` table is refused, never a pass (none before v20)
     Smoke,
 }
 

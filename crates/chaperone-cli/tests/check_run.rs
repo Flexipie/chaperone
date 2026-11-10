@@ -604,63 +604,46 @@ fn a_review_or_verdict_needs_a_pipeline_that_names_one() {
     }
 }
 
-/// The plan check runs before code: a commit that changes a code file is
-/// refused and names the owner's waiver. A missing `--file` or one on
-/// another check, a plan that is no regular file, too big, not UTF-8 or
-/// blank, and a lane whose pipeline has no plan check (to run or to waive),
-/// write nothing.
+/// `--file` goes with plan only, and is required there. A lane whose
+/// pipeline has no plan check is refused before anything is read, even
+/// with code in its commit, so it is not pointed at a waiver it cannot
+/// have; the waiver is refused there too. Each writes nothing. (The plan
+/// file and code rules are unit tests of `checks.rs`.)
 #[test]
-fn a_plan_check_needs_no_code_a_plan_file_and_a_pipeline() {
+fn a_plan_check_needs_a_plan_file_and_a_pipeline() {
     let dir = tempfile::tempdir().unwrap();
     let base = setup(dir.path());
     let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
     git(&wt, &["update-ref", "refs/remotes/origin/main", &base], &[]);
-    git(&wt, &["checkout", "-qb", "plan"], &[("docs/p.md", b"p\n")]);
+    git(&wt, &["checkout", "-qb", "plan"], &[("lib.rs", b"a\nc\n")]);
     git(&wt, &["add", "."], &[]);
-    git(&wt, &["commit", "-qm", "docs"], &[]);
+    git(&wt, &["commit", "-qm", "code"], &[]);
     let id = lane(
         &db,
         &["--worktree", wt.to_str().unwrap(), "--branch", "plan"],
     );
-    let file = |name: &str, bytes: &[u8]| {
-        let path = dir.path().join(name);
-        std::fs::write(&path, bytes).unwrap();
-        path.to_str().unwrap().to_string()
-    };
-    let good = file("plan.md", b"1. change lib.rs\n");
-    let big = file("big.md", &vec![b'x'; 64 * 1024 + 1]);
-    let (binary, blank) = (file("bin.md", &[0xff, 0xfe]), file("blank.md", b" \n"));
-    let (folder, gone) = (dir.path().to_str().unwrap(), format!("{good}.gone"));
-    let plan = |f: &str| ["check", "run", "plan", "--work", &id, "--file", f].map(String::from);
-    let bare = ["check", "run", "plan", "--work", &id].map(String::from);
-    let diff = ["check", "run", "diff", "--work", &id, "--file", &good].map(String::from);
-    let refused = |args: &[String], why: &str| {
+    let good = dir.path().join("plan.md");
+    std::fs::write(&good, b"1. change lib.rs\n").unwrap();
+    let good = good.to_str().unwrap();
+    let refused = |args: &[&str], why: &str| {
         let before = events(&db);
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let (code, err) = run(&db, &args);
+        let (code, err) = run(&db, args);
         assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
-        let said = err["message"].as_str().unwrap();
-        assert!(said.contains(why), "{why}: {said}");
+        assert_eq!(err["message"], why);
         assert_eq!(events(&db), before);
     };
-    refused(&bare, "--file <plan> goes with plan");
-    refused(&diff, "--file <plan> goes with plan");
-    refused(&plan(folder), "not a regular file");
-    refused(&plan(&big), "over 65536 bytes");
-    refused(&plan(&binary), "not UTF-8 text");
-    refused(&plan(&blank), "empty");
-    refused(&plan(&gone), "No such file");
+    let file = "--file <plan> goes with plan, and is required there";
+    refused(&["check", "run", "plan", "--work", &id], file);
+    refused(
+        &["check", "run", "diff", "--work", &id, "--file", good],
+        file,
+    );
     let v19 =
         "pipeline v19 has no check plan; a lane on it records plan checks with `check record`";
-    refused(&plan(&good), v19);
-
-    git(&wt, &["add", "."], &[("lib.rs", b"a\nc\n")]);
-    git(&wt, &["commit", "-qm", "code"], &[]);
-    let waiver = format!(
-        "changes 1 code files (2 lines) against its base: the plan check runs before any code. \
-         The owner can waive it with `check waive plan --work {id}`"
+    refused(
+        &["check", "run", "plan", "--work", &id, "--file", good],
+        v19,
     );
-    refused(&plan(&good), &waiver);
     let waive = [
         "check",
         "waive",
@@ -672,14 +655,15 @@ fn a_plan_check_needs_no_code_a_plan_file_and_a_pipeline() {
     ];
     let v19 = "pipeline v19 has no check plan; a lane on it records a skipped plan check with \
         `check record`";
-    refused(&waive.map(String::from), v19);
+    refused(&waive, v19);
 }
 
 /// A smoke's evidence files are the claim of the session that records it,
 /// stored by hash: a text file in the worktree is kept, by its path there.
 /// One outside it, reached through a link that leaves it, under `.git` or
-/// `.chaperone`, not text or not there, or files on another check, are
-/// refused and nothing is written.
+/// `.chaperone`, a FIFO, not text or not there, files on another check,
+/// and a record from a session that held the lane, are refused: no event,
+/// and no file in the evidence store.
 #[test]
 fn smoke_evidence_stays_in_the_worktree() {
     let dir = tempfile::tempdir().unwrap();
@@ -697,8 +681,16 @@ fn smoke_evidence_stays_in_the_worktree() {
         std::fs::write(path, bytes).unwrap();
     }
     std::os::unix::fs::symlink(&outside, wt.join("link.log")).unwrap();
-    // A session that never held the lane, as `check record` needs.
-    let record = |check: &[&str], file: &str| {
+    let fifo = Command::new("mkfifo").arg(wt.join("pipe.log")).status();
+    assert!(fifo.unwrap().success());
+    let in_store = || {
+        let mut find = Command::new("find");
+        let files = find.arg(dir.path().join("evidence")).args(["-type", "f"]);
+        let out = files.output().unwrap().stdout;
+        String::from_utf8(out).unwrap().lines().count()
+    };
+    // `fresh` never held the lane, as `check record` needs; `s` did.
+    let record_as = |session: &str, check: &[&str], file: &str| {
         let out = Command::new(BIN)
             .arg("--db")
             .arg(&db)
@@ -713,13 +705,14 @@ fn smoke_evidence_stays_in_the_worktree() {
                 "ran",
             ])
             .args(check)
-            .args(["--evidence", file, "--agent", "a", "--session", "fresh"])
+            .args(["--evidence", file, "--agent", "a", "--session", session])
             .output()
             .unwrap();
         let ok = out.status.success();
         let v: Value = serde_json::from_slice(if ok { &out.stdout } else { &out.stderr }).unwrap();
         (ok, v[if ok { "data" } else { "error" }].clone())
     };
+    let record = |check: &[&str], file: &str| record_as("fresh", check, file);
     let smoke = ["--check", "smoke"];
     let (ok, kept) = record(&smoke, "out/smoke.log");
     assert!(ok, "{kept}");
@@ -742,66 +735,45 @@ fn smoke_evidence_stays_in_the_worktree() {
         (&smoke, ".chaperone/x.txt", "under .git or .chaperone"),
         (&smoke, "bin.dat", "not UTF-8 text"),
         (&smoke, "gone.log", "No such file"),
+        (&smoke, "pipe.log", "not a regular file"),
         (&plan, "out/smoke.log", "--evidence goes with smoke only"),
     ] {
-        let before = events(&db);
+        let before = (events(&db), in_store());
         let (ok, err) = record(check, file);
         assert!(!ok && err["code"] == "invalid_input", "{file}: {err}");
         assert!(err["message"].as_str().unwrap().contains(why), "{err}");
-        assert_eq!(events(&db), before);
+        assert_eq!((events(&db), in_store()), before);
     }
+    std::fs::write(wt.join("out/new.log"), "new\n").unwrap();
+    let before = (events(&db), in_store());
+    let (ok, err) = record_as("s", &smoke, "out/new.log");
+    assert!(
+        !ok && err["message"].as_str().unwrap().contains("has held lane"),
+        "{err}"
+    );
+    assert_eq!((events(&db), in_store()), before);
 }
 
-/// `check run smoke` runs the base profile's `[smoke]` as `tests` runs its
-/// `[tests]`, in the harness's checkout, recorded as the harness's `smoke`
-/// pass or fail; a profile without `[smoke]` is refused and records
-/// nothing, never a pass.
+/// A harness `smoke` passes v19's `smoke_recorded` whoever starts it, so
+/// `check run smoke` on a lane whose pipeline has no `verdict` (v17 to
+/// v19) is refused, even with a `[smoke]` in the base profile, and writes
+/// nothing; such a lane records smoke with `check record` from a session
+/// that never held it.
 #[test]
-fn smoke_runs_the_base_profiles_smoke() {
+fn smoke_runs_need_a_harness_pipeline() {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, id) = tests_lane(dir.path());
-    let smoke = ["check", "run", "smoke", "--work", &id];
-    base_tests(&wt, Some(r#"commands = [["true"]]"#));
+    base_tests(
+        &wt,
+        Some("commands = [[\"true\"]]\n[smoke]\ncommands = [[\"true\"]]"),
+    );
     let before = events(&db);
-    let (code, err) = run(&db, &smoke);
+    let (code, err) = run(&db, &["check", "run", "smoke", "--work", &id]);
     assert_eq!(
         (code, &err["code"], events(&db)),
         (1, &json!("invalid_input"), before)
     );
-    assert!(
-        err["message"]
-            .as_str()
-            .unwrap()
-            .contains("no [smoke] commands"),
-        "{err}"
-    );
-    for (command, result) in [
-        (r#"["sh", "-c", "grep -qx c lib.rs"]"#, "pass"),
-        (r#"["false"]"#, "fail"),
-    ] {
-        base_tests(
-            &wt,
-            Some(&format!(
-                "commands = [[\"true\"]]\n[smoke]\ncommands = [{command}]"
-            )),
-        );
-        let (code, out) = run(&db, &smoke);
-        assert_eq!(code, 0, "{out}");
-        let p = &out["payload"];
-        let got = (
-            &p["check"],
-            &p["outcome"],
-            &p["result"],
-            &p["producer"]["kind"],
-        );
-        assert_eq!(
-            got,
-            (
-                &json!("smoke"),
-                &json!("ran"),
-                &json!(result),
-                &json!("harness")
-            )
-        );
-    }
+    let v19 = "pipeline v19 has no check verdict, so a harness smoke would stand in for one a \
+        session that never held the lane records; a lane on it records smoke with `check record`";
+    assert_eq!(err["message"], v19);
 }

@@ -9,7 +9,7 @@ use std::path::Path;
 use serde_json::{Map, json};
 
 use crate::checks::{BODY_CHARS, NOTE_CHARS, Recorded, RunInput};
-use crate::ledger::{Actor, Checked, Evidence, Finding, Findings, Ledger, LedgerError};
+use crate::ledger::{Actor, Checked, Evidence, Finding, Findings, Kept, Ledger, Refusal};
 use crate::pipeline::Pipeline;
 use crate::review::{self, Agents, Planned, TRAILER, cut, fenced};
 
@@ -18,9 +18,24 @@ pub const CHECK: &str = "plan";
 /// The event's check: the session plan check's, with the harness producer.
 pub const EVENT_CHECK: &str = "plan_check";
 
-/// The plan check's check and runner, or why the pipeline cannot run one.
-pub fn plan(pipeline: &Pipeline) -> Result<Planned<'_>, String> {
-    review::planned(pipeline, "plan", CHECK)
+/// The limit on plan sessions that gave no answer on one tree, pipeline
+/// and plan: each costs its runner's budget.
+pub const ATTEMPTS: &str = "plan_attempts";
+
+/// The plan check's check and runner and its [`ATTEMPTS`], or why the
+/// pipeline cannot run one.
+pub fn plan(pipeline: &Pipeline) -> Result<(Planned<'_>, i64), String> {
+    let planned = review::planned(pipeline, "plan", CHECK)?;
+    Ok((planned, review::limit(pipeline, ATTEMPTS)?))
+}
+
+/// What the plan reviewer is given: what the change is for, the plan as
+/// the evidence store keeps it (`Kept::of`: redacted, so a secret in the
+/// file is never sent) and the merge base.
+pub struct Given<'a> {
+    pub goal: &'a str,
+    pub plan: &'a Kept,
+    pub base: &'a str,
 }
 
 /// The plan reviewer's prompt: its check's prompt, what the change is for,
@@ -40,22 +55,37 @@ pub fn prompt(p: &Planned<'_>, goal: &str, plan: &str, head: &str, base: &str) -
 /// The start of `check run plan`: `input` keyed for a plan check by the
 /// pipeline `hash`, then the plan check that ran on the same tree and
 /// pipeline with the same plan (`plan_ref`, its evidence hash) when there
-/// is one, which replays and starts no session.
+/// is one, which replays and starts no session. Else a plan whose sessions
+/// gave no answer `attempts` times there is refused: the owner decides.
 pub fn replay(
     ledger: &Ledger,
     input: &mut RunInput,
-    hash: &str,
+    (hash, attempts): (&str, i64),
     plan_ref: &str,
-) -> Result<Option<Recorded>, LedgerError> {
+) -> Checked<Option<Recorded>> {
     input.check = EVENT_CHECK.into();
     input.profile = Some(hash.into());
-    ledger.tree_run(input, "plan_ref", plan_ref)
+    let plan = Some(("plan_ref", rusqlite::types::Value::Text(plan_ref.into())));
+    if let Some(stored) = ledger.tree_run(input, &plan, None)? {
+        return Ok(Ok(Some(stored)));
+    }
+    let failed = ledger.no_answers(input, &plan)?;
+    if failed >= attempts {
+        return Ok(Err(Refusal::InvalidInput(format!(
+            "this plan has had {failed} plan sessions with no answer on the tree {} by this \
+             pipeline, its limit {ATTEMPTS}; the owner can waive the plan check",
+            input.tree
+        ))));
+    }
+    Ok(Ok(None))
 }
 
-/// `check run plan` once [`replay`] answered none: the session in `dir`, a
-/// checkout of the commit, on the plan stored as `plan_ref`, then its usage
-/// row, then one `plan_check`: `ran` with the findings (each cut as the
-/// review's), or `skipped` with `reason` `no_answer`, never "no findings".
+/// `check run plan` once [`replay`] answered none: the plan written to
+/// `store` (so nothing is stored for a run [`replay`] refuses), the session
+/// in `dir`, a checkout of the commit, on what it is `given`, then its
+/// usage row, then
+/// one `plan_check`: `ran` with the findings (each cut as the review's), or
+/// `skipped` with `reason` `no_answer`, never "no findings".
 #[allow(clippy::too_many_arguments)]
 pub fn record(
     ledger: &Ledger,
@@ -64,10 +94,13 @@ pub fn record(
     p: &Planned<'_>,
     agents: &Agents<'_>,
     dir: &Path,
-    (goal, plan, plan_ref, base): (&str, &str, &str, &str),
+    given: &Given<'_>,
     store: &Evidence,
 ) -> Checked<Recorded> {
-    let prompt = prompt(p, goal, plan, &input.head, base);
+    let Given { goal, plan, base } = *given;
+    store.write(plan)?;
+    let plan_ref = &plan.stored.hash;
+    let prompt = prompt(p, goal, &plan.text, &input.head, base);
     let parse = |out| review::findings("plan", out);
     let session = review::one(p, agents, dir, prompt, &review::schema(), store, parse)?;
     let ran = (session.lens, session.cli, &session.model, &session.run);

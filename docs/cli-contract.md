@@ -260,10 +260,15 @@ refused elsewhere. `--evidence <file>` (repeat for up to 12) goes with `smoke` o
 the smoke wrote or showed, the claim of the session recording it, never the harness's. Each is
 read by the CLI by R13's rules: a relative path is read from the lane's worktree root, its real
 path (links resolved) must be inside the worktree and not under `.git` or `.chaperone` there,
-and it must be a regular file of at most 1 MiB of UTF-8 text with no NUL byte. Each is stored
-in the evidence store (redacted, its last 256 KiB) before the event commits, and the event
-carries `evidence_files`. A file that breaks a rule, or files on another check, are
-`invalid_input` and nothing is written. It prints `{event_id, work_id, kind, replayed, at, payload}`.
+and it must be a regular file of at most 1 MiB of UTF-8 text with no NUL byte (the type is
+checked before the file is opened, so a FIFO is refused, not waited on; this guards against
+accidents, not a lane that swaps the file between the check and the open). Every rule is checked
+first: the check and the count, then each file is read and named, then the record is tried and
+rolled back (so a session that held the lane, or any other refusal, stops here); only then is
+each file stored in the evidence store (redacted, its last 256 KiB), before the event that
+carries `evidence_files` commits. A refusal is `invalid_input` and writes no event and no file.
+(A write that fails only between the trial and the real record, such as a lane claimed in that
+moment, leaves its content-addressed files in the store.) It prints `{event_id, work_id, kind, replayed, at, payload}`.
 
 `check run diff` is a check the binary runs itself rather than one a session reports
 (events.md, producer `harness`). It first takes the lane's run lock: a file
@@ -327,9 +332,11 @@ message is kept), writes nothing.
 `check run smoke` is `check run tests` on the base profile's `[smoke]` table, which has the
 same keys and rules as `[tests]`, recorded as check `smoke` with the harness producer (events.md).
 A profile with no `[smoke]` is refused (`invalid_input`, nothing written), never a pass: whether
-a lane needs a smoke is a gate's to say, not this command's. It needs no pipeline check, as
-`tests` does not. The lane's own account of its smoke stays a session's `check record --check
-smoke`, with its evidence files.
+a lane needs a smoke is a gate's to say, not this command's. The lane's stamped pipeline must
+define the `verdict` check (v20 on); a lane on v17 to v19 is refused (`invalid_input`, nothing
+written, the message says the lane records smoke with `check record`), as a harness `smoke`
+would meet v19's `smoke_recorded` from the lane's own session. The lane's own account of its smoke stays a session's `check record
+--check smoke`, with its evidence files.
 
 `check run review` takes the same lock and reads the commit the same way. The lane's stamped
 pipeline must name the review's checks, each with a runner (`[runners]`: the CLI, model,
@@ -339,11 +346,15 @@ name a model; and `[limits]` must hold `review_attempts`, 1 or more. v17 to v19 
 a lane on them is refused (`invalid_input`, nothing written) and keeps recording reviews with
 `check record` and `reviews record`. Then it writes the rulings a crash left unwritten on the
 lane's newest review, and a complete review already stored under its key (events.md;
-`<profile>` is the pipeline's hash) is printed with `replayed` true and nothing runs. Else a
-commit that already has `review_attempts` reviews by this pipeline, complete or not, is
-refused (`invalid_input`, naming the limit): a lens that fails every time would otherwise
-make each rerun pay for the others again, so the owner waives the findings or the lane
-pushes a new commit. Else it asks `--version` of each CLI a runner of the plan uses (`claude`,
+`<profile>` is the pipeline's hash) is printed with `replayed` true and nothing runs. A
+complete review of the same tree by this pipeline on another commit (an amend that kept the
+tree) is carried to this commit, `carried_from` and no findings of its own (events.md), and no
+session starts: the lenses would only word their findings anew. A commit that already has it
+replays it, so flipping between commits of a tree appends nothing after the first carry. Else a tree that already has
+`review_attempts` reviews by this pipeline, complete or not, is refused (`invalid_input`,
+naming the limit): a lens that fails every time would otherwise make each rerun pay for the
+others again, so the owner waives the findings or the lane pushes a commit that changes the
+tree. Else it asks `--version` of each CLI a runner of the plan uses (`claude`,
 `codex`), the first of that name on `PATH`, run by its full path, reads the commit's files as
 `diff` does and their merge base in the lane's worktree, makes a fresh checkout as `tests`
 does (removed when the command ends), and reads `git diff <merge base> <commit>` there,
@@ -383,23 +394,32 @@ run (finding statuses). It is the second command that appends more than one even
 `usage report`, each event in its own transaction. A crash leaves whole events: usage rows
 without a review are what those sessions cost, and stay; a review whose rulings are missing
 is finished by the next `check run review` on the lane before anything else, with no session
-started. A review that is not `complete` runs again on the same commit, up to
+started. A review that is not `complete` runs again on the same tree, up to
 `review_attempts`. It prints the `check.finished` as `check record` does.
 
 `check run verdict` takes the same lock and reads the commit the same way. The lane's stamped
 pipeline must name a `verdict` check with a runner and a prompt file (a Claude runner naming a
 model); v17 to v19 do not, so a lane on them is refused (`invalid_input`, nothing written) and
-keeps recording verdicts with `check record`. The commit must have a harness `diff`, a harness
-`tests` result (pass or fail) and a harness `review` that is `complete`, or it is refused and
-nothing is written: the verdict judges the harness's results, so it cannot run before them and
-lock in an answer on less. Then a verdict on the same tree, pipeline and facts replays, or is
-carried to an amended commit (events.md, the key), and nothing runs. Else it asks `--version`
+keeps recording verdicts with `check record`. `[limits]` must hold `verdict_attempts`, 1
+or more. The verdict runs only on a clean commit, so a NO can be neither bought nor caused by
+running it early: the commit must have a harness `diff`, a newest harness `tests` that passed, a
+harness `review` that is `complete` (carried counts) and, when the base profile declares
+`[smoke]` (read as `tests` reads `[tests]`), a newest harness `smoke` that passed. Otherwise it
+is refused, naming what is missing or failed, and nothing is written. Blocking findings do not
+stop it: they are shown, and the verdict may say no. A verdict that ran, yes or no, stands for
+(lane, tree, pipeline): on this commit it replays, on another commit with this tree it is
+carried with this commit's fact ids (events.md, the key), and nothing runs. A NO is reopened
+only by a waive or a refutation recorded after it, or by changing the code; nothing else the
+harness shows reopens it, as the base and its profile come from the lane's own clone. Else a
+tree whose verdict sessions gave no answer `verdict_attempts` times by this pipeline is refused
+(`invalid_input`, naming the limit): the owner decides. Else it asks `--version`
 of the runner's CLI, reads the change and makes a checkout as `review` does, and starts one
 fresh session there, given its prompt file, what the lane is for (as the intent lens is
 told), the change (as every lens is shown it) and the harness's results as JSON: the key fields
-of the newest `diff`, `tests` and complete `review` on the commit, the lane's findings that
-still block, and the newest smoke on the commit: the harness's `check run smoke` and, labelled a
-claim the harness did not check, a session's `check record --check smoke` on the commit (or a
+of the newest `diff`, `tests` and complete `review` on the commit, the findings on the lane
+that still block, from every review (labelled so, with a disputed one read `open`: the dispute
+is the lane's word), and the newest smoke on the commit: whether the profile declares one, the
+harness's `check run smoke` when it does and, labelled a claim the harness did not check, a session's `check record --check smoke` on the commit (or a
 short form of it) with the last 4 KiB of each evidence file; each fenced, then the harness's
 closing line. It is told nothing else the lane
 wrote: no summary, `merge_case` or `look_at`. It answers `{decision, why, proven,
@@ -407,22 +427,27 @@ not_proven}`, `decision` `yes` or `no` and a why that is not blank. It writes a
 `usage.reported` for the session, then one `merge_verdict` with the harness producer: `ran`
 with the decision, or `skipped` with `reason` `no_answer` when the session errored, stopped or
 answered anything else, never a default yes or no. A verdict stands for its tree: the same
-tree and results replay it, so a NO is not run again until the harness's facts change (a new
-tests result, a new complete review, a ruling, dispute or waive of a blocking finding), which
-is deliberate. It prints the `check.finished` as `check record` does.
+tree and pipeline replay it, so a NO is reopened only by a waive or a refutation recorded
+after it, or by changing the code, which is deliberate. It prints the `check.finished` as `check record` does.
 
 `check run plan --file <plan>` takes the same lock and reads the commit the same way. `--file` is
-required here and refused on every other check. The commit must change no code file against its
-base, as `diff` counts code (any file not under `docs/`, ending in `.md` or in `.lock`, with or
-without counted lines): the plan is attacked before code exists, so a commit with code is refused
-(`invalid_input`, naming the files, the lines and the owner's waiver). The plan file must be a
-regular file (a link to one is followed) of at most 64 KiB of UTF-8 text that is not blank; it
-may sit outside the worktree, where agents keep their plans. Then the lane's stamped pipeline
-must name a `plan` check with a runner and a prompt (none before v20, so a lane on v17 to v19 is
-refused and keeps `check record`). All of these write nothing. The plan is stored as evidence
-(redacted); a plan check that ran on the same tree, pipeline and plan replays. Else one fresh
-session in the harness's checkout of the commit is given its prompt, what the lane is for (as the
-intent lens), the plan, fenced, and the commit and merge base, and answers `{findings: [...]}`
+required here and refused on every other check. The lane's stamped pipeline must name a `plan`
+check with a runner and a prompt, and `[limits]` must hold `plan_attempts`, 1 or more (none
+before v20, so a lane on v17 to v19 is refused and keeps `check record`). The commit must change
+no code file against its base, as `diff` counts code (any file not under `docs/`, ending in
+`.md` or in `.lock`, with or without counted lines): the plan is attacked before code exists, so
+a commit with code is refused (`invalid_input`, giving the count of code files and lines, the
+first three paths and the owner's waiver). The plan file must be a regular file (a link to one
+is followed; the type is checked before it is opened, so a FIFO is refused, against accidents
+rather than a lane swapping the file in between) of at most 64 KiB of
+UTF-8 text that is not blank; it may sit outside the worktree, where agents keep their plans.
+All of these write nothing. The plan is named as the evidence store keeps it, redacted, and
+that text is what the session is sent; a plan check that ran on the same tree, pipeline and
+plan replays, and one whose sessions gave no answer `plan_attempts` times there is refused (the
+owner can waive the check). Neither stores the plan, which is written to the store only when a
+session runs on it. Else one fresh session in the harness's checkout of the commit (no diff is
+read) is given its prompt, what the lane is for (as the intent lens), the plan, fenced, and the
+commit and merge base, and answers `{findings: [...]}`
 as a review lens does. It writes a `usage.reported` for the session, then one `plan_check` with
 the harness producer (events.md): `ran` with the findings, or `skipped` with `reason`
 `no_answer`, never "no findings". It prints the `check.finished` as `check record` does.

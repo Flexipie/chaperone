@@ -48,8 +48,33 @@ pub struct CheckInput {
     pub findings: Option<u64>,
 }
 
+/// A field of a tree-keyed check and the value it must hold, or none.
+pub(crate) type TreeFilter = Option<(&'static str, rusqlite::types::Value)>;
+
+/// The event whose session ran `r`: its `carried_from`, else itself.
+pub(crate) fn session_of(r: &Recorded) -> i64 {
+    let from = r.payload.rest.get("carried_from").and_then(Value::as_i64);
+    from.unwrap_or(r.event_id)
+}
+
 /// A smoke's evidence files, as many as a handoff's smoke entries.
 pub const EVIDENCE_FILES: usize = 12;
+
+/// Whether `n` evidence files may go with check `check`: smoke only, at
+/// most [`EVIDENCE_FILES`]. Checked before any file is read.
+pub fn evidence_ok(check: &str, n: usize) -> Result<(), Refusal> {
+    if n > 0 && check != "smoke" {
+        return Err(Refusal::InvalidInput(
+            "--evidence goes with smoke only".into(),
+        ));
+    }
+    if n > EVIDENCE_FILES {
+        return Err(Refusal::InvalidInput(format!(
+            "--evidence takes at most {EVIDENCE_FILES} files"
+        )));
+    }
+    Ok(())
+}
 
 /// One evidence file a session attached to its check, in the evidence
 /// store: its path in the lane's worktree, the stored text's hash and
@@ -174,22 +199,22 @@ impl Ledger {
     /// One `check.finished` from a session check. The write refuses a
     /// session that has held the lane. Keyed as `session_check` says.
     pub fn check_record(&self, actor: &Actor, input: &CheckInput) -> Checked<Recorded> {
-        self.check_record_with(actor, input, &[])
+        self.check_record_with(actor, input, &[], false)
     }
 
-    /// [`Ledger::check_record`] with the evidence files a smoke attaches,
-    /// already stored: the lane's claim of what it ran and saw.
+    /// [`Ledger::check_record`] with the evidence files a smoke attaches:
+    /// the recording session's claim of what it ran and saw. The caller
+    /// runs it as a `dry_run` (rolled back) before it stores the files, so a
+    /// refused record leaves none in the store, then for real.
     pub fn check_record_with(
         &self,
         actor: &Actor,
         input: &CheckInput,
         files: &[Attached],
+        dry_run: bool,
     ) -> Checked<Recorded> {
-        if !files.is_empty() && input.check != "smoke" {
-            return invalid("--evidence goes with smoke only".into());
-        }
-        if files.len() > EVIDENCE_FILES {
-            return invalid(format!("--evidence takes at most {EVIDENCE_FILES} files"));
+        if let Err(r) = evidence_ok(&input.check, files.len()) {
+            return Ok(Err(r));
         }
         let Some((_, reasons)) = CHECKS.iter().find(|(c, _)| *c == input.check) else {
             return invalid(format!("check {} is not a session check", input.check));
@@ -237,7 +262,7 @@ impl Ledger {
         if !files.is_empty() {
             payload.rest.insert("evidence_files".into(), json!(files));
         }
-        self.session_check(actor, input.work, payload)
+        self.session_check(actor, input.work, payload, dry_run)
     }
 
     /// The owner's waiver of lane `work`'s plan check, on the commit `head`
@@ -267,14 +292,20 @@ impl Ledger {
             ("reason".into(), json!("waived")),
             ("note".into(), json!(note)),
         ]);
-        self.session_check(actor, work, payload)
+        self.session_check(actor, work, payload, false)
     }
 
     /// `payload` as a session's `check.finished` on lane `work`: its
     /// producer, then a key over the payload and the lane's newest different
     /// result for the check, so a retry replays but a result that flips
     /// back (no, yes, no) is appended.
-    fn session_check(&self, actor: &Actor, work: i64, mut payload: Payload) -> Checked<Recorded> {
+    fn session_check(
+        &self,
+        actor: &Actor,
+        work: i64,
+        mut payload: Payload,
+        dry_run: bool,
+    ) -> Checked<Recorded> {
         payload.rest.insert(
             "producer".into(),
             json!({"kind": "session", "agent": actor.agent, "session": actor.session}),
@@ -299,7 +330,7 @@ impl Ledger {
         let canonical =
             canonical_string(&json!({"work": work, "payload": stored, "after": latest}));
         let key = format!("check:{:x}", Sha256::digest(canonical));
-        self.finish_check(actor, &key, work, payload)
+        self.finish_check(actor, &key, work, payload, dry_run)
     }
 
     /// One `check.finished` the harness produced (`check run`), `ran`, with
@@ -335,7 +366,7 @@ impl Ledger {
             "producer".into(),
             json!({"kind": "harness", "bin": input.bin, "version": input.version}),
         );
-        self.finish_check(actor, key, input.work, payload)
+        self.finish_check(actor, key, input.work, payload, false)
     }
 
     /// `run:<lane>:<check>:<head>:<profile or ->:<attempt>`. The attempt is
@@ -361,15 +392,21 @@ impl Ledger {
     }
 
     /// The lane's newest harness `input.check` that ran on `input.tree` by
-    /// `input.profile` with `field` equal to `value` (a digest of what it
-    /// was given), replayed: a check that holds for a tree whatever the
-    /// commit (`check run verdict`, `plan`).
+    /// `input.profile`, with `filter`'s field equal to its value when there
+    /// is one (`complete`, or the digest of a plan), replayed: a check that
+    /// holds for a tree whatever the commit (`check run review`, `verdict`,
+    /// `plan`). With `here`, only one on that commit whose session
+    /// (`carried_from`, else itself) is that event.
     pub(crate) fn tree_run(
         &self,
         input: &RunInput,
-        field: &str,
-        value: &str,
+        filter: &TreeFilter,
+        here: Option<(&str, i64)>,
     ) -> Result<Option<Recorded>, LedgerError> {
+        let (field, value) = match filter {
+            Some((field, value)) => (Some(format!("$.{field}")), Some(value)),
+            None => (None, None),
+        };
         let row: Option<(i64, String, String)> = self
             .conn()
             .query_row(
@@ -380,15 +417,19 @@ impl Ledger {
                    AND json_extract(payload_json, '$.producer.kind') = 'harness'
                    AND json_extract(payload_json, '$.tree') = ?3
                    AND json_extract(payload_json, '$.profile') IS ?4
-                   AND json_extract(payload_json, ?5) = ?6
+                   AND (?5 IS NULL OR json_extract(payload_json, ?5) = ?6)
+                   AND (?7 IS NULL OR json_extract(payload_json, '$.head_sha') = ?7
+                     AND coalesce(json_extract(payload_json, '$.carried_from'), id) = ?8)
                  ORDER BY id DESC LIMIT 1",
                 params![
                     input.work,
                     input.check,
                     input.tree,
                     input.profile,
-                    format!("$.{field}"),
-                    value
+                    field,
+                    value,
+                    here.map(|h| h.0),
+                    here.map(|h| h.1)
                 ],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
@@ -404,6 +445,80 @@ impl Ledger {
             })
         })
         .transpose()
+    }
+
+    /// What stands for `input.tree`: the newest [`Ledger::tree_run`], and
+    /// the event on `input.head` that already says it (from the same
+    /// session) when there is one, which replays: so a lane that flips
+    /// between two commits of one tree appends nothing after the first
+    /// carry.
+    pub(crate) fn tree_stand(
+        &self,
+        input: &RunInput,
+        filter: &TreeFilter,
+    ) -> Result<Option<(Recorded, Option<Recorded>)>, LedgerError> {
+        let Some(newest) = self.tree_run(input, filter, None)? else {
+            return Ok(None);
+        };
+        let here = Some((input.head.as_str(), session_of(&newest)));
+        let here = self.tree_run(input, filter, here)?;
+        Ok(Some((newest, here)))
+    }
+
+    /// `stored`, a [`Ledger::tree_run`] result on another commit, as this
+    /// commit's (`input.head`): its fields with `input.fields` over them
+    /// and without its findings, which stay the original's (a reader
+    /// follows `carried_from` for them), plus `carried_from`, the event
+    /// whose session ran. No session starts.
+    pub(crate) fn carry(
+        &self,
+        actor: &Actor,
+        input: &mut RunInput,
+        stored: Recorded,
+    ) -> Checked<Recorded> {
+        let from = session_of(&stored);
+        let mut fields = stored.payload.rest;
+        for k in ["tree", "profile", "producer", "redactions"] {
+            fields.remove(k);
+        }
+        fields.insert("carried_from".into(), json!(from));
+        fields.extend(std::mem::take(&mut input.fields));
+        input.fields = fields;
+        let key = self.tree_key(input, "carried")?;
+        self.finish_run(actor, input, true, &key)
+    }
+
+    /// How many of the lane's harness `input.check` on `input.tree` by
+    /// `input.profile` (with `filter`, as [`Ledger::tree_run`]) gave no
+    /// answer.
+    pub(crate) fn no_answers(
+        &self,
+        input: &RunInput,
+        filter: &TreeFilter,
+    ) -> Result<i64, LedgerError> {
+        let (field, value) = match filter {
+            Some((field, value)) => (Some(format!("$.{field}")), Some(value)),
+            None => (None, None),
+        };
+        Ok(self.conn().query_row(
+            "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = ?2
+               AND json_extract(payload_json, '$.outcome') = 'skipped'
+               AND json_extract(payload_json, '$.reason') = 'no_answer'
+               AND json_extract(payload_json, '$.producer.kind') = 'harness'
+               AND json_extract(payload_json, '$.tree') = ?3
+               AND json_extract(payload_json, '$.profile') IS ?4
+               AND (?5 IS NULL OR json_extract(payload_json, ?5) = ?6)",
+            params![
+                input.work,
+                input.check,
+                input.tree,
+                input.profile,
+                field,
+                value
+            ],
+            |r| r.get(0),
+        )?)
     }
 
     /// `run:<lane>:<check>:<tree>:<profile>:<digest>:<attempt>` for a
@@ -457,12 +572,13 @@ impl Ledger {
         key: &str,
         work: i64,
         payload: Payload,
+        dry_run: bool,
     ) -> Checked<Recorded> {
         let (applied, _) = self.apply_planned(
             actor,
             Some(key),
             None,
-            false,
+            dry_run,
             |conn, _| {
                 if !lane_exists(conn, work)? {
                     return Ok(Err(Refusal::NotFound {
