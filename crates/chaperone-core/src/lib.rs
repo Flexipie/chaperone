@@ -12,6 +12,7 @@ pub mod git;
 pub mod ledger;
 pub mod overlap;
 pub mod pipeline;
+pub mod runner;
 pub mod spec;
 pub mod stats;
 pub mod usage;
