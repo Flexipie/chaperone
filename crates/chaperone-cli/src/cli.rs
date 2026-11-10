@@ -147,8 +147,10 @@ pub enum Cmd {
 /// The pipeline documents this binary runs
 #[derive(Subcommand, Debug)]
 pub enum PipelineCmd {
-    /// The pipeline a new claim stamps: {id, hash}. Skills read the
-    /// version from here rather than naming one
+    /// The pipeline a new claim stamps: {id, hash, newer}, `newer` the
+    /// embedded pipelines a first claim may stamp instead (`work claim
+    /// --pipeline`). Skills read the version from here rather than naming
+    /// one
     Current,
     /// Each version of the pipeline changelog (`## vN <time>` in
     /// <dotfiles>/claude/pipeline-changelog.md), newest first, with its
@@ -301,6 +303,11 @@ pub enum WorkCmd {
         /// Take an item another pair holds LIVE; recorded with their name
         #[arg(long)]
         takeover: bool,
+        /// At the first claim, stamp this embedded pipeline in place of the
+        /// default: one newer than it (`pipeline current`'s `newer`), for a
+        /// pilot lane
+        #[arg(long)]
+        pipeline: Option<String>,
         /// Run the real write and roll it back; meta.dry_run is true
         #[arg(long)]
         dry_run: bool,

@@ -13,6 +13,7 @@ Options:
       --base-sha <BASE_SHA>      
       --lease-secs <LEASE_SECS>  Lease length in seconds, 30..=86400 (default 900)
       --takeover                 Take an item another pair holds LIVE; recorded with their name
+      --pipeline <PIPELINE>      At the first claim, stamp this embedded pipeline in place of the default: one newer than it (`pipeline current`'s `newer`), for a pilot lane
       --dry-run                  Run the real write and roll it back; meta.dry_run is true
       --agent <AGENT>            Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
       --session <SESSION>        Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)

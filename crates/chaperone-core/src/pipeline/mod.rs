@@ -34,6 +34,9 @@ pub const EVENTS: &[(&str, &str)] = &[
 #[derive(Debug, Clone)]
 pub struct Pipeline {
     pub id: String,
+    /// 1, or 2 for a document whose checks the harness runs: on a lane it
+    /// stamps, the write takes those checks from the harness only.
+    pub schema: i64,
     /// SHA-256 of the canonical JSON of the limits, gates and transitions
     /// (schema 2: and the schema, runners and checks), lowercase hex.
     pub hash: String,
@@ -284,10 +287,19 @@ static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
     .collect()
 });
 
-/// The pipeline a new claim stamps. It stays v19 while v20 is newer: the
-/// owner moves it at the M3 cutover, with no lane running.
+/// Where [`current`] is in [`KNOWN`]: v19, while v20 is newer. The owner
+/// moves it at the M3 cutover, with no lane running.
+const DEFAULT: usize = 2;
+
+/// The pipeline a new claim stamps.
 pub fn current() -> &'static Pipeline {
-    &KNOWN[2]
+    &KNOWN[DEFAULT]
+}
+
+/// The embedded documents newer than [`current`], which a first claim may
+/// stamp instead (`work claim --pipeline`): a pilot lane before the cutover.
+pub fn newer() -> &'static [Pipeline] {
+    &KNOWN[DEFAULT + 1..]
 }
 
 /// The loaded document for a lane's stamp, `None` when this binary has no
@@ -445,6 +457,8 @@ requires = ["a"]
         assert!(by_stamp("v19", V19_HASH).is_some());
         assert!(by_stamp("v18", V17_HASH).is_none());
         assert_eq!(current().id, "v19");
+        let newer: Vec<_> = newer().iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(newer, ["v20"]);
     }
 
     #[test]

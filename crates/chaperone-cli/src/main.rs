@@ -102,7 +102,13 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         ),
         Cmd::Pipeline(PipelineCmd::Current) => {
             let p = pipeline::current();
-            Ok(Outcome::One(json!({ "id": p.id, "hash": p.hash })))
+            let newer: Vec<_> = pipeline::newer()
+                .iter()
+                .map(|n| json!({ "id": n.id, "hash": n.hash }))
+                .collect();
+            Ok(Outcome::One(
+                json!({ "id": p.id, "hash": p.hash, "newer": newer }),
+            ))
         }
         Cmd::Pipeline(PipelineCmd::History { dotfiles, repo }) => {
             let root = dotfiles

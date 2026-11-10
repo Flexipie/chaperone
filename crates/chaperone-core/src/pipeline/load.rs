@@ -138,6 +138,7 @@ pub(super) fn load(src: &str, prompts: &[(&str, &str)]) -> Result<Pipeline, Pipe
     }
     Ok(Pipeline {
         id: raw.id,
+        schema: raw.schema,
         hash: semantic_hash(&hashed),
         limits: raw.limits,
         gates,
