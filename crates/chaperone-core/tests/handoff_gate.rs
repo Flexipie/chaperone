@@ -657,3 +657,43 @@ fn a_ready_handoff_names_the_observed_head() {
         Err(Refusal::GateDenied { .. })
     ));
 }
+
+/// Ready is derived: a NO verdict recorded on the handed-off commit after
+/// the ready handoff unsays it on the next read, with no write, and a yes
+/// brings it back. The owner's override still wins.
+#[test]
+fn a_later_no_verdict_revokes_ready_on_the_board() {
+    let lane = Lane::new();
+    lane.stamps();
+    lane.smoke_and_kept();
+    lane.handoff("abc1234def", "review", Some(true)).unwrap();
+    let board = || {
+        let b = lane.ledger.work_board_item(1, T2).unwrap().unwrap();
+        (b.ready, b.ready_reason)
+    };
+    assert_eq!(board(), (true, "the lane says ready".into()));
+
+    let events = lane.count("gate.denied") + lane.count("phase.entered");
+    lane.check(&lane.checker, "merge_verdict", json!({"decision": "no"}));
+    let revoked = "the lane said ready, but verdict_is_yes no longer holds";
+    assert_eq!(board(), (false, revoked.into()));
+    // The read wrote nothing, and the lane row still says ready.
+    assert_eq!(
+        lane.count("gate.denied") + lane.count("phase.entered"),
+        events
+    );
+    assert_eq!(lane.row().1.as_deref(), Some("ready"));
+
+    let owner = pair("owner", "s3");
+    lane.ledger
+        .work_ready(&owner, 1, Some(true), Some("ok".into()), Some(T2), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(board(), (true, "marked ready by owner: ok".into()));
+    lane.ledger
+        .work_ready(&owner, 1, None, None, Some(T2), false)
+        .unwrap()
+        .unwrap();
+    lane.check(&lane.checker, "merge_verdict", json!({"decision": "yes"}));
+    assert_eq!(board(), (true, "the lane says ready".into()));
+}

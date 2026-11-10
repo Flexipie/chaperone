@@ -50,25 +50,9 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
             "phase.entered needs a phase to, got '{to}'"
         ))));
     };
-    let (id, hash, route): (Option<String>, Option<String>, Option<String>) = conn.query_row(
-        "SELECT pipeline_id, pipeline_hash, route FROM lanes WHERE id = ?1",
-        [lane_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
-    let decided = match (id, hash, route) {
-        (Some(id), Some(hash), Some(route)) => {
-            let Some(doc) = pipeline::by_stamp(&id, &hash) else {
-                return Ok(Err(Refusal::PipelineUnknown {
-                    pipeline_id: id,
-                    pipeline_hash: hash,
-                }));
-            };
-            let route: Route =
-                serde_json::from_value(Value::String(route)).map_err(std::io::Error::other)?;
-            let facts = project(conn, lane_id, p.head_sha.as_deref())?;
-            doc.evaluate(&transition, route, to, &facts)
-        }
-        _ => Err(Denied::unstamped()),
+    let decided = match decide(conn, lane_id, &transition, to, p.head_sha.as_deref())? {
+        Ok(decided) => decided,
+        Err(r) => return Ok(Err(r)),
     };
     let Err(Denied { gate, fact_paths }) = decided else {
         return Ok(Ok(None));
@@ -91,6 +75,37 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
         },
         ..entered.clone()
     })))
+}
+
+/// Whether `transition` to `to` holds for lane `lane_id` on `head`, on its
+/// stamped pipeline and the facts its events project now. It only reads, so
+/// the board asks it too. A lane with no stamp is denied as `stamp_ok`; a
+/// stamp this binary cannot load is refused (`pipeline_unknown`).
+pub(crate) fn decide(
+    conn: &Connection,
+    lane_id: i64,
+    transition: &str,
+    to: Phase,
+    head: Option<&str>,
+) -> Checked<Result<(), Denied>> {
+    let (id, hash, route): (Option<String>, Option<String>, Option<String>) = conn.query_row(
+        "SELECT pipeline_id, pipeline_hash, route FROM lanes WHERE id = ?1",
+        [lane_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let (Some(id), Some(hash), Some(route)) = (id, hash, route) else {
+        return Ok(Ok(Err(Denied::unstamped())));
+    };
+    let Some(doc) = pipeline::by_stamp(&id, &hash) else {
+        return Ok(Err(Refusal::PipelineUnknown {
+            pipeline_id: id,
+            pipeline_hash: hash,
+        }));
+    };
+    let route: Route =
+        serde_json::from_value(Value::String(route)).map_err(std::io::Error::other)?;
+    let facts = project(conn, lane_id, head)?;
+    Ok(Ok(doc.evaluate(transition, route, to, &facts)))
 }
 
 /// The lane's newest event a gate could read: not a denial, and not usage,
