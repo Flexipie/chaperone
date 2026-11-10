@@ -1,6 +1,6 @@
 //! Finding moves (events.md, finding statuses): each allowed move once,
-//! each refused one for its own reason with nothing written, a dispute
-//! that keeps its round open, and the tables a rebuild folds from the log.
+//! each refused one for its own reason with nothing written, the read of
+//! what still blocks, and the tables a rebuild folds from the log.
 
 mod common;
 
@@ -180,11 +180,23 @@ fn moves_follow_the_table() {
     common::assert_consistent(&path);
 }
 
-/// A dispute keeps the round open until it is ruled on.
+/// Unsettled findings block unless their severity is a non-blocking one,
+/// an unknown severity included; a dispute keeps the round open until it
+/// is ruled on.
 #[test]
-fn a_dispute_keeps_the_round_open() {
+fn blocking_read_and_round() {
     let (_dir, path, ledger) = common::ledger();
-    let (lane, check) = review(&ledger, &["blocker:a", "risk:b", "question:c", "blocker:d"]);
+    let (lane, check) = review(
+        &ledger,
+        &[
+            "blocker:a",
+            "risk:b",
+            "question:c",
+            "blocker:d",
+            "convention:e",
+            "Blocker:f",
+        ],
+    );
     let closed = || {
         ledger
             .project(lane, None)
@@ -195,10 +207,19 @@ fn a_dispute_keeps_the_round_open() {
     walk(&ledger, check, "a", &["verified"]);
     walk(&ledger, check, "b", &["disputed"]);
     walk(&ledger, check, "d", &["waived"]);
+    let blocking = ledger.blocking_findings(lane).unwrap();
+    let got: Vec<_> = blocking
+        .iter()
+        .map(|f| (f.finding_key.as_str(), f.status.as_str()))
+        .collect();
+    assert_eq!(got, [("a", "verified"), ("b", "disputed"), ("f", "open")]);
+    walk(&ledger, check, "e", &["waived"]);
+    walk(&ledger, check, "f", &["waived"]);
     walk(&ledger, check, "a", &["fixed"]);
     walk(&ledger, check, "c", &["answered"]);
     assert!(!closed());
     walk(&ledger, check, "b", &["refuted"]);
     assert!(closed());
+    assert!(ledger.blocking_findings(lane).unwrap().is_empty());
     common::assert_consistent(&path);
 }

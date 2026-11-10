@@ -2,14 +2,15 @@
 //! (the harness's, measured by the binary), `reviews record` (a daisy
 //! review job's result, as `daisy-cli reviews get` read it), and `reviews
 //! get` / `jobs get` answering for recorded jobs in daisy's shapes
-//! (events.md, checks). Also the moves of a review's findings.
+//! (events.md, checks). Also the moves of a review's findings and the
+//! read of those that still block.
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::ledger::projection::project;
+use crate::ledger::projection::{UNSETTLED, project};
 use crate::ledger::{
     Actor, Applied, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation, Payload,
     Refusal, canonical_at, exists,
@@ -127,6 +128,21 @@ pub struct FindingMove {
     pub reason: Option<String>,
     /// The commit that fixes it; required for `fixed`.
     pub head_sha: Option<String>,
+}
+
+/// The severities that do not block. Nothing checks the severity a review
+/// writes, so the rest block, a misspelt or unknown one included: a read
+/// that fails closed. `convention` may block under a stricter profile.
+pub const NON_BLOCKING_SEVERITIES: &[&str] = &["nit", "improvement", "question", "convention"];
+
+/// A finding that still blocks its lane ([`Ledger::blocking_findings`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BlockingFinding {
+    pub check_event_id: i64,
+    pub finding_key: String,
+    pub severity: String,
+    pub status: String,
+    pub title: String,
 }
 
 fn invalid<T>(msg: String) -> Checked<T> {
@@ -742,6 +758,32 @@ impl Ledger {
             |_, _, _| Ok(()),
         )?;
         Ok(recorded(applied, lane))
+    }
+
+    /// Lane `id`'s findings that still block, oldest first, from every
+    /// round: unsettled (open, verified or disputed) and of a severity not
+    /// in [`NON_BLOCKING_SEVERITIES`], compared exactly.
+    pub fn blocking_findings(&self, id: i64) -> Result<Vec<BlockingFinding>, LedgerError> {
+        let quiet: Vec<_> = NON_BLOCKING_SEVERITIES
+            .iter()
+            .map(|s| format!("'{s}'"))
+            .collect();
+        let mut stmt = self.conn().prepare(&format!(
+            "SELECT check_event_id, finding_key, severity, status, title FROM findings
+              WHERE lane_id = ?1 AND {UNSETTLED} AND severity NOT IN ({})
+              ORDER BY id",
+            quiet.join(", ")
+        ))?;
+        let rows = stmt.query_map([id], |r| {
+            Ok(BlockingFinding {
+                check_event_id: r.get(0)?,
+                finding_key: r.get(1)?,
+                severity: r.get(2)?,
+                status: r.get(3)?,
+                title: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 }
 

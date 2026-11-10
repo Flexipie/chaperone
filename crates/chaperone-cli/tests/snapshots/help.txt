@@ -10,6 +10,7 @@ Commands:
   jobs       Recorded daisy jobs
   usage      Token usage per provider message, read from a lane's transcripts
   attention  Interventions on a lane by the orchestrator or the owner
+  finding    A review finding's status: the lane disputes it, the owner waives it
   dossier    The agent-only record of an issue key: notes, and one capped read of what the ledger knows about the key. Data for agents, never a gate
   overlap    Per file, the open lanes touching it: each lane's newest handoff (changed_files), then the commits on its worktree's HEAD since the merge-base with origin, all git calls within 5 s. Shared files first. Call it before starting work
   stats      R11's lane and cohort numbers, read from the ledger: claim to merge, tokens, peak context, attention, checks and the verdict on the merged head. A number nothing records yet is null, and `missing` names what it needs

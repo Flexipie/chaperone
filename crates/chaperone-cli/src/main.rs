@@ -76,6 +76,7 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Jobs(cmd) => checks::jobs(&Ledger::open(&path)?, cmd),
         Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),
         Cmd::Attention(cmd) => checks::attention(&Ledger::open(&path)?, cmd),
+        Cmd::Finding(cmd) => checks::finding(&Ledger::open(&path)?, cmd, meta),
         Cmd::Dossier(cmd) => checks::dossier(&Ledger::open(&path)?, cmd),
         Cmd::Stats { merged_since, work } => {
             let cohort = match merged_since {
