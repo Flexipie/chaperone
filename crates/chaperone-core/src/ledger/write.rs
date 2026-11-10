@@ -620,9 +620,11 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
         }
         // The harness measured the lane in this folder on this branch
         // (`check run`), so a later run must read the same ones, not ones
-        // the lane points it at. A trailing slash names the same folder.
+        // the lane points it at. One not set yet may be set once. A
+        // trailing slash names the same folder.
         let folder = |v: &Value| v.as_str().map(|p| p.trim_end_matches('/').to_string());
         if matches!(field.as_str(), "worktree_path" | "branch")
+            && !change.from.is_null()
             && folder(&change.to) != folder(&change.from)
             && exists(
                 tx,

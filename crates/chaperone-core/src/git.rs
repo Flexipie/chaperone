@@ -80,6 +80,8 @@ pub fn git(
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
+        // A replace ref would make a commit read as another's tree.
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         // Messages in English, so a missing revision is recognised.
         .env("LC_ALL", "C");
     let done = child::run(&mut cmd, deadline, cap).map_err(|e| match e {

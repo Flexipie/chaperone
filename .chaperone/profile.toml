@@ -1,6 +1,7 @@
 # The pipeline profile of this repo. Chaperone reads it from the base
-# branch (origin), never from a worktree, so a lane cannot change the
-# rules it is checked by: an edit takes effect once it is merged.
+# branch's remote ref (origin), never from a worktree, so a lane's own edit
+# is not used: an edit takes effect once it is merged. The ref lives in the
+# lane's clone, so this is a speed bump, not a guarantee.
 slug = "Flexipie/chaperone"
 name = "chaperone"
 
@@ -30,7 +31,9 @@ kind = "chaperone"
 
 # What `chaperone check run tests` runs, in order, in a checkout of the
 # lane's commit: each an argv, never a shell string. `target_dir` names the
-# variable the harness points at the lane's own build directory.
+# variable the harness points at the lane's own build directory. CI also
+# runs the llvm-cov coverage gate, which is not here: a harness pass is not
+# CI green.
 [tests]
 commands = [
   ["cargo", "fmt", "--check"],

@@ -213,6 +213,8 @@ fn refusals_write_nothing_and_the_worktree_freezes() {
     );
     let slash = format!("{wt}/");
     assert_eq!(run(&db, &["work", "claim", &id, "--worktree", &slash]).0, 0);
+    // The lane had no branch when it was checked: it may set one, once.
+    assert_eq!(run(&db, &["work", "claim", &id, "--branch", "one"]).0, 0);
     let err = run(&db, &["work", "claim", &id, "--branch", "other"]).1;
     assert!(
         err["message"]
@@ -225,18 +227,15 @@ fn refusals_write_nothing_and_the_worktree_freezes() {
     assert_eq!(run(&db, &["work", "claim", "4", "--worktree", &wt]).0, 0);
 }
 
-/// A repo whose lane `feat` changes `lib.rs` and carries its own profile
-/// that would pass, a ledger and the lane on it; the db, the worktree and
-/// the lane's id.
+/// A repo whose lane `feat` changes `lib.rs` to `a c`, ignores `built`
+/// and carries its own profile that would pass, a ledger and the lane on
+/// it; the db, the worktree and the lane's id.
 fn tests_lane(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf, String) {
     let (db, wt) = (dir.join("ledger.db"), dir.join("wt"));
     setup(dir);
-    let own = b"[tests]\ncommands = [[\"true\"]]\n";
-    git(
-        &wt,
-        &["checkout", "-qb", "feat"],
-        &[(".chaperone/profile.toml", own)],
-    );
+    let own: &[u8] = b"[tests]\ncommands = [[\"true\"]]\n";
+    let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", own), (".gitignore", b"built\n")];
+    git(&wt, &["checkout", "-qb", "feat"], files);
     git(&wt, &["add", "."], &[("lib.rs", b"a\nc\n")]);
     git(&wt, &["commit", "-qm", "feat"], &[]);
     let id = lane(
@@ -251,14 +250,14 @@ fn tests_lane(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf, String) {
 fn base_tests(wt: &Path, tests: Option<&str>) {
     git(wt, &["checkout", "-q", "main"], &[]);
     match tests {
-        Some(t) => git(
-            wt,
-            &["add", "."],
-            &[(
-                ".chaperone/profile.toml",
-                format!("[tests]\n{t}\n").as_bytes(),
-            )],
-        ),
+        Some(t) => {
+            let profile = format!("[tests]\n{t}\n");
+            git(
+                wt,
+                &["add", "."],
+                &[(".chaperone/profile.toml", profile.as_bytes())],
+            )
+        }
         None => git(
             wt,
             &["rm", "-q", "--ignore-unmatch", ".chaperone/profile.toml"],
@@ -270,8 +269,20 @@ fn base_tests(wt: &Path, tests: Option<&str>) {
     git(wt, &["checkout", "-q", "feat"], &[]);
 }
 
-/// A pass on the base's commands, in a checkout the harness removes, with
-/// the lane's worktree untouched; a failure stops at its command and runs
+/// What a run may not change in the lane's repository.
+fn lane_repo(wt: &Path) -> [String; 4] {
+    [
+        "status --porcelain",
+        "rev-parse HEAD",
+        "for-each-ref",
+        "worktree list",
+    ]
+    .map(|args| git(wt, &args.split(' ').collect::<Vec<_>>(), &[]))
+}
+
+/// A pass on the base's commands, in the harness's own checkout of the
+/// lane's commit, with the lane's repository untouched and an ignored file
+/// the commands made recorded; a failure stops at its command and runs
 /// again; a pass replays without running anything.
 #[test]
 fn tests_run_in_a_checkout_and_a_pass_replays() {
@@ -279,31 +290,22 @@ fn tests_run_in_a_checkout_and_a_pass_replays() {
     let (db, wt, id) = tests_lane(dir.path());
     let (mark, flag) = (dir.path().join("mark"), dir.path().join("flag"));
     let (mark, flag) = (mark.to_str().unwrap(), flag.to_str().unwrap());
-    base_tests(
-        &wt,
-        Some(&format!(
-            "commands = [[\"sh\", \"-c\", \"echo run >> {mark}; test ! -e {flag} && test -e lib.rs\"], \
-         [\"sh\", \"-c\", \"echo \\\"second $T\\\" >> {mark}\"]]\ntarget_dir = \"T\""
-        )),
+    let first = format!(r#"echo run >> {mark}; test ! -e {flag} && grep -qx c lib.rs"#);
+    let second = format!(r#"echo \"second $T\" >> {mark}; touch built"#);
+    let commands = format!(
+        "commands = [[\"sh\", \"-c\", \"{first}\"], [\"sh\", \"-c\", \"{second}\"]]\ntarget_dir = \"T\""
     );
+    base_tests(&wt, Some(&commands));
     let tests = ["check", "run", "tests", "--work", &id];
     let marks = || std::fs::read_to_string(dir.path().join("mark")).unwrap_or_default();
-    let lane_state = || {
-        (
-            git(&wt, &["status", "--porcelain"], &[]),
-            git(&wt, &["rev-parse", "HEAD"], &[]),
-        )
-    };
-    let before = lane_state();
+    let before = lane_repo(&wt);
 
     std::fs::write(flag, "").unwrap();
     let (code, failed) = run(&db, &tests);
     assert_eq!(code, 0, "{failed}");
     let p = &failed["payload"];
-    assert_eq!(
-        (&p["result"], &p["dirty"], &p["commands"][0]["exit"]),
-        (&json!("fail"), &Value::Null, &json!(1))
-    );
+    let got = (&p["result"], &p["dirty"], &p["commands"][0]["exit"]);
+    assert_eq!(got, (&json!("fail"), &Value::Null, &json!(1)));
     assert_eq!(p["commands"].as_array().unwrap().len(), 1);
     assert_eq!(marks(), "run\n");
     let again = run(&db, &tests).1;
@@ -323,29 +325,37 @@ fn tests_run_in_a_checkout_and_a_pass_replays() {
         marks(),
         format!("run\nrun\nrun\nsecond {}\n", target.display())
     );
+    let got = (&p["check"], &p["outcome"], &p["result"], &p["timed_out"]);
     assert_eq!(
-        (&p["check"], &p["outcome"], &p["result"]),
-        (&json!("tests"), &json!("ran"), &json!("pass"))
+        got,
+        (
+            &json!("tests"),
+            &json!("ran"),
+            &json!("pass"),
+            &json!(false)
+        )
     );
-    assert_eq!(
-        (&p["timed_out"], &p["dirty"], &p["producer"]["kind"]),
-        (&json!(false), &json!(false), &json!("harness"))
-    );
+    let got = (&p["dirty"], &p["ignored_files"], &p["producer"]["kind"]);
+    assert_eq!(got, (&json!(false), &json!(1), &json!("harness")));
     assert_eq!(p["head_sha"], git(&wt, &["rev-parse", "feat"], &[]));
     assert_eq!(p["tree"], git(&wt, &["rev-parse", "feat^{tree}"], &[]));
     assert_eq!(p["profile"].as_str().unwrap().len(), 64);
+    let base = git(&wt, &["rev-parse", "refs/remotes/origin/main"], &[]);
+    assert_eq!(
+        p["profile_base"],
+        json!({"ref": "origin/main", "commit": base})
+    );
     let exits: Vec<_> = p["commands"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|c| c["exit"].clone())
+        .map(|c| &c["exit"])
         .collect();
-    assert_eq!(exits, [json!(0), json!(0)]);
-    assert_eq!(p["commands"][1]["argv"][0], "sh");
+    assert_eq!(exits, [&json!(0), &json!(0)]);
     let output = Evidence::beside(&db)
         .get(p["evidence_ref"].as_str().unwrap())
         .unwrap();
-    assert!(output.contains("$ git status --porcelain"), "{output}");
+    assert!(output.ends_with("--ignored\n!! built\n"), "{output}");
 
     let replayed = run(&db, &tests).1;
     assert_eq!(
@@ -353,71 +363,130 @@ fn tests_run_in_a_checkout_and_a_pass_replays() {
         (&json!(true), &passed["event_id"])
     );
     assert_eq!(marks().lines().count(), 4);
-    assert_eq!(lane_state(), before);
-    assert!(
-        !dir.path()
-            .join("checkouts")
-            .join(format!("lane-{id}"))
-            .exists()
+    assert_eq!(lane_repo(&wt), before);
+}
+
+/// The lane repository's hooks and replace refs never reach the checkout:
+/// the commit's own tree is tested, and run from a relative `--db`.
+#[test]
+fn tests_ignore_the_lane_repos_hooks_and_replace_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, wt, id) = tests_lane(dir.path());
+    base_tests(
+        &wt,
+        Some(r#"commands = [["sh", "-c", "test ! -e hooked && grep -qx c lib.rs"]]"#),
     );
-    assert_eq!(git(&wt, &["worktree", "list"], &[]).lines().count(), 1);
+    let hook = wt.join(".git/hooks/post-checkout");
+    std::fs::write(&hook, "#!/bin/sh\ntouch hooked\n").unwrap();
+    std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let (feat, main) = (
+        git(&wt, &["rev-parse", "feat"], &[]),
+        git(&wt, &["rev-parse", "main~1"], &[]),
+    );
+    git(&wt, &["replace", &feat, &main], &[]);
+    let before = lane_repo(&wt);
+    let mut cmd = Command::new(BIN);
+    cmd.current_dir(dir.path())
+        .args(["--db", "ledger.db", "check", "run", "tests", "--work", &id]);
+    let out = cmd
+        .args(["--agent", "a", "--session", "s"])
+        .output()
+        .unwrap();
+    let data: Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let p = &data["data"]["payload"];
+    assert_eq!(
+        (&p["result"], &p["head_sha"]),
+        (&json!("pass"), &json!(feat))
+    );
+    let tree = git(
+        &wt,
+        &["--no-replace-objects", "rev-parse", "feat^{tree}"],
+        &[],
+    );
+    assert_eq!(p["tree"], tree);
+    assert_eq!(lane_repo(&wt), before);
 }
 
 /// The base's profile is the one run, not the lane's; a tree the commands
-/// dirty, and a run past its time, fail; no tests on the base, and a run
-/// already on the lane, write nothing.
+/// dirty, a run past its time and a command killed by a signal fail; a
+/// profile with no tests or a bad `[tests]`, a command that cannot start,
+/// and a run already on the lane, write nothing.
 #[test]
 fn tests_fail_closed() {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, id) = tests_lane(dir.path());
     let tests = ["check", "run", "tests", "--work", &id];
-    let payload = || {
+    let payload = |profile: &str| {
+        base_tests(&wt, Some(profile));
         let (code, out) = run(&db, &tests);
         assert_eq!(code, 0, "{out}");
         out["payload"].clone()
     };
-    base_tests(&wt, Some("commands = [[\"false\"]]"));
-    assert_eq!(payload()["result"], "fail");
-
-    base_tests(
-        &wt,
-        Some("commands = [[\"sh\", \"-c\", \"echo x > new.txt\"]]"),
-    );
-    let p = payload();
+    assert_eq!(payload(r#"commands = [["false"]]"#)["result"], "fail");
+    let p = payload(r#"commands = [["sh", "-c", "echo x > new.txt"]]"#);
     assert_eq!((&p["result"], &p["dirty"]), (&json!("fail"), &json!(true)));
-
-    base_tests(
-        &wt,
-        Some("commands = [[\"sleep\", \"5\"], [\"true\"]]\ntimeout_secs = 1"),
-    );
-    let p = payload();
-    assert_eq!(
-        (&p["result"], &p["timed_out"]),
-        (&json!("fail"), &json!(true))
-    );
-    assert_eq!(
+    for (profile, timed_out) in [
         (
-            &p["commands"][0]["exit"],
-            p["commands"].as_array().unwrap().len()
+            "commands = [[\"sleep\", \"5\"], [\"true\"]]\ntimeout_secs = 1",
+            true,
         ),
-        (&Value::Null, 1)
-    );
+        (
+            r#"commands = [["sh", "-c", "kill -9 $$"], ["true"]]"#,
+            false,
+        ),
+    ] {
+        let p = payload(profile);
+        let got = (&p["result"], &p["timed_out"], &p["commands"][0]["exit"]);
+        assert_eq!(
+            got,
+            (&json!("fail"), &json!(timed_out), &Value::Null),
+            "{profile}"
+        );
+        assert_eq!(p["commands"].as_array().unwrap().len(), 1);
+    }
 
-    for (base, why) in [
+    for (profile, why) in [
         (None, "no .chaperone/profile.toml on the base"),
         (Some("commands = []"), "no [tests] commands"),
+        (
+            Some("commands = [[\"true\"]]\nshell = true"),
+            "unknown field `shell`",
+        ),
+        (
+            Some("commands = [[\"true\"]]\ntimeout_secs = 0"),
+            "timeout_secs must be 1 to 86400",
+        ),
+        (
+            Some("commands = [[\"true\"]]\ntimeout_secs = 9223372036854775807"),
+            "timeout_secs must be",
+        ),
+        (
+            Some("commands = [[\"true\"]]\ntarget_dir = \"PATH\""),
+            "target_dir must be a variable name",
+        ),
+        (
+            Some("commands = [[\"true\"]]\ntarget_dir = \"t\""),
+            "target_dir must be a variable name",
+        ),
+        (
+            Some("commands = [[\"/no/such/command\"]]"),
+            "could not start",
+        ),
     ] {
-        base_tests(&wt, base);
+        base_tests(&wt, profile);
         let before = events(&db);
         let (code, err) = run(&db, &tests);
-        assert_eq!(
-            (code, &err["code"], events(&db)),
-            (1, &json!("invalid_input"), before)
-        );
+        let got = (code, &err["code"], events(&db));
+        assert_eq!(got, (1, &json!("invalid_input"), before), "{profile:?}");
         assert!(err["message"].as_str().unwrap().contains(why), "{err}");
     }
 
-    base_tests(&wt, Some("commands = [[\"true\"]]"));
+    base_tests(&wt, Some(r#"commands = [["true"]]"#));
     let held = lock_lane(&db, id.parse().unwrap()).unwrap().unwrap();
     let before = events(&db);
     let (code, err) = run(&db, &tests);
@@ -426,5 +495,5 @@ fn tests_fail_closed() {
         (4, &json!("conflict"), before)
     );
     drop(held);
-    assert_eq!(payload()["result"], "pass");
+    assert_eq!(payload(r#"commands = [["true"]]"#)["result"], "pass");
 }
