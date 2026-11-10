@@ -155,7 +155,7 @@ fn a_lane_folds_from_its_events() {
         ..HandoffInput::default()
     };
     ledger
-        .work_handoff(&actor("1"), id, &handoff, None, false)
+        .work_handoff(&actor("1"), id, &handoff, None, None, false)
         .unwrap()
         .unwrap();
     std::thread::sleep(Duration::from_millis(5));

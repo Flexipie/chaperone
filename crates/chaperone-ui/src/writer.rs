@@ -538,7 +538,7 @@ fn merge(
         commit: Some(handed.into()),
         ..newest.unwrap_or_default()
     };
-    done(ledger.work_handoff(actor, lane.work, &input, None, false))
+    done(ledger.work_handoff(actor, lane.work, &input, None, None, false))
         .map_err(|e| format!("{merged}; the done handoff failed: {e}"))?;
     Ok(format!("{merged}; handed off done."))
 }
@@ -644,7 +644,7 @@ mod tests {
                 pull_request: Some(format!("o/r#{n}")),
                 ..HandoffInput::default()
             };
-            rw.work_handoff(&a, id, &handoff, None, false)
+            rw.work_handoff(&a, id, &handoff, None, None, false)
                 .unwrap()
                 .unwrap();
             rw.work_ready(&by, id, Some(true), None, None, false)

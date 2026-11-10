@@ -27,7 +27,7 @@ use crate::ledger::{
     Actor, Applied, Change, Checked, Event, EventKind, Ledger, LedgerError, MAX_LEASE_SECS,
     MIN_LEASE_SECS, Mutation, Payload, Refusal, SOURCES, STATUSES, has_held, lease_held,
 };
-use crate::pipeline::Phase;
+use crate::pipeline::{Phase, sha_prefix_eq};
 
 const ENTITY: &str = "work item";
 /// The M1 gated transition (pipelines/v19.toml).
@@ -572,16 +572,33 @@ impl Ledger {
     /// the holder), and its first blocker, `next_action`, PR and commit
     /// applied to the item. One `lane.handed_off`, or for a ready or done
     /// handoff the gated `phase.entered` (or `gate.denied`).
+    ///
+    /// `observed_head` is the commit the caller read in the lane's worktree
+    /// just before this write (the ledger makes no git call). A ready
+    /// handoff must name it as its `commit`, so the checks on that commit
+    /// are checks on what the worktree holds. None is not checked: the
+    /// worktree is gone, or the caller has none to read.
     pub fn work_handoff(
         &self,
         actor: &Actor,
         id: i64,
         input: &HandoffInput,
+        observed_head: Option<&str>,
         at: Option<&str>,
         dry_run: bool,
     ) -> Checked<Handoff> {
         if let Err(r) = input.validate() {
             return Ok(Err(r));
+        }
+        if let (Some(true), Some(head)) = (input.ready, observed_head) {
+            let commit = input.commit.as_deref().unwrap_or_default();
+            if !sha_prefix_eq(commit, head, 7..=40, false) {
+                return Ok(Err(Refusal::InvalidInput(format!(
+                    "a ready handoff names the worktree's HEAD as its commit: HEAD is {head}, \
+                     the handoff says '{commit}'; commit the work, or hand off the commit that \
+                     was checked"
+                ))));
+            }
         }
         let stored = serde_json::to_value(input).map_err(std::io::Error::other)?;
         let (applied, _) = self.apply_planned(
@@ -1579,7 +1596,7 @@ mod tests {
                 ..HandoffInput::default()
             };
             ledger
-                .work_handoff(&a, id, &input, Some(T1), false)
+                .work_handoff(&a, id, &input, None, Some(T1), false)
                 .unwrap()
         };
         // An empty `areas` would read as declaring nothing, which a

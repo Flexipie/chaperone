@@ -132,7 +132,7 @@ fn lane_page_reads_timeline_decisions_rounds_and_gates() {
         ..HandoffInput::default()
     };
     ledger
-        .work_handoff(&actor("1"), id, &handoff, None, false)
+        .work_handoff(&actor("1"), id, &handoff, None, None, false)
         .unwrap()
         .unwrap();
 

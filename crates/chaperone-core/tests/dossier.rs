@@ -256,7 +256,7 @@ fn get_is_capped_and_cuts_notes_first() {
                 ..HandoffInput::default()
             };
             ledger
-                .work_handoff(&a, id, &input, None, false)
+                .work_handoff(&a, id, &input, None, None, false)
                 .unwrap()
                 .unwrap();
         }

@@ -81,7 +81,7 @@ impl Lane {
         };
         let h = self
             .ledger
-            .work_handoff(&self.lane, 1, &input, Some(T2), false)
+            .work_handoff(&self.lane, 1, &input, None, Some(T2), false)
             .unwrap();
         h.map(|h| h.id)
     }
@@ -170,7 +170,7 @@ impl Lane {
         };
         let h = self
             .ledger
-            .work_handoff(&self.lane, 1, &input, Some(T2), false)
+            .work_handoff(&self.lane, 1, &input, None, Some(T2), false)
             .unwrap();
         h.map(|h| h.id)
     }
@@ -605,4 +605,47 @@ fn a_v17_1_lane_keeps_the_v17_1_rule() {
         lane.check(&lane.checker, "review_round", json!({}));
     }
     assert_eq!(lane.ready_denied_as(), None);
+}
+
+/// A ready handoff names the commit its worktree is on: another commit is
+/// refused before the gate, with nothing written. A short sha of the head
+/// passes on to the gate, and a handoff that does not say ready, or a lane
+/// whose worktree is gone, is not checked.
+#[test]
+fn a_ready_handoff_names_the_observed_head() {
+    const HEAD: &str = "abc1234def0000000000000000000000000000aa";
+    let lane = Lane::new();
+    lane.stamps();
+    lane.smoke_and_kept();
+    let handoff = |commit: Option<&str>, ready: Option<bool>, head: Option<&str>| {
+        let input = HandoffInput {
+            summary: "s".into(),
+            status: Some("review".into()),
+            commit: commit.map(String::from),
+            ready,
+            ..HandoffInput::default()
+        };
+        let h = lane
+            .ledger
+            .work_handoff(&lane.lane, 1, &input, head, Some(T2), false);
+        h.unwrap().map(|h| h.id)
+    };
+    for stale in [Some("def5678"), Some("abc1234dee"), None] {
+        let r = handoff(stale, Some(true), Some(HEAD));
+        let Err(Refusal::InvalidInput(why)) = r else {
+            panic!("{stale:?}: {r:?}");
+        };
+        assert!(why.contains(HEAD), "{why}");
+    }
+    assert_eq!(lane.count("gate.denied") + lane.count("phase.entered"), 0);
+    assert_eq!(lane.ledger.work_handoffs(1).unwrap().len(), 0);
+
+    handoff(Some("def5678"), None, Some(HEAD)).unwrap();
+    handoff(Some("abc1234def"), Some(true), Some(HEAD)).unwrap();
+    assert_eq!(lane.row().1.as_deref(), Some("ready"));
+    // The worktree is gone: nothing to compare, and the gate still decides.
+    assert!(matches!(
+        handoff(Some("def5678"), Some(true), None),
+        Err(Refusal::GateDenied { .. })
+    ));
 }

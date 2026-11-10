@@ -2,9 +2,12 @@
 //! returns an `Outcome`; rendering is `output`'s.
 
 use std::io::{IsTerminal, Read};
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use chaperone_core::checks::MergedInput;
 use chaperone_core::cursor::Page;
+use chaperone_core::git;
 use chaperone_core::ledger::{Ledger, Refusal};
 use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter};
 use serde::Serialize;
@@ -12,6 +15,9 @@ use serde_json::{Value, json};
 
 use crate::cli::{ActorArgs, Format, WorkCmd};
 use crate::output::{self, CliError, Meta, Outcome};
+
+/// How long `work handoff` waits for `git rev-parse` in the worktree.
+const HEAD_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run(
     ledger: &Ledger,
@@ -147,7 +153,17 @@ pub fn run(
             };
             let input: HandoffInput = serde_json::from_str(&raw)
                 .map_err(|e| Refusal::InvalidInput(format!("handoff JSON: {e}")))?;
-            one(ledger.work_handoff(&actor.resolve(), id, &input, None, dry(dry_run))??)
+            // Only a ready handoff is checked against the worktree.
+            let head = match input.ready {
+                Some(true) => {
+                    // An unknown item is the write's to refuse.
+                    let item = ledger.work_get(id, &ledger.now()?)?.ok();
+                    observed_head(item.and_then(|i| i.worktree_path).as_deref())?
+                }
+                _ => None,
+            };
+            let actor = actor.resolve();
+            one(ledger.work_handoff(&actor, id, &input, head.as_deref(), None, dry(dry_run))??)
         }
         WorkCmd::Handoffs { id } => items(ledger.work_handoffs(id)?),
         WorkCmd::Merged {
@@ -266,10 +282,63 @@ fn items(v: Vec<impl Serialize>) -> Result<Outcome, CliError> {
     }))
 }
 
+/// The commit the lane's worktree is on, read just before a ready handoff
+/// is written. None when the lane has no worktree or it is gone (removed
+/// after a merge): there is nothing to compare with. A worktree that is
+/// there and cannot be read refuses, so a broken checkout is not a pass.
+fn observed_head(worktree: Option<&str>) -> Result<Option<String>, Refusal> {
+    let Some(wt) = worktree.map(Path::new).filter(|wt| wt.is_dir()) else {
+        return Ok(None);
+    };
+    // One call, so plain `git`: finding the real binary costs a call too.
+    git::head(Path::new("git"), wt, Instant::now() + HEAD_TIMEOUT)
+        .map(Some)
+        .map_err(|e| Refusal::InvalidInput(format!("could not read HEAD in {}: {e}", wt.display())))
+}
+
 pub(crate) fn value(v: impl Serialize) -> Result<Value, CliError> {
     serde_json::to_value(v).map_err(|e| CliError::Internal(e.to_string()))
 }
 
 pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
     Ok(Outcome::One(value(v)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::*;
+
+    /// A worktree's commit is read; a lane with no worktree, or one that is
+    /// gone, has none; a directory that is no repository refuses.
+    #[test]
+    fn observed_head_reads_the_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().to_str().unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(wt)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        assert_eq!(observed_head(None).unwrap(), None);
+        let gone = dir.path().join("gone");
+        assert_eq!(observed_head(gone.to_str()).unwrap(), None);
+        let Err(Refusal::InvalidInput(why)) = observed_head(Some(wt)) else {
+            panic!("a directory that is no repository was read");
+        };
+        assert!(why.starts_with("could not read HEAD in "), "{why}");
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        assert_eq!(
+            observed_head(Some(wt)).unwrap(),
+            Some(git(&["rev-parse", "HEAD"]))
+        );
+    }
 }
