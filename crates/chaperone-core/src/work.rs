@@ -836,7 +836,10 @@ impl Ledger {
                 let lost = match held {
                     Ok(Ok(())) => None,
                     Ok(Err(d)) => Some(format!("{} no longer holds", d.gate)),
-                    Err(_) => Some("this binary does not know its pipeline".into()),
+                    Err(Refusal::PipelineUnknown { pipeline_id, .. }) => {
+                        Some(format!("this binary does not know pipeline {pipeline_id}"))
+                    }
+                    Err(r) => Some(format!("its gate could not be read ({r:?})")),
                 };
                 if let Some(why) = lost {
                     ready = false;

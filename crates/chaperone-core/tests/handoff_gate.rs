@@ -660,7 +660,8 @@ fn a_ready_handoff_names_the_observed_head() {
 
 /// Ready is derived: a NO verdict recorded on the handed-off commit after
 /// the ready handoff unsays it on the next read, with no write, and a yes
-/// brings it back. The owner's override still wins.
+/// brings it back. The owner's override still wins. A verdict on a newer
+/// commit, or a stamp this binary cannot load, unsays it too.
 #[test]
 fn a_later_no_verdict_revokes_ready_on_the_board() {
     let lane = Lane::new();
@@ -673,15 +674,16 @@ fn a_later_no_verdict_revokes_ready_on_the_board() {
     };
     assert_eq!(board(), (true, "the lane says ready".into()));
 
-    let events = lane.count("gate.denied") + lane.count("phase.entered");
+    let newest = || -> i64 {
+        let sql = "SELECT max(id) FROM events";
+        lane.db.query_row(sql, [], |r| r.get(0)).unwrap()
+    };
     lane.check(&lane.checker, "merge_verdict", json!({"decision": "no"}));
-    let revoked = "the lane said ready, but verdict_is_yes no longer holds";
-    assert_eq!(board(), (false, revoked.into()));
+    let events = newest();
+    let revoked = |why: &str| (false, format!("the lane said ready, but {why}"));
+    assert_eq!(board(), revoked("verdict_is_yes no longer holds"));
     // The read wrote nothing, and the lane row still says ready.
-    assert_eq!(
-        lane.count("gate.denied") + lane.count("phase.entered"),
-        events
-    );
+    assert_eq!(newest(), events);
     assert_eq!(lane.row().1.as_deref(), Some("ready"));
 
     let owner = pair("owner", "s3");
@@ -696,4 +698,12 @@ fn a_later_no_verdict_revokes_ready_on_the_board() {
         .unwrap();
     lane.check(&lane.checker, "merge_verdict", json!({"decision": "yes"}));
     assert_eq!(board(), (true, "the lane says ready".into()));
+
+    let yes = json!({"decision": "yes"});
+    lane.finish("merge_verdict", "ran", "fff9999", yes);
+    assert_eq!(board(), revoked("verdict_on_head no longer holds"));
+    lane.db
+        .execute("UPDATE lanes SET pipeline_hash = 'gone' WHERE id = 1", [])
+        .unwrap();
+    assert_eq!(board(), revoked("this binary does not know pipeline v19"));
 }
