@@ -62,9 +62,20 @@ const TOKENS: &[Token] = &[
     ("xoxs-", 10, dashed, "slack_token"),
     ("sk-ant-", 20, dashed, "api_key"),
     ("sk-proj-", 20, dashed, "api_key"),
+    ("glpat-", 20, dashed, "gitlab_token"),
 ];
 
-const SECRET_NAMES: &[&str] = &["TOKEN", "SECRET", "PASSWORD", "API_KEY", "APIKEY"];
+/// What a secret's name ends in, in any case: `AWS_SECRET_ACCESS_KEY`,
+/// `db_password`, `apiKey`.
+const SECRET_NAMES: &[&str] = &[
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "API_KEY",
+    "APIKEY",
+    "ACCESS_KEY",
+    "SECRET_KEY",
+];
 
 const REDACTED: &str = "[redacted:";
 
@@ -200,6 +211,15 @@ fn hit(s: &str, ends: &[usize], i: usize) -> Option<(usize, usize, &'static str)
             return (n >= min).then_some((i, i + prefix.len() + n, kind));
         }
     }
+    // A bare `sk-` key (no `ant-` or `proj-`): 32 letters and digits, at
+    // the start of a word, so `task-<hash>` and a dashed name are kept.
+    if rest.starts_with("sk-") && !i.checked_sub(1).is_some_and(|k| dashed(b[k])) {
+        let n = run(b, i + 3, |c| c.is_ascii_alphanumeric());
+        return (n >= 32).then_some((i, i + 3 + n, "api_key"));
+    }
+    if rest.starts_with("://") {
+        return url_password(s, i + 3);
+    }
     if rest.starts_with("Bearer") {
         let start = i + 6 + run(b, i + 6, blank);
         if start == i + 6 {
@@ -214,9 +234,25 @@ fn hit(s: &str, ends: &[usize], i: usize) -> Option<(usize, usize, &'static str)
     None
 }
 
+/// `scheme://user:password@host`, the authority starting at `from`: the
+/// password. A port (`host:8080/`) has no `@` before the path, and a
+/// password that is a reference (`${VAR}`) or already redacted is kept.
+fn url_password(s: &str, from: usize) -> Option<(usize, usize, &'static str)> {
+    let authority = run(s.as_bytes(), from, |c| {
+        !c.is_ascii_whitespace() && !b"/?#\"'<>\\".contains(&c)
+    });
+    let at = from + s[from..from + authority].rfind('@')?;
+    let start = from + s[from..at].find(':')? + 1;
+    let password = &s[start..at];
+    let kept = password.is_empty() || [REDACTED, "${"].iter().any(|p| password.starts_with(p));
+    (!kept).then_some((start, at, "url_credentials"))
+}
+
 /// `NAME_TOKEN=value`, `"API_KEY": "value"`, `API_KEY := value`,
 /// `API_KEY: &str = "value"`: the value side, when the name ends in one of
-/// [`SECRET_NAMES`] and `b[sep]` is `=` or `:`.
+/// [`SECRET_NAMES`] and `b[sep]` is `=` or `:`. A name with a lower-case
+/// letter and a bare `:` is prose as often as not (`the token: a word`), so
+/// it needs more: an underscore, a quoted name or a quoted value.
 fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'static str)> {
     let b = s.as_bytes();
     let mut j = sep;
@@ -225,19 +261,32 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
     }
     // `env["API_KEY"] =`, `"API_KEY":`, and `\"API_KEY\":` (or `\\\"`, JSON
     // logged inside JSON) inside a logged string.
+    let bare_end = j;
     for close in [b']', b'"'] {
         if j > 0 && (b[j - 1] == close || close == b'"' && b[j - 1] == b'\'') {
             j -= 1;
         }
     }
+    let name_quoted = j < bare_end;
     while j > 0 && b[j - 1] == b'\\' {
         j -= 1;
     }
     let name_start = (0..j).rev().take_while(|&k| word(b[k])).last()?;
     let name = &s[name_start..j];
-    if !SECRET_NAMES.iter().any(|n| name.ends_with(n)) {
+    let ends_in =
+        |n: &&str| name.len() >= n.len() && name[name.len() - n.len()..].eq_ignore_ascii_case(n);
+    if !SECRET_NAMES.iter().any(ends_in) {
         return None;
     }
+    // `a_token == b`, `token => ...`: a comparison or an arrow, no value.
+    if b[sep] == b'=' && matches!(b.get(sep + 1), Some(b'=' | b'>')) {
+        return None;
+    }
+    let weak = b[sep] == b':'
+        && b.get(sep + 1) != Some(&b'=')
+        && !name_quoted
+        && !name.contains('_')
+        && name.bytes().any(|c| c.is_ascii_lowercase());
     let mut at = sep + 1;
     if b[sep] == b':' {
         match b.get(at) {
@@ -275,6 +324,9 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
         .copied()
         .filter(|&c| c == b'"' || c == b'\'');
     let escaped = escaped && quote.is_some();
+    if weak && quote.is_none() {
+        return None;
+    }
     start += usize::from(escaped) + usize::from(quote.is_some());
     let rest = &s[start..];
     // Already redacted, a reference to a secret (`${{ secrets.X }}`), or
@@ -524,6 +576,32 @@ mod tests {
                 "SECRET:v APIKEY=w".into(),
                 "SECRET:[redacted:assignment] APIKEY=[redacted:assignment]",
             ),
+            (
+                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG DJANGO_SECRET_KEY: x1".into(),
+                "AWS_SECRET_ACCESS_KEY=[redacted:assignment] DJANGO_SECRET_KEY: [redacted:assignment]",
+            ),
+            // Lower and mixed case: `=` always; a bare `:` with an
+            // underscore, a quoted name or a quoted value.
+            (
+                "password=hunter2 github_token=abc db_password: s3cret".into(),
+                "password=[redacted:assignment] github_token=[redacted:assignment] db_password: [redacted:assignment]",
+            ),
+            (
+                r#"{"password": "hunter2"} accessToken: "abc" token := v"#.into(),
+                r#"{"password": "[redacted:assignment]"} accessToken: "[redacted:assignment]" token := [redacted:assignment]"#,
+            ),
+            (
+                format!("key sk-{} and glpat-{t20} end", "aB3".repeat(11)),
+                "key [redacted:api_key] and [redacted:gitlab_token] end",
+            ),
+            (
+                "git clone https://x-access-token:s3cr3t@github.com/o/r.git".into(),
+                "git clone https://x-access-token:[redacted:url_credentials]@github.com/o/r.git",
+            ),
+            (
+                "postgres://app:p@ss:w0rd@db:5432/x".into(),
+                "postgres://app:[redacted:url_credentials]@db:5432/x",
+            ),
         ];
         for (text, want) in cases {
             let (out, _) = redact(&text);
@@ -550,7 +628,20 @@ mod tests {
             "-----BEGIN PUBLIC KEY-----",
             "-----BEGIN PRIVATE",
             "-----BEGIN A\nRSA PRIVATE KEY-----",
-            "TOKEN_COUNT=3 is fine? no: NAME=v, github_token=lowercase",
+            "TOKEN_COUNT=3 is fine? no: NAME=v, tokens=3",
+            // A lower-case word and a bare colon is prose.
+            "the token: refresh it, Password: required, secret: none",
+            "if token == expected, (token) => use(token), token => 1",
+            "TOKEN==x",
+            // `sk-` inside a word, in a dashed name, or too short.
+            "task-0123456789abcdef0123456789abcdef",
+            "risk-sk-0123456789abcdef0123456789abcdef",
+            "sk-learn-is-a-long-dashed-name-and-not-a-key",
+            "sk-0123456789abcdef",
+            "glpat-short",
+            // A port, a user with no password, a reference, an `@` in the path.
+            "http://localhost:8080/a ssh://git@github.com/o/r https://h:1/a@b",
+            "https://user:${PASSWORD}@host https://user:@host",
             "API_KEY::new()",
             "API_KEY=",
             "= : leading separators",
