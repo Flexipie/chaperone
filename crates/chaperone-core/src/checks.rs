@@ -2,7 +2,7 @@
 //! (the harness's, measured by the binary), `reviews record` (a daisy
 //! review job's result, as `daisy-cli reviews get` read it), and `reviews
 //! get` / `jobs get` answering for recorded jobs in daisy's shapes
-//! (events.md, checks).
+//! (events.md, checks). Also the moves of a review's findings.
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -114,6 +114,19 @@ pub struct Recorded {
     pub replayed: bool,
     pub at: String,
     pub payload: Payload,
+}
+
+/// A move of one finding, addressed as the ledger addresses it: the
+/// `check.finished` that raised it and its key there.
+#[derive(Clone, Debug, Default)]
+pub struct FindingMove {
+    pub check_event_id: i64,
+    pub finding_key: String,
+    pub status: String,
+    /// Required to dispute or waive.
+    pub reason: Option<String>,
+    /// The commit that fixes it; required for `fixed`.
+    pub head_sha: Option<String>,
 }
 
 fn invalid<T>(msg: String) -> Checked<T> {
@@ -373,11 +386,7 @@ impl Ledger {
             return invalid("answered needs --answers <asked event id> and --note <the answer>; --answers goes with answered only".into());
         }
         if let Some(note) = &input.note
-            && (note.trim().is_empty()
-                || note
-                    .chars()
-                    .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
-                || note.chars().count() > NOTE_CHARS)
+            && !one_line(note)
         {
             return invalid(format!(
                 "--note is one non-blank line of at most {NOTE_CHARS} characters"
@@ -689,6 +698,51 @@ impl Ledger {
         ]);
         Ok(Ok(out.into()))
     }
+
+    /// One `finding.updated` on the finding's own lane. The write checks
+    /// the move and who may make it (events.md, finding statuses). No key:
+    /// a retry is the same move again, which the write refuses.
+    pub fn finding_update(
+        &self,
+        actor: &Actor,
+        input: &FindingMove,
+        dry_run: bool,
+    ) -> Checked<Recorded> {
+        let mut payload = Payload {
+            check_event_id: Some(input.check_event_id),
+            finding_key: Some(input.finding_key.clone()),
+            status: Some(input.status.clone()),
+            head_sha: input.head_sha.clone(),
+            ..Payload::default()
+        };
+        if let Some(reason) = &input.reason {
+            payload.rest.insert("reason".into(), json!(reason));
+        }
+        let mut lane = None;
+        let (applied, _) = self.apply_planned(
+            actor,
+            None,
+            None,
+            dry_run,
+            |conn, _| {
+                lane = conn
+                    .query_row(
+                        "SELECT lane_id FROM findings WHERE check_event_id = ?1 AND finding_key = ?2",
+                        params![input.check_event_id, input.finding_key],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                Ok(lane
+                    .map(|id| check_event(EventKind::FindingUpdated, id, payload))
+                    .ok_or_else(|| Refusal::NotFoundRef {
+                        entity: "finding",
+                        reference: format!("{}/{}", input.check_event_id, input.finding_key),
+                    }))
+            },
+            |_, _, _| Ok(()),
+        )?;
+        Ok(recorded(applied, lane))
+    }
 }
 
 /// The newest of `sql`'s events (`id, payload_json`, newest first) whose
@@ -732,7 +786,17 @@ pub(crate) fn recorded(applied: Applied, work_id: Option<i64>) -> Result<Recorde
 }
 
 /// A commit: 7 to 40 lowercase hex digits.
-fn sha_ok(sha: &str) -> bool {
+/// A note a person reads in a list: one non-blank line of at most
+/// `NOTE_CHARS` characters (`attention record --note`, a finding's reason).
+pub(crate) fn one_line(note: &str) -> bool {
+    !note.trim().is_empty()
+        && !note
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        && note.chars().count() <= NOTE_CHARS
+}
+
+pub(crate) fn sha_ok(sha: &str) -> bool {
     (7..=40).contains(&sha.len())
         && sha
             .bytes()

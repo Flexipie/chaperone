@@ -586,6 +586,7 @@ impl World {
                             check_event_id: Some(check),
                             finding_key: Some(key),
                             status: Some("fixed".into()),
+                            head_sha: Some("abc1234".into()),
                             ..Payload::default()
                         },
                     ),

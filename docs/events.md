@@ -164,7 +164,27 @@ run reads the folder the earlier one measured. One that names the same path, a t
 | --- | --- | --- |
 | `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha`, `review` |
 | `check.finished` | `check record`, `check run`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
-| `finding.updated` | none in M1 (folded and tested through `Ledger::apply`, #16) | `check_event_id`, `finding_key`, `status` (`fixed` with `commit`, or `answered` with one line) |
+| `finding.updated` | none yet: core's `Ledger::finding_update` (the lane's dispute, the owner's waiver and the harness's moves) | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute or waive; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits) |
+
+**Finding statuses.** A finding is folded `open`. Each `finding.updated` makes one of these
+moves, checked by the write; any other move, another status, or the same status again
+(`finding <event>/<key> is already <status>`) is `invalid_input`, an unknown finding is
+`not_found` with reference `<event>/<key>`, and nothing is written. `refuted`, `waived`,
+`fixed` and `answered` are final. "Lane" is a session that has held the lane (a
+`lane.claimed` or `lane.taken_over`); "independent" is one that never has: the verifier,
+or the owner (the rule `work ready` uses). The lane's only move is to dispute, so it never
+settles its own finding.
+
+| From | To | Who |
+| --- | --- | --- |
+| `open` | `answered` | anyone, and only when the severity is `question` |
+| `open`, `verified` | `fixed` | independent (the verifier confirms the fix on `head_sha`) |
+| `open`, `disputed` | `verified`, `refuted` | independent |
+| `open`, `verified` | `disputed` | lane |
+| `open`, `verified`, `disputed` | `waived` | independent (the owner) |
+
+There is no `disputed` to `fixed`: a lane that concedes a disputed finding fixes it and
+waits for the verifier to rule. `open`, `verified` and `disputed` are unsettled.
 
 A requested review with no finish projects the fact `daisy_review.state` as `running`, never `absent`, and `reviews get` reports it running.
 
@@ -324,7 +344,7 @@ reasons) are reserved for a `--file` input after M1.
 | --- | --- |
 | `lanes` | `status` is a wire status only (`queued`, `claimed`, `active`, `blocked`, `review`, `done`, `cancelled`). There is no `ready` status. Ready is the `work ready` override, which wins over every handoff until `--clear`; else a lane not in `review` is not ready; else the latest handoff's `ready` field, with no `next_action` fallback (daisy's `lane_says_ready` falls back; M1 does not). `work board` applies it (cli-contract.md). The columns are daisy's `work get` fields (`title`, `source`, `source_id`, `source_key`, `repo_slug`, `next_action`, `blocker`, `pr_ref`, `branch`, `base_sha`, `worktree_path`, `agent`, `session`, `claimed_at`, `lease_secs`, `lease_expires_at`, `last_heartbeat_at`, `spec_id`, `lane_key`, `lane_pos`, `status`, `created_at`, `updated_at`) plus `kind`, `pr_flow`, `phase`, `pipeline_id`, `pipeline_hash`, `route` and `head_event_id`. `id` is the lane id, `idempotency_key` comes from `lane.created` (less the `create:` it is stored under), `lease_state` is computed at read time, and `linear_outbox` and `repo_id` are always null. `phase` is null until the first `phase.entered`, then its `to`; M1's `handoff` has no `from` constraint. `head_event_id` is the id of the lane's latest event of any kind. `spec_id`, `lane_key` and the pipeline columns are nullable until set. One item per `(spec_id, lane_key, lane_pos)` slot (a null `lane_pos` is one slot), so a stack's layers share a lane. `events.idempotency_key` is nullable. |
 | `gate_results` | One row per `(lane_id, gate, head_sha)`, where column `gate` holds the `check.finished` payload's `check` (named `gate` because `CHECK` is an SQL keyword). `status` is `ran` or `skipped`. The latest `check.finished` on that key wins. |
-| `findings` | One row per `(check_event_id, finding_key)`. `status` is `open`, `fixed` or `answered`. |
+| `findings` | One row per `(check_event_id, finding_key)`. `status` is one of the finding statuses (checks, above). |
 | `spec_keys` | Since ledger v3. One row per `(spec_id, key)`: the slice keys of the spec's head version, as the spec parser reads them, replaced on every `spec.created` and `spec.revised`. Keys match in any ASCII case (`COLLATE NOCASE`), so two sections naming one key in different cases are one row. `spec get --key` without `--spec` reads it. |
 | handoffs | A handoff is a `lane.handed_off`, or a `phase.entered` that carries `handoff`. `work handoffs`, "the latest handoff" (ready, `pr.opened.head_sha`, the `update --status done` commit) and lane-stats read both. |
 
@@ -343,8 +363,9 @@ and reason, so recording the same result again after the PR does not fail
 it. `smoke.recorded` and `kept_tests.recorded` are true once any such check is recorded.
 `review.local_rounds` counts `ran` local reviews and `review_round` checks, so the cap
 binds only rounds that were recorded; `review.local_head` is the newest
-one's sha, and `review.previous_round_closed` holds when that round has no `open`
-finding. `daisy_review.state` is `running` while a requested job (or a request with no
+one's sha, and `review.previous_round_closed` holds when that newest round has no
+unsettled finding of any severity (so a dispute never closes it; no transition that runs
+today reads it). `daisy_review.state` is `running` while a requested job (or a request with no
 job) has no finish, else the latest finished review's (`finished`, or `failed` when
 skipped), else `absent`. A finish recorded after a newer job's finish of the same check
 closes its request and counts its round, but leaves the state, head and newest round on
