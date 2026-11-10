@@ -133,6 +133,16 @@ impl Actor {
                 "session must match [A-Za-z0-9._:-]{{1,120}}, got '{session}'"
             )));
         }
+        // Both are stored on every event as they are. The value is not
+        // echoed: stderr is logged too.
+        for (name, value) in [("agent", agent), ("session", session)] {
+            if let Some(kind) = super::redact::secret(value) {
+                return Err(Refusal::InvalidInput(format!(
+                    "{name} looks like a secret ({kind}); it is stored as it is, so name the \
+                     session some other way"
+                )));
+            }
+        }
         Ok(())
     }
 }

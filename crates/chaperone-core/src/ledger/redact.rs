@@ -161,6 +161,12 @@ fn key(k: &str) -> Result<(), Refusal> {
     }
 }
 
+/// The kind of the first secret in `s`, a string stored as it is (a session
+/// id, an idempotency key): nothing redacts those, so the write refuses it.
+pub(crate) fn secret(s: &str) -> Option<&'static str> {
+    redact(s).1.first().copied()
+}
+
 /// `s` with every match replaced by `[redacted:<kind>]`, and the kind of
 /// each match. Redacting the result again changes nothing.
 fn redact(s: &str) -> (String, Vec<&'static str>) {

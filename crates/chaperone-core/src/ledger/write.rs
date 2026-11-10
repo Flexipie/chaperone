@@ -192,6 +192,12 @@ fn write(
             spec_id,
             payload,
         } => {
+            // Before the lookup: a key is stored, and compared, as it is.
+            if let Some(kind) = key.and_then(redact::secret) {
+                return Ok(Applied::Refused(invalid(&format!(
+                    "the idempotency key looks like a secret ({kind}); it is stored as it is"
+                ))));
+            }
             if let Some(event) = key.map(|k| by_key(tx, k)).transpose()?.flatten() {
                 // Scoped to the kind, so one command's key never answers another's.
                 if event.kind != kind {
@@ -1797,6 +1803,41 @@ mod tests {
             assert!(got.starts_with(want), "case {i}: want {want}, got {got}");
             assert_eq!(events(&ledger), 4, "case {i}");
         }
+    }
+
+    /// A session id or an idempotency key shaped like a secret is refused
+    /// without being echoed, and nothing is stored.
+    #[test]
+    fn secret_shaped_identifiers_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let token = format!("ghp_{}", "a".repeat(36));
+        let me = Actor {
+            agent: Some("a".into()),
+            session: Some("s".into()),
+        };
+        let leaky = Actor {
+            session: Some(token.clone()),
+            ..me.clone()
+        };
+        let create = || ev(EventKind::LaneCreated, None, None, lane());
+        for (who, key, names) in [
+            (&leaky, None, "session looks like a secret (github_token)"),
+            (&me, Some(token.as_str()), "the idempotency key looks like"),
+        ] {
+            let Applied::Refused(Refusal::InvalidInput(why)) =
+                ledger.apply(who, key, AT, create()).unwrap()
+            else {
+                panic!("{names}: not refused");
+            };
+            assert!(why.starts_with(names), "{why}");
+            assert!(!why.contains(&token), "{why}");
+        }
+        let stored: i64 = ledger
+            .conn()
+            .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, 0);
     }
 
     /// Prose is redacted before the insert: the retry replays the bytes the
