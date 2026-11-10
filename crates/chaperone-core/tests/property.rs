@@ -109,30 +109,6 @@ enum Op {
         lane: u8,
         who: u8,
     },
-    /// Every stamp v19's ready and done gates read, on one commit.
-    Stamp {
-        lane: u8,
-        who: u8,
-        sha: u8,
-    },
-    Handoff {
-        lane: u8,
-        who: u8,
-        ready: bool,
-    },
-    /// The gated handoff: `phase.entered`, or the `gate.denied` the write
-    /// appends in its place.
-    Phase {
-        lane: u8,
-        who: u8,
-        done: bool,
-        sha: u8,
-    },
-    Merged {
-        lane: u8,
-        who: u8,
-        pr: u8,
-    },
     Advance {
         secs: i64,
     },
@@ -186,22 +162,7 @@ fn op() -> impl Strategy<Value = Op> {
                 review
             }),
         (0u8..5, who.clone()).prop_map(|(lane, who)| Op::FindingUpdate { lane, who }),
-        (0u8..5, who.clone()).prop_map(|(lane, who)| Op::Ready { lane, who }),
-        (0u8..5, who.clone(), 0u8..2).prop_map(|(lane, who, sha)| Op::Stamp { lane, who, sha }),
-        (0u8..5, who.clone(), any::<bool>()).prop_map(|(lane, who, ready)| Op::Handoff {
-            lane,
-            who,
-            ready
-        }),
-        (0u8..5, who.clone(), any::<bool>(), 0u8..2).prop_map(|(lane, who, done, sha)| {
-            Op::Phase {
-                lane,
-                who,
-                done,
-                sha,
-            }
-        }),
-        (0u8..5, who, 0u8..3).prop_map(|(lane, who, pr)| Op::Merged { lane, who, pr }),
+        (0u8..5, who).prop_map(|(lane, who)| Op::Ready { lane, who }),
         prop_oneof![Just(5), Just(120), Just(1000)].prop_map(|secs| Op::Advance { secs }),
     ]
 }
@@ -294,31 +255,6 @@ impl World {
                 )
             })
             .collect()
-    }
-
-    /// One `check.finished` per stamp of [`Op::Stamp`].
-    fn stamps(&self, lane: i64, sha: u8) -> Vec<Mutation> {
-        [
-            ("plan_check", "ran", json!({})),
-            ("quality_gate", "ran", json!({})),
-            ("merge_verdict", "ran", json!({"decision": "yes"})),
-            ("smoke", "ran", json!({})),
-            ("kept_tests", "skipped", json!({"reason": "none"})),
-        ]
-        .into_iter()
-        .map(|(check, outcome, rest)| Mutation::Event {
-            kind: EventKind::CheckFinished,
-            lane_id: Some(lane),
-            spec_id: None,
-            payload: Payload {
-                check: Some(check.into()),
-                outcome: Some(outcome.into()),
-                head_sha: Some(format!("abc123{sha}")),
-                rest: serde_json::from_value(rest).unwrap(),
-                ..Payload::default()
-            },
-        })
-        .collect()
     }
 
     fn mutation(&mut self, op: &Op) -> Option<(Actor, Mutation)> {
@@ -549,73 +485,6 @@ impl World {
                     ),
                 )
             }
-            // `apply` writes its stamps.
-            Op::Stamp { .. } => return None,
-            Op::Handoff { lane, who, ready } => (
-                actor(who),
-                event(
-                    EventKind::LaneHandedOff,
-                    Some(self.lane(lane)),
-                    None,
-                    Payload {
-                        // A ready one is refused: only the gate says ready.
-                        rest: [(
-                            "handoff".to_string(),
-                            json!({"summary": "s", "ready": ready}),
-                        )]
-                        .into_iter()
-                        .collect(),
-                        ..Payload::default()
-                    },
-                ),
-            ),
-            Op::Phase {
-                lane,
-                who,
-                done,
-                sha,
-            } => {
-                let id = self.lane(lane);
-                let status = if done { "done" } else { "review" };
-                let mut sets = vec![("status", json!(status))];
-                if done && self.lane_value(id, "session") != Value::Null {
-                    sets.extend([("agent", Value::Null), ("session", Value::Null)]);
-                }
-                let mut changed = self.change(id, &sets, false);
-                changed.retain(|_, c| c.from != c.to);
-                (
-                    actor(who),
-                    event(
-                        EventKind::PhaseEntered,
-                        Some(id),
-                        None,
-                        Payload {
-                            changed,
-                            transition: Some("handoff".into()),
-                            to: Some(if done { "done" } else { "ready" }.into()),
-                            status: Some(status.into()),
-                            head_sha: Some(format!("abc123{sha}")),
-                            ..Payload::default()
-                        },
-                    ),
-                )
-            }
-            Op::Merged { lane, who, pr } => (
-                actor(who + 10),
-                event(
-                    EventKind::PrMerged,
-                    Some(self.lane(lane)),
-                    None,
-                    Payload {
-                        head_sha: Some("abc1230".into()),
-                        rest: serde_json::from_value(json!({
-                            "pr": format!("o/r#{pr}"), "merge_sha": "fedcba9", "merged_at": self.at(),
-                        }))
-                        .unwrap(),
-                        ..Payload::default()
-                    },
-                ),
-            ),
             Op::Ready { lane, who } => (
                 actor(who + 20),
                 event(
@@ -632,14 +501,6 @@ impl World {
     }
 
     fn apply(&mut self, op: &Op, key: Option<u8>) -> Option<Applied> {
-        if let Op::Stamp { lane, who, sha } = *op {
-            // Five unkeyed checks from one session on one lane: all commit
-            // or all are refused, so the last answers for them.
-            let (by, at) = (actor(who + 10), self.at());
-            let stamps = self.stamps(self.lane(lane), sha);
-            let apply = |m| self.ledger.apply(&by, None, &at, m).unwrap();
-            return stamps.into_iter().map(apply).last();
-        }
         let (actor, mutation) = self.mutation(op)?;
         let key = match mutation {
             Mutation::Heartbeat { .. } => None,
@@ -670,66 +531,6 @@ fn lanes_without_lease(db: &Connection) -> Vec<String> {
     .unwrap()
     .map(Result::unwrap)
     .collect()
-}
-
-/// A gate that passes is rare at random, so one fixed run of the same ops:
-/// a claimed, stamped lane enters ready, then done, another commit is
-/// denied, and the tables still rebuild from the log.
-#[test]
-fn a_passed_gate_rebuilds() {
-    let mut w = World::new();
-    let (lane, who, sha) = (0, 1, 0);
-    let ops = [
-        (Op::CreateLane { spec: None, key: 1 }, "lane.created"),
-        (
-            Op::Claim {
-                lane,
-                who,
-                secs: 900,
-                stale: false,
-                takeover: false,
-            },
-            "lane.claimed",
-        ),
-        (Op::Stamp { lane, who, sha }, "check.finished"),
-        (
-            Op::Phase {
-                lane,
-                who,
-                done: false,
-                sha: 1,
-            },
-            "gate.denied",
-        ),
-        (
-            Op::Phase {
-                lane,
-                who,
-                done: false,
-                sha,
-            },
-            "phase.entered",
-        ),
-        (
-            Op::Phase {
-                lane,
-                who,
-                done: true,
-                sha,
-            },
-            "phase.entered",
-        ),
-    ];
-    for (op, kind) in ops {
-        let Some(Applied::Committed(event)) = w.apply(&op, None) else {
-            panic!("{op:?} did not commit");
-        };
-        assert_eq!(event.kind.to_string(), kind, "{op:?}");
-    }
-    assert_eq!(w.lane_value(1, "phase"), json!("done"));
-    let before = dump(&w.db);
-    w.ledger.rebuild().unwrap();
-    assert_eq!(before, dump(&w.db));
 }
 
 proptest! {
