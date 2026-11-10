@@ -3,6 +3,7 @@
 //! calls of `overlap`, `impact` and the UI's diff.
 
 use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -25,20 +26,37 @@ pub enum Failed {
 /// read to the end while it runs, so a large answer cannot fill one and
 /// stall the child until the deadline; stdout past `cap` bytes is dropped.
 pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Failed> {
-    run_input(cmd, None, deadline, cap)
+    start(cmd, None, false, deadline, cap)
 }
 
-/// [`run`], with `input` written to the child's stdin, which is then
-/// closed: a prompt too long for an argument. A child that exits before
-/// it has read all of it is a [`Failed::Wait`], whatever it printed.
+/// [`run`] for an agent session, with `input` written to the child's
+/// stdin, which is then closed: a prompt too long for an argument. A
+/// child that exits before it has read all of it is a [`Failed::Wait`],
+/// whatever it printed. The child leads a process group of its own and at
+/// the deadline the whole group is killed, so a shell or a build the
+/// agent started does not outlive it and hold the pipes open. The cost:
+/// a Ctrl-C at the terminal no longer reaches the session.
 pub fn run_input(
     cmd: &mut Command,
     input: Option<&[u8]>,
     deadline: Instant,
     cap: usize,
 ) -> Result<Done, Failed> {
+    start(cmd, input, true, deadline, cap)
+}
+
+fn start(
+    cmd: &mut Command,
+    input: Option<&[u8]>,
+    group: bool,
+    deadline: Instant,
+    cap: usize,
+) -> Result<Done, Failed> {
     if Instant::now() >= deadline {
         return Err(Failed::TimedOut);
+    }
+    if group {
+        cmd.process_group(0);
     }
     let mut child = cmd
         .stdin(match input {
@@ -82,6 +100,16 @@ pub fn run_input(
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
             Ok(None) => {
+                // std has no killpg and `unsafe` is forbidden, so the
+                // system's kill sends it. The child is not reaped yet, so
+                // its pid still names its own group and no other.
+                if group {
+                    let _ = Command::new("/bin/kill")
+                        .args(["-KILL", "--", &format!("-{}", child.id())])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(Failed::TimedOut);

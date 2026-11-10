@@ -72,7 +72,7 @@ fn calls(dir: &Path) -> Vec<Value> {
 
 /// An answer is the CLI's `structured_output`, with its cost and usage;
 /// the session got the prompt on stdin, the flags of a fresh read-only
-/// run, the run's directory, and none of the lane's variables.
+/// sandboxed run, the run's directory, and none of the lane's variables.
 #[test]
 fn an_answer_is_read_from_a_fresh_session() {
     let found = json!({"findings": []});
@@ -120,6 +120,8 @@ fn an_answer_is_read_from_a_fresh_session() {
         "dontAsk",
         "--setting-sources",
         "user",
+        "--settings",
+        r#"{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"network":{"strictAllowlist":true}}}"#,
         "--strict-mcp-config",
         "--no-session-persistence",
         "--max-budget-usd",

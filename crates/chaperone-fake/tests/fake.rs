@@ -48,3 +48,35 @@ fn the_fake_plays_its_script() {
     let long = format!("review {}", "x".repeat(2 * 1024 * 1024));
     assert!(matches!(run(&[], &long), Err(Failed::Wait(_))));
 }
+
+/// At the deadline the child's whole process group goes, so a tool the
+/// agent left running in the background does not outlive the run.
+#[test]
+fn a_timed_out_child_takes_what_it_started_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_at = dir.path().join("pid");
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg(r#"sleep 30 & echo $! > "$0"; wait"#)
+        .arg(&pid_at);
+    let deadline = Instant::now() + Duration::from_millis(300);
+    assert!(matches!(
+        child::run_input(&mut cmd, Some(b""), deadline, 1024),
+        Err(Failed::TimedOut)
+    ));
+    let pid = std::fs::read_to_string(&pid_at).unwrap();
+    // Killed, it is gone once it has been reaped.
+    let alive = || {
+        Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    let start = Instant::now();
+    while alive() && start.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!alive(), "the sleeper {pid} outlived the deadline");
+}
