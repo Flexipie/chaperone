@@ -43,8 +43,9 @@ it still turns on a product decision, answer no and say what must be decided. Ne
 ## A no stands
 
 Your answer stands for this exact tree. The same tree with the same harness facts gets the
-same answer without asking you again, so a no is only lifted by a change to the code or to
-what the harness found. Answer for this code as it is, not for a promise of a fix.
+same answer without asking you again, so a no is lifted only by a commit that changes the
+tree, or by a finding raised before it that is waived or refuted after it. Answer for this
+code as it is, not for a promise of a fix.
 
 ## Answer
 

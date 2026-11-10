@@ -443,8 +443,8 @@ after it, or by changing the code, which is deliberate. It prints the `check.fin
 required here and refused on every other check. The lane's stamped pipeline must name a `plan`
 check with a runner and a prompt, and `[limits]` must hold `plan_attempts`, 1 or more (none
 before v20, so a lane on v17 to v19 is refused and keeps `check record`). The commit must change
-no code file against its base, as `diff` counts code (any file not under `docs/`, ending in
-`.md` or in `.lock`, with or without counted lines): the plan is attacked before code exists, so
+no code file against its base, as `diff` counts code (any file not under `docs/` or ending in
+`.md`, with or without counted lines): the plan is attacked before code exists, so
 a commit with code is refused (`invalid_input`, giving the count of code files and lines, the
 first three paths and the owner's waiver). The plan file must be a regular file (a link to one
 is followed; the type is checked before it is opened, so a FIFO is refused, against accidents
@@ -565,7 +565,8 @@ gates, in the order a denial names the first that fails:
 | Gate | Holds when | Facts a denial lists |
 | --- | --- | --- |
 | `stamp_ok` | the lane is stamped `v20` | `pipeline.id` |
-| `code_lines_at_most` | a harness `diff` on the commit counts at most 400 code lines | `commit.code_lines` |
+| `no_uncounted_files` | a harness `diff` on the commit has no file git counts no lines of | `commit.uncounted_files` |
+| `code_lines_at_most` | that diff counts at most 400 code lines | `commit.code_lines` |
 | `tests_passed` | the newest harness `tests` on the commit passed | `tests.passed` |
 | `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree counts) | `review.complete` |
 | `no_blocking_findings` | that review has no finding open, verified or disputed of severity `blocker`, `risk` or another blocking one; refuted, waived, fixed and answered findings, other reviews' and the plan check's never count | `findings.open_blocking` |

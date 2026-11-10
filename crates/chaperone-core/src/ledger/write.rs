@@ -555,7 +555,8 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             |r| r.get(0),
         )?);
         // Every lease kind runs on the stamp it has; the first claim stamps
-        // the newest pipeline and the route its kind and flow pick.
+        // the default pipeline (or a newer one it names) and the route its
+        // kind and flow pick.
         let (id, hash, kind, flow): (Option<String>, Option<String>, String, String) = tx
             .query_row(
                 "SELECT pipeline_id, pipeline_hash, kind, pr_flow FROM lanes WHERE id = ?1",
@@ -745,10 +746,7 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // plan waiver is the one session plan check, and a session's
             // smoke is its claim, which may not carry a harness `result`.
             let check = p.check.as_deref().unwrap_or_default();
-            let waiver = check == "plan_check"
-                && p.outcome.as_deref() == Some("skipped")
-                && p.rest.get("reason") == Some(&Value::from("waived"));
-            let harness_only = HARNESS_CHECKS.contains(&check) && !waiver
+            let harness_only = HARNESS_CHECKS.contains(&check) && !plan_waiver(p)
                 || check == "smoke" && p.rest.contains_key("result");
             if !harness && harness_only && stamped_schema(tx, lane_id)? == Some(2) {
                 refuse!(invalid(&format!(
@@ -890,6 +888,13 @@ fn owner_pause(event: &Event) -> bool {
                 changed: p.changed.clone(),
                 ..Payload::default()
             }
+}
+
+/// The owner's plan waiver (`check waive plan`).
+pub(crate) fn plan_waiver(p: &Payload) -> bool {
+    p.check.as_deref() == Some("plan_check")
+        && p.outcome.as_deref() == Some("skipped")
+        && p.rest.get("reason") == Some(&Value::from("waived"))
 }
 
 /// The schema of the pipeline lane `lane_id` is stamped with, `None` while

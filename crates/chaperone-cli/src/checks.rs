@@ -40,10 +40,10 @@ use crate::work::{observed_head, one};
 /// overrides it.
 const DAISY_CLI: &str = "/Applications/daisy.app/Contents/MacOS/daisy-cli";
 const DAISY_TIMEOUT: Duration = Duration::from_secs(30);
-/// Not code: docs, Markdown and lock files (a dependency bump alone is no
-/// code change). No profile says what code is yet, so every other changed
-/// file counts. The profile should own this list later.
-const NOT_CODE: [&str; 3] = ["docs/**", "**/*.md", "**/*.lock"];
+/// Not code: docs and Markdown. A lock file is code: a dependency bump
+/// changes what runs. No profile says what code is yet, so every other
+/// changed file counts. The profile should own this list later.
+const NOT_CODE: [&str; 2] = ["docs/**", "**/*.md"];
 /// The git calls that read the lane's commit, its tree and its numstat.
 const RUN_TIMEOUT: Duration = Duration::from_secs(10);
 /// `check run tests`, when the profile names no `timeout_secs`.
@@ -1091,7 +1091,7 @@ mod tests {
     }
 
     /// The plan check refuses a commit with code, naming up to three code
-    /// files and the waiver; docs, Markdown and lock files are no code.
+    /// files and the waiver; docs and Markdown are no code.
     #[test]
     fn a_plan_check_refuses_code() {
         let file = |path: &str| ChangedFile {
@@ -1101,7 +1101,7 @@ mod tests {
             removed: Some(1),
             untracked: false,
         };
-        let docs = [file("docs/a.md"), file("README.md"), file("Cargo.lock")];
+        let docs = [file("docs/a.md"), file("README.md")];
         assert!(no_code(&docs, "abc1234", 7).is_ok());
         let code = [
             file("a.rs"),
