@@ -603,3 +603,61 @@ fn a_review_or_verdict_needs_a_pipeline_that_names_one() {
         assert_eq!(events(&db), before);
     }
 }
+
+/// The plan check runs before code: a commit that changes a code file is
+/// refused and names the owner's waiver. A missing `--file` or one on
+/// another check, a plan that is no regular file, too big, not UTF-8 or
+/// blank, and a lane whose pipeline has no plan check, write nothing.
+#[test]
+fn a_plan_check_needs_no_code_a_plan_file_and_a_pipeline() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = setup(dir.path());
+    let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
+    git(&wt, &["update-ref", "refs/remotes/origin/main", &base], &[]);
+    git(&wt, &["checkout", "-qb", "plan"], &[("docs/p.md", b"p\n")]);
+    git(&wt, &["add", "."], &[]);
+    git(&wt, &["commit", "-qm", "docs"], &[]);
+    let id = lane(
+        &db,
+        &["--worktree", wt.to_str().unwrap(), "--branch", "plan"],
+    );
+    let file = |name: &str, bytes: &[u8]| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path.to_str().unwrap().to_string()
+    };
+    let good = file("plan.md", b"1. change lib.rs\n");
+    let big = file("big.md", &vec![b'x'; 64 * 1024 + 1]);
+    let (binary, blank) = (file("bin.md", &[0xff, 0xfe]), file("blank.md", b" \n"));
+    let (folder, gone) = (dir.path().to_str().unwrap(), format!("{good}.gone"));
+    let plan = |f: &str| ["check", "run", "plan", "--work", &id, "--file", f].map(String::from);
+    let bare = ["check", "run", "plan", "--work", &id].map(String::from);
+    let diff = ["check", "run", "diff", "--work", &id, "--file", &good].map(String::from);
+    let refused = |args: &[String], why: &str| {
+        let before = events(&db);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (code, err) = run(&db, &args);
+        assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+        let said = err["message"].as_str().unwrap();
+        assert!(said.contains(why), "{why}: {said}");
+        assert_eq!(events(&db), before);
+    };
+    refused(&bare, "--file <plan> goes with plan");
+    refused(&diff, "--file <plan> goes with plan");
+    refused(&plan(folder), "not a regular file");
+    refused(&plan(&big), "over 65536 bytes");
+    refused(&plan(&binary), "not UTF-8 text");
+    refused(&plan(&blank), "empty");
+    refused(&plan(&gone), "No such file");
+    let v19 =
+        "pipeline v19 has no check plan; a lane on it records plan checks with `check record`";
+    refused(&plan(&good), v19);
+
+    git(&wt, &["add", "."], &[("lib.rs", b"a\nc\n")]);
+    git(&wt, &["commit", "-qm", "code"], &[]);
+    let waiver = format!(
+        "changes 1 code files (2 lines) against its base: the plan check runs before any code. \
+         The owner can waive it with `check waive plan --work {id}`"
+    );
+    refused(&plan(&good), &waiver);
+}

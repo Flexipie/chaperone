@@ -32,14 +32,14 @@ These rules keep every write small, single and fail-closed.
 
 - **One command, one event, one transaction.** Each command appends exactly one event and
   folds it inside one `BEGIN IMMEDIATE` transaction. A crash leaves the event and its
-  fold both there or both absent. The exceptions are `usage report`, `check run review` and
-  `check run verdict`.
+  fold both there or both absent. The exceptions are `usage report`, `check run review`,
+  `check run verdict` and `check run plan`.
   `usage report` appends one `usage.reported` per message the lane lacks, each in its own
   transaction, so a crash leaves whole events, and the next report adds the rest. `check run
   review` appends a `usage.reported` per session it started, then one `check.finished`, then
   one `finding.updated` per verifier ruling, each in its own transaction; the next run writes
-  rulings a crash left out before anything else (cli-contract.md). `check run verdict` appends a
-  `usage.reported` for its session, then one `check.finished`.
+  rulings a crash left out before anything else (cli-contract.md). `check run verdict` and `check run
+  plan` append a `usage.reported` for their session, then one `check.finished`.
 - **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
   `gate.denied` and nothing else. Its key is
   `deny:<lane_id>:<transition>:<to>:<gate>:<head_sha, or - for none>:<id of the lane's latest event that is not a gate.denied, usage.reported, pr.merged or attention.recorded>`,
@@ -78,7 +78,9 @@ These rules keep every write small, single and fail-closed.
   run on the same tree: a different `tests` result, a newest complete `review` with another
   finding count, or a change in the lane's blocking findings (a verifier's ruling, a
   dispute, a waive, a new blocking finding). A skipped verdict (no answer) is not looked up,
-  so the next run starts a session.
+  so the next run starts a session. `check run plan` is keyed the same way, as
+  `run:<lane_id>:plan_check:<tree>:<pipeline hash>:<plan_ref>:<attempt>`: the same plan text on
+  the same tree and pipeline replays, a changed plan runs.
   `attention record` scopes its `--idempotency-key` to the lane and type (`attention:<lane_id>:<type>:<key>`);
   without one it uses `attention:` plus the
   sha256 of the lane id, its canonical payload and the id of the lane's newest event that is
@@ -319,10 +321,10 @@ events (`usage get`), never a stored counter. Message text never enters the payl
   `parent_thread_id`, `agent_id` its own id, `agent_type` the spawn's `agent_role` and
   `description` its `agent_nickname`.
 - **Harness sessions.** A headless session the harness starts (`check run review`'s lenses
-  and verifier, `check run verdict`'s session) is one `usage.reported` with `source` and `origin` `harness`, `message_id`
+  and verifier, `check run verdict`'s and `check run plan`'s session) is one `usage.reported` with `source` and `origin` `harness`, `message_id`
   `run:<session_id>` (so the key is `usage:<lane_id>:run:<session_id>`), the session's
   `session_id` and `cost_usd` (the CLI's own figure, null for Codex, which reports none), `raw`
-  (the CLI's usage object, counts only), and labels saying what ran it: `phase` (`review` or `verdict`),
+  (the CLI's usage object, counts only), and labels saying what ran it: `phase` (`review`, `verdict` or `plan`),
   `lens`, `cli` and `model` (the runner's). The token fields are null: unknown, never 0. A
   session that left no id (it never started, or Codex printed no `thread.started`) writes none.
 - **Cursor** and other CLIs are not read. Their lanes have no usage events, so `usage get`
@@ -348,12 +350,13 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
   the result itself: `bin` is the executable's path and `version` the package version, plus
   `+<commit>` when it was built in a git checkout. The session rule does not apply. Only
   `check run` writes this producer; no write refuses another producer's `diff` yet. A harness
-  check named like a session check (`merge_verdict`) is the binary's too, so the session rule
+  check named like a session check (`merge_verdict`, `plan_check`) is the binary's too, so the session rule
   does not apply to it either.
 
 | Check | Producer | Fields (after `check`, `outcome`, `head_sha`, `producer`) |
 | --- | --- | --- |
 | `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation`, `docs` or `tests`. |
+| `plan_check` | harness | `check run plan`, before any code. `ran` with `findings[]` in the harness `review`'s shape (keys `plan-<first 12 hex of sha256(path, NUL, title)>`, title and body cut the same way), folded into `findings` like a review's, or `skipped` with `reason` `no_answer` and no findings (never "no findings"). Both carry `tree`, `profile` (the lane's pipeline hash), `base` (the merge base), `plan_ref` (the evidence hash of the plan text as stored, redacted) and `session` (the lens row for lens `plan`, as the verdict's). |
 | `quality_gate` | session | `ran`: `findings` (count). `skipped`: `reason` `no_code` or `tests`. |
 | `merge_verdict` | session | `ran` only. `decision` `yes` or `no`. The verdict sha is `head_sha`, from `--head`, never the model's prose. |
 | `merge_verdict` | harness | `check run verdict`. `ran` with `decision` `yes` or `no`, `why` (cut to 600 characters), `proven` and `not_proven` (at most 20 items, each cut to 500), or `skipped` with `reason` `no_answer` (the session errored, stopped on its budget or timeout, or answered outside the schema) and no decision, which no fact reads. Both carry `tree`, `profile` (the lane's pipeline hash), `base` (the merge base shown), `diff_cut`, `facts` (the ids of the harness `diff`, `tests` and complete `review` events read, all on `head_sha`), `facts_sha256` (the sha256 of the canonical JSON of the results the session was shown: those events' key fields and the lane's blocking findings, once each, nothing that names the commit, so a later gate can require a verdict on the current facts) and `session` (the review's lens row for lens `verdict`, without `findings`: `ran`, `error`, `bin`, `version`, `runner`, `model`, `prompt_sha256`, `prompt_ref`, `answer_ref`, `evidence_truncated`, `cost_usd`). A carried verdict copies them and adds `carried_from`, the id of the event whose session decided. |

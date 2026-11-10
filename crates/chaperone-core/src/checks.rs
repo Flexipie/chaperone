@@ -283,7 +283,7 @@ impl Ledger {
     /// The lane's newest harness `input.check` that ran on `input.tree` by
     /// `input.profile` with `field` equal to `value` (a digest of what it
     /// was given), replayed: a check that holds for a tree whatever the
-    /// commit (`check run verdict`).
+    /// commit (`check run verdict`, `plan`).
     pub(crate) fn tree_run(
         &self,
         input: &RunInput,
