@@ -12,11 +12,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{Attached, AttentionInput, CheckInput, FindingMove, RunInput};
+use chaperone_core::checks::{
+    Attached, AttentionInput, CheckInput, FindingMove, RunInput, evidence_ok,
+};
 use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
 use chaperone_core::git::{self, ChangedFile};
-use chaperone_core::ledger::{self, Actor, Evidence, Ledger, LedgerError, Refusal};
+use chaperone_core::ledger::{self, Actor, Evidence, Kept, Ledger, LedgerError, Refusal};
 use chaperone_core::pipeline::{self, Cli, Pipeline};
 use chaperone_core::plan;
 use chaperone_core::review::{self, Agents, Facts};
@@ -24,7 +26,7 @@ use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
 use chaperone_core::work::WorkItem;
-use chaperone_graph::{commands_in, glob};
+use chaperone_graph::{commands_in, declares, glob};
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
@@ -81,15 +83,26 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
                 decision,
                 findings,
             };
-            let mut files = Vec::new();
-            if !evidence.is_empty() {
-                let item = ledger.work_get(work, &ledger.now()?)??;
-                let store = Evidence::beside(db);
-                for path in &evidence {
-                    files.push(attach(item.worktree_path.as_deref(), path, &store)?);
-                }
+            let actor = actor.resolve();
+            if evidence.is_empty() {
+                return one(ledger.check_record(&actor, &input)??);
             }
-            one(ledger.check_record_with(&actor.resolve(), &input, &files)??)
+            // Every rule before any file is stored: the files are read and
+            // named, the record is tried and rolled back, and only then are
+            // they written, before the record that names them.
+            evidence_ok(&input.check, evidence.len())?;
+            let item = ledger.work_get(work, &ledger.now()?)??;
+            let read: Vec<_> = evidence
+                .iter()
+                .map(|path| attach(item.worktree_path.as_deref(), path))
+                .collect::<Result<_, _>>()?;
+            let files: Vec<_> = read.iter().map(|(file, _)| file.clone()).collect();
+            ledger.check_record_with(&actor, &input, &files, true)??;
+            let store = Evidence::beside(db);
+            for (_, kept) in &read {
+                store.write(kept).map_err(LedgerError::from)?;
+            }
+            one(ledger.check_record_with(&actor, &input, &files, false)??)
         }
         CheckCmd::Run {
             kind,
@@ -209,7 +222,7 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         ("added".into(), json!(added)),
         ("removed".into(), json!(removed)),
         ("code_lines".into(), json!(code_lines)),
-        ("changes_code".into(), json!(code > 0)),
+        ("changes_code".into(), json!(!code.is_empty())),
         // Binary, or text an attributes rule (`-diff`) hides: no lines
         // counted, so a size gate can refuse rather than trust the totals.
         (
@@ -230,14 +243,15 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     one(ledger.check_run(actor, &input)??)
 }
 
-/// Of `files`, how many are code (not [`NOT_CODE`]), and their lines
-/// added plus removed.
-fn code(files: &[ChangedFile]) -> (usize, u64) {
+/// Of `files`, the code ones (not [`NOT_CODE`]), and their lines added
+/// plus removed.
+fn code(files: &[ChangedFile]) -> (Vec<&str>, u64) {
     let code = files
         .iter()
         .filter(|f| !NOT_CODE.iter().any(|g| glob(g, &f.path)));
-    code.fold((0, 0), |(n, lines), f| {
-        (n + 1, lines + f.added.unwrap_or(0) + f.removed.unwrap_or(0))
+    code.fold((Vec::new(), 0), |(mut paths, lines), f| {
+        paths.push(f.path.as_str());
+        (paths, lines + f.added.unwrap_or(0) + f.removed.unwrap_or(0))
     })
 }
 
@@ -261,7 +275,7 @@ fn changed(
 /// and profile replays without running anything. A run that times out
 /// failed: the tests did not pass on that tree. No profile or table, a
 /// checkout that cannot be made or a command that cannot start writes
-/// nothing.
+/// nothing, nor does `smoke` on a lane whose pipeline has no `verdict`.
 fn run_tests(
     ledger: &Ledger,
     db: &Path,
@@ -272,9 +286,15 @@ fn run_tests(
     let Run {
         _lock,
         wt,
+        item,
         mut input,
-        ..
     } = start_run(ledger, db, work, check)?;
+    // A harness smoke is named like a session check and passes v19's
+    // `smoke_recorded` from the lane's own session, so only a lane whose
+    // pipeline judges with harness checks may run one.
+    if check == "smoke" {
+        verdict_plan(lane_pipeline(&item)?, "smoke")?;
+    }
     let base = commands_in(Path::new("git"), &wt, check, Instant::now() + RUN_TIMEOUT)?;
     input.profile = Some(base.hash.clone());
     let key = ledger.run_key(&input)?;
@@ -393,19 +413,17 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         mut input,
     } = start_run(ledger, db, work, verdict::EVENT_CHECK)?;
     let pipeline = lane_pipeline(&item)?;
-    let planned = verdict::plan(pipeline).map_err(|e| {
-        refuse(format!(
-            "{e}; a lane on it records verdicts with `check record`"
-        ))
-    })?;
+    let (planned, attempts) = verdict_plan(pipeline, "verdicts")?;
     let (head, store) = (input.head.clone(), Evidence::beside(db));
-    let harness = verdict::harness(ledger, &store, work, &head)?.map_err(|lacks| {
+    let smoke = declares(Path::new("git"), &wt, "smoke", Instant::now() + RUN_TIMEOUT)?;
+    let harness = verdict::harness(ledger, &store, work, &head, smoke)?.map_err(|lacks| {
         refuse(format!(
-            "commit {head} has no harness {lacks}; a verdict needs `check run diff`, `tests` \
-             and a complete `review` on it first"
+            "commit {head} has no harness {lacks}; a verdict needs `check run diff`, `tests`, \
+             a complete `review` and, when the base profile declares `[smoke]`, `smoke` on it first"
         ))
     })?;
-    if let Some(stored) = verdict::replay(ledger, actor, &mut input, &pipeline.hash, &harness)?? {
+    let key = (&*pipeline.hash, attempts);
+    if let Some(stored) = verdict::replay(ledger, actor, &mut input, key, &harness)?? {
         return one(stored);
     }
     let cli = planned.runner.cli;
@@ -428,11 +446,11 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
     )??)
 }
 
-/// `check run plan`: the lane's commit must change no code file against
-/// its base, as `diff` counts code, or the run is refused and names the
-/// owner's waiver. Then the plan file is read here, the pipeline must name
-/// a `plan` check, and the plan is stored as evidence; the same plan on the
-/// same tree and pipeline replays. Else one fresh
+/// `check run plan`: the pipeline must name a `plan` check, and the lane's
+/// commit must change no code file against its base, as `diff` counts
+/// code, or the run is refused and names the owner's waiver. Then the plan
+/// file is read here and stored as evidence (redacted, which is what the
+/// reviewer is sent); the same plan on the same tree and pipeline replays. Else one fresh
 /// session on the pipeline's `plan` check (`plan::record`) in the
 /// harness's checkout attacks it. A lane whose pipeline has no `plan`
 /// (v17 to v19) writes nothing.
@@ -449,35 +467,36 @@ fn run_plan(
         item,
         mut input,
     } = start_run(ledger, db, work, plan::EVENT_CHECK)?;
-    let head = input.head.clone();
-    let (_, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
-    let (code, lines) = code(&files);
-    if code > 0 {
-        return Err(refuse(format!(
-            "commit {head} changes {code} code files ({lines} lines) against its base: the plan \
-             check runs before any code. The owner can waive it with `check waive plan --work {work}`"
-        )));
-    }
-    let text = plan_text(file)?;
     let pipeline = lane_pipeline(&item)?;
-    let planned = plan::plan(pipeline).map_err(|e| {
+    let (planned, attempts) = plan::plan(pipeline).map_err(|e| {
         refuse(format!(
             "{e}; a lane on it records plan checks with `check record`"
         ))
     })?;
+    let head = input.head.clone();
+    let (base, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
+    no_code(&files, &head, work)?;
     let store = Evidence::beside(db);
-    let plan_ref = store.put(&text).map_err(LedgerError::from)?.hash;
-    if let Some(stored) = plan::replay(ledger, &mut input, &pipeline.hash, &plan_ref)? {
+    let kept = plan::keep(&store, &plan_text(file)?).map_err(LedgerError::from)?;
+    let plan_ref = kept.stored.hash.clone();
+    let key = (&*pipeline.hash, attempts);
+    if let Some(stored) = plan::replay(ledger, &mut input, key, &plan_ref)?? {
         return one(stored);
     }
     let cli = planned.runner.cli;
     let started = agent(cli)?;
-    let (checkout, facts) = change(ledger, db, &wt, &item, &head)?;
+    let base = merge_base(&wt, &base, &head)?;
+    let checkout = lane_checkout(db, &wt, work, &head, Instant::now() + CHECKOUT_TIMEOUT)?;
     let agents = Agents {
         claude: (cli == Cli::Claude).then_some(&started),
         codex: (cli == Cli::Codex).then_some(&started),
     };
-    let given = (&*facts.goal, &*text, &*plan_ref, &*facts.base);
+    let given = plan::Given {
+        goal: &review::goal(ledger, &item)?,
+        plan: &kept.text,
+        plan_ref: &plan_ref,
+        base: &base,
+    };
     one(plan::record(
         ledger,
         actor,
@@ -485,9 +504,24 @@ fn run_plan(
         &planned,
         &agents,
         &checkout.dir,
-        given,
+        &given,
         &store,
     )??)
+}
+
+/// Refuses a commit `head` whose `files` change code, naming up to three
+/// of them and the owner's waiver: the plan check runs before any code.
+fn no_code(files: &[ChangedFile], head: &str, work: i64) -> Result<(), CliError> {
+    let (code, lines) = code(files);
+    if code.is_empty() {
+        return Ok(());
+    }
+    let (n, some) = (code.len(), code[..code.len().min(3)].join(", "));
+    Err(refuse(format!(
+        "commit {head} changes code against its base ({n} code file(s), {lines} lines: \
+         {some}): the plan check runs before any code. The owner can waive it with \
+         `check waive plan --work {work}`"
+    )))
 }
 
 /// The plan at `path`: a regular file (a link to one is followed) of at
@@ -507,8 +541,9 @@ fn plan_text(path: &Path) -> Result<String, CliError> {
 /// rules: its real path (links resolved) inside the worktree's and not
 /// under `.git` or `.chaperone` there, a regular file of at most
 /// [`EVIDENCE_BYTES`] of UTF-8 text with no NUL. A relative path is read
-/// from the worktree's root, whoever records it. Stored redacted.
-fn attach(wt: Option<&str>, path: &Path, store: &Evidence) -> Result<Attached, CliError> {
+/// from the worktree's root, whoever records it. Named as the store will
+/// keep it (redacted), not yet written.
+fn attach(wt: Option<&str>, path: &Path) -> Result<(Attached, Kept), CliError> {
     let bad = |why: &str| refuse(format!("evidence {}: {why}", path.display()));
     let wt = wt.map(Path::new).filter(|w| w.is_absolute());
     let wt = wt.and_then(|w| w.canonicalize().ok());
@@ -530,24 +565,27 @@ fn attach(wt: Option<&str>, path: &Path, store: &Evidence) -> Result<Attached, C
     if text.contains('\0') {
         return Err(bad("not UTF-8 text"));
     }
-    let stored = store.put(&text).map_err(LedgerError::from)?;
-    Ok(Attached {
+    let kept = Kept::of(&text);
+    let stored = &kept.stored;
+    let file = Attached {
         path: inside.display().to_string(),
-        sha256: stored.hash,
+        sha256: stored.hash.clone(),
         bytes: text.len() as u64,
         truncated: stored.truncated,
         redactions: stored.redactions,
-    })
+    };
+    Ok((file, kept))
 }
 
 /// The UTF-8 text of the regular file at `path`, at most `max` bytes, or
-/// why not.
+/// why not. The type is checked before the open: opening a FIFO would wait
+/// for a writer, with the lane's lock held.
 fn text_file(path: &Path, max: usize) -> Result<String, String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let meta = file.metadata().map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err("not a regular file".into());
     }
+    let file = File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     let read = file.take(max as u64 + 1).read_to_end(&mut bytes);
     read.map_err(|e| e.to_string())?;
@@ -555,6 +593,19 @@ fn text_file(path: &Path, max: usize) -> Result<String, String> {
         return Err(format!("over {max} bytes"));
     }
     String::from_utf8(bytes).map_err(|_| "not UTF-8 text".into())
+}
+
+/// The lane pipeline's `verdict` and its limit, or why a lane on it
+/// (v17 to v19) records its `what` with `check record` instead.
+fn verdict_plan<'a>(
+    pipeline: &'a Pipeline,
+    what: &str,
+) -> Result<(review::Planned<'a>, i64), CliError> {
+    verdict::plan(pipeline).map_err(|e| {
+        refuse(format!(
+            "{e}; a lane on it records {what} with `check record`"
+        ))
+    })
 }
 
 /// The pipeline the lane is stamped with, as this binary loads it.
@@ -586,6 +637,13 @@ fn agent(cli: Cli) -> Result<Agent, CliError> {
         .map_err(|e| refuse(format!("could not start {bin}: {e}")))
 }
 
+/// The merge base of `head` with `base` (as `changed` names it).
+fn merge_base(wt: &Path, base: &str, head: &str) -> Result<String, CliError> {
+    let args = ["merge-base", "--end-of-options", &git::base_rev(base), head];
+    let (base, _) = harness_git(wt, &args, Instant::now() + RUN_TIMEOUT)?;
+    Ok(base.trim().to_string())
+}
+
 /// What a session is shown of commit `head` and the checkout it reads it
 /// in: the files `diff` counts, their merge base, and the diff read in the
 /// harness's fresh checkout (removed when it drops), where the lane's git
@@ -599,14 +657,7 @@ fn change(
     head: &str,
 ) -> Result<(Checkout, Facts), CliError> {
     let (base, files) = changed(wt, item.base_sha.as_deref(), head)?;
-    let args = [
-        "merge-base",
-        "--end-of-options",
-        &git::base_rev(&base),
-        head,
-    ];
-    let (base, _) = harness_git(wt, &args, Instant::now() + RUN_TIMEOUT)?;
-    let base = base.trim().to_string();
+    let base = merge_base(wt, &base, head)?;
     let checkout = lane_checkout(db, wt, item.id, head, Instant::now() + CHECKOUT_TIMEOUT)?;
     let args = [
         "diff",
@@ -988,5 +1039,81 @@ fn daisy_review(job: i64) -> Result<Value, CliError> {
             details: field("details"),
         })),
         None => Err(failed(message, json!({ "daisy": error, "exit": exit }))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plan is a regular file of at most 64 KiB of UTF-8 text that is not
+    /// blank; a directory or a FIFO is refused before it is opened, so a
+    /// FIFO never blocks the run.
+    #[test]
+    fn a_plan_file_is_bounded_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let fifo = dir.path().join("fifo");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let said = |path: &Path| match plan_text(path) {
+            Ok(text) => text,
+            Err(CliError::Refused(Refusal::InvalidInput(why))) => why,
+            Err(e) => format!("{e:?}"),
+        };
+        assert_eq!(said(&file("ok.md", b"1. do it\n")), "1. do it\n");
+        for (path, why) in [
+            (
+                file("big.md", &vec![b'x'; PLAN_BYTES + 1]),
+                "over 65536 bytes",
+            ),
+            (file("bin.md", &[0xff, 0xfe]), "not UTF-8 text"),
+            (file("blank.md", b" \n"), "empty"),
+            (dir.path().to_path_buf(), "not a regular file"),
+            (fifo, "not a regular file"),
+            (dir.path().join("gone.md"), "No such file"),
+        ] {
+            let got = said(&path);
+            assert!(got.contains(why), "{why}: {got}");
+        }
+    }
+
+    /// The plan check refuses a commit with code, naming up to three code
+    /// files and the waiver; docs, Markdown and lock files are no code.
+    #[test]
+    fn a_plan_check_refuses_code() {
+        let file = |path: &str| ChangedFile {
+            path: path.into(),
+            area: None,
+            added: Some(2),
+            removed: Some(1),
+            untracked: false,
+        };
+        let docs = [file("docs/a.md"), file("README.md"), file("Cargo.lock")];
+        assert!(no_code(&docs, "abc1234", 7).is_ok());
+        let code = [
+            file("a.rs"),
+            file("b.rs"),
+            file("docs/x.md"),
+            file("c.rs"),
+            file("d.rs"),
+        ];
+        let Err(CliError::Refused(Refusal::InvalidInput(why))) = no_code(&code, "abc1234", 7)
+        else {
+            panic!("code is refused");
+        };
+        let want = "commit abc1234 changes code against its base (4 code file(s), 12 lines: \
+            a.rs, b.rs, c.rs): the plan check runs before any code. The owner can waive it with \
+            `check waive plan --work 7`";
+        assert_eq!(why, want);
     }
 }

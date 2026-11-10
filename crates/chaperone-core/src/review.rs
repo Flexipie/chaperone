@@ -106,18 +106,24 @@ pub struct Plan<'a> {
 /// cannot review.
 pub fn plan(pipeline: &Pipeline) -> Result<Plan<'_>, String> {
     let (lenses, verifier) = (lenses(pipeline)?, verifier(pipeline)?);
-    let Some(&attempts) = pipeline.limits.get(ATTEMPTS).filter(|n| **n >= 1) else {
-        return Err(format!(
-            "pipeline {} has no limit {ATTEMPTS} of 1 or more",
-            pipeline.id
-        ));
-    };
     Ok(Plan {
         lenses,
         verifier,
         hash: &pipeline.hash,
-        attempts,
+        attempts: limit(pipeline, ATTEMPTS)?,
     })
+}
+
+/// `pipeline`'s limit `name`, which a check that caps its runs needs at 1
+/// or more.
+pub(crate) fn limit(pipeline: &Pipeline, name: &str) -> Result<i64, String> {
+    match pipeline.limits.get(name) {
+        Some(&n) if n >= 1 => Ok(n),
+        _ => Err(format!(
+            "pipeline {} has no limit {name} of 1 or more",
+            pipeline.id
+        )),
+    }
 }
 
 impl Plan<'_> {
@@ -605,8 +611,11 @@ pub fn goal(ledger: &Ledger, item: &WorkItem) -> Result<String, LedgerError> {
 /// The start of `check run review`, before anything is run: the rulings a
 /// crash left unwritten on the lane's newest review, then `input` keyed
 /// for a review by `plan`, and the complete review of this commit by this
-/// pipeline when one is stored, which a run replays. Else a commit that
-/// has had the pipeline's [`ATTEMPTS`] reviews already is refused.
+/// pipeline when one is stored, which a run replays. A complete review of
+/// the same tree on another commit is carried to this one (`carried_from`,
+/// no findings of its own: they stay the original's, so none is counted
+/// twice). Else a tree that has had the pipeline's [`ATTEMPTS`] reviews
+/// already is refused.
 pub fn replay(
     ledger: &Ledger,
     actor: &Actor,
@@ -633,19 +642,28 @@ pub fn replay(
     if let Some(stored) = ledger.run_replay(&ledger.run_key(input)?)? {
         return Ok(Ok(Some(stored)));
     }
+    // An amend that kept the tree gets the tree's complete review, not a
+    // new one: the lenses would only word their findings anew.
+    if let Some(stored) = ledger.tree_run(input, "complete", true)? {
+        if stored.payload.head_sha.as_deref() == Some(input.head.as_str()) {
+            return Ok(Ok(Some(stored)));
+        }
+        return Ok(ledger.carry(actor, input, stored, &["verifier"])?.map(Some));
+    }
     let done: i64 = ledger.conn().query_row(
         "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
            AND json_extract(payload_json, '$.check') = 'review'
-           AND json_extract(payload_json, '$.head_sha') = ?2
+           AND json_extract(payload_json, '$.tree') = ?2
            AND json_extract(payload_json, '$.profile') = ?3",
-        params![input.work, input.head, plan.hash],
+        params![input.work, input.tree, plan.hash],
         |r| r.get(0),
     )?;
     if done >= plan.attempts {
         return Ok(Err(Refusal::InvalidInput(format!(
-            "commit {} has had {done} reviews by this pipeline, its limit {ATTEMPTS}; \
-             the owner can waive the findings, or the lane can push a new commit",
-            input.head
+            "the tree {} of commit {} has had {done} reviews by this pipeline, its limit \
+             {ATTEMPTS}; the owner can waive the findings, or the lane can push a commit that \
+             changes the tree",
+            input.tree, input.head
         ))));
     }
     Ok(Ok(None))

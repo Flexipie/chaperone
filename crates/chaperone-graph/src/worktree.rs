@@ -361,6 +361,24 @@ pub fn commands_in(
     })
 }
 
+/// Whether the base branch's [`REPO_PROFILE`] for the repo `dir` is in has
+/// a `[<table>]`, whatever it holds: a declared table that does not load
+/// still counts, so a check that needs its result fails closed. No profile
+/// declares none.
+pub fn declares(bin: &Path, dir: &Path, table: &str, deadline: Instant) -> Result<bool, Error> {
+    let Some(found) = base_profile(bin, dir, deadline)? else {
+        return Ok(false);
+    };
+    match toml::from_str::<toml::Table>(&found.text) {
+        Ok(profile) => Ok(profile.contains_key(table)),
+        Err(e) => Err(Error::Invalid(format!(
+            "profile {}: {}",
+            found.at(),
+            e.message()
+        ))),
+    }
+}
+
 /// A profile as a base branch holds it: the base, the commit it pointed
 /// at and the text.
 struct BaseProfile {

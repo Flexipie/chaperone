@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 const PIPELINE: &str = r#"
 schema = 2
 id = "review-test"
-limits = { budget = 150, timeout = 20, review_attempts = 2 }
+limits = { budget = 150, timeout = 20, review_attempts = 2, verdict_attempts = 9, plan_attempts = 2 }
 runners.lens = { cli = "claude", model = "opus", tools = ["Read", "Grep"], budget_limit = "budget", timeout_limit = "timeout" }
 runners.second = { cli = "codex", model = "gpt-5.5", budget_limit = "budget", timeout_limit = "timeout" }
 checks.review_correctness = { runner = "lens", prompt = "correctness.md" }
@@ -372,10 +372,19 @@ fn input(pipeline: &Pipeline) -> RunInput {
 /// `check run review` as the CLI runs it, started by the lane's own
 /// session: [`review::replay`], then [`review::record`].
 fn record(env: &Env, ledger: &Ledger) -> Result<Recorded, Refusal> {
+    reviewed(env, ledger, &env.facts.head, &"3".repeat(40))
+}
+
+/// [`record`] on lane 1's commit `head` of `tree`.
+fn reviewed(env: &Env, ledger: &Ledger, head: &str, tree: &str) -> Result<Recorded, Refusal> {
     let pipeline = pipeline();
     let plan = review::plan(&pipeline).unwrap();
     let (dir, agents, me) = (env.checkout(), env.agents(), lane_session());
-    let mut input = input(&pipeline);
+    let mut input = RunInput {
+        head: head.into(),
+        tree: tree.into(),
+        ..input(&pipeline)
+    };
     if let Some(stored) = review::replay(ledger, &me, &mut input, &plan).unwrap()? {
         return Ok(stored);
     }
@@ -486,8 +495,10 @@ fn a_verifier_that_fails_leaves_findings_open() {
     assert_eq!(
         said,
         format!(
-            "commit {head} has had 2 reviews by this pipeline, its limit review_attempts; \
-             the owner can waive the findings, or the lane can push a new commit"
+            "the tree {} of commit {head} has had 2 reviews by this pipeline, its limit \
+             review_attempts; the owner can waive the findings, or the lane can push a commit \
+             that changes the tree",
+            "3".repeat(40)
         )
     );
     assert_eq!(calls(&env), before);
@@ -617,16 +628,17 @@ fn measured(ledger: &Ledger, head: &str, tree: &str, checks: &[&str]) {
 /// then [`verdict::record`].
 fn judge(env: &Env, ledger: &Ledger, head: &str, tree: &str) -> Recorded {
     let pipeline = pipeline();
-    let p = verdict::plan(&pipeline).unwrap();
+    let (p, attempts) = verdict::plan(&pipeline).unwrap();
     let me = lane_session();
-    let harness = verdict::harness(ledger, &env.store, 1, head);
+    let harness = verdict::harness(ledger, &env.store, 1, head, false);
     let harness = harness.unwrap().unwrap();
     let mut input = RunInput {
         head: head.into(),
         tree: tree.into(),
         ..input(&pipeline)
     };
-    let stored = verdict::replay(ledger, &me, &mut input, &pipeline.hash, &harness);
+    let key = (&*pipeline.hash, attempts);
+    let stored = verdict::replay(ledger, &me, &mut input, key, &harness);
     if let Some(r) = stored.unwrap().unwrap() {
         return r;
     }
@@ -792,7 +804,7 @@ fn no_answer_is_no_decision() {
     let ledger = ledger(&env);
     let (head, tree) = ("2".repeat(40), "3".repeat(40));
     let lacks = || {
-        verdict::harness(&ledger, &env.store, 1, &head)
+        verdict::harness(&ledger, &env.store, 1, &head, false)
             .unwrap()
             .err()
     };
@@ -842,24 +854,26 @@ fn no_answer_is_no_decision() {
 /// [`plan::record`].
 fn attack(env: &Env, ledger: &Ledger, text: &str) -> Recorded {
     let pipeline = pipeline();
-    let p = plan::plan(&pipeline).unwrap();
-    let plan_ref = env.store.put(text).unwrap().hash;
+    let (p, attempts) = plan::plan(&pipeline).unwrap();
+    let kept = plan::keep(&env.store, text).unwrap();
+    let plan_ref = kept.stored.hash;
     let mut input = input(&pipeline);
-    if let Some(stored) = plan::replay(ledger, &mut input, &pipeline.hash, &plan_ref).unwrap() {
+    let key = (&*pipeline.hash, attempts);
+    if let Some(stored) = plan::replay(ledger, &mut input, key, &plan_ref)
+        .unwrap()
+        .unwrap()
+    {
         return stored;
     }
     let (dir, agents) = (env.checkout(), env.agents());
-    let given = ("GOAL add a widget", text, &*plan_ref, "1111111");
-    let got = plan::record(
-        ledger,
-        &lane_session(),
-        input,
-        &p,
-        &agents,
-        &dir,
-        given,
-        &env.store,
-    );
+    let given = plan::Given {
+        goal: "GOAL add a widget",
+        plan: &kept.text,
+        plan_ref: &plan_ref,
+        base: "1111111",
+    };
+    let me = lane_session();
+    let got = plan::record(ledger, &me, input, &p, &agents, &dir, &given, &env.store);
     got.unwrap().unwrap()
 }
 
@@ -874,7 +888,8 @@ fn the_plan_check_attacks_the_plan() {
     let runs = json!([{"when": "LENS plan", "stdout": session("p", said)}]);
     let env = env(runs, json!([]), 10);
     let ledger = ledger(&env);
-    let first = attack(&env, &ledger, "PLAN step one");
+    let token = format!("ghp_{}", "a".repeat(20));
+    let first = attack(&env, &ledger, &format!("PLAN step one {token}"));
     let p = &first.payload;
     let got = (
         p.check.as_deref(),
@@ -888,23 +903,24 @@ fn the_plan_check_attacks_the_plan() {
     assert_eq!((found.len(), &*found[0].title), (1, "it races"));
     assert!(found[0].finding_key.starts_with("plan-"));
     let stored = env.store.get(p.rest["plan_ref"].as_str().unwrap()).unwrap();
-    assert_eq!(stored, "PLAN step one");
+    assert_eq!(stored, "PLAN step one [redacted:github_token]");
     let call = call(env.dir.path(), "claude", "plan");
     let prompt = call["prompt"].as_str().unwrap();
     for said in [
         "```\nGOAL add a widget\n```",
-        "```\nPLAN step one\n```",
+        "```\nPLAN step one [redacted:github_token]\n```",
         "merge base is 1111111",
     ] {
         assert!(prompt.contains(said), "{said}: {prompt}");
     }
+    assert!(!prompt.contains(&token));
     assert!(prompt.ends_with("in the schema you were given.\n"));
     assert_eq!(
         ledger.usage_get(1).unwrap().unwrap()["totals"]["harness"]["messages"],
         1
     );
 
-    let again = attack(&env, &ledger, "PLAN step one");
+    let again = attack(&env, &ledger, &format!("PLAN step one {token}"));
     assert_eq!(
         (again.replayed, again.event_id, calls(&env)),
         (true, first.event_id, 1)
@@ -927,4 +943,79 @@ fn the_plan_check_attacks_the_plan() {
         facts.get("plan_check.outcome"),
         &Fact::Str("skipped".into())
     );
+    // A second session with no answer reaches plan_attempts (2): the next
+    // run on that plan is refused and starts nothing.
+    attack(&env, &ledger, "PLAN step two");
+    let pipeline = pipeline();
+    let plan_ref = plan::keep(&env.store, "PLAN step two").unwrap().stored.hash;
+    let mut input = input(&pipeline);
+    let refused = plan::replay(&ledger, &mut input, (&pipeline.hash, 2), &plan_ref).unwrap();
+    let Err(Refusal::InvalidInput(why)) = refused else {
+        panic!("past plan_attempts is refused: {refused:?}");
+    };
+    assert!(why.contains("its limit plan_attempts"), "{why}");
+    assert_eq!(calls(&env), 3);
+}
+
+/// An amend that keeps the tree carries the tree's complete review and
+/// the verdict on it, though the lenses would now find something else: no
+/// review session, no verdict session, and the NO stands. A change to the
+/// tree starts both.
+#[test]
+fn an_amend_carries_the_review_and_the_verdict() {
+    let (mut claude, codex) = scripts(rules);
+    claude.as_array_mut().unwrap().push(says("no")[0].clone());
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let (h1, h2, h3) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
+    let (t1, t2) = ("d".repeat(40), "e".repeat(40));
+    measured(&ledger, &h1, &t1, &["diff", "tests"]);
+    let first = reviewed(&env, &ledger, &h1, &t1).unwrap();
+    let no = judge(&env, &ledger, &h1, &t1);
+    let (before, blocking_before) = (calls(&env), blocking(&ledger));
+    assert_eq!(no.payload.rest["decision"], "no");
+
+    // The lenses would now word another finding, and the verdict say yes.
+    let said = json!({"findings": [found("blocker", "DIFFERENT")]});
+    let key = &review::findings("correctness", said.clone()).unwrap()[0].finding_key;
+    let ruled = json!({"rulings": [{"key": key, "verdict": "verified", "why": "it does"}]});
+    let none = json!({"findings": []});
+    let ran = |lens: &str, said: &Value| json!({"when": format!("LENS {lens}"), "stdout": session(lens, said.clone())});
+    let runs = json!([
+        ran("correctness", &said),
+        ran("design_tests", &none),
+        ran("intent", &none),
+        ran("verifier", &ruled),
+        says("yes")[0],
+    ]);
+    rescript(&env, "claude", runs);
+
+    measured(&ledger, &h2, &t1, &["diff", "tests"]);
+    let carried = reviewed(&env, &ledger, &h2, &t1).unwrap();
+    let p = &carried.payload;
+    assert_eq!(
+        (p.head_sha.as_deref(), &p.rest["carried_from"]),
+        (Some(&*h2), &json!(first.event_id))
+    );
+    assert!(p.findings.is_none() && !carried.replayed);
+    let amended = judge(&env, &ledger, &h2, &t1);
+    assert_eq!(
+        (
+            &amended.payload.rest["decision"],
+            &amended.payload.rest["carried_from"]
+        ),
+        (&json!("no"), &json!(no.event_id))
+    );
+    assert_eq!(
+        (calls(&env), blocking(&ledger)),
+        (before, blocking_before.clone())
+    );
+
+    measured(&ledger, &h3, &t2, &["diff", "tests"]);
+    reviewed(&env, &ledger, &h3, &t2).unwrap();
+    let changed = judge(&env, &ledger, &h3, &t2);
+    assert_eq!(changed.payload.rest["decision"], "yes");
+    // Three Claude lenses, Codex, the verifier and the verdict.
+    assert_eq!(calls(&env), before + 6);
+    assert!(blocking(&ledger).len() > blocking_before.len());
 }

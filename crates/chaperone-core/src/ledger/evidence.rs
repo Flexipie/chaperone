@@ -27,6 +27,33 @@ pub struct Stored {
     pub truncated: bool,
 }
 
+/// A text as the store keeps it, before it is written: redacted, then its
+/// end, and the name it will have. A caller that must not write yet (a
+/// write that may still be refused) names it first.
+pub struct Kept {
+    pub stored: Stored,
+    pub text: String,
+}
+
+impl Kept {
+    pub fn of(text: &str) -> Kept {
+        let (text, redactions) = redact::text(text);
+        let mut from = text.len().saturating_sub(TEXT_BYTES);
+        while !text.is_char_boundary(from) {
+            from += 1;
+        }
+        let kept = text[from..].to_string();
+        Kept {
+            stored: Stored {
+                hash: format!("{:x}", Sha256::digest(&kept)),
+                redactions,
+                truncated: from > 0,
+            },
+            text: kept,
+        }
+    }
+}
+
 /// Tells this process's unfinished files apart.
 static PENDING: AtomicU64 = AtomicU64::new(0);
 
@@ -49,13 +76,14 @@ impl Evidence {
     /// call it before the event that names the hash commits. The
     /// directories are the owner's alone (0700), the file 0600.
     pub fn put(&self, text: &str) -> io::Result<Stored> {
-        let (text, redactions) = redact::text(text);
-        let mut from = text.len().saturating_sub(TEXT_BYTES);
-        while !text.is_char_boundary(from) {
-            from += 1;
-        }
-        let kept = &text[from..];
-        let hash = format!("{:x}", Sha256::digest(kept));
+        let kept = Kept::of(text);
+        self.write(&kept)?;
+        Ok(kept.stored)
+    }
+
+    /// Writes `kept` as [`Evidence::put`] does.
+    pub fn write(&self, kept: &Kept) -> io::Result<()> {
+        let hash = &kept.stored.hash;
         let dir = self.dir.join(&hash[..2]);
         DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
         // One made before this rule, or by `mkdir`.
@@ -67,15 +95,10 @@ impl Evidence {
             .create_new(true)
             .mode(0o600)
             .open(&pending)?;
-        file.write_all(kept.as_bytes())?;
+        file.write_all(kept.text.as_bytes())?;
         file.sync_all()?;
-        fs::rename(&pending, dir.join(&hash))?;
-        File::open(&dir)?.sync_all()?;
-        Ok(Stored {
-            hash,
-            redactions,
-            truncated: from > 0,
-        })
+        fs::rename(&pending, dir.join(hash))?;
+        File::open(&dir)?.sync_all()
     }
 
     /// The text stored as `hash`, hashed again: a file that was edited or
