@@ -1861,5 +1861,6 @@ mod tests {
         };
         assert_eq!(claim("/x", Some("b")), frozen("worktree_path"));
         assert_eq!(claim("/wt", Some("c")), frozen("branch"));
+        assert_eq!(claim("/wt", Some("b/")), frozen("branch"));
     }
 }

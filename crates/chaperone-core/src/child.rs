@@ -15,7 +15,8 @@ pub struct Done {
     pub status: ExitStatus,
     /// At most the cap's bytes of stdout.
     pub out: Vec<u8>,
-    /// Stdout went past the cap.
+    /// Stdout went past the cap; for [`run_tail`], either stream lost its
+    /// start.
     pub cut: bool,
     pub err: Vec<u8>,
 }
@@ -58,7 +59,7 @@ pub fn run_input(
 
 /// [`run_input`] with stdin empty that keeps only the last `tail` bytes of
 /// stdout and of stderr, so a command that prints without end costs no
-/// more memory than that; `cut` says stdout lost its start.
+/// more memory than that; `cut` says either stream lost its start.
 pub fn run_tail(cmd: &mut Command, deadline: Instant, tail: usize) -> Result<Done, Failed> {
     start(cmd, None, true, deadline, Keep::Tail(tail))
 }
@@ -175,8 +176,9 @@ fn start(
     }
     // A reader only stops early by panicking, which is no result either.
     let left = || deadline.saturating_duration_since(Instant::now());
-    let (out, cut) = out.recv_timeout(left()).map_err(|_| Failed::TimedOut)?;
-    let (err, _) = err.recv_timeout(left()).map_err(|_| Failed::TimedOut)?;
+    let (out, out_cut) = out.recv_timeout(left()).map_err(|_| Failed::TimedOut)?;
+    let (err, err_cut) = err.recv_timeout(left()).map_err(|_| Failed::TimedOut)?;
+    let cut = out_cut || matches!(keep, Keep::Tail(_)) && err_cut;
     Ok(Done {
         status,
         out,

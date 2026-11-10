@@ -280,28 +280,41 @@ move, so under the same-user trust model this keeps a lane's edit out but is a s
 guarantee. The table: `commands`, a list of argv arrays run in order with no shell;
 `target_dir`, optional, the name of a variable (`[A-Z_][A-Z0-9_]*`, not `PATH` or `HOME`; for
 cargo `CARGO_TARGET_DIR`) the harness sets to `targets/lane-<id>` beside the ledger, the lane's
-own build directory, kept between runs and never shared with another lane, whose builds would
-replace the binaries its tests run; and `timeout_secs`, optional, 1 to 86400, default 1800, for
-the checkout and every command together. Unknown keys in `[tests]` are refused. No profile, no
-`[tests]`, no command or a bad key is `invalid_input` and writes nothing. A result already
-stored under its key (events.md) is printed with `replayed` true and nothing runs. Else the
-checkout is `checkouts/lane-<id>` beside the ledger, a repository the harness owns: made once
-(`git init`, hooks off with `core.hooksPath=/dev/null`) and kept, so a later run fetches
-little. The lane's commit is fetched into it by sha from the lane's repository
-(`git fetch --no-tags <path> <sha>`: no remote, no other ref), checked out detached and
-forced, and cleaned of every untracked and ignored file (`git clean -ffdx`). So the lane's
-hooks, config, filters, excludes and replace refs never reach it, and the lane's repository is
-only read. Every git call the harness makes sets `GIT_NO_REPLACE_OBJECTS=1`, so `diff`, the
-commit read and the tree are never another object's. Each command runs there with stdin
-empty, the environment less the session's variables and the ones that point git at another
-repository, in its own process group (SIGTERM, then the group killed 2 s later, at the
-deadline; the group is also killed once the command exits, so nothing it left running holds
-its output or outlives it), keeping only the end of each output stream, and the run stops at
-the first that fails. If all pass, `git status --porcelain --untracked-files=all --ignored` in
-the checkout must show no tracked change and no new untracked file; new ignored files are
-counted, not failed. A failing command, a command killed by a signal, a dirty tree and a
-timeout are a `check.finished` with `result` `fail`; a command that cannot start, or a checkout
-that cannot be made (git's own message is kept), writes nothing.
+own build directory, never shared with another lane, whose builds would replace the binaries its
+tests run; and `timeout_secs`, optional, 1 to 86400, default 1800, for the checkout, every
+command and the checks after them together. Unknown keys in `[tests]` are refused. No profile,
+no `[tests]`, no command or a bad key is `invalid_input` and writes nothing. A result already
+stored under its key (events.md) is printed with `replayed` true and nothing runs.
+
+Else every run starts from a fresh repository the harness owns at `checkouts/lane-<id>` beside
+the ledger: whatever is there (a killed run's) is deleted first, then `git init` with hooks off
+(`core.hooksPath=/dev/null`), the lane's commit fetched by sha from the lane's repository
+(`git fetch --no-tags <path> <sha>`: no remote, no other ref), and checked out detached. The
+whole directory is deleted again when the run ends, however it ends, and no git state is kept
+between runs, as a test command can write the repository's `.git` (config, sparse checkout,
+excludes) and so change what a later run would check out. One that cannot be deleted refuses
+the next run. So the lane's hooks, config, filters, excludes and replace refs never reach the
+checkout, and the lane's repository is only read. Every git call the harness makes sets
+`GIT_NO_REPLACE_OBJECTS=1` and drops `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and the
+`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` variables, whose config would beat the repository's
+own (the user's global config is still read). The build directory `targets/lane-<id>` is kept
+between runs for speed: it is a cache an earlier commit's build could have written, a trade-off
+under the same-user trust model.
+
+Each command runs in the checkout with stdin empty and the environment less the session's
+variables, the ones that point git at another repository and the config variables above, in
+its own process group: at the deadline SIGTERM, then the group killed 2 s later, and when the
+command exits its group is killed too, so a process it left in its own group neither holds its
+output nor outlives it (one it moved to another group or session is not reached). Only the last
+16 KiB of each output stream is kept, and the run stops at the first command that fails. If all
+pass, the checkout's `HEAD` must still be the commit, and `git status --porcelain
+--untracked-files=normal --ignored` must show no tracked change and no new untracked file or
+directory; new ignored entries (a whole ignored directory counts once) are counted, not failed,
+and a listing past 1 MiB is not read and fails. These checks target accidental writes; an index
+flag such as `assume-unchanged` hides a change from them. A failing command, a command killed by
+a signal, a moved `HEAD`, a dirty tree, a cut listing and a timeout are a `check.finished` with
+`result` `fail`; a command that cannot start, or a checkout that cannot be made (git's own
+message is kept), writes nothing.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

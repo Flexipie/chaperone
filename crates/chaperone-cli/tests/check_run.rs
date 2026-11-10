@@ -234,7 +234,10 @@ fn tests_lane(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf, String) {
     let (db, wt) = (dir.join("ledger.db"), dir.join("wt"));
     setup(dir);
     let own: &[u8] = b"[tests]\ncommands = [[\"true\"]]\n";
-    let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", own), (".gitignore", b"built\n")];
+    let files: &[(&str, &[u8])] = &[
+        (".chaperone/profile.toml", own),
+        (".gitignore", b"built\n*.o\n"),
+    ];
     git(&wt, &["checkout", "-qb", "feat"], files);
     git(&wt, &["add", "."], &[("lib.rs", b"a\nc\n")]);
     git(&wt, &["commit", "-qm", "feat"], &[]);
@@ -355,7 +358,16 @@ fn tests_run_in_a_checkout_and_a_pass_replays() {
     let output = Evidence::beside(&db)
         .get(p["evidence_ref"].as_str().unwrap())
         .unwrap();
-    assert!(output.ends_with("--ignored\n!! built\n"), "{output}");
+    let listing = "$ git status --porcelain --untracked-files=normal --ignored\n!! built\n$ [";
+    assert!(output.starts_with(listing), "{output}");
+    let after = (&p["dirty"], &p["head_moved"], &p["status_cut"]);
+    assert_eq!(after, (&json!(false), &json!(false), &json!(false)));
+    assert!(
+        !dir.path()
+            .join("checkouts")
+            .join(format!("lane-{id}"))
+            .exists()
+    );
 
     let replayed = run(&db, &tests).1;
     assert_eq!(
@@ -366,15 +378,18 @@ fn tests_run_in_a_checkout_and_a_pass_replays() {
     assert_eq!(lane_repo(&wt), before);
 }
 
-/// The lane repository's hooks and replace refs never reach the checkout:
-/// the commit's own tree is tested, and run from a relative `--db`.
+/// The lane repository's hooks and replace refs never reach the checkout,
+/// nor does config the caller's environment passes git: the commit's own
+/// tree is tested, and run from a relative `--db`.
 #[test]
 fn tests_ignore_the_lane_repos_hooks_and_replace_refs() {
     let dir = tempfile::tempdir().unwrap();
     let (_, wt, id) = tests_lane(dir.path());
     base_tests(
         &wt,
-        Some(r#"commands = [["sh", "-c", "test ! -e hooked && grep -qx c lib.rs"]]"#),
+        Some(
+            r#"commands = [["sh", "-c", "test ! -e hooked && test -z \"$GIT_CONFIG_COUNT$GIT_CONFIG_PARAMETERS\" && grep -qx c lib.rs"]]"#,
+        ),
     );
     let hook = wt.join(".git/hooks/post-checkout");
     std::fs::write(&hook, "#!/bin/sh\ntouch hooked\n").unwrap();
@@ -385,7 +400,15 @@ fn tests_ignore_the_lane_repos_hooks_and_replace_refs() {
     );
     git(&wt, &["replace", &feat, &main], &[]);
     let before = lane_repo(&wt);
+    let hooks = wt.join(".git/hooks");
     let mut cmd = Command::new(BIN);
+    cmd.env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", &hooks)
+        .env(
+            "GIT_CONFIG_PARAMETERS",
+            format!("'core.hookspath'='{}'", hooks.display()),
+        );
     cmd.current_dir(dir.path())
         .args(["--db", "ledger.db", "check", "run", "tests", "--work", &id]);
     let out = cmd
@@ -496,4 +519,59 @@ fn tests_fail_closed() {
     );
     drop(held);
     assert_eq!(payload(r#"commands = [["true"]]"#)["result"], "pass");
+}
+
+/// Nothing a run's commands write into the harness's repository reaches a
+/// later run: a first run turns on a sparse checkout that would leave out
+/// the file the second commit's test needs, and the second still fails.
+#[test]
+fn tests_start_from_a_fresh_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, id) = tests_lane(dir.path());
+    let sparse =
+        "git config core.sparseCheckout true && printf 'lib.rs\\\\n' > .git/info/sparse-checkout";
+    let command = format!(r#"if [ -e strict ]; then false; else {sparse}; fi"#);
+    base_tests(
+        &wt,
+        Some(&format!(r#"commands = [["sh", "-c", "{command}"]]"#)),
+    );
+    let tests = ["check", "run", "tests", "--work", &id];
+    let checkout = dir.path().join("checkouts").join(format!("lane-{id}"));
+    assert_eq!(run(&db, &tests).1["payload"]["result"], "pass");
+    assert!(!checkout.exists());
+    git(&wt, &["add", "."], &[("strict", b"x\n")]);
+    git(&wt, &["commit", "-qm", "strict"], &[]);
+    assert_eq!(run(&db, &tests).1["payload"]["result"], "fail");
+    assert!(!checkout.exists());
+}
+
+/// After commands that passed, the checkout must still be at the commit
+/// and its listing whole: a test that commits fails, an ignored directory
+/// is one entry however many files it holds, and a listing past its cap
+/// fails.
+#[test]
+fn tests_check_the_checkout_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, id) = tests_lane(dir.path());
+    let tests = ["check", "run", "tests", "--work", &id];
+    let payload = |profile: &str| {
+        base_tests(&wt, Some(profile));
+        let (code, out) = run(&db, &tests);
+        assert_eq!(code, 0, "{out}");
+        out["payload"].clone()
+    };
+    let commit = r#"git -c user.name=t -c user.email=t@t commit -q --allow-empty -m own"#;
+    let p = payload(&format!(r#"commands = [["sh", "-c", "{commit}"]]"#));
+    let got = (&p["result"], &p["head_moved"], &p["dirty"]);
+    assert_eq!(got, (&json!("fail"), &json!(true), &json!(false)));
+    let many = r#"mkdir built && cd built && seq 1 5000 | xargs touch"#;
+    let p = payload(&format!(r#"commands = [["sh", "-c", "{many}"]]"#));
+    let got = (&p["result"], &p["ignored_files"], &p["status_cut"]);
+    assert_eq!(got, (&json!("pass"), &json!(1), &json!(false)));
+    let long = r#"seq -f %0240g.o 1 4600 | xargs touch"#;
+    let p = payload(&format!(r#"commands = [["sh", "-c", "{long}"]]"#));
+    assert_eq!(
+        (&p["result"], &p["status_cut"]),
+        (&json!("fail"), &json!(true))
+    );
 }

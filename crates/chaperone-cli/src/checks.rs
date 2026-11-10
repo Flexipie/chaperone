@@ -190,12 +190,12 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
 }
 
 /// `check run tests`: the `[tests]` commands of the base branch's profile,
-/// in order until one fails, in a checkout of the lane's commit that the
-/// harness owns, then the checkout must have no change or new untracked
-/// file. A pass on the same commit and profile replays without running
-/// anything. A run that times out failed: the tests did not pass on that
-/// tree. No profile, a checkout that cannot be made or a command that
-/// cannot start writes nothing.
+/// in order until one fails, in a fresh checkout of the lane's commit that
+/// the harness makes and removes, then the checkout must still be at that
+/// commit with no change or new untracked file. A pass on the same commit
+/// and profile replays without running anything. A run that times out
+/// failed: the tests did not pass on that tree. No profile, a checkout that
+/// cannot be made or a command that cannot start writes nothing.
 fn run_tests(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let Run {
         _lock,
@@ -218,79 +218,140 @@ fn run_tests(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Out
     let db = std::path::absolute(db).map_err(LedgerError::from)?;
     let home = db.parent().unwrap_or(Path::new("/"));
     let dir = home.join("checkouts").join(format!("lane-{work}"));
-    checkout(&wt, &dir, &input.head, deadline)?;
+    let checkout = Checkout::fresh(&wt, dir, &input.head, deadline)?;
     let target = tests.target_dir.as_ref().map(|var| {
         let lane_target = home.join("targets").join(format!("lane-{work}"));
         (OsString::from(var), lane_target.into_os_string())
     });
-    let mut ran = run_commands(&tests.commands, &dir, target, deadline)?;
-    let (mut dirty, mut ignored) = (Value::Null, Value::Null);
-    if ran.passed {
-        // `--ignored` too, so the commit's `.gitignore` hides nothing.
-        let args = [
-            "status",
-            "--porcelain",
-            "--untracked-files=all",
-            "--ignored",
-        ];
-        let status = harness_git(&dir, &args, deadline)?;
-        let new_ignored = status.lines().filter(|l| l.starts_with("!! ")).count();
-        ran.passed = status.lines().count() == new_ignored;
-        (dirty, ignored) = (json!(!ran.passed), json!(new_ignored));
-        ran.text += &format!("$ git {}\n{status}", args.join(" "));
+    let ran = run_commands(&tests.commands, &checkout.dir, target, deadline)?;
+    let mut after = Map::from_iter(
+        ["dirty", "head_moved", "ignored_files", "status_cut"].map(|k| (k.into(), Value::Null)),
+    );
+    let mut text = String::new();
+    let mut passed = ran.passed;
+    if passed {
+        let found = tree_after(&checkout.dir, &input.head, deadline)?;
+        passed = !(found.dirty || found.head_moved || found.cut);
+        after.extend([
+            ("dirty".into(), json!(found.dirty)),
+            ("head_moved".into(), json!(found.head_moved)),
+            ("ignored_files".into(), json!(found.ignored)),
+            ("status_cut".into(), json!(found.cut)),
+        ]);
+        // First: the store keeps a long text's end, the commands' output.
+        text = found.listing;
     }
+    drop(checkout);
+    text += &ran.text;
     let stored = Evidence::beside(&db)
-        .put(&ran.text)
+        .put(&text)
         .map_err(LedgerError::from)?;
     input.evidence_ref = Some(stored.hash);
     input.fields = Map::from_iter([
-        (
-            "result".into(),
-            json!(if ran.passed { "pass" } else { "fail" }),
-        ),
+        ("result".into(), json!(if passed { "pass" } else { "fail" })),
         ("commands".into(), json!(ran.commands)),
         ("timed_out".into(), json!(ran.timed_out)),
-        ("dirty".into(), dirty),
-        ("ignored_files".into(), ignored),
-        ("output_truncated".into(), json!(stored.truncated)),
+        (
+            "output_truncated".into(),
+            json!(ran.cut || stored.truncated),
+        ),
         (
             "profile_base".into(),
             json!({"ref": base.base, "commit": base.commit}),
         ),
     ]);
+    input.fields.extend(after);
     one(ledger.check_run(actor, &input)??)
 }
 
-/// The commit `head` checked out in `dir`, a repository the harness owns,
-/// made once and kept so a later run fetches little. The lane's repository
-/// is only read: `head` is fetched from it by sha, with no remote and no
+/// A fresh repository the harness owns at `dir` with the lane's commit
+/// checked out, removed when it is dropped, however the run ends. Nothing
+/// is kept between runs: test commands can write a repository's `.git`
+/// (config, sparse checkout, excludes, index flags), so a kept one could
+/// make a later commit's run read another tree. The lane's repository is
+/// only read: `head` is fetched from it by sha, with no remote and no
 /// other ref, so its hooks, config, filters, excludes and replace refs
 /// never reach the checkout, and this repository runs no hook (not even
-/// one a user's `init.templateDir` copied in). Checked out detached and
-/// forced, then cleaned of every untracked and ignored file, so nothing an
-/// earlier run left survives.
-fn checkout(lane: &Path, dir: &Path, head: &str, deadline: Instant) -> Result<(), CliError> {
-    let mut owner_only = DirBuilder::new();
-    owner_only.recursive(true).mode(0o700);
-    owner_only.create(dir).map_err(LedgerError::from)?;
-    let lane = lane.to_string_lossy();
-    for args in [
-        &["init", "-q"][..],
-        &["config", "core.hooksPath", "/dev/null"],
-        &["fetch", "-q", "--no-tags", &lane, head],
-        &["checkout", "-q", "--force", "--detach", head],
-        &["clean", "-q", "-ffdx"],
-    ] {
-        harness_git(dir, args, deadline)?;
-    }
-    Ok(())
+/// one a user's `init.templateDir` copied in).
+struct Checkout {
+    dir: PathBuf,
 }
 
-/// One git call in the harness's checkout; a failure refuses with git's
-/// own line.
-fn harness_git(dir: &Path, args: &[&str], deadline: Instant) -> Result<String, CliError> {
+impl Checkout {
+    fn fresh(
+        lane: &Path,
+        dir: PathBuf,
+        head: &str,
+        deadline: Instant,
+    ) -> Result<Checkout, CliError> {
+        // What a killed run left, first; one that cannot go refuses.
+        match std::fs::remove_dir_all(&dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(refuse(format!("could not remove {}: {e}", dir.display())));
+            }
+            _ => {}
+        }
+        let mut owner_only = DirBuilder::new();
+        owner_only.recursive(true).mode(0o700);
+        owner_only.create(&dir).map_err(LedgerError::from)?;
+        let checkout = Checkout { dir };
+        let lane = lane.to_string_lossy();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "core.hooksPath", "/dev/null"],
+            &["fetch", "-q", "--no-tags", &lane, head],
+            &["checkout", "-q", "--force", "--detach", head],
+        ] {
+            harness_git(&checkout.dir, args, deadline)?;
+        }
+        Ok(checkout)
+    }
+}
+
+impl Drop for Checkout {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// The checkout after commands that all passed: whether `HEAD` is still
+/// the commit under test, and `git status` with untracked and ignored
+/// directories as one entry each, so its length does not grow with what a
+/// build wrote. It targets accidental writes; an index flag such as
+/// `assume-unchanged` hides a change from it.
+struct After {
+    head_moved: bool,
+    dirty: bool,
+    ignored: usize,
+    /// The listing went past its cap: it is not read, and the run fails.
+    cut: bool,
+    listing: String,
+}
+
+fn tree_after(dir: &Path, head: &str, deadline: Instant) -> Result<After, CliError> {
+    let (now, _) = harness_git(dir, &["rev-parse", "--verify", "HEAD"], deadline)?;
+    let args = [
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+        "--ignored",
+    ];
+    let (status, cut) = harness_git(dir, &args, deadline)?;
+    let ignored = status.lines().filter(|l| l.starts_with("!! ")).count();
+    Ok(After {
+        head_moved: now.trim() != head,
+        dirty: !cut && status.lines().count() > ignored,
+        ignored,
+        cut,
+        listing: format!("$ git {}\n{status}", args.join(" ")),
+    })
+}
+
+/// One git call in the harness's checkout: its output and whether it was
+/// cut at 1 MiB. A failure refuses with git's own line.
+fn harness_git(dir: &Path, args: &[&str], deadline: Instant) -> Result<(String, bool), CliError> {
     match git::git(Path::new("git"), dir, args, deadline, 1024 * 1024) {
-        Ok((out, _)) => Ok(String::from_utf8_lossy(&out).into_owned()),
+        Ok((out, cut)) => Ok((String::from_utf8_lossy(&out).into_owned(), cut)),
         Err(git::Failure::TimedOut) => Err(refuse(format!("git {}: timed out", args[0]))),
         Err(git::Failure::BadRevision) => Err(refuse(format!("git {}: no such commit", args[0]))),
         Err(git::Failure::Other(e)) => Err(refuse(e)),
@@ -304,6 +365,8 @@ struct Ran {
     text: String,
     passed: bool,
     timed_out: bool,
+    /// Some command's output lost its start.
+    cut: bool,
 }
 
 /// Each argv in order in `dir`, until one fails, with stdin empty and the
@@ -317,7 +380,7 @@ fn run_commands(
     deadline: Instant,
 ) -> Result<Ran, CliError> {
     let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
-        .filter(|(k, _)| !session_var(k) && !git::GIT_REPO_VARS.iter().any(|v| k == v))
+        .filter(|(k, _)| !session_var(k) && !git::repo_var(k))
         .collect();
     env.extend(target);
     let mut ran = Ran {
@@ -325,6 +388,7 @@ fn run_commands(
         text: String::new(),
         passed: true,
         timed_out: false,
+        cut: false,
     };
     for argv in commands {
         let started = Instant::now();
@@ -339,6 +403,7 @@ fn run_commands(
             Ok(done) => {
                 ran.text += &String::from_utf8_lossy(&done.err);
                 ran.text += &String::from_utf8_lossy(&done.out);
+                ran.cut |= done.cut;
                 done.status.code()
             }
             Err(child::Failed::TimedOut) => {
