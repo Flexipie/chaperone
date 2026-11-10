@@ -257,7 +257,7 @@ fn tree(bin: &Path, lane: &Lane, deadline: Instant, uncommitted: bool) -> Git {
     let result = (|| {
         let mut committed = None;
         for base in BASES.iter().copied().chain(lane.base_sha.as_deref()) {
-            let range = format!("{base}..HEAD");
+            let range = format!("{}..HEAD", crate::git::base_rev(base));
             // `--end-of-options`: a claimed base_sha is not checked as hex.
             let args = [
                 "log",

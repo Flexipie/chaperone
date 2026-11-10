@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use chaperone_core::git::{BASES, ChangedFile, Failure, git, git_bin, lane_files};
+use chaperone_core::git::{BASES, ChangedFile, Failure, base_rev, git, git_bin, lane_files};
 use chaperone_graph::{Error, profile_file, rules};
 
 use crate::watch::{Selected, Shown};
@@ -193,10 +193,11 @@ pub fn against_base(
 ) -> Result<(String, Vec<u8>, bool), String> {
     let deadline = Instant::now() + DEADLINE;
     for base in BASES.iter().copied().chain(base_sha) {
+        let full = base_rev(base);
         // `--end-of-options`: a claimed base_sha is not checked as hex.
         let args = [
             pre,
-            &["--merge-base", "--end-of-options", base],
+            &["--merge-base", "--end-of-options", &full],
             post,
             &["--"],
         ]

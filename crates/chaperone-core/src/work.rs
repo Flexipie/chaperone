@@ -1850,6 +1850,7 @@ mod tests {
         };
         ledger.check_run(&pair("h", "s9"), &run).unwrap().unwrap();
         assert_eq!(claim("/wt"), Ok(Some("/wt".into())));
+        assert_eq!(claim("/wt/"), Ok(Some("/wt/".into())));
         let frozen =
             "worktree_path is frozen: lane 1 has a harness check, so its worktree cannot move";
         assert_eq!(claim("/x"), Err(Refusal::InvalidInput(frozen.into())));

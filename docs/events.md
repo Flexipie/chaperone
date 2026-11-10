@@ -53,11 +53,13 @@ These rules keep every write small, single and fail-closed.
   `review:<lane_id>:<job>:requested` or `review:<lane_id>:<job>:finished`. A job already
   recorded on another lane is `invalid_input`. `work merged` uses `merged:<lane_id>:<pr>`
   (the PR lowercased), and a PR already merged on another lane is `invalid_input`.
-  `check run` uses `run:<lane_id>:<check>:<tree>:-:<attempt>`: `<tree>` is the measured
-  commit's tree, `-` stands where a profile hash goes once a run check reads the profile, and
-  `<attempt>` is the id of the lane's newest `check.finished` for that check on another tree
-  (0 for none). So a run on the same tree replays (even from a new commit with that tree), and
-  a lane that comes back to an earlier tree after another appends, as `check record`'s flip back does.
+  `check run` uses `run:<lane_id>:<check>:<head_sha>:-:<attempt>`: `<head_sha>` is the measured
+  commit, `-` stands where a profile hash goes once a run check reads the profile, and
+  `<attempt>` is the id of the lane's newest `check.finished` for that check on another commit
+  (0 for none). So a run on the same commit replays, a new commit appends even when its tree is
+  the same (an amend that only rewords), and a lane that comes back to an earlier commit after
+  another appends, as `check record`'s flip back does. A rule that holds for a tree whatever the
+  commit is the verdict's, later.
   `attention record` scopes its `--idempotency-key` to the lane and type (`attention:<lane_id>:<type>:<key>`);
   without one it uses `attention:` plus the
   sha256 of the lane id, its canonical payload and the id of the lane's newest event that is
@@ -145,7 +147,7 @@ nothing.
 
 `worktree_path` is frozen once the lane has a harness check (`producer.kind` `harness`): a
 claim, renewal or takeover that changes it is `invalid_input` and writes nothing, so a later
-run reads the folder the earlier one measured. One that names the same path still writes.
+run reads the folder the earlier one measured. One that names the same path, a trailing slash aside, still writes.
 
 ### Engine
 
@@ -303,7 +305,7 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 | `kept_tests` | session | `ran`, or `skipped` with `reason` `none` (kept tests: none). |
 | `review_round` | session | `ran` only. One review round daisy did not run (a review agent's, `ship-wait round`). It adds a round and nothing else: no `review.local_head`, no findings, no `daisy_review.state`. |
 | `local_review` | daisy_worker | `job`, `round`, `score`, `verdict`, `findings[]` of `finding_key`, `severity` (`blocker`, `convention`, `risk`, `nit`, `question`), `path`, `line`, `title`, `body`, `verified`, `lenses`, `body_truncated`; `review` |
-| `diff` | harness | `ran` only. `tree` (the commit's tree), `base` (the first of `origin/HEAD`, `origin/main`, `origin/master`, else the claimed `base_sha`), `files`, `added`, `removed` (a binary file counts as a file with no lines), `code_lines` (added plus removed over code files), `changes_code` (some changed file is code). A file is code unless it is under `docs/` or ends in `.md`. `evidence_ref`: the per-file list as JSON. |
+| `diff` | harness | `ran` only. `tree` (the commit's tree), `base` (the first of `origin/HEAD`, `origin/main`, `origin/master` that this clone has as a remote-tracking ref, never a local branch of that name, else the claimed `base_sha`), `files`, `added`, `removed`, `code_lines` (added plus removed over code files), `changes_code` (some changed file is code), `uncounted_files` (changed files git gave no line counts for: binary, or text an attributes rule such as `-diff` hides; they add nothing to the line totals, so a size gate should not trust them while this is above 0), `files_truncated` (the evidence kept only the end of the list). A file is code unless it is under `docs/`, ends in `.md` or ends in `.lock`. `evidence_ref`: the per-file list, one JSON object `{path, added, removed}` per line, so a list cut to its end still reads line by line once a partial first line is skipped. |
 | `pr_review` | daisy_worker | Same as `local_review`, without `round`, plus `pr`. |
 | `local_review`, `pr_review` (job `failed` or `cancelled`) | daisy_worker | `skipped`, `reason` `failed` or `cancelled`, `job`. `review`. No score or findings. It sets no `review.local_head`, adds no round, and projects `daisy_review.state` as `failed`, which no gate accepts. |
 

@@ -63,8 +63,10 @@ fn lane(db: &Path, claim: &[&str]) -> String {
     id
 }
 
-/// The branch tip is measured exactly while a later layer is checked out;
-/// the same tree replays, a new commit appends, docs alone are no code.
+/// The branch tip is measured exactly against the remote base, past a
+/// local branch named like it, while a later layer is checked out; the same
+/// commit replays, a reworded one and a return to the first append; docs,
+/// lock files and lines git does not count are no code lines.
 #[test]
 fn a_run_measures_the_lane_commit() {
     let dir = tempfile::tempdir().unwrap();
@@ -73,6 +75,7 @@ fn a_run_measures_the_lane_commit() {
         dir.path().join("ledger.db"),
         dir.path().join("wt"),
     );
+    git(&wt, &["update-ref", "refs/remotes/origin/main", &base], &[]);
     let files: &[(&str, &[u8])] = &[
         ("lib.rs", b"a\nc\nd\n"),
         ("docs/n.md", b"x\n"),
@@ -85,18 +88,11 @@ fn a_run_measures_the_lane_commit() {
         git(&wt, &["rev-parse", "HEAD"], &[]),
         git(&wt, &["rev-parse", "HEAD^{tree}"], &[]),
     );
+    // A local branch that `origin/main` alone would name first.
+    git(&wt, &["branch", "origin/main", &tip], &[]);
     git(&wt, &["checkout", "-qb", "layer-2"], &[]);
     git(&wt, &["commit", "-q", "--allow-empty", "-m", "two"], &[]);
-    let claim = |branch| {
-        [
-            "--worktree",
-            wt.to_str().unwrap(),
-            "--branch",
-            branch,
-            "--base-sha",
-            &base,
-        ]
-    };
+    let claim = |branch| ["--worktree", wt.to_str().unwrap(), "--branch", branch];
     let id = lane(&db, &claim("feat"));
     let diff = ["check", "run", "diff", "--work", &id];
     let (code, first) = run(&db, &diff);
@@ -104,8 +100,9 @@ fn a_run_measures_the_lane_commit() {
     let mut p = first["payload"].clone();
     let producer = p.as_object_mut().unwrap().remove("producer").unwrap();
     let evidence = p.as_object_mut().unwrap().remove("evidence_ref").unwrap();
-    let want = json!({"check": "diff", "outcome": "ran", "head_sha": tip, "tree": tree, "base": base,
-        "files": 3, "added": 3, "removed": 1, "code_lines": 3, "changes_code": true});
+    let want = json!({"check": "diff", "outcome": "ran", "head_sha": tip, "tree": tree,
+        "base": "origin/main", "files": 3, "added": 3, "removed": 1, "code_lines": 3,
+        "changes_code": true, "uncounted_files": 1, "files_truncated": false});
     assert_eq!(p, want);
     assert_eq!(producer["kind"], "harness");
     assert!(producer["bin"].as_str().unwrap().ends_with("/chaperone"));
@@ -118,44 +115,50 @@ fn a_run_measures_the_lane_commit() {
     let list = Evidence::beside(&db)
         .get(evidence.as_str().unwrap())
         .unwrap();
-    let list: Vec<Value> = serde_json::from_str(&list).unwrap();
-    let rows: Vec<_> = list
-        .iter()
-        .map(|f| json!([f["path"], f["added"]]))
+    let rows: Vec<Value> = list
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    assert_eq!(
-        rows,
-        [
-            json!(["blob.bin", null]),
-            json!(["docs/n.md", 1]),
-            json!(["lib.rs", 2])
-        ]
-    );
+    let rows: Vec<_> = rows
+        .iter()
+        .map(|f| json!([f["path"], f["added"], f["removed"]]))
+        .collect();
+    let want = [
+        json!(["blob.bin", null, null]),
+        json!(["docs/n.md", 1, 0]),
+        json!(["lib.rs", 2, 1]),
+    ];
+    assert_eq!(rows, want);
 
-    let again = run(&db, &diff).1;
-    assert_eq!(
-        (&again["replayed"], &again["event_id"]),
-        (&json!(true), &first["event_id"])
-    );
+    let event = |want_replayed: bool| {
+        let got = run(&db, &diff).1;
+        assert_eq!(got["replayed"], want_replayed, "{got}");
+        (got["event_id"].clone(), got["payload"]["head_sha"].clone())
+    };
+    assert_eq!(event(true).0, first["event_id"]);
     git(&wt, &["checkout", "-q", "feat"], &[]);
-    git(&wt, &["commit", "-qam", "docs"], &[("docs/n.md", b"y\n")]);
-    let next = run(&db, &diff).1;
-    assert_eq!(next["replayed"], false);
-    assert_ne!(next["event_id"], first["event_id"]);
+    git(&wt, &["commit", "-q", "--amend", "-m", "reworded"], &[]);
+    let reworded = git(&wt, &["rev-parse", "HEAD"], &[]);
+    let (second, head) = event(false);
+    assert_eq!(head, reworded);
+    git(&wt, &["reset", "-q", "--hard", &tip], &[]);
+    let (third, head) = event(false);
+    assert_eq!(head, tip);
+    assert!(third != first["event_id"] && third != second);
 
-    git(&wt, &["checkout", "-qb", "docs", &base], &[]);
-    git(
-        &wt,
-        &["add", "."],
-        &[("docs/a.md", b"x\n"), ("README.md", b"r\n")],
-    );
+    let attributes: &[(&str, &[u8])] = &[(".git/info/attributes", b"README.md -diff\n")];
+    git(&wt, &["checkout", "-qb", "docs", &base], attributes);
+    let docs: &[(&str, &[u8])] = &[
+        ("docs/a.md", b"x\n"),
+        ("README.md", b"r\n"),
+        ("Cargo.lock", b"l\n"),
+    ];
+    git(&wt, &["add", "."], docs);
     git(&wt, &["commit", "-qm", "docs only"], &[]);
     let id = lane(&db, &claim("docs"));
     let p = &run(&db, &["check", "run", "diff", "--work", &id]).1["payload"];
-    assert_eq!(
-        [&p["files"], &p["code_lines"], &p["changes_code"]],
-        [&json!(2), &json!(0), &json!(false)]
-    );
+    let got = ["files", "uncounted_files", "code_lines", "changes_code"].map(|k| &p[k]);
+    assert_eq!(got, [&json!(3), &json!(1), &json!(0), &json!(false)]);
 }
 
 /// Nothing to measure, git that fails and a run already on the lane are
@@ -207,7 +210,8 @@ fn refusals_write_nothing_and_the_worktree_freezes() {
                 .unwrap()
                 .starts_with("worktree_path is frozen")
     );
-    assert_eq!(run(&db, &["work", "claim", &id, "--worktree", &wt]).0, 0);
+    let slash = format!("{wt}/");
+    assert_eq!(run(&db, &["work", "claim", &id, "--worktree", &slash]).0, 0);
     // Lane 4 (the folder that is no repository) never ran a harness check.
     assert_eq!(run(&db, &["work", "claim", "4", "--worktree", &wt]).0, 0);
 }

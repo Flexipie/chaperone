@@ -190,11 +190,11 @@ impl Ledger {
 
     /// One `check.finished` the harness produced (`check run`), `ran`, with
     /// producer `{kind: harness, bin, version}`. Keyed
-    /// `run:<lane>:<check>:<tree>:-:<attempt>`, `-` where a profile hash
+    /// `run:<lane>:<check>:<head>:-:<attempt>`, `-` where a profile hash
     /// goes once a check reads the profile, and the attempt the id of the
-    /// lane's newest result for this check on another tree (0 for none): a
-    /// run on the same tree replays, and one back on an earlier tree after
-    /// another appends, as `check record`'s flip back does.
+    /// lane's newest result for this check on another commit (0 for none):
+    /// a run on the same commit replays, and one back on an earlier commit
+    /// after another appends, as `check record`'s flip back does.
     pub fn check_run(&self, actor: &Actor, input: &RunInput) -> Checked<Recorded> {
         let mut payload = Payload {
             check: Some(input.check.clone()),
@@ -214,13 +214,13 @@ impl Ledger {
         let attempt: i64 = self.conn().query_row(
             "SELECT coalesce(max(id), 0) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
                AND json_extract(payload_json, '$.check') = ?2
-               AND json_extract(payload_json, '$.tree') IS NOT ?3",
-            params![input.work, input.check, input.tree],
+               AND json_extract(payload_json, '$.head_sha') IS NOT ?3",
+            params![input.work, input.check, input.head],
             |r| r.get(0),
         )?;
         let key = format!(
             "run:{}:{}:{}:-:{attempt}",
-            input.work, input.check, input.tree
+            input.work, input.check, input.head
         );
         self.finish_check(actor, &key, input.work, payload)
     }

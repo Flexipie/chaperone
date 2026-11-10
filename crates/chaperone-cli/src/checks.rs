@@ -24,9 +24,10 @@ use crate::work::{observed_head, one};
 /// overrides it.
 const DAISY_CLI: &str = "/Applications/daisy.app/Contents/MacOS/daisy-cli";
 const DAISY_TIMEOUT: Duration = Duration::from_secs(30);
-/// Not code: docs and Markdown. No profile says what code is yet, so every
-/// other changed file counts.
-const NOT_CODE: [&str; 2] = ["docs/**", "**/*.md"];
+/// Not code: docs, Markdown and lock files (a dependency bump alone is no
+/// code change). No profile says what code is yet, so every other changed
+/// file counts. The profile should own this list later.
+const NOT_CODE: [&str; 3] = ["docs/**", "**/*.md", "**/*.lock"];
 /// Every git call of one `check run diff`, together.
 const RUN_TIMEOUT: Duration = Duration::from_secs(10);
 /// The numstat's output; a cut list would count too little, so past it the
@@ -68,8 +69,8 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
 /// against the merge base, committed files only. The per-file list goes to
 /// the evidence store, its totals in the payload.
 fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
-    let item = ledger.work_get(work, &ledger.now()?)??;
     let _lock = ledger::lock_lane(db, work)??;
+    let item = ledger.work_get(work, &ledger.now()?)??;
     let refuse = |why: String| CliError::from(Refusal::InvalidInput(why));
     let wt = item.worktree_path.as_deref();
     let head = observed_head(wt, item.branch.as_deref())?.ok_or_else(|| {
@@ -96,16 +97,28 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         .iter()
         .map(|f| f.added.unwrap_or(0) + f.removed.unwrap_or(0))
         .sum();
-    let fields = Map::from_iter([
+    let mut fields = Map::from_iter([
         ("base".into(), json!(base)),
         ("files".into(), json!(files.len())),
         ("added".into(), json!(added)),
         ("removed".into(), json!(removed)),
         ("code_lines".into(), json!(code_lines)),
         ("changes_code".into(), json!(!code.is_empty())),
+        // Binary, or text an attributes rule (`-diff`) hides: no lines
+        // counted, so a size gate can refuse rather than trust the totals.
+        (
+            "uncounted_files".into(),
+            json!(files.iter().filter(|f| f.added.is_none()).count()),
+        ),
     ]);
-    let list = serde_json::to_string(&files).map_err(|e| CliError::Internal(e.to_string()))?;
+    // One row per line: the store keeps a long text's end, and a cut list
+    // still reads line by line.
+    let list: String = files
+        .iter()
+        .map(|f| json!({"path": f.path, "added": f.added, "removed": f.removed}).to_string() + "\n")
+        .collect();
     let stored = Evidence::beside(db).put(&list).map_err(LedgerError::from)?;
+    fields.insert("files_truncated".into(), json!(stored.truncated));
     let bin = std::env::current_exe().map_err(LedgerError::from)?;
     let input = RunInput {
         work,
