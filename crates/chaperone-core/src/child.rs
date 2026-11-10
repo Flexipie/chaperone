@@ -1,6 +1,7 @@
 //! A child process with a deadline: `daisy-cli reviews get`, the UI
-//! backlog's daisy reads, the UI writer's gh and herdr calls and the git
-//! calls of `overlap`, `impact` and the UI's diff.
+//! backlog's daisy reads, the UI writer's gh and herdr calls, the git
+//! calls of `overlap`, `impact` and the UI's diff, agent sessions and the
+//! commands of `check run tests`.
 
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
@@ -31,7 +32,7 @@ pub enum Failed {
 /// A process the child left behind that still holds a pipe at the
 /// deadline makes the run [`Failed::TimedOut`], even after a clean exit.
 pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Failed> {
-    start(cmd, None, false, deadline, cap)
+    start(cmd, None, false, deadline, Keep::Head(cap))
 }
 
 /// [`run`] for an agent session, with `input` written to the child's
@@ -41,15 +42,33 @@ pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Fai
 /// deadline it gets SIGTERM and 2 s to stop, then its group gets
 /// SIGKILL. That reaches what the agent started in its own group; a tool
 /// it put in a group or session of its own goes only if the agent stops
-/// it on SIGTERM. The cost: a Ctrl-C at the terminal no longer reaches
-/// the session, and a chaperone that dies leaves the session running.
+/// it on SIGTERM. Once the child has exited its group is killed too, so
+/// a process it left in the group neither holds a pipe until the deadline
+/// nor outlives the run. The cost: a Ctrl-C at the terminal no longer
+/// reaches the session, and a chaperone that dies leaves the session
+/// running.
 pub fn run_input(
     cmd: &mut Command,
     input: Option<&[u8]>,
     deadline: Instant,
     cap: usize,
 ) -> Result<Done, Failed> {
-    start(cmd, input, true, deadline, cap)
+    start(cmd, input, true, deadline, Keep::Head(cap))
+}
+
+/// [`run_input`] with stdin empty that keeps only the last `tail` bytes of
+/// stdout and of stderr, so a command that prints without end costs no
+/// more memory than that; `cut` says stdout lost its start.
+pub fn run_tail(cmd: &mut Command, deadline: Instant, tail: usize) -> Result<Done, Failed> {
+    start(cmd, None, true, deadline, Keep::Tail(tail))
+}
+
+/// What a pipe's reader keeps: the first bytes (stdout's cap, stderr whole)
+/// or the last bytes of both.
+#[derive(Clone, Copy)]
+enum Keep {
+    Head(usize),
+    Tail(usize),
 }
 
 fn start(
@@ -57,7 +76,7 @@ fn start(
     input: Option<&[u8]>,
     group: bool,
     deadline: Instant,
-    cap: usize,
+    keep: Keep,
 ) -> Result<Done, Failed> {
     if Instant::now() >= deadline {
         return Err(Failed::TimedOut);
@@ -81,7 +100,7 @@ fn start(
         std::thread::spawn(move || sent.send(pipe.write_all(&input)));
     }
     // Over a channel, so the wait for the end of a pipe has the deadline.
-    let drain = |pipe: Option<Box<dyn Read + Send>>, cap: usize| {
+    let drain = |pipe: Option<Box<dyn Read + Send>>, keep: Keep| {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let (mut buf, mut cut) = (Vec::new(), false);
@@ -94,17 +113,31 @@ fn start(
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break,
                     };
-                    let keep = n.min(cap - buf.len());
-                    buf.extend_from_slice(&chunk[..keep]);
-                    cut |= keep < n;
+                    match keep {
+                        Keep::Head(cap) => {
+                            let kept = n.min(cap - buf.len());
+                            buf.extend_from_slice(&chunk[..kept]);
+                            cut |= kept < n;
+                        }
+                        Keep::Tail(tail) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            let over = buf.len().saturating_sub(tail);
+                            buf.drain(..over);
+                            cut |= over > 0;
+                        }
+                    }
                 }
             }
             let _ = tx.send((buf, cut));
         });
         rx
     };
-    let out = drain(child.stdout.take().map(|p| Box::new(p) as _), cap);
-    let err = drain(child.stderr.take().map(|p| Box::new(p) as _), usize::MAX);
+    let err_keep = match keep {
+        Keep::Head(_) => Keep::Head(usize::MAX),
+        tail => tail,
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _), keep);
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as _), err_keep);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -123,6 +156,12 @@ fn start(
             Err(e) => return Err(Failed::Wait(e)),
         }
     };
+    // What the child left in its group would hold the pipes to the
+    // deadline. While one is alive the group's id cannot be reused; with
+    // none left, the kill finds nothing.
+    if group {
+        let _ = signal("-KILL", format!("-{}", child.id()));
+    }
     // An answer to half the input is none. The write has ended unless
     // something the child started still holds the pipe; then the deadline
     // ends the wait.
@@ -151,14 +190,7 @@ fn start(
 /// `unsafe` is forbidden, so the system's kill sends both.
 fn stop(child: &mut Child) -> std::io::Result<()> {
     let pid = child.id();
-    let kill = |signal: &str, target: String| {
-        Command::new("/bin/kill")
-            .args([signal, "--", &target])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-    };
-    let _ = kill("-TERM", pid.to_string());
+    let _ = signal("-TERM", pid.to_string());
     let until = Instant::now() + GRACE;
     let mut alive = true;
     while alive && Instant::now() < until {
@@ -168,10 +200,19 @@ fn stop(child: &mut Child) -> std::io::Result<()> {
     // While the agent is unreaped its group exists, so a failed kill is a
     // real failure. Once reaped, the group may be empty and kill finds
     // nothing; its pid names a new group only after the pids wrap around.
-    match kill("-KILL", format!("-{pid}"))? {
+    match signal("-KILL", format!("-{pid}"))? {
         status if alive && !status.success() => Err(std::io::Error::other(format!(
             "/bin/kill -KILL -- -{pid}: {status}"
         ))),
         _ => Ok(()),
     }
+}
+
+/// `kill <signal> -- <target>`: a pid, or `-<pgid>` for a group.
+fn signal(signal: &str, target: String) -> std::io::Result<ExitStatus> {
+    Command::new("/bin/kill")
+        .args([signal, "--", &target])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
 }
