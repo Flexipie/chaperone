@@ -79,7 +79,7 @@ The redactor replaces matches with `[redacted:<kind>]` and records the count. Pa
 
 A novel token format that matches none of these is an accepted miss. The redactor does not scan the git history of the worktree. Redaction happens before the idempotency key and before the evidence hash, so a retry hits the same redacted bytes and does not insert a second row.
 
-Evidence ([R10](r10-verification-review-layer.md)): the server opens the file. `realpath` must stay inside the lane worktree. Symlinks that escape are rejected. Paths under `.git` and `.chaperone` are rejected. Text is truncated to the last 256 KiB first, then redacted, then hashed. The manifest stores `redactions` and `truncated`. Image bytes are not scanned. They still have to be PNG or WebP under 8 MiB.
+Evidence ([R10](r10-verification-review-layer.md)): the server opens the file. `realpath` must stay inside the lane worktree. Symlinks that escape are rejected. Paths under `.git` and `.chaperone` are rejected. Text is redacted first, then truncated to the last 256 KiB, then hashed (truncating first could cut a secret's start off and leave its end unredacted). The manifest stores `redactions` and `truncated`. Image bytes are not scanned. They still have to be PNG or WebP under 8 MiB.
 
 `usage.reported.raw` keeps only the usage object the adapter mapped: token counts, cache counts, reasoning, model id, the CLI's own cost if present. Drop message text, prompts, tool arguments, env, and error bodies before insert. A missing usage object stays null ([R11](r11-observability-cost-metrics.md)). It is not filled with the surrounding stream line.
 
