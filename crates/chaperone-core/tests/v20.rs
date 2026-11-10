@@ -396,6 +396,7 @@ fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
     let complete = denied("review_complete", &["review.complete"]);
     assert_eq!(lane.ready(HEAD), complete);
     lane.run("review", HEAD, json!({"complete": false}));
+    let earlier = lane.run("review", OTHER, json!({"complete": true}));
     assert_eq!(lane.ready(HEAD), complete);
     let review = lane.run("review", HEAD, json!({"complete": true})).event_id;
     let blocking = denied("no_blocking_findings", &["findings.open_blocking"]);
@@ -405,6 +406,15 @@ fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
     lane.rule(&lane.lane, review, "correctness-risk", "disputed");
     assert_eq!(lane.ready(HEAD), blocking);
     lane.rule(&lane.owner, review, "correctness-risk", "waived");
+    // Another tree's review's blockers, not raised again here, still block.
+    assert_eq!(lane.ready(HEAD), blocking);
+    lane.rule(
+        &lane.owner,
+        earlier.event_id,
+        "correctness-blocker",
+        "refuted",
+    );
+    lane.rule(&lane.owner, earlier.event_id, "correctness-risk", "waived");
     assert_eq!(lane.ready(HEAD), denied("plan_or_no_code", &PLAN));
     lane.run("plan_check", OTHER, json!({}));
     let smoke = denied("smoke_or_no_code", &SMOKE);

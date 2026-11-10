@@ -281,7 +281,7 @@ fn the_verifier_rules_by_key() {
         let pipeline = pipeline();
         let p = review::verifier(&pipeline).unwrap();
         let (dir, facts) = (env.checkout(), &env.facts);
-        let v = review::verify(&p, &env.agents(), &dir, facts, &found, &env.store);
+        let v = review::verify(&p, &env.agents(), &dir, facts, &found, &[], &env.store);
         (env, v.unwrap())
     };
     let ruled = json!({"rulings": [
@@ -568,6 +568,7 @@ fn a_crash_before_the_rulings_is_finished_by_a_rerun() {
         &dir,
         &env.facts,
         &found,
+        &[],
         &env.store,
     );
     let verified = verified.unwrap();
@@ -582,6 +583,48 @@ fn a_crash_before_the_rulings_is_finished_by_a_rerun() {
     let want = [("a", "verified"), ("c", "open")].map(|(t, s)| (t.to_string(), s.to_string()));
     assert_eq!(blocking(&ledger), want);
     assert_eq!(calls(&env), before);
+}
+
+/// The next tree's verifier is shown the earlier review's findings that
+/// still block, by that review, and its `fixed` ruling settles one; the
+/// one it leaves still blocks.
+#[test]
+fn the_verifier_rules_an_earlier_finding_fixed() {
+    let (claude, codex) = scripts(rules);
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let first = record(&env, &ledger).unwrap().event_id;
+    let said = json!({"findings": [found("risk", "a"), found("blocker", "b"), found("risk", "c")]});
+    let keys = review::findings("correctness", said).unwrap();
+    let earlier = |i: usize| format!("{first}/{}", keys[i].finding_key);
+    let none = json!({"findings": []});
+    let lens = |l: &str| json!({"when": format!("LENS {l}"), "stdout": session(l, none.clone())});
+    let fixed = json!({"rulings": [
+        {"key": earlier(0), "verdict": "fixed", "why": "src/a.rs:3 now stops at the end"}]});
+    let verifier = json!({"when": "LENS verifier", "stdout": session("verifier", fixed)});
+    let runs = [
+        lens("correctness"),
+        lens("design_tests"),
+        lens("intent"),
+        verifier,
+    ];
+    rescript(&env, "claude", json!(runs));
+    let codex = json!([{"when": "LENS codex", "write": {"-o": none.to_string()}}]);
+    rescript(&env, "codex", codex);
+    let head = "4".repeat(40);
+    reviewed(&env, &ledger, &head, &"5".repeat(40)).unwrap();
+    let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
+    let call: Value = log
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .rfind(|c: &Value| c["prompt"].as_str().unwrap().starts_with("LENS verifier"))
+        .unwrap();
+    let schema: Value = serde_json::from_str(call["args"][4].as_str().unwrap()).unwrap();
+    let mut shown = [earlier(0), earlier(2)];
+    shown.sort();
+    let rulings = &schema["properties"]["rulings"]["items"]["properties"];
+    assert_eq!(rulings["key"]["enum"], json!(shown));
+    assert_eq!(blocking(&ledger), [("c".to_string(), "open".to_string())]);
 }
 
 /// The fake `cli`'s script, replaced.

@@ -4,7 +4,8 @@ Your one job: try to refute each finding below against the code, and rule on eac
 can. Reviewers wrote these findings; some are right and some are not. You did not write the
 change or the findings. Below this text are the files the change touches, its diff, then the
 findings, one JSON object a line, each with the `key` to rule by. You are in a read-only
-checkout of the commit.
+checkout of the commit. Earlier findings, if any, are ones the lane's reviews of earlier
+commits raised (`raised_on`) that still block.
 
 ## How to judge each finding
 
@@ -18,6 +19,12 @@ checkout of the commit.
    or quote the rule that answers the finding. Rule `verified` when you tried and the finding
    holds: the failure can happen or the rule is broken as it says.
 
+## Earlier findings
+
+Rule an earlier finding `fixed` only when you can name the file and line in this commit that
+answer it. Never because no reviewer raised it again, by default or by doubt. One you cannot
+show is fixed you leave out: it stays open and still blocks. Rule nothing else on one.
+
 ## Rules
 
 - Never refute by default, by doubt, or because a finding is unlikely, small or badly
@@ -30,6 +37,7 @@ checkout of the commit.
 
 ## Answer
 
-One ruling per finding you could decide: its `key`, the verdict `verified` or `refuted`, and
-`why`, one or two sentences that cite the file and line or the rule. A ruling with no why is
+One ruling per finding you could decide: its `key`, the verdict (`verified` or `refuted` for a
+finding of this review, `fixed` for an earlier one), and `why`, one or two sentences that cite
+the file and line or the rule. A ruling with no why is
 no ruling. Rule on each key at most once.

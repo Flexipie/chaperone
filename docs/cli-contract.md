@@ -391,14 +391,17 @@ lens found something, one more fresh session, the verifier, is shown every findi
 answers `{rulings: [{key, verdict, why}]}`, `verified` or `refuted` with a why that is not
 blank: one session for all, as the findings share the facts and the checkout, bounded like a
 lens by its runner's timeout and, for a Claude runner, its budget (Codex takes no budget, so
-the timeout is its only bound). One that fails, or rules on a key it was not shown or twice,
-or gives a blank why, rules on nothing, and every finding stays open (still blocking). Each
+the timeout is its only bound). It is also shown the lane's earlier open or verified blocking
+findings from complete harness reviews, keyed `<review event id>/<finding_key>`, and may rule
+those only `fixed` (a verifier starts when there are any, even if no lens found anything).
+One that fails, or rules on a key it was not shown, with a verdict that key does not take or
+twice, or gives a blank why, rules on nothing, and every finding stays open (still blocking). Each
 session's prompt and whole answer are stored first, as two evidence files.
 
 It then writes, in this order: one `usage.reported` per session that left a session id
 (events.md, Usage), one `check.finished` (check `review`: the lens table, the verifier,
-`complete`, the findings), and one `finding.updated` per ruling on a finding still open,
-carrying the review's harness producer, so the verifier rules whichever session started the
+`complete`, the findings), and one `finding.updated` per ruling on a finding still open (for
+`fixed`, open or verified, with this commit as `head_sha`), carrying the review's harness producer, so the verifier rules whichever session started the
 run (finding statuses). It is the second command that appends more than one event, after
 `usage report`, each event in its own transaction. A crash leaves whole events: usage rows
 without a review are what those sessions cost, and stay; a review whose rulings are missing
@@ -569,7 +572,7 @@ gates, in the order a denial names the first that fails:
 | `code_lines_at_most` | that diff counts at most 400 code lines | `commit.code_lines` |
 | `tests_passed` | the newest harness `tests` on the commit passed | `tests.passed` |
 | `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree counts) | `review.complete` |
-| `no_blocking_findings` | that review has no finding open, verified or disputed of severity `blocker`, `risk` or another blocking one; refuted, waived, fixed and answered findings, other reviews' and the plan check's never count | `findings.open_blocking` |
+| `no_blocking_findings` | no complete harness review on the lane, of any tree, has a finding open, verified or disputed of severity `blocker`, `risk` or another blocking one; refuted, waived, fixed and answered findings, incomplete and session reviews' and the plan check's never count | `findings.open_blocking` |
 | `plan_or_no_code` | the diff changes no code, or the plan check ran (`check run plan`, before code) or the owner waived it (`check waive plan`) | `commit.changes_code`, `plan_check.outcome`, `plan_check.reason` |
 | `smoke_or_no_code` | the diff changes no code, or the newest harness smoke on the commit passed, or the harness ran none there and a session's smoke claim on it ran with evidence | `commit.changes_code`, `smoke.passed`, `smoke.claimed` |
 | `verdict_is_yes` | the newest harness verdict says `yes` | `verdict.decision` |

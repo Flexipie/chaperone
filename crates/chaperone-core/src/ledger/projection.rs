@@ -209,15 +209,18 @@ pub(crate) fn project(
         });
         f.set("smoke.claimed", claimed);
         f.set("review.complete", covering.is_some());
-        if let Some(review) = covering {
-            let open: i64 = conn.query_row(
-                &format!(
-                    "SELECT count(*) FROM findings WHERE check_event_id = ?1 AND {}",
-                    blocking()
-                ),
-                [review],
-                |r| r.get(0),
-            )?;
+        if covering.is_some() {
+            // Every complete harness review's, so a blocker that a later
+            // tree's review does not raise again still blocks until settled.
+            let mut stmt = conn.prepare(&format!(
+                "SELECT check_event_id FROM findings WHERE lane_id = ?1 AND {}",
+                blocking()
+            ))?;
+            let reviews = stmt.query_map([lane_id], |r| r.get::<_, i64>(0))?;
+            let mut open = 0;
+            for review in reviews {
+                open += i64::from(complete.contains(&review?));
+            }
             f.set("findings.open_blocking", open);
         }
     }
@@ -688,8 +691,8 @@ requires = ["quality_gate_before_pr"]
     }
 
     /// The review that covers the commit is its newest complete harness
-    /// review, a carried one read as its original; only that review's
-    /// unsettled blocking findings count.
+    /// review, a carried one read as its original; the unsettled blocking
+    /// findings of every complete harness review count.
     #[test]
     fn the_covering_review_and_its_blocking_findings() {
         let lane = Lane::new("code");
@@ -703,13 +706,14 @@ requires = ["quality_gate_before_pr"]
         let review = lane.on("review", HEAD, "harness", json!({"complete": true}));
         let f = at(HEAD);
         assert_eq!(f.get("review.complete"), &Fact::Bool(true));
-        // The blocker and the risk; the nit and the other commit's never.
-        assert_eq!(f.get("findings.open_blocking"), &Fact::Int(2));
+        // Each complete review's blocker and risk; the nits and the
+        // incomplete review's never.
+        assert_eq!(f.get("findings.open_blocking"), &Fact::Int(4));
         lane.rule(review.id, "blocker", "refuted");
         lane.rule(review.id, "risk", "verified");
-        assert_eq!(at(HEAD).get("findings.open_blocking"), &Fact::Int(1));
+        assert_eq!(at(HEAD).get("findings.open_blocking"), &Fact::Int(3));
         lane.rule(review.id, "risk", "waived");
-        assert_eq!(at(HEAD).get("findings.open_blocking"), &Fact::Int(0));
+        assert_eq!(at(HEAD).get("findings.open_blocking"), &Fact::Int(2));
         assert_eq!(at(OTHER).get("findings.open_blocking"), &Fact::Int(2));
         // Carried to a commit with the same tree: the original's findings.
         let carried = "0123456789abcdef0123456789abcdef01234567";
