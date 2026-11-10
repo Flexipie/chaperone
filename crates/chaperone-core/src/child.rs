@@ -2,7 +2,7 @@
 //! backlog's daisy reads, the UI writer's gh and herdr calls and the git
 //! calls of `overlap`, `impact` and the UI's diff.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -25,15 +25,36 @@ pub enum Failed {
 /// read to the end while it runs, so a large answer cannot fill one and
 /// stall the child until the deadline; stdout past `cap` bytes is dropped.
 pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Failed> {
+    run_input(cmd, None, deadline, cap)
+}
+
+/// [`run`], with `input` written to the child's stdin, which is then
+/// closed: a prompt too long for an argument. A child that exits before
+/// it has read all of it is a [`Failed::Wait`], whatever it printed.
+pub fn run_input(
+    cmd: &mut Command,
+    input: Option<&[u8]>,
+    deadline: Instant,
+    cap: usize,
+) -> Result<Done, Failed> {
     if Instant::now() >= deadline {
         return Err(Failed::TimedOut);
     }
     let mut child = cmd
-        .stdin(Stdio::null())
+        .stdin(match input {
+            Some(_) => Stdio::piped(),
+            None => Stdio::null(),
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(Failed::Spawn)?;
+    // From a thread, as the pipes below are read: a child that answers
+    // before it has read everything would stall both sides.
+    let (sent, written) = std::sync::mpsc::channel();
+    if let (Some(mut pipe), Some(input)) = (child.stdin.take(), input.map(<[u8]>::to_vec)) {
+        std::thread::spawn(move || sent.send(pipe.write_all(&input)));
+    }
     let drain = |pipe: Option<Box<dyn Read + Send>>, cap: usize| {
         std::thread::spawn(move || {
             let (mut buf, mut cut) = (Vec::new(), false);
@@ -68,6 +89,17 @@ pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Fai
             Err(e) => return Err(Failed::Wait(e)),
         }
     };
+    // An answer to half the input is none. The write has ended unless
+    // something the child started still holds the pipe; then the deadline
+    // ends the wait.
+    if input.is_some() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match written.recv_timeout(left) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(Failed::Wait(e)),
+            Err(_) => return Err(Failed::TimedOut),
+        }
+    }
     let (out, cut) = out.join().unwrap_or_default();
     let (err, _) = err.join().unwrap_or_default();
     Ok(Done {
