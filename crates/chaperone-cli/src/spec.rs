@@ -15,7 +15,6 @@ use crate::output::{CliError, Meta, Outcome};
 use crate::work::value;
 
 pub fn run(ledger: &Ledger, cmd: SpecCmd, meta: &mut Meta) -> Result<Outcome, CliError> {
-    let now = ledger.now()?;
     let spec = match cmd {
         SpecCmd::Create {
             parent,
@@ -31,7 +30,7 @@ pub fn run(ledger: &Ledger, cmd: SpecCmd, meta: &mut Meta) -> Result<Outcome, Cl
                 &parent,
                 title.as_deref(),
                 &body,
-                &now,
+                None,
                 dry_run,
             )??
         }
@@ -70,7 +69,7 @@ pub fn run(ledger: &Ledger, cmd: SpecCmd, meta: &mut Meta) -> Result<Outcome, Cl
                 &body,
                 &reason,
                 expected_version,
-                &now,
+                None,
                 dry_run,
             )??
         }
@@ -80,7 +79,7 @@ pub fn run(ledger: &Ledger, cmd: SpecCmd, meta: &mut Meta) -> Result<Outcome, Cl
             actor,
         } => {
             meta.dry_run = dry_run.then_some(true);
-            ledger.spec_approve(&actor.resolve(), &spec, &now, dry_run)??
+            ledger.spec_approve(&actor.resolve(), &spec, None, dry_run)??
         }
         SpecCmd::Decide {
             spec,

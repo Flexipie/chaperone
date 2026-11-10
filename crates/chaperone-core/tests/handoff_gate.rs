@@ -204,7 +204,7 @@ fn denied(gate: &str, fact_paths: &[&str]) -> Result<i64, Refusal> {
 }
 
 #[test]
-fn done_without_stamps_is_denied_once_and_moves_nothing() {
+fn done_without_stamps_is_denied_and_moves_nothing() {
     let lane = Lane::new();
     let before = lane.row();
     let no_plan = denied(
@@ -414,6 +414,27 @@ fn a_create_key_cannot_take_a_denial_key() {
     let made = create(DENY);
     assert_eq!(made.idempotency_key.as_deref(), Some(DENY));
     assert_eq!(create(DENY).id, made.id);
+    let stored: String = lane
+        .db
+        .query_row(
+            "SELECT idempotency_key FROM events WHERE lane_id = ?1",
+            [made.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, format!("create:{DENY}"));
+    let taken = CreateInput {
+        title: "t".into(),
+        kind: "code".into(),
+        pr_flow: "pr".into(),
+        idempotency_key: Some(stored),
+        ..CreateInput::default()
+    };
+    let r = lane
+        .ledger
+        .work_create(me, &taken, Some(T0), false)
+        .unwrap();
+    assert!(matches!(r, Err(Refusal::InvalidInput(_))), "{r:?}");
     assert!(matches!(done(), Err(Refusal::GateDenied { .. })));
     assert_eq!(lane.count("gate.denied"), 1);
 
@@ -446,18 +467,20 @@ fn a_create_key_cannot_take_a_denial_key() {
 }
 
 /// A retry of a denied handoff replays its denial; the same handoff on
-/// another commit is a new attempt and appends its own.
+/// another commit, or to another target, is a new attempt and appends its
+/// own.
 #[test]
 fn a_denial_names_the_commit_it_denied() {
     let lane = Lane::new();
-    let denied = |commit: &str| {
-        let r = lane.handoff(commit, "review", Some(true));
+    let denied = |commit: &str, status: &str, ready: Option<bool>| {
+        let r = lane.handoff(commit, status, ready);
         assert!(matches!(r, Err(Refusal::GateDenied { .. })), "{r:?}");
         lane.count("gate.denied")
     };
-    assert_eq!(denied("abc1234"), 1);
-    assert_eq!(denied("abc1234"), 1);
-    assert_eq!(denied("def5678"), 2);
+    assert_eq!(denied("abc1234", "review", Some(true)), 1);
+    assert_eq!(denied("abc1234", "review", Some(true)), 1);
+    assert_eq!(denied("def5678", "review", Some(true)), 2);
+    assert_eq!(denied("def5678", "done", None), 3);
     let heads: Vec<String> = lane
         .db
         .prepare("SELECT payload_json ->> '$.head_sha' FROM events WHERE kind = 'gate.denied'")
@@ -466,7 +489,7 @@ fn a_denial_names_the_commit_it_denied() {
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    assert_eq!(heads, ["abc1234", "def5678"]);
+    assert_eq!(heads, ["abc1234", "def5678", "def5678"]);
 }
 
 /// The board's ready: the owner's override, else status review and a ready

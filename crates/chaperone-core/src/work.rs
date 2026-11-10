@@ -94,7 +94,7 @@ const SELECT: &str = "SELECT id, title, source, source_id,
       CASE WHEN source IN ('linear', 'github', 'issue') THEN source_id END AS source_key,
       repo_slug, status, agent, session, claimed_at, lease_secs, lease_expires_at,
       last_heartbeat_at, base_sha, branch, worktree_path, blocker, next_action, pr_ref,
-      (SELECT iif(idempotency_key LIKE 'create:%', substr(idempotency_key, 8), idempotency_key)
+      (SELECT iif(substr(idempotency_key, 1, 7) = 'create:', substr(idempotency_key, 8), idempotency_key)
        FROM events WHERE lane_id = lanes.id ORDER BY id LIMIT 1),
       spec_id, lane_key, lane_pos, created_at, updated_at,
       CASE WHEN lease_expires_at IS NULL THEN 'none'
@@ -278,10 +278,9 @@ impl Ledger {
             Ok(v) => v,
             Err(r) => return Ok(Err(r)),
         };
-        let key = match key {
-            Some(k) => Some(create_key(self.conn(), &k)?),
-            None => None,
-        };
+        // Read before the write lock: only a binary from before the prefix
+        // could store the bare key in between.
+        let key = key.map(|k| create_key(self.conn(), &k)).transpose()?;
         let (applied, item) = self.apply_planned(
             actor,
             key.as_deref(),
@@ -1335,6 +1334,10 @@ fn create_payload(input: &CreateInput) -> Result<(Payload, Option<String>), Refu
     let key = trimmed(&input.idempotency_key);
     if key.as_ref().is_some_and(|k| k.len() > 200) {
         return invalid("idempotency_key is longer than 200 characters".into());
+    }
+    // `create:k` would answer for the lane stored under the key `k`.
+    if key.as_ref().is_some_and(|k| k.starts_with("create:")) {
+        return invalid("idempotency_key cannot start with 'create:'".into());
     }
     let payload = Payload {
         title: Some(title.into()),
