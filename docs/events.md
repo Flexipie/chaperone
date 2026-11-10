@@ -23,7 +23,7 @@ One row in `events`. The log is the truth. Every other table is a fold of it. Th
 | `spec_id` | integer, nullable | Null for a lane created without `--spec`. |
 | `actor` | `{agent, session, tool}` | From `--agent` / `--session` (or `DAISY_AGENT` / `DAISY_SESSION`). `tool` is always `chaperone`. |
 | `idempotency_key` | text, nullable, unique | The same key returns the existing row and appends nothing (by key and kind, never the payload). A key already used by another kind is `invalid_input`. |
-| `at` | RFC 3339 UTC, ms | Passed in, or for a CLI command read once the write lock is held, so an event is not timed before one that committed while it waited (as long as the wall clock does not step back). |
+| `at` | RFC 3339 UTC, ms | Passed in, or for a CLI command read once the write lock is held and moved to 1 ms past the newest event's `at` when the clock is not later (two commits in one millisecond, or a wall clock that stepped back). So clock-timed events are strictly ordered by `at`, each lane's `updated_at` only goes up, and a write between a read and its `--expected-updated-at` always shows. |
 | `payload` | JSON object | Typed per kind, below. |
 
 ## Write rules
@@ -37,14 +37,16 @@ These rules keep every write small, single and fail-closed.
   whole events, and the next report adds the rest.
 - **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
   `gate.denied` and nothing else. Its key is
-  `deny:<lane_id>:<transition>:<gate>:<id of the lane's latest event that is not a gate.denied, usage.reported, pr.merged or attention.recorded>`,
-  so a retry with no new facts replays the same denial instead of appending again. A
+  `deny:<lane_id>:<transition>:<to>:<gate>:<head_sha, or - for none>:<id of the lane's latest event that is not a gate.denied, usage.reported, pr.merged or attention.recorded>`,
+  so a retry of the same target and commit with no new facts replays the same denial instead of appending again, and the same command on another commit appends its own. A
   replayed denial still exits 1 with `gate_denied`.
 - **Lane commands other than `work ready` bump `updated_at`.** `gate.denied`, `check.*`,
   `finding.updated`, `lane.ready_overridden`, `usage.reported`, `pr.merged` and `attention.recorded` do not touch the lane row's `updated_at`, so a subagent
   recording a check never makes the lane's next `--expected-updated-at` stale.
 - **Replays.** A retry with the same key and kind returns the stored event, even if the new
-  payload differs. Commands that take no `--idempotency-key` derive one: `check record`
+  payload differs. `work create` stores its `--idempotency-key` as `create:<key>` and shows it without the prefix, so a
+  caller's key can never take a derived key below and block that write; a create stored under the bare key by an older
+  binary still replays under it. Commands that take no `--idempotency-key` derive one: `check record`
   uses `check:` plus the sha256 of the lane id, its canonical payload and the id of the lane's newest
   `check.finished` for that check with a different payload (so a retry replays unless another session recorded the same check since, and a
   result that flips back, such as no, yes, no, appends), and `reviews record` uses
