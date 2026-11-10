@@ -1,13 +1,13 @@
-//! `review::run`'s lenses against the scripted agent, linked as both
-//! `claude` and `codex`.
+//! `review::run`'s lenses and `review::verify` against the scripted
+//! agent, linked as both `claude` and `codex`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chaperone_core::git::ChangedFile;
 use chaperone_core::ledger::Evidence;
 use chaperone_core::pipeline::Pipeline;
-use chaperone_core::review::{self, Agents, DIFF_BYTES, Facts, Review};
+use chaperone_core::review::{self, Agents, DIFF_BYTES, Facts, Lens, Review, Ruling};
 use chaperone_core::runner::Agent;
 use serde_json::{Value, json};
 
@@ -21,6 +21,7 @@ checks.review_correctness = { runner = "lens", prompt = "correctness.md" }
 checks.review_design_tests = { runner = "lens", prompt = "design_tests.md" }
 checks.review_intent = { runner = "lens", prompt = "intent.md" }
 checks.review_codex = { runner = "second", prompt = "codex.md" }
+checks.review_verifier = { runner = "lens", prompt = "verifier.md" }
 gate = [{ id = "a", fn = "eq", args = { field = "verdict.decision", value = "yes" } }]
 transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["a"] }]
 "#;
@@ -29,6 +30,7 @@ const PROMPTS: &[(&str, &str)] = &[
     ("design_tests.md", "LENS design_tests"),
     ("intent.md", "LENS intent"),
     ("codex.md", "LENS codex"),
+    ("verifier.md", "LENS verifier"),
 ];
 
 /// A result as Claude Code prints it, less the fields not read.
@@ -42,11 +44,19 @@ fn found(severity: &str, title: &str) -> Value {
     json!({"severity": severity, "title": title, "body": "why", "path": "src/a.rs", "line": null})
 }
 
-/// The lenses run with `claude` and `codex` scripts in a new directory,
-/// in its `checkout`, on a diff of `diff_bytes`, and how long they took.
-fn run(claude: Value, codex: Value, diff_bytes: usize) -> (tempfile::TempDir, Review, Duration) {
+/// The fake as `claude` and `codex` in a new directory with these
+/// scripts, the facts of a diff of `diff_bytes`, and the evidence store
+/// beside a ledger there.
+struct Env {
+    dir: tempfile::TempDir,
+    claude: Agent,
+    codex: Agent,
+    facts: Facts,
+    store: Evidence,
+}
+
+fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
     let dir = tempfile::tempdir().unwrap();
-    let pipeline = Pipeline::load_with_prompts(PIPELINE, PROMPTS).unwrap();
     let agent = |name: &str, runs: Value| {
         let bin = dir.path().join(name);
         std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_chaperone-fake"), &bin).unwrap();
@@ -55,8 +65,7 @@ fn run(claude: Value, codex: Value, diff_bytes: usize) -> (tempfile::TempDir, Re
         Agent::probe(bin, [], Instant::now() + Duration::from_secs(20)).unwrap()
     };
     let (claude, codex) = (agent("claude", claude), agent("codex", codex));
-    let checkout = dir.path().join("checkout");
-    std::fs::create_dir(&checkout).unwrap();
+    std::fs::create_dir(dir.path().join("checkout")).unwrap();
     let file = ChangedFile {
         path: "src/a.rs".into(),
         area: None,
@@ -71,15 +80,43 @@ fn run(claude: Value, codex: Value, diff_bytes: usize) -> (tempfile::TempDir, Re
         diff: "+x\n".repeat(diff_bytes / 3),
         goal: "GOAL add a widget".into(),
     };
-    let agents = Agents {
-        claude: &claude,
-        codex: &codex,
-    };
     let store = Evidence::beside(&dir.path().join("ledger.db"));
+    Env {
+        dir,
+        claude,
+        codex,
+        facts,
+        store,
+    }
+}
+
+impl Env {
+    fn agents(&self) -> Agents<'_> {
+        Agents {
+            claude: &self.claude,
+            codex: &self.codex,
+        }
+    }
+
+    fn checkout(&self) -> PathBuf {
+        self.dir.path().join("checkout")
+    }
+}
+
+fn pipeline() -> Pipeline {
+    Pipeline::load_with_prompts(PIPELINE, PROMPTS).unwrap()
+}
+
+/// The lenses run with `claude` and `codex` scripts, and how long they
+/// took.
+fn run(claude: Value, codex: Value, diff_bytes: usize) -> (Env, Review, Duration) {
+    let env = env(claude, codex, diff_bytes);
+    let pipeline = pipeline();
     let planned = review::lenses(&pipeline).unwrap();
     let started = Instant::now();
-    let review = review::run(&planned, &agents, &checkout, &facts, &store).unwrap();
-    (dir, review, started.elapsed())
+    let (dir, facts) = (env.checkout(), &env.facts);
+    let review = review::run(&planned, &env.agents(), &dir, facts, &env.store).unwrap();
+    (env, review, started.elapsed())
 }
 
 /// Each lens's call, by the lens its prompt names.
@@ -112,7 +149,7 @@ fn every_lens_reviews_the_same_facts() {
     ]);
     let said = json!({"findings": [found("improvement", "i")]}).to_string();
     let codex = json!([{"when": "LENS codex", "sleep_ms": 500, "write": {"-o": said}}]);
-    let (dir, review, took) = run(claude, codex, 2 * DIFF_BYTES);
+    let (env, review, took) = run(claude, codex, 2 * DIFF_BYTES);
     // Four sessions of 500 ms each: one after another would take 2 s.
     assert!(took < Duration::from_millis(1500), "{took:?}");
     let rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
@@ -135,14 +172,13 @@ fn every_lens_reviews_the_same_facts() {
     );
     assert!(review.diff_cut && review.diff_bytes > 2 * DIFF_BYTES - 3);
 
-    let checkout = dir.path().join("checkout").canonicalize().unwrap();
-    let store = Evidence::beside(&dir.path().join("ledger.db"));
+    let checkout = env.checkout().canonicalize().unwrap();
     for (i, cli) in ["claude", "claude", "claude", "codex"]
         .into_iter()
         .enumerate()
     {
         let lens = review.lenses[i].lens;
-        let call = call(dir.path(), cli, lens);
+        let call = call(env.dir.path(), cli, lens);
         let prompt = call["prompt"].as_str().unwrap();
         assert_eq!(Path::new(call["cwd"].as_str().unwrap()), checkout);
         assert_eq!(
@@ -160,7 +196,8 @@ fn every_lens_reviews_the_same_facts() {
             cli == "claude",
             args.contains(r#""--max-budget-usd","1.50""#)
         );
-        let stored = store
+        let stored = env
+            .store
             .get(rows[i]["evidence_ref"].as_str().unwrap())
             .unwrap();
         assert!(stored.starts_with(prompt) && stored.contains("\n--- answer ---\n"));
@@ -208,4 +245,51 @@ fn a_lens_with_no_answer_did_not_run() {
         error.starts_with("unreadable answer: the last message is not JSON"),
         "{error}"
     );
+}
+
+/// The verifier is shown every finding by its key, with the lenses'
+/// facts but not the goal, and rules by key; a ruling on a finding it was
+/// not shown, or a session that fails, rules on nothing.
+#[test]
+fn the_verifier_rules_by_key() {
+    let said = json!({"findings": [found("risk", "a"), found("nit", "b")]});
+    let found = review::findings("correctness", said).unwrap();
+    let (a, b) = (&found[0].finding_key, &found[1].finding_key);
+    let verify = |run: Value| -> (Env, Lens<Vec<Ruling>>) {
+        let env = env(json!([run]), json!([]), 10);
+        let pipeline = pipeline();
+        let p = review::verifier(&pipeline).unwrap();
+        let (dir, facts) = (env.checkout(), &env.facts);
+        let v = review::verify(&p, &env.agents(), &dir, facts, &found, &env.store);
+        (env, v.unwrap())
+    };
+    let ruled = json!({"rulings": [
+        {"key": a, "verdict": "verified", "why": "it reads past the end"},
+        {"key": b, "verdict": "refuted", "why": "the test covers it"},
+    ]});
+    let answer = |said: Value| json!({"when": "LENS verifier", "stdout": result(said)});
+    let (env, v) = verify(answer(ruled.clone()));
+    assert_eq!(json!(v.outcome.unwrap()), ruled["rulings"]);
+    let call = call(env.dir.path(), "claude", "verifier");
+    let prompt = call["prompt"].as_str().unwrap();
+    assert!(!prompt.contains("GOAL") && prompt.contains("```diff\n+x\n"));
+    let line = format!(r#""key":"{a}","lens":"correctness","line":null,"path":"src/a.rs""#);
+    assert!(prompt.contains(&line), "{prompt}");
+    // The schema names the keys it may rule on, and no other.
+    let schema: Value = serde_json::from_str(call["args"][4].as_str().unwrap()).unwrap();
+    let mut keys = [a, b];
+    keys.sort();
+    assert_eq!(
+        schema["properties"]["rulings"]["items"]["properties"]["key"]["enum"],
+        json!(keys)
+    );
+
+    let stray = json!({"rulings": [{"key": "correctness-0", "verdict": "verified", "why": "w"}]});
+    let error = verify(answer(stray)).1.outcome.unwrap_err();
+    assert!(
+        error.starts_with(r#"a ruling on "correctness-0""#),
+        "{error}"
+    );
+    let failed = verify(json!({"when": "LENS verifier", "exit": 2})).1;
+    assert_eq!(failed.row()["ran"], false);
 }
