@@ -7,19 +7,21 @@
 //! told what the lane says about its own change (its summary, merge case
 //! or what to look at): the author does not steer the review. Then one more
 //! fresh session, the verifier, tries to refute each finding against the
-//! code: triage is its, not the author's.
+//! code: triage is its, not the author's. [`record`] writes what they did.
 
 use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::checks::{BODY_CHARS, FindingMove, Recorded, RunInput};
 use crate::git::ChangedFile;
-use crate::ledger::{Evidence, Finding};
+use crate::ledger::{Actor, Checked, Evidence, Finding, Findings, Ledger, Payload};
 use crate::pipeline::{Check, Cli, Pipeline, Runner};
 use crate::runner::{Agent, Ask, CodexAsk, Run, RunError};
 
@@ -75,6 +77,23 @@ pub fn lenses(pipeline: &Pipeline) -> Result<Vec<Planned<'_>>, String> {
 /// The verifier's check and runner, as [`lenses`] reads a lens's.
 pub fn verifier(pipeline: &Pipeline) -> Result<Planned<'_>, String> {
     planned(pipeline, "verifier", VERIFIER)
+}
+
+/// The sessions a pipeline runs for a review, and its hash: a changed
+/// pipeline (a prompt, a model) is another run.
+pub struct Plan<'a> {
+    pub lenses: Vec<Planned<'a>>,
+    pub verifier: Planned<'a>,
+    pub hash: &'a str,
+}
+
+/// [`lenses`] and [`verifier`] of `pipeline`, or why it cannot review.
+pub fn plan(pipeline: &Pipeline) -> Result<Plan<'_>, String> {
+    Ok(Plan {
+        lenses: lenses(pipeline)?,
+        verifier: verifier(pipeline)?,
+        hash: &pipeline.hash,
+    })
 }
 
 fn planned<'a>(
@@ -219,6 +238,7 @@ pub struct Agents<'a> {
 #[derive(Debug)]
 pub struct Lens<T = Vec<Finding>> {
     pub lens: &'static str,
+    pub cli: Cli,
     pub runner: String,
     pub model: Option<String>,
     /// The pipeline's prompt file's.
@@ -236,6 +256,16 @@ pub struct Review {
     pub lenses: Vec<Lens>,
     pub diff_bytes: usize,
     pub diff_cut: bool,
+}
+
+impl Review {
+    /// The findings of every lens that ran.
+    pub fn found(&self) -> impl Iterator<Item = &Finding> {
+        self.lenses
+            .iter()
+            .filter_map(|l| l.outcome.as_ref().ok())
+            .flatten()
+    }
 }
 
 /// Runs every lens at once in `dir`, the checkout of `facts.head`, each
@@ -326,6 +356,7 @@ fn one<T>(
     let stored = store.put(&format!("{prompt}\n--- answer ---\n{raw}"))?;
     Ok(Lens {
         lens: p.lens,
+        cli: r.cli,
         runner: p.check.runner.clone(),
         model: r.model.clone(),
         prompt_sha256: p.check.prompt_sha256.clone(),
@@ -434,6 +465,146 @@ pub fn verify(
         }
         Ok(said.rulings)
     })
+}
+
+/// `check run review` once the CLI has read the lane, under its run lock:
+/// `input` the lane's commit, `dir` a checkout of it, `facts` what it
+/// changes. First the rulings a crash left unwritten on the lane's newest
+/// review; then, unless a complete review of this commit by this pipeline
+/// replays, the sessions and [`finish`], then one `finding.updated` per
+/// ruling.
+#[allow(clippy::too_many_arguments)]
+pub fn record(
+    ledger: &Ledger,
+    actor: &Actor,
+    mut input: RunInput,
+    plan: &Plan<'_>,
+    agents: &Agents<'_>,
+    dir: &Path,
+    facts: &Facts,
+    store: &Evidence,
+) -> Checked<Recorded> {
+    let newest: Option<(i64, String)> = ledger
+        .conn()
+        .query_row(
+            "SELECT id, payload_json FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = 'review' ORDER BY id DESC LIMIT 1",
+            [input.work],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((id, payload)) = newest {
+        let payload: Payload = serde_json::from_str(&payload).map_err(io::Error::other)?;
+        if let Err(r) = rule(ledger, actor, id, &payload)? {
+            return Ok(Err(r));
+        }
+    }
+    input.check = "review".into();
+    input.profile = Some(plan.hash.into());
+    if let Some(stored) = ledger.run_replay(&ledger.run_key(&input)?)? {
+        return Ok(Ok(stored));
+    }
+    let review = run(&plan.lenses, agents, dir, facts, store)?;
+    let found: Vec<Finding> = review.found().cloned().collect();
+    // Nothing to rule on starts no session.
+    let verifier = match found.is_empty() {
+        true => None,
+        false => Some(verify(&plan.verifier, agents, dir, facts, &found, store)?),
+    };
+    let recorded = match finish(ledger, actor, input, facts, &review, verifier.as_ref())? {
+        Ok(recorded) => recorded,
+        Err(r) => return Ok(Err(r)),
+    };
+    let ruled = rule(ledger, actor, recorded.event_id, &recorded.payload)?;
+    Ok(ruled.map(|()| recorded))
+}
+
+/// Writes what the sessions did: a `usage.reported` for each that left a
+/// session id, first, as they cost whether or not the review is recorded;
+/// then the review's one `check.finished` under `input`'s key. It is
+/// `complete` when every lens ran and the verifier ran or had nothing to
+/// rule on. Finding bodies are cut to daisy's 600 characters; the whole
+/// answer is evidence.
+pub fn finish(
+    ledger: &Ledger,
+    actor: &Actor,
+    mut input: RunInput,
+    facts: &Facts,
+    review: &Review,
+    verifier: Option<&Lens<Vec<Ruling>>>,
+) -> Checked<Recorded> {
+    let lenses = review.lenses.iter();
+    let sessions = lenses.map(|l| (l.lens, l.cli, &l.model, &l.run));
+    let sessions = sessions.chain(verifier.map(|v| (v.lens, v.cli, &v.model, &v.run)));
+    for (lens, cli, model, run) in sessions {
+        let Some(run) = run else { continue };
+        let labels = Map::from_iter([
+            ("phase".into(), json!("review")),
+            ("lens".into(), json!(lens)),
+            ("cli".into(), json!(cli)),
+            ("model".into(), json!(model)),
+        ]);
+        if let Err(r) = ledger.usage_run(actor, input.work, labels, run)? {
+            return Ok(Err(r));
+        }
+    }
+    let complete = review.lenses.iter().all(|l| l.outcome.is_ok())
+        && verifier.is_none_or(|v| v.outcome.is_ok());
+    let mut verified = Value::Null;
+    if let Some(v) = verifier {
+        verified = v.row();
+        if let Ok(rulings) = &v.outcome {
+            verified["rulings"] = json!(rulings);
+        }
+    }
+    let rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
+    input.fields = Map::from_iter([
+        ("base".into(), json!(facts.base)),
+        ("lenses".into(), json!(rows)),
+        ("verifier".into(), verified),
+        ("complete".into(), json!(complete)),
+        ("diff_bytes".into(), json!(review.diff_bytes)),
+        ("diff_cut".into(), json!(review.diff_cut)),
+    ]);
+    let found = review.found().map(|f| Finding {
+        body: f.body.chars().take(BODY_CHARS).collect(),
+        ..f.clone()
+    });
+    input.findings = Some(Findings::List(found.collect()));
+    ledger.check_run(actor, &input)
+}
+
+/// The verifier's rulings stored on review `id`, each a `finding.updated`
+/// with the review's harness producer. A finding no longer open is
+/// skipped: ruled already (a rerun after a crash), or moved by its lane or
+/// the owner since. Its status is read before the write, so a dispute that
+/// lands in between is ruled on, a move the verifier may make.
+fn rule(ledger: &Ledger, actor: &Actor, id: i64, payload: &Payload) -> Checked<()> {
+    let verifier = payload.rest.get("verifier");
+    let rulings = verifier.and_then(|v| v.get("rulings")).cloned();
+    let rulings: Vec<Ruling> =
+        serde_json::from_value(rulings.unwrap_or(json!([]))).map_err(io::Error::other)?;
+    for r in rulings {
+        let open: bool = ledger.conn().query_row(
+            "SELECT status = 'open' FROM findings WHERE check_event_id = ?1 AND finding_key = ?2",
+            params![id, r.key],
+            |row| row.get(0),
+        )?;
+        if !open {
+            continue;
+        }
+        let input = FindingMove {
+            check_event_id: id,
+            finding_key: r.key,
+            status: r.verdict,
+            ..FindingMove::default()
+        };
+        let producer = payload.rest.get("producer");
+        if let Err(refused) = ledger.finding_move(actor, &input, producer, false)? {
+            return Ok(Err(refused));
+        }
+    }
+    Ok(Ok(()))
 }
 
 #[cfg(test)]
