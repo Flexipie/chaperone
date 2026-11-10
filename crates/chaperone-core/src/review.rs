@@ -1,21 +1,25 @@
 //! `check run review`'s lenses: four fresh headless sessions, three Claude
 //! and one Codex, each reviewing the same commit in the harness's checkout
-//! from the same facts. This builds what each lens is asked and reads what
-//! it answers: an answer outside the schema is none, never "no findings".
+//! from the same facts, at once. A lens that errors, hits its budget or
+//! answers outside the schema did not run: it never reads as "no findings".
 //!
 //! Only the intent lens is told what the change is for, and no lens is
 //! told what the lane says about its own change (its summary, merge case
 //! or what to look at): the author does not steer the review.
 
 use std::collections::BTreeSet;
+use std::io;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::git::ChangedFile;
-use crate::ledger::Finding;
+use crate::ledger::{Evidence, Finding};
 use crate::pipeline::{Check, Cli, Pipeline, Runner};
+use crate::runner::{Agent, Ask, CodexAsk, Run, RunError};
 
 /// The lenses, each the pipeline's check `review_<lens>`.
 pub const LENSES: [&str; 4] = ["correctness", "design_tests", "intent", "codex"];
@@ -189,6 +193,151 @@ pub fn findings(lens: &str, output: Value) -> Result<Vec<Finding>, String> {
         });
     }
     Ok(out)
+}
+
+pub struct Agents<'a> {
+    pub claude: &'a Agent,
+    pub codex: &'a Agent,
+}
+
+/// What one lens did.
+#[derive(Debug)]
+pub struct Lens {
+    pub lens: &'static str,
+    pub runner: String,
+    pub model: Option<String>,
+    /// The pipeline's prompt file's.
+    pub prompt_sha256: String,
+    /// The prompt the session was given, then the CLI's whole answer.
+    pub evidence_ref: String,
+    /// The findings, or why the lens did not run.
+    pub outcome: Result<Vec<Finding>, String>,
+    /// What the session left, which still cost when it failed; none when
+    /// it never answered.
+    pub run: Option<Run>,
+}
+
+pub struct Review {
+    pub lenses: Vec<Lens>,
+    pub diff_bytes: usize,
+    pub diff_cut: bool,
+}
+
+/// Runs every lens at once in `dir`, the checkout of `facts.head`, each
+/// under its runner's model, tools, budget and timeout, and stores each
+/// one's prompt and answer in `store`. Fails only when the store does: a
+/// lens's own failure is its outcome.
+pub fn run(
+    planned: &[Planned<'_>],
+    agents: &Agents<'_>,
+    dir: &Path,
+    facts: &Facts,
+    store: &Evidence,
+) -> io::Result<Review> {
+    let (change, diff_cut) = change(facts);
+    let schema = schema();
+    let lenses = std::thread::scope(|s| {
+        let threads: Vec<_> = planned
+            .iter()
+            .map(|p| {
+                let prompt = prompt(p, &facts.goal, &change);
+                let schema = &schema;
+                s.spawn(move || one(p, agents, dir, prompt, schema, store))
+            })
+            .collect();
+        threads
+            .into_iter()
+            .map(|t| {
+                t.join()
+                    .unwrap_or_else(|_| Err(io::Error::other("a lens panicked")))
+            })
+            .collect::<io::Result<_>>()
+    })?;
+    Ok(Review {
+        lenses,
+        diff_bytes: facts.diff.len(),
+        diff_cut,
+    })
+}
+
+fn one(
+    p: &Planned<'_>,
+    agents: &Agents<'_>,
+    dir: &Path,
+    prompt: String,
+    schema: &Value,
+    store: &Evidence,
+) -> io::Result<Lens> {
+    let r = p.runner;
+    let deadline = Instant::now() + Duration::from_secs(r.timeout_secs as u64);
+    let model = r.model.as_deref();
+    let answer = match r.cli {
+        Cli::Claude => {
+            let tools: Vec<&str> = r.tools.iter().map(String::as_str).collect();
+            let ask = Ask {
+                prompt: &prompt,
+                schema,
+                // `lenses` refused a Claude runner with none.
+                model: model.unwrap_or_default(),
+                tools: &tools,
+                dir,
+                budget_cents: u32::try_from(r.budget_cents).unwrap_or(u32::MAX),
+            };
+            agents.claude.claude(&ask, deadline)
+        }
+        Cli::Codex => {
+            let ask = CodexAsk {
+                prompt: &prompt,
+                schema,
+                model,
+                dir,
+            };
+            agents.codex.codex(&ask, deadline)
+        }
+    };
+    let (outcome, run) = match answer {
+        Ok(a) => (findings(p.lens, a.output), Some(a.run)),
+        Err(e) => {
+            let why = Err(e.to_string());
+            match e {
+                RunError::Failed { run, .. } => (why, Some(*run)),
+                _ => (why, None),
+            }
+        }
+    };
+    let raw = run.as_ref().map_or("", |r| r.raw.as_str());
+    let stored = store.put(&format!("{prompt}\n--- answer ---\n{raw}"))?;
+    Ok(Lens {
+        lens: p.lens,
+        runner: p.check.runner.clone(),
+        model: r.model.clone(),
+        prompt_sha256: p.check.prompt_sha256.clone(),
+        evidence_ref: stored.hash,
+        outcome,
+        run,
+    })
+}
+
+impl Lens {
+    /// The lens's row in the review's `lenses` table.
+    pub fn row(&self) -> Value {
+        let mut row = json!({
+            "lens": self.lens,
+            "ran": self.outcome.is_ok(),
+            "findings": self.outcome.as_ref().map_or(0, Vec::len),
+            "runner": self.runner,
+            "model": self.model,
+            "prompt_sha256": self.prompt_sha256,
+            "evidence_ref": self.evidence_ref,
+        });
+        if let Err(e) = &self.outcome {
+            row["error"] = json!(e);
+        }
+        if let Some(cost) = self.run.as_ref().and_then(|r| r.cost_usd) {
+            row["cost_usd"] = json!(cost);
+        }
+        row
+    }
 }
 
 #[cfg(test)]
