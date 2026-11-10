@@ -27,7 +27,7 @@ use crate::ledger::{
     Actor, Applied, Change, Checked, Event, EventKind, Ledger, LedgerError, MAX_LEASE_SECS,
     MIN_LEASE_SECS, Mutation, Payload, Refusal, SOURCES, STATUSES, has_held, lease_held,
 };
-use crate::pipeline::Phase;
+use crate::pipeline::{Phase, sha_prefix_eq};
 
 const ENTITY: &str = "work item";
 /// The M1 gated transition (pipelines/v19.toml).
@@ -572,16 +572,40 @@ impl Ledger {
     /// the holder), and its first blocker, `next_action`, PR and commit
     /// applied to the item. One `lane.handed_off`, or for a ready or done
     /// handoff the gated `phase.entered` (or `gate.denied`).
+    ///
+    /// `observed_head` is the commit the caller read in the lane's worktree
+    /// just before this write (the ledger makes no git call): the tip of
+    /// the lane's branch, or `HEAD` when the item names none or the
+    /// worktree does not have it. A handoff that enters
+    /// ready must name it as its `commit`, so the checks on that commit are
+    /// checks on what the branch holds. A handoff to `done` is not checked
+    /// (the branch may have moved on after the merge), and neither is None:
+    /// the worktree is gone, or the caller has none to read.
     pub fn work_handoff(
         &self,
         actor: &Actor,
         id: i64,
         input: &HandoffInput,
+        observed_head: Option<&str>,
         at: Option<&str>,
         dry_run: bool,
     ) -> Checked<Handoff> {
         if let Err(r) = input.validate() {
             return Ok(Err(r));
+        }
+        if let (true, Some(head)) = (input.enters_ready(), observed_head) {
+            let said = match input.commit.as_deref() {
+                Some(c) if sha_prefix_eq(c, head, 7..=64, false) => None,
+                Some(c) => Some(format!("says '{c}'")),
+                None => Some("names no commit".into()),
+            };
+            if let Some(said) = said {
+                return Ok(Err(Refusal::InvalidInput(format!(
+                    "a ready handoff names the commit the lane is on: that is {head}, the \
+                     handoff {said}; record the checks on {head} and hand it off, or check \
+                     out the commit that was checked"
+                ))));
+            }
         }
         let stored = serde_json::to_value(input).map_err(std::io::Error::other)?;
         let (applied, _) = self.apply_planned(
@@ -628,7 +652,7 @@ impl Ledger {
                 // Ready and done are gated (cli-contract.md, commands and
                 // transitions); a needs-you or progress handoff is not.
                 let done = input.status.as_deref() == Some("done");
-                if done || input.ready == Some(true) {
+                if done || input.enters_ready() {
                     let to = if done { Phase::Done } else { Phase::Ready };
                     let status = input.status.as_deref().unwrap_or(&item.status);
                     let head = input.commit.clone();
@@ -1579,7 +1603,7 @@ mod tests {
                 ..HandoffInput::default()
             };
             ledger
-                .work_handoff(&a, id, &input, Some(T1), false)
+                .work_handoff(&a, id, &input, None, Some(T1), false)
                 .unwrap()
         };
         // An empty `areas` would read as declaring nothing, which a

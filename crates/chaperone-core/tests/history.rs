@@ -57,7 +57,7 @@ fn lane(ledger: &Ledger, repo: &str, claimed: Option<&str>, summaries: &[&str]) 
             ..HandoffInput::default()
         };
         ledger
-            .work_handoff(&a, id, &handoff, None, false)
+            .work_handoff(&a, id, &handoff, None, None, false)
             .unwrap()
             .unwrap();
     }

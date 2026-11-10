@@ -77,10 +77,14 @@ pub fn git(
     })?;
     if !done.status.success() {
         let err = String::from_utf8_lossy(&done.err);
-        if ["unknown revision", "bad revision", "Invalid revision range"]
-            .iter()
-            .any(|m| err.contains(m))
-        {
+        // The last is `rev-parse --verify`'s.
+        let missing = [
+            "unknown revision",
+            "bad revision",
+            "Invalid revision range",
+            "Needed a single revision",
+        ];
+        if missing.iter().any(|m| err.contains(m)) {
             return Err(Failure::BadRevision);
         }
         // The fatal line is last; warnings come before it.
@@ -162,16 +166,27 @@ pub fn commit_files(
     numstat(bin, wt, base_sha, Some(rev), deadline, cap)
 }
 
-/// The commit `wt`'s `HEAD` is at, as a full sha. A repository with no
-/// commit yet fails with git's own line.
-pub fn head(bin: &Path, wt: &Path, deadline: Instant) -> Result<String, String> {
-    let args = ["rev-parse", "--verify", "HEAD^{commit}"];
-    match git(bin, wt, &args, deadline, 4096) {
-        Ok((out, _)) => Ok(String::from_utf8_lossy(&out).trim().to_string()),
-        Err(Failure::TimedOut) => Err("git rev-parse: timed out".into()),
-        Err(Failure::BadRevision) => Err("git rev-parse: no HEAD commit".into()),
+/// The commit `rev` names in `wt`, as a full sha; None when `wt` has no
+/// such revision. `rev` is passed as it is: give a full ref name or `HEAD`.
+pub fn commit(
+    bin: &Path,
+    wt: &Path,
+    rev: &str,
+    deadline: Instant,
+) -> Result<Option<String>, String> {
+    let rev = format!("{rev}^{{commit}}");
+    match git(bin, wt, &["rev-parse", "--verify", &rev], deadline, 4096) {
+        Ok((out, _)) => Ok(Some(String::from_utf8_lossy(&out).trim().to_string())),
+        Err(Failure::BadRevision) => Ok(None),
+        Err(Failure::TimedOut) => Err("git rev-parse: timed out, retry".into()),
         Err(Failure::Other(e)) => Err(e),
     }
+}
+
+/// The commit `wt`'s `HEAD` is at, as a full sha. A repository with no
+/// commit yet fails.
+pub fn head(bin: &Path, wt: &Path, deadline: Instant) -> Result<String, String> {
+    commit(bin, wt, "HEAD", deadline)?.ok_or_else(|| "git rev-parse: no HEAD commit".into())
 }
 
 /// One call's whole output, None for a revision this clone lacks. Output

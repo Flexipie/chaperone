@@ -372,7 +372,7 @@ mod tests {
                     }),
                     ..HandoffInput::default()
                 };
-                rw.work_handoff(&me, id, &handoff, None, false)
+                rw.work_handoff(&me, id, &handoff, None, None, false)
                     .unwrap()
                     .unwrap();
             }
