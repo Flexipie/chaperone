@@ -203,6 +203,7 @@ fn checks(
             runner: c.runner,
             prompt_sha256: format!("{:x}", Sha256::digest(text)),
             prompt: c.prompt,
+            text: text.to_string(),
         };
         checks.insert(name, check);
     }
