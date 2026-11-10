@@ -395,6 +395,12 @@ dependencies = [
 [[package]]
 name = "chaperone-fake"
 version = "0.1.0"
+dependencies = [
+ "chaperone-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "chaperone-graph"
