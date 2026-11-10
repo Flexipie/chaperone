@@ -62,6 +62,8 @@ const TOKENS: &[Token] = &[
     ("xoxs-", 10, dashed, "slack_token"),
     ("sk-ant-", 20, dashed, "api_key"),
     ("sk-proj-", 20, dashed, "api_key"),
+    ("sk-svcacct-", 20, dashed, "api_key"),
+    ("sk-admin-", 20, dashed, "api_key"),
     ("glpat-", 20, dashed, "gitlab_token"),
 ];
 
@@ -74,7 +76,9 @@ const SECRET_NAMES: &[&str] = &[
     "API_KEY",
     "APIKEY",
     "ACCESS_KEY",
+    "ACCESSKEY",
     "SECRET_KEY",
+    "SECRETKEY",
 ];
 
 const REDACTED: &str = "[redacted:";
@@ -161,8 +165,8 @@ fn redact(s: &str) -> (String, Vec<&'static str>) {
     let (mut i, mut copied) = (0, 0);
     while i < s.len() {
         match hit(s, &ends, i) {
-            // Matches start and end on ASCII bytes, so the slices are on
-            // char boundaries.
+            // Matches start and end on, or right after, an ASCII byte, so
+            // the slices are on char boundaries.
             Some((start, end, kind)) => {
                 out.push_str(&s[copied..start]);
                 out.push_str(REDACTED);
@@ -235,24 +239,27 @@ fn hit(s: &str, ends: &[usize], i: usize) -> Option<(usize, usize, &'static str)
 }
 
 /// `scheme://user:password@host`, the authority starting at `from`: the
-/// password. A port (`host:8080/`) has no `@` before the path, and a
-/// password that is a reference (`${VAR}`) or already redacted is kept.
+/// user and the password, since either may be the token. A port
+/// (`host:8080/`) has no `@` before the path. Kept: a user alone (`git@`;
+/// a token there is its own pattern's), a password that is a reference
+/// (`${VAR}`), and credentials already redacted.
 fn url_password(s: &str, from: usize) -> Option<(usize, usize, &'static str)> {
     let authority = run(s.as_bytes(), from, |c| {
-        !c.is_ascii_whitespace() && !b"/?#\"'<>\\".contains(&c)
+        !c.is_ascii_whitespace() && !b"/?#\"'<>\\`)|".contains(&c)
     });
     let at = from + s[from..from + authority].rfind('@')?;
-    let start = from + s[from..at].find(':')? + 1;
-    let password = &s[start..at];
-    let kept = password.is_empty() || [REDACTED, "${"].iter().any(|p| password.starts_with(p));
-    (!kept).then_some((start, at, "url_credentials"))
+    let userinfo = &s[from..at];
+    let password = &userinfo[userinfo.find(':')? + 1..];
+    let kept = password.is_empty() || password.starts_with("${") || userinfo.contains(REDACTED);
+    (!kept).then_some((from, at, "url_credentials"))
 }
 
 /// `NAME_TOKEN=value`, `"API_KEY": "value"`, `API_KEY := value`,
 /// `API_KEY: &str = "value"`: the value side, when the name ends in one of
 /// [`SECRET_NAMES`] and `b[sep]` is `=` or `:`. A name with a lower-case
-/// letter and a bare `:` is prose as often as not (`the token: a word`), so
-/// it needs more: an underscore, a quoted name or a quoted value.
+/// letter and a bare `:` is prose or a declaration as often as not (`the
+/// token: a word`, `api_key: String`), so it needs a quoted name or a
+/// quoted value.
 fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'static str)> {
     let b = s.as_bytes();
     let mut j = sep;
@@ -275,7 +282,8 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
     let name = &s[name_start..j];
     let ends_in =
         |n: &&str| name.len() >= n.len() && name[name.len() - n.len()..].eq_ignore_ascii_case(n);
-    if !SECRET_NAMES.iter().any(ends_in) {
+    // A marker's own kind (`[redacted:github_token]:`) is no name.
+    if !SECRET_NAMES.iter().any(ends_in) || s[..name_start].ends_with(REDACTED) {
         return None;
     }
     // `a_token == b`, `token => ...`: a comparison or an arrow, no value.
@@ -285,7 +293,6 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
     let weak = b[sep] == b':'
         && b.get(sep + 1) != Some(&b'=')
         && !name_quoted
-        && !name.contains('_')
         && name.bytes().any(|c| c.is_ascii_lowercase());
     let mut at = sep + 1;
     if b[sep] == b':' {
@@ -329,13 +336,20 @@ fn assignment(s: &str, ends: &[usize], sep: usize) -> Option<(usize, usize, &'st
     }
     start += usize::from(escaped) + usize::from(quote.is_some());
     let rest = &s[start..];
-    // Already redacted, a reference to a secret (`${{ secrets.X }}`), or
-    // another pattern that starts here and redacts more than the first word
+    // Already redacted, a reference to a secret (`${{ secrets.X }}`, `$PW`,
+    // `$(pass show x)`), or another pattern that starts here and redacts more than the first word
     // (`Bearer ` always, so a redacted bearer stays as it is). Checked before
     // the value is read, so a long line stays linear.
-    if [REDACTED, "${", "Bearer "]
-        .iter()
-        .any(|p| rest.starts_with(p))
+    // `$NAME` is upper case and whole, so a password that starts with `$`
+    // (`$uperSecret`, `$2b$...`) is still a value.
+    let reference = rest.strip_prefix('$').is_some_and(|name| {
+        let n = run(name.as_bytes(), 0, |c| upper(c) || c == b'_');
+        let next = name.as_bytes().get(n).copied();
+        matches!(name.as_bytes().first(), Some(b'(' | b'{'))
+            || n > 0 && !next.is_some_and(|c| word(c) || c == b'$')
+    });
+    if reference
+        || [REDACTED, "Bearer "].iter().any(|p| rest.starts_with(p))
         || hit(s, ends, start).is_some()
     {
         return None;
@@ -580,11 +594,11 @@ mod tests {
                 "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG DJANGO_SECRET_KEY: x1".into(),
                 "AWS_SECRET_ACCESS_KEY=[redacted:assignment] DJANGO_SECRET_KEY: [redacted:assignment]",
             ),
-            // Lower and mixed case: `=` always; a bare `:` with an
-            // underscore, a quoted name or a quoted value.
+            // Lower and mixed case: `=` always; a bare `:` with a quoted
+            // name or a quoted value.
             (
-                "password=hunter2 github_token=abc db_password: s3cret".into(),
-                "password=[redacted:assignment] github_token=[redacted:assignment] db_password: [redacted:assignment]",
+                "password=hunter2 github_token=abc secretAccessKey=x".into(),
+                "password=[redacted:assignment] github_token=[redacted:assignment] secretAccessKey=[redacted:assignment]",
             ),
             (
                 r#"{"password": "hunter2"} accessToken: "abc" token := v"#.into(),
@@ -596,11 +610,29 @@ mod tests {
             ),
             (
                 "git clone https://x-access-token:s3cr3t@github.com/o/r.git".into(),
-                "git clone https://x-access-token:[redacted:url_credentials]@github.com/o/r.git",
+                "git clone https://[redacted:url_credentials]@github.com/o/r.git",
             ),
             (
                 "postgres://app:p@ss:w0rd@db:5432/x".into(),
-                "postgres://app:[redacted:url_credentials]@db:5432/x",
+                "postgres://[redacted:url_credentials]@db:5432/x",
+            ),
+            // A token as the URL's user, with and without a password, and
+            // one before a colon: redacted once, and stable after.
+            (
+                format!("https://ghp_{t20}:x-oauth-basic@github.com/o/r"),
+                "https://[redacted:url_credentials]@github.com/o/r",
+            ),
+            (
+                format!("https://ghp_{t20}@github.com/o/r"),
+                "https://[redacted:github_token]@github.com/o/r",
+            ),
+            (
+                "PASSWORD=$uperSecret PASSWORD=$2b$10$abc TOKEN=$PWd".into(),
+                "PASSWORD=[redacted:assignment] PASSWORD=[redacted:assignment] TOKEN=[redacted:assignment]",
+            ),
+            (
+                format!("curl -u ghp_{t20}:x sk-svcacct-{t20} sk-admin-{t20}"),
+                "curl -u [redacted:github_token]:x [redacted:api_key] [redacted:api_key]",
             ),
         ];
         for (text, want) in cases {
@@ -642,6 +674,11 @@ mod tests {
             // A port, a user with no password, a reference, an `@` in the path.
             "http://localhost:8080/a ssh://git@github.com/o/r https://h:1/a@b",
             "https://user:${PASSWORD}@host https://user:@host",
+            "http://user@host:8080/ http://[::1]:8080/ `http://localhost:3000`@me",
+            "_sk-0123456789abcdef0123456789abcdef",
+            // A declaration or a list item, not an assignment.
+            "pub api_key: String, fn new(secret_key: &str) - db_password: the one",
+            "--password=$PW --token=$(pass show gh) TOKEN=${X}",
             "API_KEY::new()",
             "API_KEY=",
             "= : leading separators",

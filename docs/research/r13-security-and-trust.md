@@ -72,10 +72,10 @@ The redactor replaces matches with `[redacted:<kind>]` and records the count. Pa
 - An AWS access key id: `AKIA` plus 16 uppercase alphanumerics.
 - A Slack token: `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-`, `xoxs-` plus 10 or more token characters.
 - `Bearer` followed by 20 or more token characters.
-- `sk-ant-` and `sk-proj-` plus 20 or more token characters, and a bare `sk-` plus 32 or more letters and digits at the start of a word (so `task-<hash>` is kept).
+- `sk-ant-`, `sk-proj-`, `sk-svcacct-` and `sk-admin-` plus 20 or more token characters, and a bare `sk-` plus 32 or more letters and digits at the start of a word (so `task-<hash>` is kept).
 - A GitLab token: `glpat-` plus 20 or more token characters.
-- The password in a URL's credentials, `scheme://user:password@host`. A port, a user with no password and a `${...}` reference are kept.
-- The value side of an assignment whose name ends in `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `APIKEY`, `ACCESS_KEY` or `SECRET_KEY`, in any case (`AWS_SECRET_ACCESS_KEY=`, `db_password=`, `apiKey=`). A comparison (`==`) and an arrow (`=>`) are not assignments. A name with a lower-case letter followed by a bare `:` is prose as often as not (`the token: a word`), so it matches only with an underscore in the name, a quoted name or a quoted value; an unquoted `password: hunter2` is an accepted miss.
+- A URL's credentials, `scheme://user:password@host`: the user and the password both go, since either may be the token, so the stored form loses the user. A port, a user with no password (`git@`; a token there is its own pattern's) and a `${...}` reference are kept.
+- The value side of an assignment whose name ends in `TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `APIKEY`, `ACCESS_KEY`, `ACCESSKEY`, `SECRET_KEY` or `SECRETKEY`, in any case (`AWS_SECRET_ACCESS_KEY=`, `db_password=`, `apiKey=`). A comparison (`==`) and an arrow (`=>`) are not assignments, and a value that is a reference (an upper-case `$PW`, `${X}`, `$(cmd)`) is kept. A name with a lower-case letter followed by a bare `:` is prose or a declaration as often as not (`the token: a word`, `api_key: String`), so it matches only with a quoted name or a quoted value; an unquoted `password: hunter2` or `db_password: s3cret` is an accepted miss.
 
 A novel token format that matches none of these is an accepted miss. The redactor does not scan the git history of the worktree. Redaction happens before the idempotency key and before the evidence hash, so a retry hits the same redacted bytes and does not insert a second row.
 
