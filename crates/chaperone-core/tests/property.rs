@@ -109,6 +109,30 @@ enum Op {
         lane: u8,
         who: u8,
     },
+    /// Every stamp v19's ready and done gates read, on one commit.
+    Stamp {
+        lane: u8,
+        who: u8,
+        sha: u8,
+    },
+    Handoff {
+        lane: u8,
+        who: u8,
+        ready: bool,
+    },
+    /// The gated handoff: `phase.entered`, or the `gate.denied` the write
+    /// appends in its place.
+    Phase {
+        lane: u8,
+        who: u8,
+        done: bool,
+        sha: u8,
+    },
+    Merged {
+        lane: u8,
+        who: u8,
+        pr: u8,
+    },
     Advance {
         secs: i64,
     },
@@ -162,7 +186,22 @@ fn op() -> impl Strategy<Value = Op> {
                 review
             }),
         (0u8..5, who.clone()).prop_map(|(lane, who)| Op::FindingUpdate { lane, who }),
-        (0u8..5, who).prop_map(|(lane, who)| Op::Ready { lane, who }),
+        (0u8..5, who.clone()).prop_map(|(lane, who)| Op::Ready { lane, who }),
+        (0u8..5, who.clone(), 0u8..2).prop_map(|(lane, who, sha)| Op::Stamp { lane, who, sha }),
+        (0u8..5, who.clone(), any::<bool>()).prop_map(|(lane, who, ready)| Op::Handoff {
+            lane,
+            who,
+            ready
+        }),
+        (0u8..5, who.clone(), any::<bool>(), 0u8..2).prop_map(|(lane, who, done, sha)| {
+            Op::Phase {
+                lane,
+                who,
+                done,
+                sha,
+            }
+        }),
+        (0u8..5, who, 0u8..3).prop_map(|(lane, who, pr)| Op::Merged { lane, who, pr }),
         prop_oneof![Just(5), Just(120), Just(1000)].prop_map(|secs| Op::Advance { secs }),
     ]
 }
@@ -177,6 +216,31 @@ fn actor(who: u8) -> Actor {
         agent: Some(format!("a{who}")),
         session: Some(format!("s{who}")),
     }
+}
+
+/// One `check.finished` per stamp of [`Op::Stamp`].
+fn stamps(lane: i64, sha: u8) -> Vec<Mutation> {
+    [
+        ("plan_check", "ran", json!({})),
+        ("quality_gate", "ran", json!({})),
+        ("merge_verdict", "ran", json!({"decision": "yes"})),
+        ("smoke", "ran", json!({})),
+        ("kept_tests", "skipped", json!({"reason": "none"})),
+    ]
+    .into_iter()
+    .map(|(check, outcome, rest)| Mutation::Event {
+        kind: EventKind::CheckFinished,
+        lane_id: Some(lane),
+        spec_id: None,
+        payload: Payload {
+            check: Some(check.into()),
+            outcome: Some(outcome.into()),
+            head_sha: Some(format!("abc123{sha}")),
+            rest: serde_json::from_value(rest).unwrap(),
+            ..Payload::default()
+        },
+    })
+    .collect()
 }
 
 struct World {
@@ -198,6 +262,48 @@ impl World {
             db,
             secs: 0,
         }
+    }
+
+    /// An empty ledger, or with `ready` one whose lane 1 is claimed by
+    /// actor 1, stamped on commit 0, denied on commit 1 and then ready. A
+    /// gate that passes is rare at random, so half the cases start here.
+    fn start(ready: bool) -> Self {
+        use EventKind::*;
+        let mut w = Self::new();
+        let (lane, who, sha, done) = (0, 1, 0, false);
+        let claim = Op::Claim {
+            lane,
+            who,
+            secs: 900,
+            stale: false,
+            takeover: false,
+        };
+        let other = Op::Phase {
+            lane,
+            who,
+            done,
+            sha: 1,
+        };
+        let phase = Op::Phase {
+            lane,
+            who,
+            done,
+            sha,
+        };
+        let ops = [
+            (Op::CreateLane { spec: None, key: 1 }, LaneCreated),
+            (claim, LaneClaimed),
+            (Op::Stamp { lane, who, sha }, CheckFinished),
+            (other, GateDenied),
+            (phase, PhaseEntered),
+        ];
+        for (op, kind) in ops.into_iter().filter(|_| ready) {
+            let Some(Applied::Committed(event)) = w.apply(&op, None) else {
+                panic!("{op:?} did not commit");
+            };
+            assert_eq!(event.kind, kind, "{op:?}");
+        }
+        w
     }
 
     fn at(&self) -> String {
@@ -485,6 +591,84 @@ impl World {
                     ),
                 )
             }
+            // `apply` writes its stamps.
+            Op::Stamp { .. } => return None,
+            Op::Handoff { lane, who, ready } => (
+                actor(who),
+                event(
+                    EventKind::LaneHandedOff,
+                    Some(self.lane(lane)),
+                    None,
+                    Payload {
+                        // A ready one is refused: only the gate says ready.
+                        rest: [(
+                            "handoff".to_string(),
+                            json!({"summary": "s", "ready": ready}),
+                        )]
+                        .into_iter()
+                        .collect(),
+                        ..Payload::default()
+                    },
+                ),
+            ),
+            Op::Phase {
+                lane,
+                who,
+                done,
+                sha,
+            } => {
+                let id = self.lane(lane);
+                let status = if done { "done" } else { "review" };
+                let mut sets = vec![("status", json!(status))];
+                if done && self.lane_value(id, "session") != Value::Null {
+                    sets.extend([("agent", Value::Null), ("session", Value::Null)]);
+                }
+                let mut changed = self.change(id, &sets, false);
+                changed.retain(|_, c| c.from != c.to);
+                (
+                    actor(who),
+                    event(
+                        EventKind::PhaseEntered,
+                        Some(id),
+                        None,
+                        Payload {
+                            changed,
+                            transition: Some("handoff".into()),
+                            to: Some(if done { "done" } else { "ready" }.into()),
+                            status: Some(status.into()),
+                            // As `work handoff` sends it; done is `work
+                            // update --status done`'s, which has none.
+                            rest: match done {
+                                true => Default::default(),
+                                false => [(
+                                    "handoff".to_string(),
+                                    json!({"summary": "s", "ready": true}),
+                                )]
+                                .into_iter()
+                                .collect(),
+                            },
+                            head_sha: Some(format!("abc123{sha}")),
+                            ..Payload::default()
+                        },
+                    ),
+                )
+            }
+            Op::Merged { lane, who, pr } => (
+                actor(who + 10),
+                event(
+                    EventKind::PrMerged,
+                    Some(self.lane(lane)),
+                    None,
+                    Payload {
+                        head_sha: Some("abc1230".into()),
+                        rest: serde_json::from_value(json!({
+                            "pr": format!("o/r#{pr}"), "merge_sha": "fedcba9", "merged_at": self.at(),
+                        }))
+                        .unwrap(),
+                        ..Payload::default()
+                    },
+                ),
+            ),
             Op::Ready { lane, who } => (
                 actor(who + 20),
                 event(
@@ -501,6 +685,15 @@ impl World {
     }
 
     fn apply(&mut self, op: &Op, key: Option<u8>) -> Option<Applied> {
+        if let Op::Stamp { lane, who, sha } = *op {
+            // The five differ only in the check, and a check from a session
+            // that never claims is refused only for a lane that is not
+            // there: all commit or none does, so the last answers for them.
+            let (by, at) = (actor(who + 10), self.at());
+            let stamps = stamps(self.lane(lane), sha);
+            let apply = |m| self.ledger.apply(&by, None, &at, m).unwrap();
+            return stamps.into_iter().map(apply).last();
+        }
         let (actor, mutation) = self.mutation(op)?;
         let key = match mutation {
             Mutation::Heartbeat { .. } => None,
@@ -533,14 +726,37 @@ fn lanes_without_lease(db: &Connection) -> Vec<String> {
     .collect()
 }
 
+/// The fold of a passed gate: ready on the lane row, then done with the
+/// holder cleared, and the tables still rebuild from the log.
+#[test]
+fn a_passed_gate_rebuilds() {
+    let mut w = World::start(true);
+    let row = |w: &World| ["phase", "status", "session"].map(|c| w.lane_value(1, c));
+    assert_eq!(row(&w), [json!("ready"), json!("review"), json!("s1")]);
+    let done = Op::Phase {
+        lane: 0,
+        who: 1,
+        done: true,
+        sha: 0,
+    };
+    let Some(Applied::Committed(event)) = w.apply(&done, None) else {
+        panic!("done did not commit");
+    };
+    assert_eq!(event.kind, EventKind::PhaseEntered);
+    assert_eq!(row(&w), [json!("done"), json!("done"), Value::Null]);
+    let before = dump(&w.db);
+    w.ledger.rebuild().unwrap();
+    assert_eq!(before, dump(&w.db));
+}
+
 proptest! {
     #![proptest_config(config())]
 
     /// A random sequence folded from the log equals the tables, at a random
     /// prefix and at the end.
     #[test]
-    fn rebuild_matches_log(steps in proptest::collection::vec(step(), 1..60), cut in any::<prop::sample::Index>()) {
-        let mut w = World::new();
+    fn rebuild_matches_log(ready in any::<bool>(), steps in proptest::collection::vec(step(), 1..60), cut in any::<prop::sample::Index>()) {
+        let mut w = World::start(ready);
         let cut = cut.index(steps.len());
         for (i, (op, key)) in steps.iter().enumerate() {
             w.apply(op, *key);
@@ -553,12 +769,20 @@ proptest! {
     }
 
     /// The same key inserts one row: a retry of the same kind, even with
-    /// another payload, returns the stored event and changes nothing.
+    /// another payload, returns the stored event and changes nothing. So
+    /// does the retry of a denied command.
     #[test]
-    fn retry_replays_one_row(steps in proptest::collection::vec(step(), 1..40)) {
-        let mut w = World::new();
+    fn retry_replays_one_row(ready in any::<bool>(), steps in proptest::collection::vec(step(), 1..40)) {
+        let mut w = World::start(ready);
         for (op, key) in &steps {
             let Some(Applied::Committed(event)) = w.apply(op, *key) else { continue };
+            // A denial is keyed by the write: its retry is the same command.
+            if event.kind == EventKind::GateDenied {
+                let before = dump(&w.db);
+                prop_assert_eq!(w.apply(op, *key), Some(Applied::Replayed(event)));
+                prop_assert_eq!(&before, &dump(&w.db));
+                continue;
+            }
             let Some(key) = event.idempotency_key.clone() else { continue };
             let before = dump(&w.db);
             let other = Mutation::Event {
@@ -576,8 +800,8 @@ proptest! {
 
     /// A refused write leaves every table, the log included, as it was.
     #[test]
-    fn refusal_writes_nothing(steps in proptest::collection::vec(step(), 1..60)) {
-        let mut w = World::new();
+    fn refusal_writes_nothing(ready in any::<bool>(), steps in proptest::collection::vec(step(), 1..60)) {
+        let mut w = World::start(ready);
         for (op, key) in &steps {
             let before = dump(&w.db);
             if let Some(Applied::Refused(_)) = w.apply(op, *key) {
