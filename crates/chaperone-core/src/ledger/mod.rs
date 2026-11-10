@@ -209,18 +209,26 @@ pub(crate) fn check_schema(conn: &Connection) -> Result<(), LedgerError> {
 /// Makes the ledger, its `-wal` and its `-shm` readable and writable by
 /// their owner alone (0600): SQLite creates the ledger with the umask's
 /// mode, and it holds every handoff, note and prompt. Called before the
-/// first page is written; SQLite gives a `-wal` or `-shm` it creates later
-/// the ledger's mode. A read-only open changes nothing.
+/// first page is written; the bundled SQLite gives a `-wal` or `-shm` it
+/// creates later the ledger's mode. A file that is already private is left
+/// alone, and a read-only open changes nothing.
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn owner_only(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     for suffix in ["", "-wal", "-shm"] {
         use std::os::unix::fs::PermissionsExt;
         let mut file = OsString::from(path);
         file.push(suffix);
-        match std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-            _ => {}
+        let Ok(meta) = std::fs::metadata(&file) else {
+            continue;
+        };
+        if meta.permissions().mode() & 0o077 == 0 {
+            continue;
         }
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            let file = Path::new(&file).display();
+            std::io::Error::new(e.kind(), format!("cannot make {file} owner-only: {e}"))
+        })?;
     }
     Ok(())
 }
