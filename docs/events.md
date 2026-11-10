@@ -33,13 +33,14 @@ These rules keep every write small, single and fail-closed.
 - **One command, one event, one transaction.** Each command appends exactly one event and
   folds it inside one `BEGIN IMMEDIATE` transaction. A crash leaves the event and its
   fold both there or both absent. The exceptions are `usage report`, `check run review`,
-  `check run verdict` and `check run plan`.
+  `check run verdict`, `check run plan` and `verify`.
   `usage report` appends one `usage.reported` per message the lane lacks, each in its own
   transaction, so a crash leaves whole events, and the next report adds the rest. `check run
   review` appends a `usage.reported` per session it started, then one `check.finished`, then
   one `finding.updated` per verifier ruling, each in its own transaction; the next run writes
   rulings a crash left out before anything else (cli-contract.md). `check run verdict` and `check run
-  plan` append a `usage.reported` for their session, then one `check.finished`.
+  plan` append a `usage.reported` for their session, then one `check.finished`. `verify` runs
+  `check run diff`, `tests`, `review` and `verdict` in turn and writes only what they write.
 - **Refusals.** A validation or CAS refusal writes nothing. A gate denial appends one
   `gate.denied` and nothing else. Its key is
   `deny:<lane_id>:<transition>:<to>:<gate>:<head_sha, or - for none>:<id of the lane's latest event that is not a gate.denied, usage.reported, pr.merged or attention.recorded>`,

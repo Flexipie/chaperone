@@ -115,6 +115,18 @@ pub enum Cmd {
         #[arg(long, requires = "entry_points", value_delimiter = ',')]
         declared: Option<Vec<String>>,
     },
+    /// Run `check run` diff, tests, review and verdict on the lane's commit
+    /// in that order, under one hold of the lane's run lock (a second run is
+    /// a conflict, exit 4), stopping at the first step refused or not
+    /// passed; the verdict runs only after a complete review that leaves no
+    /// finding blocking. Prints each step and where and why it stopped. Plan
+    /// and smoke are not steps
+    Verify {
+        #[arg(long)]
+        work: i64,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
     #[command(subcommand)]
     Pipeline(PipelineCmd),
     /// Check skill and script files against this binary: every chaperone
@@ -176,6 +188,7 @@ impl Cmd {
             Cmd::Check(CheckCmd::Record { .. }) => Some("check record"),
             Cmd::Check(CheckCmd::Run { .. }) => Some("check run"),
             Cmd::Check(CheckCmd::Waive { .. }) => Some("check waive"),
+            Cmd::Verify { .. } => Some("verify"),
             Cmd::Reviews(ReviewsCmd::Record { .. }) => Some("reviews record"),
             Cmd::Reviews(ReviewsCmd::Get { .. }) | Cmd::Jobs(JobsCmd::Get { .. }) => None,
             Cmd::Work(WorkCmd::Create { .. }) => Some("work create"),

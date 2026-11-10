@@ -120,6 +120,7 @@ fn help_matches_snapshots() {
         (&["overlap"], include_str!("snapshots/overlap.txt")),
         (&["stats"], include_str!("snapshots/stats.txt")),
         (&["impact"], include_str!("snapshots/impact.txt")),
+        (&["verify"], include_str!("snapshots/verify.txt")),
         (&["pipeline"], include_str!("snapshots/pipeline.txt")),
         (
             &["pipeline", "current"],

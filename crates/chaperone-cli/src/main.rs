@@ -72,6 +72,9 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Work(cmd) => work::run(&Ledger::open(&path)?, cmd, meta, cli.format),
         Cmd::Spec(cmd) => spec::run(&Ledger::open(&path)?, cmd, meta),
         Cmd::Check(cmd) => checks::check(&Ledger::open(&path)?, &path, cmd),
+        Cmd::Verify { work, actor } => {
+            checks::verify(&Ledger::open(&path)?, &path, work, &actor.resolve())
+        }
         Cmd::Reviews(cmd) => checks::reviews(&Ledger::open(&path)?, cmd),
         Cmd::Jobs(cmd) => checks::jobs(&Ledger::open(&path)?, cmd),
         Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),
