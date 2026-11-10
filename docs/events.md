@@ -204,7 +204,7 @@ the same value, a trailing slash aside, still writes.
 | Kind | Command | Payload |
 | --- | --- | --- |
 | `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha`, `review` |
-| `check.finished` | `check record`, `check run`, `check waive`, `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
+| `check.finished` | `check record`, `check run`, `check waive`, `verify` (through `check run`), `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
 | `finding.updated` | `finding dispute`, `finding waive`; the other moves are core's (`Ledger::finding_update`) for the harness | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute or waive; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits) |
 
 **Finding statuses.** A finding is folded `open`. Each `finding.updated` makes one of these

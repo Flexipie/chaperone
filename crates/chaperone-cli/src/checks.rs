@@ -19,7 +19,7 @@ use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
 use chaperone_core::git::{self, ChangedFile};
 use chaperone_core::ledger::{self, Actor, Evidence, Kept, Ledger, LedgerError, Refusal};
-use chaperone_core::pipeline::{self, Cli, Pipeline};
+use chaperone_core::pipeline::{self, Cli, Fact, Pipeline};
 use chaperone_core::plan;
 use chaperone_core::review::{self, Agents, Facts};
 use chaperone_core::runner::{Agent, session_var};
@@ -149,12 +149,24 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
 
 /// `verify`: `check run` diff, tests, review and verdict on the lane's
 /// commit under one hold of its run lock, until a step is refused or does
-/// not pass; the verdict runs only after a complete review that leaves no
-/// finding blocking. One result: each step, and where and why it stopped.
+/// not pass, or the lane moves off the diff's commit; the verdict runs only
+/// after a complete review that leaves no finding blocking, as the gate
+/// counts them. One result: each step, and where and why it stopped.
 pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let _lock = ledger::lock_lane(db, work)??;
-    let (mut steps, mut stopped) = (Vec::new(), Value::Null);
+    let (mut steps, mut stopped, mut from) = (Vec::new(), Value::Null, None::<String>);
     for check in ["diff", "tests", "review", "verdict"] {
+        if let Some(from) = &from {
+            let item = ledger.work_get(work, &ledger.now()?)??;
+            let (wt, branch) = (item.worktree_path.as_deref(), item.branch.as_deref());
+            if let Some(now) = observed_head(wt, branch)?
+                && now != *from
+            {
+                let why = format!("the lane moved from {from} to {now}");
+                stopped = json!({"check": check, "why": why});
+                break;
+            }
+        }
         let ran = match check {
             "diff" => run_diff(ledger, db, work, actor),
             "tests" => run_tests(ledger, db, work, actor, check),
@@ -163,26 +175,33 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         };
         let recorded = match ran {
             Ok(Outcome::One(recorded)) => recorded,
-            Err(e @ CliError::Refused(_)) => {
-                let ErrorBody { code, message, .. } = ErrorBody::from_cli(&e);
-                stopped = json!({"check": check, "code": code, "why": message});
+            Err(CliError::Refused(Refusal::InvalidInput(why))) => {
+                stopped = json!({"check": check, "why": why});
                 break;
             }
             other => return other,
         };
         let p = &recorded["payload"];
+        let head = p["head_sha"].as_str().unwrap_or_default();
+        from.get_or_insert_with(|| head.into());
         let why = match check {
             "tests" if p["result"] != "pass" => "tests failed".into(),
-            "review" if p["complete"] != true => "review not complete".into(),
-            "review" => match ledger.blocking_findings(work)?.len() {
-                0 => String::new(),
-                n => format!("{n} finding(s) on the lane still block"),
+            // The gate's own count: complete harness reviews' findings only.
+            "review" => match ledger
+                .project(work, Some(head))?
+                .get("findings.open_blocking")
+            {
+                Fact::Int(0) => String::new(),
+                Fact::Int(n) => format!("{n} finding(s) still block"),
+                _ => "review not complete".into(),
             },
             "verdict" if p["decision"] != "yes" => "the verdict is not yes".into(),
             _ => String::new(),
         };
-        steps.push(json!({"check": check, "event_id": recorded["event_id"],
-            "replayed": recorded["replayed"], "passed": why.is_empty()}));
+        steps.push(
+            json!({"check": check, "head": head, "event_id": recorded["event_id"],
+            "replayed": recorded["replayed"], "passed": why.is_empty()}),
+        );
         if !why.is_empty() {
             stopped = json!({"check": check, "why": why});
             break;
