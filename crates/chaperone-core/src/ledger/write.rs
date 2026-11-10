@@ -777,11 +777,17 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // its findings, and someone who never has rules on them.
             let session = event.actor.session.as_deref().unwrap_or_default();
             let held = has_held(tx, lane_id, session)?;
+            // The verifier `check run review` starts rules whoever started
+            // the run: its authority is the binary's, and only that code
+            // path sets this producer. Its moves only.
+            let harness =
+                p.rest.get("producer").and_then(|v| v.get("kind")) == Some(&Value::from("harness"));
+            let ruled = harness && matches!(to, "verified" | "refuted");
             match by {
                 By::Lane if !held => refuse!(invalid(&format!(
                     "only the lane disputes a finding; session {session} has never held lane {lane_id}"
                 ))),
-                By::Independent if held => refuse!(invalid(&format!(
+                By::Independent if held && !ruled => refuse!(invalid(&format!(
                     "session {session} has held lane {lane_id}; a finding goes {to} from a session that never has"
                 ))),
                 _ => {}

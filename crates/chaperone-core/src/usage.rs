@@ -15,7 +15,10 @@ use serde_json::{Map, Value, json};
 pub use scan::Session;
 
 use crate::checks::lane_exists;
-use crate::ledger::{Actor, Applied, Checked, EventKind, Ledger, Mutation, Payload, Refusal};
+use crate::ledger::{
+    Actor, Applied, Checked, EventKind, Ledger, LedgerError, Mutation, Payload, Refusal,
+};
+use crate::runner::Run;
 
 const ENTITY: &str = "work item";
 
@@ -119,22 +122,7 @@ impl Ledger {
                 rest: usage.fields,
                 ..Payload::default()
             };
-            let (applied, _) = self.apply_planned(
-                actor,
-                Some(&key),
-                None,
-                false,
-                |_, _| {
-                    Ok(Ok(Mutation::Event {
-                        kind: EventKind::UsageReported,
-                        lane_id: Some(work),
-                        spec_id: None,
-                        payload,
-                    }))
-                },
-                |_, _, _| Ok(()),
-            )?;
-            match applied {
+            match self.usage_event(actor, work, &key, payload)? {
                 Applied::Committed(_) => out.written += 1,
                 Applied::Replayed(_) => out.existing += 1,
                 Applied::Refused(r) => return Ok(Err(r)),
@@ -142,6 +130,67 @@ impl Ledger {
             }
         }
         Ok(Ok(out))
+    }
+
+    /// One `usage.reported` (source and origin `harness`) for a session
+    /// the harness ran: `labels` say what ran it, then the session's id,
+    /// cost and counts. Its message is `run:<session id>`, so a retry
+    /// appends nothing. A session that left no id wrote nothing to count.
+    pub fn usage_run(
+        &self,
+        actor: &Actor,
+        work: i64,
+        mut labels: Map<String, Value>,
+        run: &Run,
+    ) -> Checked<()> {
+        let Some(session) = &run.session_id else {
+            return Ok(Ok(()));
+        };
+        let message_id = format!("run:{session}");
+        let key = format!("usage:{work}:{message_id}");
+        labels.extend([
+            ("message_id".into(), json!(message_id)),
+            ("origin".into(), json!("harness")),
+            ("session_id".into(), json!(session)),
+            ("cost_usd".into(), json!(run.cost_usd)),
+            ("raw".into(), scan::counts(&run.model_usage)),
+        ]);
+        let payload = Payload {
+            source: Some("harness".into()),
+            rest: labels,
+            ..Payload::default()
+        };
+        Ok(match self.usage_event(actor, work, &key, payload)? {
+            Applied::Refused(r) => Err(r),
+            _ => Ok(()),
+        })
+    }
+
+    /// Appends `payload` as a `usage.reported` on lane `work` under `key`,
+    /// or replays the one stored there.
+    fn usage_event(
+        &self,
+        actor: &Actor,
+        work: i64,
+        key: &str,
+        payload: Payload,
+    ) -> Result<Applied, LedgerError> {
+        let (applied, _) = self.apply_planned(
+            actor,
+            Some(key),
+            None,
+            false,
+            |_, _| {
+                Ok(Ok(Mutation::Event {
+                    kind: EventKind::UsageReported,
+                    lane_id: Some(work),
+                    spec_id: None,
+                    payload,
+                }))
+            },
+            |_, _, _| Ok(()),
+        )?;
+        Ok(applied)
     }
 
     /// Lane `work`'s usage: one row per transcript (`cli`, session, and the

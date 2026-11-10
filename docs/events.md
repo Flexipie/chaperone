@@ -177,7 +177,11 @@ moves, checked by the write; any other move, another status, or the same status 
 `fixed` and `answered` are final. "Lane" is a session that has held the lane (a
 `lane.claimed` or `lane.taken_over`); "independent" is one that never has: the verifier,
 or the owner (the rule `work ready` uses). The lane's only move is to dispute, so it never
-settles its own finding.
+settles its own finding. A `finding.updated` whose `producer.kind` is `harness` is the
+verifier's ruling inside `check run review`: the binary ran the verifier, so it may make the
+`verified` and `refuted` moves whatever session started the run (usually the lane's own, in
+the background). It makes no other move from a session that has held the lane. Only that code
+path sets the producer; no command takes it as input.
 
 | From | To | Who |
 | --- | --- | --- |
@@ -296,6 +300,13 @@ events (`usage get`), never a stored counter. Message text never enters the payl
   whose `session_meta.source` has `subagent` is a subagent: `session_id` is its
   `parent_thread_id`, `agent_id` its own id, `agent_type` the spawn's `agent_role` and
   `description` its `agent_nickname`.
+- **Harness sessions.** A headless session the harness starts (`check run review`'s lenses
+  and verifier) is one `usage.reported` with `source` and `origin` `harness`, `message_id`
+  `run:<session_id>` (so the key is `usage:<lane_id>:run:<session_id>`), the session's
+  `session_id` and `cost_usd` (the CLI's own figure, null for Codex, which reports none), `raw`
+  (the CLI's usage object, counts only), and labels saying what ran it: `phase` (`review`),
+  `lens`, `cli` and `model` (the runner's). The token fields are null: unknown, never 0. A
+  session that left no id (it never started, or Codex printed no `thread.started`) writes none.
 - **Cursor** and other CLIs are not read. Their lanes have no usage events, so `usage get`
   says `known: false`, never a guessed zero.
 

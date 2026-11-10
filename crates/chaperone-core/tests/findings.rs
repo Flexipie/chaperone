@@ -223,3 +223,39 @@ fn blocking_read_and_round() {
     assert!(ledger.blocking_findings(lane).unwrap().is_empty());
     common::assert_consistent(&path);
 }
+
+/// A move carrying the harness's producer (`check run review`'s verifier)
+/// is made by the binary, so the lane's own session may write it; it
+/// makes the verifier's moves only. The same move without it is refused.
+#[test]
+fn the_harness_rules_from_the_lanes_session() {
+    let (_dir, path, ledger) = common::ledger();
+    let (_, check) = review(&ledger, &["blocker:a", "blocker:b", "blocker:c"]);
+    walk(&ledger, check, "c", &["disputed"]);
+    let rule = |key: &str, to: &str| {
+        let payload = json!({"check_event_id": check, "finding_key": key, "status": to,
+            "reason": "r", "producer": {"kind": "harness", "bin": "chaperone", "version": "0"}});
+        let m = Mutation::Event {
+            kind: EventKind::FindingUpdated,
+            lane_id: Some(1),
+            spec_id: None,
+            payload: serde_json::from_value(payload).unwrap(),
+        };
+        ledger.apply(&actor("1"), None, "2099-01-01T00:00:00.000Z", m)
+    };
+    assert!(mv(&ledger, check, ("1", "a", "verified"), "", "").is_err());
+    common::committed(rule("a", "verified").unwrap());
+    common::committed(rule("c", "refuted").unwrap());
+    let waived = format!("{:?}", rule("b", "waived").unwrap());
+    assert!(
+        waived.contains("session s1 has held lane 1; a finding goes waived"),
+        "{waived}"
+    );
+    let blocking = ledger.blocking_findings(1).unwrap();
+    let got: Vec<_> = blocking
+        .iter()
+        .map(|f| (&*f.finding_key, &*f.status))
+        .collect();
+    assert_eq!(got, [("a", "verified"), ("b", "open")]);
+    common::assert_consistent(&path);
+}
