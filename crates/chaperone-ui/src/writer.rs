@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use chaperone_core::checks::{AttentionInput, NOTE_CHARS};
 use chaperone_core::child;
-use chaperone_core::ledger::{Actor, Ledger, LedgerError, Refusal};
-use chaperone_core::merge::{self, Done};
+use chaperone_core::ledger::{Actor, Ledger};
+use chaperone_core::merge::{self, Done, done};
 use chaperone_core::spec::decide::DecideInput;
 use chaperone_core::work::{OWNER_UI, PAUSED_BY_OWNER, UpdateInput};
 use serde_json::Value;
@@ -175,14 +175,6 @@ pub fn owner(start: &str) -> Actor {
     Actor {
         agent: Some(AGENT.into()),
         session: Some(format!("ui:{start}")),
-    }
-}
-
-fn done<T>(c: Result<Result<T, Refusal>, LedgerError>) -> Result<T, String> {
-    match c {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(r)) => Err(format!("refused: {r:?}")),
-        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -379,7 +371,7 @@ fn merge(
     pr: &str,
     head: &str,
 ) -> Result<String, String> {
-    let m = match merge::merge(ledger, actor, gh, lane.work, pr, head, "chaperone-ui")? {
+    let m = match merge::merge(ledger, actor, gh, lane.work, pr, Some(head), "chaperone-ui")? {
         Ok(m) => m,
         Err(why) => return Err(format!("Not merged: {why}.")),
     };

@@ -347,8 +347,7 @@ pub fn pr_open(
     one(json!({"work_id": work, "pr": pr, "head": head, "created": created, "steps": steps}))
 }
 
-/// `merge`: [`merge::merge`] of the lane's PR at `head`, by default its
-/// newest handoff's commit.
+/// `merge`: [`merge::merge`] of the lane's PR.
 pub fn merge(
     ledger: &Ledger,
     work: i64,
@@ -359,22 +358,16 @@ pub fn merge(
     let pr = item
         .pr_ref
         .ok_or_else(|| refuse(format!("work item {work} has no PR")))?;
-    let head = match head {
-        Some(head) => head,
-        None => ledger
-            .work_handoffs(work)?
-            .pop()
-            .and_then(|h| h.handoff.commit)
-            .unwrap_or_default(),
-    };
-    let gh = OsStr::new("gh");
-    let merged = merge::merge(ledger, actor, gh, work, &pr, &head, "chaperone merge")
+    let (gh, head) = (OsStr::new("gh"), head.as_deref());
+    let merged = merge::merge(ledger, actor, gh, work, &pr, head, "chaperone merge")
         .map_err(CliError::Internal)?
         .map_err(refuse)?;
-    let left = matches!(merged.done, Done::ByLane).then_some("the lane's agent hands off done");
-    one(
-        json!({"work_id": work, "pr": pr, "merge_sha": merged.sha, "done": left.is_none(), "left": left}),
-    )
+    let done_by = match merged.done {
+        Done::Was => "already",
+        Done::HandedOff => "merge",
+        Done::ByLane => "lane",
+    };
+    one(json!({"work_id": work, "pr": pr, "merge_sha": merged.sha, "done_by": done_by}))
 }
 
 /// A PR's body from ledger facts: of the lane's own words only its title,

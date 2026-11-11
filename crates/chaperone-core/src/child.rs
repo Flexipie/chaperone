@@ -1,7 +1,7 @@
 //! A child process with a deadline: `daisy-cli reviews get`, the UI
-//! backlog's daisy reads, the UI writer's gh and herdr calls, the git
-//! calls of `overlap`, `impact` and the UI's diff, agent sessions and the
-//! commands of `check run tests`.
+//! backlog's daisy reads, the UI writer's herdr calls and merge's gh calls
+//! ([`cli`]), the git calls of `overlap`, `impact` and the UI's diff, agent
+//! sessions and the commands of `check run tests`.
 
 use std::ffi::OsStr;
 use std::io::{Read, Write};
@@ -77,7 +77,7 @@ pub fn cli(
     limit: Duration,
     late: &str,
 ) -> Result<String, String> {
-    let call = format!("{name} {}", args[..2].join(" "));
+    let call = format!("{name} {}", args[..args.len().min(2)].join(" "));
     let deadline = Instant::now() + limit;
     let mut command = Command::new(cmd);
     command.args(args).current_dir(std::env::temp_dir());
