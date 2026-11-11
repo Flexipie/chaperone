@@ -232,6 +232,12 @@ pub enum PipelineCmd {
     /// --pipeline`). Skills read the version from here rather than naming
     /// one
     Current,
+    /// The `[limits]` table of the lane's pipeline, else of the one a new
+    /// claim stamps: {pipeline: {id, hash}, limits}
+    Limits {
+        #[arg(long)]
+        work: Option<i64>,
+    },
     /// Each version of the pipeline changelog (`## vN <time>` in
     /// <dotfiles>/claude/pipeline-changelog.md), newest first, with its
     /// entry, engine ids and `stats`' cohort numbers over its lanes: the

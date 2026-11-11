@@ -128,6 +128,17 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
                 json!({ "id": p.id, "hash": p.hash, "newer": newer }),
             ))
         }
+        Cmd::Pipeline(PipelineCmd::Limits { work }) => {
+            let p = match work {
+                Some(work) => {
+                    let ledger = Ledger::open(&path)?;
+                    checks::lane_pipeline(&ledger.work_get(work, &ledger.now()?)??)?
+                }
+                None => pipeline::current(),
+            };
+            let at = json!({ "id": p.id, "hash": p.hash });
+            Ok(Outcome::One(json!({ "pipeline": at, "limits": p.limits })))
+        }
         Cmd::Pipeline(PipelineCmd::History { dotfiles, repo }) => {
             let root = dotfiles
                 .or_else(|| dirs::home_dir().map(|h| h.join("dotfiles")))
