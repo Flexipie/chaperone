@@ -237,7 +237,7 @@ fn without_reviews_review_numbers_are_null_and_named() {
         assert_eq!(out["cohort"][field], Value::Null, "{field}");
         assert_eq!(
             out["cohort"]["missing"][field],
-            "check.finished local_review or pr_review"
+            "check.finished review, local_review or pr_review"
         );
     }
     assert_eq!(out["cohort"]["flat_rounds"], Value::Null);
@@ -285,4 +285,110 @@ fn the_cohort_filter() {
         ledger.stats(&Cohort::Work(vec![open, 99])).unwrap(),
         Err(Refusal::NotFound { id: 99, .. })
     ));
+}
+
+/// A v20 lane read from the harness's events: complete reviews count, an
+/// incomplete one does not, a finding refuted by the owner is not
+/// verified, and "after handoff" is after the harness's YES verdict, not
+/// the planning handoff.
+#[test]
+fn a_v20_lane_reads_the_harness_review() {
+    let (_dir, _path, ledger) = common::ledger();
+    let lane = actor("1");
+    let input = CreateInput {
+        title: "t".into(),
+        kind: "code".into(),
+        pr_flow: "pr".into(),
+        ..CreateInput::default()
+    };
+    let id = ledger
+        .work_create(&lane, &input, None, false)
+        .unwrap()
+        .unwrap()
+        .id;
+    let claim = ClaimInput {
+        pipeline: Some("v20".into()),
+        ..ClaimInput::default()
+    };
+    ledger
+        .work_claim(&lane, id, &claim, None, false)
+        .unwrap()
+        .unwrap();
+    let handoff = HandoffInput {
+        summary: "planning".into(),
+        ..HandoffInput::default()
+    };
+    ledger
+        .work_handoff(&lane, id, &handoff, None, None, false)
+        .unwrap()
+        .unwrap();
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    let apply = |who: &str, kind, payload: Value| {
+        std::thread::sleep(Duration::from_millis(2));
+        let event = Mutation::Event {
+            kind,
+            lane_id: Some(id),
+            spec_id: None,
+            payload: serde_json::from_value(payload).unwrap(),
+        };
+        committed(
+            ledger
+                .apply(&actor(who), None, &ledger.now().unwrap(), event)
+                .unwrap(),
+        )
+        .id
+    };
+    let review = |head: &str, complete: bool, keys: &[&str]| {
+        let findings: Vec<Value> = keys
+            .iter()
+            .map(|k| json!({"finding_key": k, "severity": "risk", "title": format!("T {k}"), "body": "b"}))
+            .collect();
+        apply(
+            "h",
+            EventKind::CheckFinished,
+            json!({"check": "review", "outcome": "ran",
+            "head_sha": head, "producer": harness, "complete": complete, "findings": findings}),
+        )
+    };
+    let mv = |who: &str, check: i64, key: &str, to: &str| {
+        let mut p =
+            json!({"check_event_id": check, "finding_key": key, "status": to, "reason": "r"});
+        if who == "h" {
+            p["producer"] = harness.clone();
+        }
+        apply(who, EventKind::FindingUpdated, p);
+    };
+    let first = review("1111111", true, &["k1", "k2"]);
+    mv("h", first, "k1", "verified");
+    mv("h", first, "k2", "verified");
+    mv("1", first, "k2", "disputed");
+    mv("owner", first, "k2", "refuted");
+    let incomplete = review("2222222", false, &["k1"]);
+    mv("h", incomplete, "k1", "verified");
+    let last = review(HEAD, true, &["k1"]);
+    mv("h", last, "k1", "verified");
+    apply(
+        "h",
+        EventKind::CheckFinished,
+        json!({"check": "merge_verdict", "outcome": "ran",
+        "head_sha": HEAD, "producer": harness, "decision": "yes"}),
+    );
+
+    let out = stats(&ledger, Cohort::Work(vec![id]));
+    let l = &out["lanes"][0];
+    // k1 is the one verified finding (k2 was refuted), raised on two
+    // complete reviews on two commits: one re-raise, one flat round.
+    assert_eq!(l["verified_findings"], 1);
+    assert_eq!(l["reraised_findings"], 1);
+    assert_eq!(l["flat_rounds"], 1);
+    // Its latest record is before the YES verdict, the ready point.
+    assert_eq!(l["verified_findings_after_handoff"], 0);
+    assert_eq!(
+        l["sources"],
+        json!({"reviews": ["review"], "ready_point": "verdict"})
+    );
+    let cohort = &out["cohort"];
+    assert_eq!(cohort["lanes_reviewed"], 1);
+    assert_eq!(cohort["sources"]["ready_point"], json!({"verdict": 1}));
+    assert!(cohort["missing"].get("verified_findings").is_none());
 }

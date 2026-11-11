@@ -1321,7 +1321,7 @@ pub fn usage(ledger: &Ledger, cmd: UsageCmd) -> Result<Outcome, CliError> {
 
 /// A CLI's default home: its variable as given (so a typo is refused, as
 /// with a flag), else `~/<dir>` when that folder exists.
-fn home(var: &str, dir: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn home(var: &str, dir: &str) -> Option<std::path::PathBuf> {
     std::env::var_os(var)
         .map(Into::into)
         .or_else(|| dirs::home_dir().map(|h| h.join(dir)).filter(|p| p.is_dir()))

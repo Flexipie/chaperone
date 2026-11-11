@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use crate::checks::ATTENTION_TYPES;
 use crate::ledger::{Checked, Ledger, LedgerError, Refusal, canonical_at, check_schema};
-use crate::pipeline::{Fact, sha_prefix_eq};
+use crate::pipeline::{self, Fact, sha_prefix_eq};
 use crate::work::IS_HANDOFF;
 
 /// Which lanes `stats` reads.
@@ -30,7 +30,7 @@ pub const TOO_FEW_LANES: usize = 25;
 pub const PEAK_OVER: i64 = 500_000;
 const TOKENS: [&str; 4] = ["input_total", "cache_read", "cache_write", "output_total"];
 /// What a review number needs when the cohort has no recorded review.
-const NO_REVIEW: &str = "check.finished local_review or pr_review";
+const NO_REVIEW: &str = "check.finished review, local_review or pr_review";
 /// What a token number needs when no lane in the cohort has usage.
 const NO_USAGE: &str = "usage.reported";
 /// Commits after the handoff are a git count (events.md, PR), never a
@@ -44,7 +44,12 @@ pub(crate) const MERGED_SINCE: &str = "SELECT lane_id FROM events WHERE kind = '
 
 #[derive(Default)]
 struct Review {
-    local: bool,
+    /// `local_review`, `pr_review` (daisy's) or `review` (the harness's,
+    /// complete ones only, as `findings.open_blocking` reads them).
+    check: String,
+    /// A harness review carried from an earlier one: its findings stay
+    /// that one's.
+    carried: bool,
     /// Daisy's job id: reviews are ordered by it, never by when recorded.
     job: Option<i64>,
     event: i64,
@@ -61,6 +66,11 @@ struct Lane {
     title: String,
     kind: Option<String>,
     pipeline_id: Option<String>,
+    /// Stamped with a schema 2 pipeline (v20 on): its ready point is the
+    /// first harness YES verdict, else the first `pr.opened`.
+    schema2: bool,
+    ready_verdict_at: Option<String>,
+    pr_opened_at: Option<String>,
     /// The first `pipeline vN` a handoff summary names, in log order.
     stamp: Option<String>,
     /// The first claim: its `at` and its julian day.
@@ -161,36 +171,61 @@ impl Lane {
             heads.iter().all(|head| {
                 self.reviews
                     .iter()
-                    .any(|r| r.local && r.head.as_deref().is_some_and(|h| same_commit(h, head)))
+                    .filter(|r| r.check != "pr_review")
+                    .any(|r| r.head.as_deref().is_some_and(|h| same_commit(h, head)))
             })
         });
         let mut after_pr: Vec<&Review> = self
             .reviews
             .iter()
-            .filter(|r| r.local && self.first_pr_event.is_some_and(|pr| r.event > pr))
+            .filter(|r| {
+                r.check == "local_review" && self.first_pr_event.is_some_and(|pr| r.event > pr)
+            })
             .collect();
         after_pr.sort_by_key(|r| (r.job, r.event));
         let scores: Vec<f64> = after_pr.iter().filter_map(|r| r.score).collect();
-        let flat_rounds = scores.windows(2).filter(|w| w[1] <= w[0]).count() as i64;
-        // Verified titles raised again by another review.
-        let mut by_title: BTreeMap<String, BTreeSet<Option<i64>>> = BTreeMap::new();
+        let mut flat_rounds = scores.windows(2).filter(|w| w[1] <= w[0]).count() as i64;
+        // A harness round on a new commit that finds again every verified
+        // finding of the round before it.
+        let verified_keys = |r: &Review| -> BTreeSet<String> {
+            r.findings
+                .iter()
+                .filter(|f| f.2)
+                .map(|f| f.0.clone())
+                .collect()
+        };
+        let rounds: Vec<&Review> = self
+            .reviews
+            .iter()
+            .filter(|r| r.check == "review" && !r.carried)
+            .collect();
+        flat_rounds += rounds
+            .windows(2)
+            .filter(|w| {
+                let new_commit = match (&w[0].head, &w[1].head) {
+                    (Some(a), Some(b)) => !same_commit(a, b),
+                    _ => false,
+                };
+                let before = verified_keys(w[0]);
+                new_commit && !before.is_empty() && before.is_subset(&verified_keys(w[1]))
+            })
+            .count() as i64;
+        // Verified titles raised again by another review (a daisy job, or a
+        // harness review's event).
+        let mut by_title: BTreeMap<String, BTreeSet<(bool, i64)>> = BTreeMap::new();
         for r in &self.reviews {
             for (_, title, _) in r.findings.iter().filter(|f| f.2) {
                 by_title
                     .entry(title.trim().to_lowercase())
                     .or_default()
-                    .insert(r.job);
+                    .insert(r.job.map_or((false, r.event), |job| (true, job)));
             }
         }
         let reraised = by_title.values().map(|s| s.len() as i64 - 1).sum();
         // R11: a review is before the handoff when it was recorded before the
-        // first real one (the earliest handoff when none is real).
-        let handoff = self
-            .handoffs
-            .iter()
-            .find(|h| h.1)
-            .or(self.handoffs.first())
-            .map(|h| h.0.as_str());
+        // first real one (the earliest handoff when none is real). A schema 2
+        // lane hands off at planning, so its point is the ready point.
+        let handoff = self.ready_point().map(|p| p.1);
         // R11 counts a finding once, as its latest record (in job order)
         // says, with its phase from that record's review.
         let mut ordered: Vec<&Review> = self.reviews.iter().collect();
@@ -218,6 +253,23 @@ impl Lane {
             verified,
             verified_after,
         }
+    }
+
+    /// Where "after handoff" is measured from, and what set it.
+    fn ready_point(&self) -> Option<(&'static str, &str)> {
+        if self.schema2 {
+            let verdict = self.ready_verdict_at.as_deref().map(|at| ("verdict", at));
+            let pr = self.pr_opened_at.as_deref().map(|at| ("pr_opened", at));
+            return verdict.or(pr);
+        }
+        let real = self.handoffs.iter().find(|h| h.1);
+        real.or(self.handoffs.first())
+            .map(|h| ("handoff", h.0.as_str()))
+    }
+
+    /// The checks this lane's reviews came from.
+    fn review_sources(&self) -> BTreeSet<&str> {
+        self.reviews.iter().map(|r| r.check.as_str()).collect()
     }
 
     fn json(&self, row: &Row, reviews_known: bool) -> Value {
@@ -256,6 +308,10 @@ impl Lane {
             "verified_findings": known(json!(row.verified)),
             "verified_findings_after_handoff": known(json!(row.verified_after)),
             "commits_after_handoff": null,
+            "sources": {
+                "reviews": self.review_sources(),
+                "ready_point": self.ready_point().map(|p| p.0),
+            },
         })
     }
 
@@ -266,6 +322,9 @@ impl Lane {
             "pr.opened" => text("pr"),
             _ => p.pointer("/changed/pr_ref/to").and_then(Value::as_str),
         };
+        if e.kind == "pr.opened" && self.pr_opened_at.is_none() {
+            self.pr_opened_at = Some(e.at.clone());
+        }
         if let Some(pr) = pr {
             self.prs.insert(pr.to_lowercase());
             self.first_pr_event.get_or_insert(e.id);
@@ -310,6 +369,25 @@ impl Lane {
                 }
             }
             "check.finished" => self.check(e),
+            "finding.updated" => {
+                // A ruling on a harness review's finding, by the verifier or the owner.
+                let verified = match text("status") {
+                    Some("verified") => true,
+                    Some("refuted") => false,
+                    _ => return,
+                };
+                let event = p.get("check_event_id").and_then(Value::as_i64);
+                let key = text("finding_key");
+                let review = self
+                    .reviews
+                    .iter_mut()
+                    .find(|r| r.check == "review" && Some(r.event) == event);
+                for f in review.into_iter().flat_map(|r| &mut r.findings) {
+                    if Some(f.0.as_str()) == key {
+                        f.2 = verified;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -333,12 +411,29 @@ impl Lane {
                 }
             }
             Some("merge_verdict") if ran => {
+                let harness =
+                    p.pointer("/producer/kind").and_then(Value::as_str) == Some("harness");
+                if harness && text("decision") == Some("yes") && self.ready_verdict_at.is_none() {
+                    self.ready_verdict_at = Some(e.at.clone());
+                }
                 if let Some(head) = text("head_sha") {
                     self.verdicts
                         .push((head.into(), text("decision") == Some("yes")));
                 }
             }
-            Some(check @ ("local_review" | "pr_review")) if ran => {
+            Some(check @ ("local_review" | "pr_review" | "review")) if ran => {
+                let carried = p.get("carried_from").and_then(Value::as_i64);
+                // A harness review counts when it is the harness's and
+                // complete; a carried one when the review it names counted.
+                if check == "review"
+                    && (p.pointer("/producer/kind").and_then(Value::as_str) != Some("harness")
+                        || match carried {
+                            Some(from) => !self.reviews.iter().any(|r| r.event == from),
+                            None => p.get("complete") != Some(&Value::Bool(true)),
+                        })
+                {
+                    return;
+                }
                 let findings = p.get("findings").and_then(Value::as_array);
                 let field = |f: &Value, k: &str| f.get(k).and_then(Value::as_str).map(String::from);
                 let findings = findings
@@ -350,7 +445,8 @@ impl Lane {
                     })
                     .collect();
                 self.reviews.push(Review {
-                    local: check == "local_review",
+                    check: check.into(),
+                    carried: carried.is_some(),
                     job: p.get("job").and_then(Value::as_i64),
                     event: e.id,
                     at: e.at.clone(),
@@ -420,7 +516,7 @@ impl Ledger {
         let tok = |k: &str| format!("json_extract(payload_json, '$.{k}')");
         let sql = format!(
             "SELECT l.id, l.title, l.kind, l.pipeline_id, e.id, e.kind, e.at, e.day,
-                    e.payload, e.handoff, e.source, e.t0, e.t1, e.t2, e.t3
+                    e.payload, e.handoff, e.source, e.t0, e.t1, e.t2, e.t3, l.pipeline_hash
              FROM lanes l JOIN (
                  SELECT lane_id, id, kind, at,
                         julianday(CASE kind WHEN 'pr.merged'
@@ -444,11 +540,18 @@ impl Ledger {
         while let Some(r) = rows.next()? {
             let id: i64 = r.get(0)?;
             if lanes.last().is_none_or(|l| l.id != id) {
+                let pipeline_id: Option<String> = r.get(3)?;
+                let hash: Option<String> = r.get(15)?;
+                let stamp = pipeline::by_stamp(
+                    pipeline_id.as_deref().unwrap_or_default(),
+                    hash.as_deref().unwrap_or_default(),
+                );
                 lanes.push(Lane {
                     id,
                     title: r.get(1)?,
                     kind: r.get(2)?,
-                    pipeline_id: r.get(3)?,
+                    pipeline_id,
+                    schema2: stamp.is_some_and(|p| p.schema >= 2),
                     ..Lane::default()
                 });
             }
@@ -636,6 +739,16 @@ fn summarize(lanes: &[Lane]) -> Value {
     for kind in ATTENTION_TYPES {
         attention.entry(kind).or_default();
     }
+    let mut review_sources: BTreeMap<&str, i64> = BTreeMap::new();
+    let mut ready_points: BTreeMap<&str, i64> = BTreeMap::new();
+    for l in lanes {
+        for check in l.review_sources() {
+            *review_sources.entry(check).or_default() += 1;
+        }
+        if let Some((point, _)) = l.ready_point() {
+            *ready_points.entry(point).or_default() += 1;
+        }
+    }
     let tokens: Map<String, Value> = tokens
         .into_iter()
         .map(|(source, sums)| (source.to_string(), token_fields(&sums)))
@@ -694,6 +807,7 @@ fn summarize(lanes: &[Lane]) -> Value {
         "quality_gate_skipped": skipped(&|l| &l.quality_gate),
         "lanes_verdict_on_head": count(&|_, r| r.with_pr && r.verdict_on_head == Some(true)),
         "missing": missing,
+        "sources": { "reviews": review_sources, "ready_point": ready_points },
     });
     let lanes: Vec<Value> = lanes
         .iter()

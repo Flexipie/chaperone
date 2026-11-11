@@ -8,10 +8,11 @@ use std::path::Path;
 use chaperone_core::checks::AttentionInput;
 use chaperone_core::ledger::Ledger;
 use chaperone_core::pipeline::sha_prefix_eq;
+use chaperone_core::usage::Roots;
 use chaperone_core::work::is_terminal;
 use serde_json::{Value, json};
 
-use crate::checks::lane_pipeline;
+use crate::checks::{home, lane_pipeline};
 use crate::cli::{ActorArgs, HookEvent};
 use crate::work::observed_head;
 
@@ -28,7 +29,7 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
     std::io::stdin().read_to_string(&mut input).ok()?;
     let input: Value = serde_json::from_str(&input).ok()?;
     let ledger = match event {
-        HookEvent::StopFailure => Ledger::open(db),
+        HookEvent::Stop | HookEvent::StopFailure => Ledger::open(db),
         _ => Ledger::open_read_only(db),
     }
     .ok()?;
@@ -100,6 +101,15 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
                 "permissionDecision": "deny", "permissionDecisionReason": reason}}))
         }
         HookEvent::Stop => {
+            // The lane's own session tokens, recorded every turn without
+            // the lane asking; a report that finds nothing new writes nothing.
+            let roots = Roots {
+                claude: home("CLAUDE_CONFIG_DIR", ".claude"),
+                codex: None,
+            };
+            if std::env::var_os("DAISY_CLI_READONLY").is_none_or(|v| v != "1") {
+                let _ = ledger.usage_report(&ActorArgs::default().resolve(), work, &roots);
+            }
             if input["stop_hook_active"] == true {
                 return None;
             }
