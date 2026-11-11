@@ -289,19 +289,25 @@ fn the_newest_plan_checks_findings_are_answered_and_never_block() {
     let (_dir, path, ledger) = common::ledger();
     review(&ledger, &[]);
     let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
-    let plan = |payload: serde_json::Value| {
-        let mut payload = payload;
-        payload["check"] = json!("plan_check");
-        payload["head_sha"] = json!("abc1234");
-        payload["producer"] = harness.clone();
+    let plan = |mut p: serde_json::Value| {
+        p.as_object_mut().unwrap().extend([
+            ("check".into(), json!("plan_check")),
+            ("head_sha".into(), json!("abc1234")),
+            ("producer".into(), harness.clone()),
+        ]);
+        let payload = serde_json::from_value(p).unwrap();
         let m = Mutation::Event {
             kind: EventKind::CheckFinished,
             lane_id: Some(1),
             spec_id: None,
-            payload: serde_json::from_value(payload).unwrap(),
+            payload,
         };
-        let at = "2099-01-01T00:00:00.000Z";
-        common::committed(ledger.apply(&actor("9"), None, at, m).unwrap()).id
+        common::committed(
+            ledger
+                .apply(&actor("9"), None, "2099-01-01T00:00:00.000Z", m)
+                .unwrap(),
+        )
+        .id
     };
     let found = ["p1", "p2"]
         .map(|k| json!({"finding_key": k, "severity": "blocker", "title": "t", "body": "b"}));
@@ -311,17 +317,10 @@ fn the_newest_plan_checks_findings_are_answered_and_never_block() {
     let answers = || {
         let found = ledger.plan_findings(1).unwrap().into_iter();
         found
-            .map(|f| (f.finding_key, f.status, f.reason))
+            .map(|f| format!("{} {} {:?}", f.finding_key, f.status, f.reason))
             .collect::<Vec<_>>()
     };
-    let r = Some("r".to_string());
-    assert_eq!(
-        answers(),
-        [
-            ("p1".into(), "accepted".into(), r),
-            ("p2".into(), "open".into(), None)
-        ]
-    );
+    assert_eq!(answers(), ["p1 accepted Some(\"r\")", "p2 open None"]);
     plan(json!({"outcome": "skipped", "reason": "no_answer"}));
     assert!(answers().is_empty());
     common::assert_consistent(&path);
