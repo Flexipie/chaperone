@@ -140,28 +140,14 @@ fn claude_file(path: &Path, source: &'static str, base: Value, scan: &mut Scan) 
         }
         let u = msg.usage.as_ref();
         let n = |k: &str| u.and_then(|u| u.get(k)).and_then(Value::as_u64);
-        let (input, read, write, output) = (
+        let mut fields = claude_tokens([
             n("input_tokens"),
             n("cache_read_input_tokens"),
             n("cache_creation_input_tokens"),
             n("output_tokens"),
-        );
-        let input_total = input.zip(read).zip(write).map(|((i, r), w)| i + r + w);
-        // Anthropic counts thinking inside output_tokens and reports no
-        // separate reasoning number.
-        let fields = json!({
-            "uncached_input": input,
-            "cache_read": read,
-            "cache_write": write,
-            "output": output,
-            "reasoning": null,
-            "input_includes_cache": false,
-            "output_includes_reasoning": true,
-            "input_total": input_total,
-            "output_total": output,
-            "model": msg.model,
-            "raw": u.map(counts),
-        });
+        ]);
+        fields["model"] = json!(msg.model);
+        fields["raw"] = json!(u.map(counts));
         push(scan, &base, &mut session, id, source, fields);
     }
     scan.sessions.push(session);
@@ -250,24 +236,48 @@ fn codex_file(path: &Path, worktree: &str, scan: &mut Scan) -> io::Result<()> {
     session.unknown = order.is_empty();
     for rid in &order {
         let (u, model) = &records[rid];
-        let n = |k: &str| u.get(k).and_then(Value::as_u64);
-        let fields = json!({
-            "uncached_input": n("input_tokens"),
-            "cache_read": n("cached_input_tokens"),
-            "cache_write": n("cache_write_input_tokens"),
-            "output": n("output_tokens"),
-            "reasoning": n("reasoning_output_tokens"),
-            "input_includes_cache": true,
-            "output_includes_reasoning": true,
-            "input_total": n("input_tokens"),
-            "output_total": n("output_tokens"),
-            "model": model,
-            "raw": counts(u),
-        });
+        let mut fields = codex_tokens(u);
+        fields["model"] = json!(model);
+        fields["raw"] = counts(u);
         push(scan, &base, &mut session, rid, source, fields);
     }
     scan.sessions.push(session);
     Ok(())
+}
+
+/// R11's token fields of Anthropic's input, cache read, cache write and
+/// output counts.
+pub(crate) fn claude_tokens([input, read, write, output]: [Option<u64>; 4]) -> Value {
+    let input_total = input.zip(read).zip(write).map(|((i, r), w)| i + r + w);
+    // Anthropic counts thinking inside output_tokens and reports no
+    // separate reasoning number.
+    json!({
+        "uncached_input": input,
+        "cache_read": read,
+        "cache_write": write,
+        "output": output,
+        "reasoning": null,
+        "input_includes_cache": false,
+        "output_includes_reasoning": true,
+        "input_total": input_total,
+        "output_total": output,
+    })
+}
+
+/// R11's token fields of a Codex usage object.
+pub(crate) fn codex_tokens(u: &Value) -> Value {
+    let n = |k: &str| u.get(k).and_then(Value::as_u64);
+    json!({
+        "uncached_input": n("input_tokens"),
+        "cache_read": n("cached_input_tokens"),
+        "cache_write": n("cache_write_input_tokens"),
+        "output": n("output_tokens"),
+        "reasoning": n("reasoning_output_tokens"),
+        "input_includes_cache": true,
+        "output_includes_reasoning": true,
+        "input_total": n("input_tokens"),
+        "output_total": n("output_tokens"),
+    })
 }
 
 fn session(cli: &'static str, base: &Value) -> Session {

@@ -327,46 +327,77 @@ fn an_idle_transcript_counts_its_last_message() {
 
 /// A session the harness ran is one row, source and origin `harness`,
 /// keyed by its session id: a retry writes nothing, its counts keep no
-/// string, and a session that left no id writes nothing.
+/// string, its tokens are Claude's summed over models or Codex's, and a
+/// session that left no id writes nothing.
 #[test]
 fn a_harness_session_is_one_row() {
     let (_dir, path, ledger) = common::ledger();
     let id = lane(&ledger, None);
-    let usage = json!({"claude-x": {"inputTokens": 3, "costUSD": 0.5, "note": "not stored"}});
+    let usage = json!({"claude-x": {"inputTokens": 3, "cacheReadInputTokens": 100,
+        "cacheCreationInputTokens": 10, "outputTokens": 2, "costUSD": 0.5, "note": "not stored"},
+        "claude-y": {"inputTokens": 1, "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 5, "outputTokens": 4}});
     let run = Run {
         raw: "not stored".into(),
         cost_usd: Some(0.5),
         model_usage: usage,
         session_id: Some("sess".into()),
     };
-    let labels = Map::from_iter([("phase".into(), json!("review"))]);
+    let labels = Map::from_iter([
+        ("phase".into(), json!("review")),
+        ("cli".into(), json!("claude")),
+    ]);
+    let codex = Run {
+        raw: String::new(),
+        cost_usd: None,
+        model_usage: json!({"input_tokens": 50, "cached_input_tokens": 40, "output_tokens": 6}),
+        session_id: Some("thread".into()),
+    };
     let no_id = Run {
         raw: String::new(),
         cost_usd: Some(1.0),
         model_usage: Value::Null,
         session_id: None,
     };
-    for run in [&run, &run, &no_id] {
+    let mut codex_labels = labels.clone();
+    codex_labels.insert("cli".into(), json!("codex"));
+    let runs = [
+        (&run, &labels),
+        (&run, &labels),
+        (&codex, &codex_labels),
+        (&no_id, &labels),
+    ];
+    for (run, labels) in runs {
         let written = ledger.usage_run(&actor("1"), id, labels.clone(), run);
         written.unwrap().unwrap();
     }
     let db = read_only(&path);
-    assert_eq!(count(&db, USAGE), 1);
-    let payload: String = db
-        .query_row(
-            "SELECT payload_json FROM events WHERE kind = 'usage.reported'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let want = json!({"source": "harness", "phase": "review", "message_id": "run:sess",
-        "origin": "harness", "session_id": "sess", "cost_usd": 0.5,
-        "raw": {"claude-x": {"inputTokens": 3, "costUSD": 0.5}}});
-    assert_eq!(serde_json::from_str::<Value>(&payload).unwrap(), want);
+    assert_eq!(count(&db, USAGE), 2);
+    let payload = |cli: &str| -> Value {
+        let sql = "SELECT payload_json FROM events WHERE kind = 'usage.reported'
+                   AND json_extract(payload_json, '$.cli') = ?1";
+        let text: String = db.query_row(sql, [cli], |r| r.get(0)).unwrap();
+        serde_json::from_str(&text).unwrap()
+    };
+    let mut raw = run.model_usage.clone();
+    raw["claude-x"].as_object_mut().unwrap().remove("note");
+    let want = json!({"source": "harness", "phase": "review", "cli": "claude",
+        "message_id": "run:sess", "origin": "harness", "session_id": "sess", "cost_usd": 0.5,
+        "raw": raw, "uncached_input": 4, "cache_read": 100, "cache_write": 15, "output": 6,
+        "reasoning": null, "input_includes_cache": false, "output_includes_reasoning": true,
+        "input_total": 119, "output_total": 6});
+    assert_eq!(payload("claude"), want);
+    let tokens = ["input_total", "cache_read", "cache_write", "output_total"];
+    let got = tokens.map(|k| payload("codex")[k].clone());
+    assert_eq!(got, [json!(50), json!(40), Value::Null, json!(6)]);
     let got = ledger.usage_get(id).unwrap().unwrap();
     let harness = &got["totals"]["harness"];
     assert_eq!(
-        (&harness["messages"], &harness["cost_usd"]),
-        (&json!(1), &json!(0.5))
+        (
+            &harness["messages"],
+            &harness["cost_usd"],
+            &harness["input_total"]
+        ),
+        (&json!(2), &json!(0.5), &json!(169))
     );
 }
