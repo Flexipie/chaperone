@@ -332,7 +332,15 @@ read as remote-tracking refs, so a local branch named `origin/main` is never tak
 its tree, those two within one 10 s deadline. A lane with no worktree, a relative or missing
 one, a git call that fails or times out (not marked retryable yet), a numstat past 16 MiB and
 a base profile that is a link or no file, is not TOML (with or without `[diff]`) or whose
-`[diff]` does not load are `invalid_input` and write nothing. The per-file list goes to the
+`[diff]` or `[[companions]]` does not load are `invalid_input` and write nothing. So is a
+commit that breaks a companion rule of the base profile: each `[[companions]]` has a `name`
+(no space or `:`), `when` and `needs` (non-empty glob lists), and a commit that changes a file
+`when` names must change one `needs` names. The refusal names each broken rule, the file that
+triggered it and the files it needs. A lane commit (merge base to the lane's commit) whose
+message has the trailer `No-companion: <name> <why>`, the why not empty, waives that rule, so a change that truly
+needs no doc edit says so in its history; git's log is read for it only when a rule is broken, and a log past 1 MiB refuses rather than
+read as no waiver.
+A binary older than the table ignores it. The per-file list goes to the
 evidence store before the one `check.finished` that names it is written. It prints what
 `check record` prints.
 

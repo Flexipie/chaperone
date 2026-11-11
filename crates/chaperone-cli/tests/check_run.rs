@@ -191,6 +191,104 @@ fn a_run_measures_the_lane_commit() {
     assert_eq!(measured(), [json!(1), json!(true), at]);
 }
 
+/// A commit that changes a file a base profile's companion rule names
+/// without one it needs is refused and writes nothing; the needed file, or
+/// a lane commit's `No-companion` trailer naming the rule and why, passes. A rule
+/// with an empty list does not load.
+#[test]
+fn a_companion_rule_needs_its_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
+    setup(dir.path());
+    let rule = "[[companions]]\nname = \"contract\"\nwhen = [\"*.rs\"]\n";
+    let profile = format!("{rule}needs = [\"docs/contract.md\"]\n");
+    git(
+        &wt,
+        &["add", "."],
+        &[(".chaperone/profile.toml", profile.as_bytes())],
+    );
+    git(&wt, &["commit", "-qm", "profile"], &[]);
+    git(
+        &wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(
+        &wt,
+        &["checkout", "-qb", "feat"],
+        &[("lib.rs", b"changed\n")],
+    );
+    git(&wt, &["commit", "-qam", "code"], &[]);
+    let id = lane(
+        &db,
+        &["--worktree", wt.to_str().unwrap(), "--branch", "feat"],
+    );
+    let diff = ["check", "run", "diff", "--work", &id];
+    let before = events(&db);
+    let (code, err) = run(&db, &diff);
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    let why = "companion rule contract: lib.rs changed but not docs/contract.md";
+    assert!(err["message"].as_str().unwrap().contains(why), "{err}");
+    assert_eq!(events(&db), before);
+
+    let bare = "skip\n\nNo-companion: contract";
+    git(&wt, &["commit", "-q", "--allow-empty", "-m", bare], &[]);
+    assert_eq!(run(&db, &diff).0, 1, "a waiver needs a why");
+    git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
+    let folded = "skip\n\nNo-companion: other because\n contract is named on a continuation";
+    git(&wt, &["commit", "-q", "--allow-empty", "-m", folded], &[]);
+    assert_eq!(run(&db, &diff).0, 1, "a continuation line waives nothing");
+    git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
+    let long = dir.path().join("long");
+    let text = format!("skip\n\nNo-companion: contract {}", "x".repeat(1 << 20));
+    std::fs::write(&long, text).unwrap();
+    let file = long.to_str().unwrap();
+    git(&wt, &["commit", "-q", "--allow-empty", "-F", file], &[]);
+    let (code, err) = run(&db, &diff);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("over the output limit")
+    );
+    git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
+    let waive = "skip\n\nNo-companion: contract no behaviour change";
+    git(&wt, &["commit", "-q", "--allow-empty", "-m", waive], &[]);
+    assert_eq!(run(&db, &diff).0, 0);
+    git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
+    assert_eq!(run(&db, &diff).0, 1);
+    git(&wt, &["add", "."], &[("docs/contract.md", b"x\n")]);
+    git(&wt, &["commit", "-qm", "doc"], &[]);
+    assert_eq!(run(&db, &diff).0, 0);
+
+    git(&wt, &["checkout", "-q", "main"], &[]);
+    let needs = "needs = [\"docs/contract.md\"]\n";
+    let bad = [
+        format!("{rule}needs = []\n"),
+        rule.replace("contract", "a b") + needs,
+        rule.replace("contract", "a:b") + needs,
+        rule.replace("contract", "") + needs,
+    ];
+    for profile in bad {
+        let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", profile.as_bytes())];
+        git(&wt, &["add", "."], files);
+        git(&wt, &["commit", "-qm", "bad"], &[]);
+        git(
+            &wt,
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+            &[],
+        );
+        let (code, err) = run(&db, &diff);
+        assert_eq!(code, 1, "{profile}: {err}");
+        let message = err["message"].as_str().unwrap();
+        assert!(
+            message.contains("non-empty `when` and `needs`"),
+            "{profile}: {err}"
+        );
+    }
+}
+
 /// Nothing to measure, git that fails and a run already on the lane are
 /// refused and write nothing; once a lane has a harness check its worktree
 /// may not move, while a lane without one still may.

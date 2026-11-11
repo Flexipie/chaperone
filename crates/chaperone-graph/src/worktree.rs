@@ -385,12 +385,24 @@ struct Diff {
     code: Vec<String>,
 }
 
+/// A `[[companions]]` rule (its own table, so a binary that predates it
+/// still loads `[diff]`): a diff that changes a file `when` names
+/// must change one `needs` names too.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Companion {
+    pub name: String,
+    pub when: Vec<String>,
+    pub needs: Vec<String>,
+}
+
 /// The `[diff] code` globs of a base branch's profile (a file matching one
-/// is code even under docs or in Markdown), with the profile's hash, base
-/// and commit as [`BaseTests`] has them.
+/// is code even under docs or in Markdown) and its companion rules, with
+/// the profile's hash, base and commit as [`BaseTests`] has them.
 #[derive(Debug)]
 pub struct BaseCode {
     pub code: Vec<String>,
+    pub companions: Vec<Companion>,
     pub hash: String,
     pub base: &'static str,
     pub commit: String,
@@ -398,8 +410,9 @@ pub struct BaseCode {
 
 /// The [`BaseCode`] of the base branch's [`REPO_PROFILE`] for the repo
 /// `dir` is in; None when there is none. No `[diff]` names no globs. A
-/// profile that is a link or no file, is not TOML, or whose `[diff]` does
-/// not load refuses.
+/// profile that is a link or no file, is not TOML, or whose `[diff]` or
+/// `[[companions]]` does not load refuses, as does a rule with an empty list or a
+/// name that is empty or holds a space or `:` (a trailer names it).
 pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<BaseCode>, Error> {
     let Some(found) = base_profile(bin, dir, deadline)? else {
         return Ok(None);
@@ -412,8 +425,25 @@ pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<Ba
         .transpose()
         .map_err(bad)?
         .map_or_else(Vec::new, |d| d.code);
+    let rules = profile
+        .remove("companions")
+        .map(toml::Value::try_into::<Vec<Companion>>);
+    let companions = rules.transpose().map_err(bad)?.unwrap_or_default();
+    let named = |n: &str| !n.is_empty() && !n.contains(|c: char| c.is_whitespace() || c == ':');
+    if let Some(c) = companions
+        .iter()
+        .find(|c| !named(&c.name) || c.when.is_empty() || c.needs.is_empty())
+    {
+        return Err(Error::Invalid(format!(
+            "profile {}: [[companions]] {:?} needs a name without spaces or `:`, and \
+             non-empty `when` and `needs`",
+            found.at(),
+            c.name
+        )));
+    }
     Ok(Some(BaseCode {
         code,
+        companions,
         hash: format!("{:x}", Sha256::digest(&found.text)),
         base: found.base,
         commit: found.commit,

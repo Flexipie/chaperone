@@ -27,7 +27,7 @@ use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
 use chaperone_core::work::{UpdateInput, WorkItem, is_terminal};
-use chaperone_graph::{code_globs, commands_in, declares, glob};
+use chaperone_graph::{Companion, code_globs, commands_in, declares, glob};
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
@@ -511,6 +511,8 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     // The profile says what code is, so a changed one measures again.
     input.profile = found.as_ref().map(|f| f.hash.clone());
     let globs = found.as_ref().map_or(&[][..], |f| &f.code);
+    let rules = found.as_ref().map_or(&[][..], |f| &f.companions);
+    companions(&wt, &base, &input.head, &files, rules)?;
     let (code, code_lines) = code(&files, globs);
     let added: u64 = files.iter().filter_map(|f| f.added).sum();
     let removed: u64 = files.iter().filter_map(|f| f.removed).sum();
@@ -543,6 +545,71 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     }
     input.evidence_ref = Some(stored.hash);
     one(ledger.check_run(actor, &input)??)
+}
+
+/// Refuses a commit whose `files` break a companion rule (a file the
+/// rule's `when` names changed, none its `needs` names did) unless a lane
+/// commit, `base..head`, waives it with a `No-companion: <rule> <why>`
+/// trailer whose why is not empty. The log is read only when a rule is broken.
+fn companions(
+    wt: &Path,
+    base: &str,
+    head: &str,
+    files: &[ChangedFile],
+    rules: &[Companion],
+) -> Result<(), CliError> {
+    let hit = |globs: &[String]| {
+        files
+            .iter()
+            .find(|f| globs.iter().any(|g| glob(g, &f.path)))
+    };
+    let broken: Vec<_> = rules
+        .iter()
+        .filter_map(|r| Some((r, hit(&r.when)?)))
+        .filter(|(r, _)| hit(&r.needs).is_none())
+        .collect();
+    if broken.is_empty() {
+        return Ok(());
+    }
+    let range = format!("{}..{head}", git::base_rev(base));
+    let format = "--format=%(trailers:key=No-companion,valueonly,unfold)";
+    let args = ["log", format, "--end-of-options", &range, "--"];
+    let (log, cut) = harness_git(wt, &args, Instant::now() + RUN_TIMEOUT)?;
+    if cut {
+        return Err(refuse(
+            "the No-companion trailer log is over the output limit, so a waiver in it \
+             cannot be read"
+                .into(),
+        ));
+    }
+    // One line per trailer (`unfold`: a continuation line is no trailer of
+    // its own): the rule's name, then a reason; a bare name records no why.
+    let waived = |name: &str| {
+        let given = |r: &str| {
+            let r = r.trim_start_matches(':');
+            r.starts_with(char::is_whitespace) && !r.trim().is_empty()
+        };
+        log.lines()
+            .any(|l| l.trim().strip_prefix(name).is_some_and(given))
+    };
+    let why: Vec<_> = broken
+        .iter()
+        .filter(|(r, _)| !waived(&r.name))
+        .map(|(r, f)| {
+            let needs = r.needs.join(" or ");
+            format!(
+                "companion rule {}: {} changed but not {needs}",
+                r.name, f.path
+            )
+        })
+        .collect();
+    if why.is_empty() {
+        return Ok(());
+    }
+    Err(refuse(format!(
+        "{}; change it too, or add a trailer `No-companion: <rule> <why>` to a lane commit",
+        why.join("; ")
+    )))
 }
 
 /// Of `files`, the code ones (named by `globs`, else not [`NOT_CODE`]),

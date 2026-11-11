@@ -28,6 +28,16 @@ daisy = false
 [diff]
 code = ["pipelines/**", "plugin/**"]
 
+# Companion rules: `check run diff` refuses a commit that changes a file
+# `when` names and none `needs` names, unless a lane commit has the trailer
+# `No-companion: <name> <why>`. A new subcommand also belongs in
+# [[entry_points]], but it is a variant in cli.rs like any flag edit, so a
+# path rule cannot tell it apart: review catches that one.
+[[companions]]
+name = "cli-contract"
+when = ["crates/chaperone-cli/src/cli.rs"]
+needs = ["docs/cli-contract.md"]
+
 [lanes]
 enabled = true
 
