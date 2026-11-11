@@ -940,6 +940,13 @@ fn a_v20_smoke_claim_runs_its_command() {
         assert!(stored.contains(printed), "{stored}");
         assert!(stored.ends_with(&format!("exit {exit}\n")), "{stored}");
     }
+    // The same run again, with the same output, replays and writes nothing.
+    let before = events(&db);
+    let (code, again) = claim("--run", "./-s");
+    assert_eq!(
+        (code, &again["replayed"], events(&db)),
+        (0, &json!(true), before)
+    );
     // A skipped smoke ran nothing: no run goes with it, and none starts.
     let before = events(&db);
     let skipped = [

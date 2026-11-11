@@ -190,10 +190,11 @@ fn start(
                     ))));
                 }
                 // With its group killed the pipes close; the grace bounds a
-                // process that left the group and still holds one.
+                // process that left the group and still holds one, whose
+                // stream is then lost and counts as cut (#230 keeps it).
                 if let (Keep::Tail(_), Ok(status)) = (keep, status) {
-                    let (out, out_cut) = out.recv_timeout(GRACE).unwrap_or_default();
-                    let (err, err_cut) = err.recv_timeout(GRACE).unwrap_or_default();
+                    let (out, out_cut) = out.recv_timeout(GRACE).unwrap_or((Vec::new(), true));
+                    let (err, err_cut) = err.recv_timeout(GRACE).unwrap_or((Vec::new(), true));
                     return Ok(Done {
                         status,
                         out,
