@@ -759,6 +759,17 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                      run it with `check run`, not a record"
                 )));
             }
+            // There a smoke claim that ran carries the run of its command,
+            // so its evidence is what the command printed, not the script.
+            let unrun = check == "smoke"
+                && p.outcome.as_deref() == Some("ran")
+                && !p.rest.contains_key("run");
+            if !harness && unrun && stamped_schema(tx, lane_id)? == Some(2) {
+                refuse!(invalid(&format!(
+                    "a smoke claim on lane {lane_id} runs its command: \
+                     `check record --check smoke --run <script>`"
+                )));
+            }
             let findings = p.finding_list();
             let keys: BTreeSet<_> = findings.iter().map(|f| &f.finding_key).collect();
             if keys.len() != findings.len() {

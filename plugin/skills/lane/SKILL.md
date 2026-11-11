@@ -94,16 +94,17 @@ Before every verify: the review and the verdict read the smoke on the commit, an
 stands for the tree even if a smoke comes later. Every new commit needs a new one.
 
 `chaperone check run smoke --work $2`. `result` `fail`: read its `commands`, fix, commit, run
-it again. Refused for no `[smoke]` in the base profile: run the plan's smoke yourself, put
-each command and its output in `smoke-$2.log` at the worktree root, and record your claim:
+it again. Refused for no `[smoke]` in the base profile: put the plan's smoke commands in
+`smoke-$2.sh` at the worktree root and record your claim; the CLI runs it with bash there and
+keeps the script, its output and exit code:
 
 ```
-chaperone check record --work $2 --check smoke --head "$(git rev-parse HEAD)" --outcome ran --evidence smoke-$2.log
-rm smoke-$2.log
+chaperone check record --work $2 --check smoke --head "$(git rev-parse HEAD)" --outcome ran --run smoke-$2.sh
+rm smoke-$2.sh
 ```
 
-Record only what ran and what you saw. The ledger keeps a copy; `pr open` refuses untracked
-files. A code change with no smoke that ran cannot be ready: after a real attempt, Needs you.
+A run that exits non-zero is recorded and claims nothing: fix, commit, run it again. The
+ledger keeps a copy; `pr open` refuses untracked files. A code change with no smoke that ran cannot be ready: after a real attempt, Needs you.
 
 ## 6. Verify
 

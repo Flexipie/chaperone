@@ -473,6 +473,7 @@ mod tests {
                 reason: None,
                 decision: Some(decision.into()),
                 findings: None,
+                run: None,
             };
             // Checks and the override come from a session that never held it.
             let by = Actor {

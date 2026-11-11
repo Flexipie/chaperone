@@ -123,7 +123,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `spec update` | `<spec> --file <path\|-> --reason <r> [--expected-version <n>]` | write |
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
-| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]...` | write |
+| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]... [--run <script>]` | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan\|smoke --work <id> [--file <plan>]` | write |
 | `check waive` | `plan --work <id> --reason <r>` | write |
 | `check prune` | | read, removes directories |
@@ -332,6 +332,18 @@ first: the check and the count, then each file is read and named, then the recor
 rolled back (so a session that held the lane, or any other refusal, stops here); only then is
 each file stored in the evidence store (redacted, its last 256 KiB), before the event that
 carries `evidence_files` commits. A refusal is `invalid_input` and writes no event and no file.
+`--run <script>` (#225) goes with a `smoke` that ran only and counts toward the 12: the script
+is read by the same rules, then, after the trial record (which carries the run as if it passed),
+the CLI runs `bash <script>` in the worktree's root as `check run` runs a command (stdin empty,
+the session's and git's repository variables removed, the end of each stream kept, a 30-minute
+deadline). The script's text, `$ ["bash", "<script>"]`, its stderr and stdout, then
+`exit <code>` (`null`, and `(timed out)` at the deadline, when it has no code) is the first
+evidence file, named by the script's path, and the payload carries `run: {argv, exit}`. A run
+that exits non-zero is recorded too, and claims nothing (`smoke.claimed` needs `exit` 0); a
+script that cannot start writes nothing. On a lane stamped `v20`, a session `smoke` that ran
+without `run` is refused at the write (`invalid_input`), so a claim's evidence is what its
+command printed and how it exited, never a script the lane names as evidence. The output is part
+of the payload's hash, so a run claim replays only when its output is the same.
 (A write that fails only between the trial and the real record, such as a lane claimed in that
 moment, leaves its content-addressed files in the store.) It prints `{event_id, work_id, kind, replayed, at, payload}`.
 
@@ -502,7 +514,7 @@ of the newest `diff`, `tests` and complete `review` on the commit, the findings 
 that still block, from every review (labelled so, with a disputed one read `open`: the dispute
 is the lane's word), and the newest smoke on the commit: whether the profile declares one, the
 harness's `check run smoke` when it does and, labelled a claim the harness did not check, a session's `check record --check smoke` on the commit (or a
-short form of it) with the last 4 KiB of each evidence file; each fenced, then the harness's
+short form of it) with its `run` and the last 4 KiB of each evidence file; each fenced, then the harness's
 closing line. It is told nothing else the lane
 wrote: no summary, `merge_case` or `look_at`. It answers `{decision, why, proven,
 not_proven}`, `decision` `yes` or `no` and a why that is not blank. It writes a
@@ -736,7 +748,7 @@ gates, in the order a denial names the first that fails:
 | `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree counts) | `review.complete` |
 | `no_blocking_findings` | no complete harness review on the lane, of any tree, has a finding open, verified or disputed of severity `blocker`, `risk` or another blocking one; refuted, waived, fixed and answered findings, incomplete and session reviews' and the plan check's never count | `findings.open_blocking` |
 | `plan_or_no_code` | the diff changes no code, or the plan check ran (`check run plan`, before code) or the owner waived it (`check waive plan`) | `commit.changes_code`, `plan_check.outcome`, `plan_check.reason` |
-| `smoke_or_no_code` | the diff changes no code, or the newest harness smoke on the commit passed, or the harness ran none there and a session's smoke claim on it ran with evidence | `commit.changes_code`, `smoke.passed`, `smoke.claimed` |
+| `smoke_or_no_code` | the diff changes no code, or the newest harness smoke on the commit passed, or the harness ran none there and a session's smoke claim on it ran with evidence (and, when it carries a `run`, exited 0) | `commit.changes_code`, `smoke.passed`, `smoke.claimed` |
 | `verdict_is_yes` | the newest harness verdict says `yes` | `verdict.decision` |
 | `verdict_on_head` | that verdict is on the commit (a carried verdict is on the amend it was carried to) | `verdict.sha`, `commit.sha` |
 

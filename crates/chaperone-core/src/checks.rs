@@ -46,6 +46,9 @@ pub struct CheckInput {
     pub reason: Option<String>,
     pub decision: Option<String>,
     pub findings: Option<u64>,
+    /// A smoke claim's run of its command (`check record --run`): `argv`
+    /// and `exit`, null when it was killed or timed out.
+    pub run: Option<Value>,
 }
 
 /// A field of a tree-keyed check and the value it must hold, or none.
@@ -305,6 +308,9 @@ impl Ledger {
         if input.findings.is_some() != (counted && !skipped) {
             return invalid("--findings <n> is required for a plan_check or quality_gate that ran, and only there".into());
         }
+        if input.run.is_some() && (input.check != "smoke" || skipped) {
+            return invalid("--run goes with a smoke that ran, and only there".into());
+        }
         let mut payload = Payload {
             check: Some(input.check.clone()),
             outcome: Some(input.outcome.clone()),
@@ -316,6 +322,9 @@ impl Ledger {
             if let Some(v) = v {
                 payload.rest.insert(k.into(), json!(v));
             }
+        }
+        if let Some(run) = &input.run {
+            payload.rest.insert("run".into(), run.clone());
         }
         if !files.is_empty() {
             payload.rest.insert("evidence_files".into(), json!(files));

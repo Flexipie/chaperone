@@ -888,6 +888,53 @@ fn smoke_evidence_stays_in_the_worktree() {
     assert_eq!((events(&db), in_store()), before);
 }
 
+/// A smoke claim on a v20 lane runs its command: `--run` keeps the script,
+/// the output and the exit code, a failing run's too. The script alone as `--evidence` is refused, writing nothing.
+#[test]
+fn a_v20_smoke_claim_runs_its_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = setup(dir.path());
+    let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
+    let id = lane(
+        &db,
+        &["--pipeline", "v20", "--worktree", wt.to_str().unwrap()],
+    );
+    std::fs::write(wt.join("smoke.sh"), "echo hello from smoke\n").unwrap();
+    std::fs::write(wt.join("bad.sh"), "echo boom\nexit 3\n").unwrap();
+    let claim = |how: &str, file: &str| {
+        let args = ["check", "record", "--work", &id, "--check", "smoke"];
+        let rest = ["--head", &base, "--outcome", "ran", how, file];
+        run(&db, &[&args[..], &rest].concat())
+    };
+    let before = events(&db);
+    let (code, err) = claim("--evidence", "smoke.sh");
+    assert_eq!(
+        (code, &err["code"], events(&db)),
+        (1, &json!("invalid_input"), before)
+    );
+    assert!(
+        err["message"].as_str().unwrap().contains("--run <script>"),
+        "{err}"
+    );
+
+    for (script, exit) in [("smoke.sh", 0), ("bad.sh", 3)] {
+        let (code, kept) = claim("--run", script);
+        assert_eq!(code, 0, "{kept}");
+        let p = &kept["payload"];
+        assert_eq!(p["run"], json!({"argv": ["bash", script], "exit": exit}));
+        let file = &p["evidence_files"][0];
+        let stored = Evidence::beside(&db).get(file["sha256"].as_str().unwrap());
+        let stored = stored.unwrap();
+        let printed = if exit == 0 {
+            "hello from smoke"
+        } else {
+            "boom"
+        };
+        assert!(stored.contains(printed), "{stored}");
+        assert!(stored.ends_with(&format!("exit {exit}\n")), "{stored}");
+    }
+}
+
 /// A harness `smoke` passes v19's `smoke_recorded` whoever starts it, so
 /// `check run smoke` on a lane whose pipeline has no `verdict` (v17 to
 /// v19) is refused, even with a `[smoke]` in the base profile, and writes

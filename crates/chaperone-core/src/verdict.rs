@@ -227,8 +227,8 @@ pub fn smoke(
                 }
                 shown.push(json!({"path": f["path"], "end": &text[from..]}));
             }
-            let reason = p.rest.get("reason").cloned();
-            json!({"outcome": p.outcome, "reason": reason, "evidence_files": shown})
+            let (reason, run) = (p.rest.get("reason").cloned(), p.rest.get("run").cloned());
+            json!({"outcome": p.outcome, "reason": reason, "run": run, "evidence_files": shown})
         }
         None => Value::Null,
     };
