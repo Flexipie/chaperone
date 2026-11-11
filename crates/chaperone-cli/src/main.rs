@@ -7,6 +7,7 @@ mod doctor;
 mod impact;
 mod output;
 mod overlap;
+mod plugin;
 mod spec;
 mod work;
 
@@ -145,6 +146,8 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
             repo,
             profile,
         } => doctor::run(&skills, repo.as_deref(), profile),
+        Cmd::Install => plugin::install(Path::new("claude")),
+        Cmd::Uninstall => plugin::uninstall(Path::new("claude")),
         Cmd::Overlap { repo, uncommitted } => {
             overlap::run(&Ledger::open(&path)?, repo, uncommitted, meta, cli.format)
         }
