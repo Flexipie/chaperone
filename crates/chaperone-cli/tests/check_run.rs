@@ -239,6 +239,20 @@ fn a_companion_rule_needs_its_file() {
     git(&wt, &["commit", "-q", "--allow-empty", "-m", folded], &[]);
     assert_eq!(run(&db, &diff).0, 1, "a continuation line waives nothing");
     git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
+    let long = dir.path().join("long");
+    let text = format!("skip\n\nNo-companion: contract {}", "x".repeat(1 << 20));
+    std::fs::write(&long, text).unwrap();
+    let file = long.to_str().unwrap();
+    git(&wt, &["commit", "-q", "--allow-empty", "-F", file], &[]);
+    let (code, err) = run(&db, &diff);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("over the output limit")
+    );
+    git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
     let waive = "skip\n\nNo-companion: contract no behaviour change";
     git(&wt, &["commit", "-q", "--allow-empty", "-m", waive], &[]);
     assert_eq!(run(&db, &diff).0, 0);

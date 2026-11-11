@@ -574,7 +574,14 @@ fn companions(
     let range = format!("{}..{head}", git::base_rev(base));
     let format = "--format=%(trailers:key=No-companion,valueonly,unfold)";
     let args = ["log", format, "--end-of-options", &range, "--"];
-    let (log, _) = harness_git(wt, &args, Instant::now() + RUN_TIMEOUT)?;
+    let (log, cut) = harness_git(wt, &args, Instant::now() + RUN_TIMEOUT)?;
+    if cut {
+        return Err(refuse(
+            "the No-companion trailer log is over the output limit, so a waiver in it \
+             cannot be read"
+                .into(),
+        ));
+    }
     // One line per trailer (`unfold`: a continuation line is no trailer of
     // its own): the rule's name, then a reason; a bare name records no why.
     let waived = |name: &str| {
