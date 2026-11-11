@@ -192,8 +192,8 @@ fn ran(p: &Payload) -> Value {
 /// The newest smoke on lane `work`'s commit `head`, as the verdict and the
 /// intent lens are shown it: `harness`, what `check run smoke` ran, and
 /// `lane_claim`, what a session recorded with `check record --check smoke`
-/// (on `head` or a short form of it) and the end of each evidence file it
-/// attached, read from `store`; null for none.
+/// (on `head` or a short form of it) and the id and end of each evidence
+/// file it attached, read from `store`; null for none.
 pub fn smoke(
     ledger: &Ledger,
     store: &Evidence,
@@ -225,7 +225,7 @@ pub fn smoke(
                 while !text.is_char_boundary(from) {
                     from += 1;
                 }
-                shown.push(json!({"path": f["path"], "end": &text[from..]}));
+                shown.push(json!({"path": f["path"], "sha256": f["sha256"], "end": &text[from..]}));
             }
             let reason = p.rest.get("reason").cloned();
             json!({"outcome": p.outcome, "reason": reason, "evidence_files": shown})

@@ -239,7 +239,7 @@ A requested review with no finish projects the fact `daisy_review.state` as `run
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `pr.opened` | `work update --pr` when the PR goes from null to set | `pr`, `head_sha` (the latest handoff's `commit`, null if none), `changed` |
+| `pr.opened` | `work update --pr` or `pr open` when the PR goes from null to set | `pr`, `head_sha` (the commit `pr open` opened it on, else the latest handoff's `commit`, null if none), `changed` |
 | `pr.merged` | `work merged` | `pr`, `merge_sha`, `head_sha` (the PR head that merged), `merged_at` (the forge's merge time; R11's `at`, kept apart from the envelope `at`, which is when it was recorded), `patch_id` (nullable) |
 
 It is that update's one event, in place of `lane.updated`, and `work events` shows it as `update`. When the PR first arrives in

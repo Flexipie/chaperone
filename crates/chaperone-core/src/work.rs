@@ -255,6 +255,9 @@ pub struct UpdateInput {
     pub spec: Option<String>,
     pub lane_key: Option<String>,
     pub lane_pos: Option<i64>,
+    /// The commit a first PR is opened on (`pr open`); else the latest
+    /// handoff's.
+    pub head_sha: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -531,7 +534,10 @@ impl Ledger {
                 && let Some(pr) = &input.pr_ref
             {
                 kind = PrOpened;
-                p.head_sha = latest_commit(conn, id)?;
+                p.head_sha = match &input.head_sha {
+                    Some(head) => Some(head.clone()),
+                    None => latest_commit(conn, id)?,
+                };
                 p.rest.insert("pr".into(), json!(pr));
             }
             Ok(Ok(lane_event(kind, id, p)))

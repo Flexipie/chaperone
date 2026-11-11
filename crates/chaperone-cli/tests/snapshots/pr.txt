@@ -1,0 +1,12 @@
+The lane's pull request
+
+Usage: chaperone pr [OPTIONS] <COMMAND>
+
+Commands:
+  open  Under the lane's run lock (a second run is a conflict, exit 4), on a clean worktree at the lane's branch tip: `check run` diff and tests (a pass on the same tree replays), refused over the pipeline's code line limit or when the tests fail. Then `git push -u origin <branch>` and `gh pr create`, or `gh pr edit` when the lane holds a PR, with a body made from ledger facts; a new PR is recorded as `pr.opened` on that commit
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

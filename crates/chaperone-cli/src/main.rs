@@ -11,7 +11,7 @@ mod spec;
 mod work;
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chaperone_core::ledger::{Ledger, Refusal, SCHEMA_VERSION};
 use chaperone_core::pipeline;
@@ -20,7 +20,7 @@ use clap::Parser;
 use clap::error::ErrorKind;
 use serde_json::json;
 
-use cli::{Cli, Cmd, Format, PipelineCmd};
+use cli::{Cli, Cmd, Format, PipelineCmd, PrCmd};
 use output::{CliError, Meta, Outcome};
 
 fn main() {
@@ -74,6 +74,16 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Check(cmd) => checks::check(&Ledger::open(&path)?, &path, cmd),
         Cmd::Verify { work, actor } => {
             checks::verify(&Ledger::open(&path)?, &path, work, &actor.resolve())
+        }
+        Cmd::Pr(PrCmd::Open {
+            work,
+            title,
+            draft,
+            actor,
+        }) => {
+            let ledger = Ledger::open(&path)?;
+            let gh = Path::new("gh");
+            checks::pr_open(&ledger, &path, work, title, draft, gh, &actor.resolve())
         }
         Cmd::Reviews(cmd) => checks::reviews(&Ledger::open(&path)?, cmd),
         Cmd::Jobs(cmd) => checks::jobs(&Ledger::open(&path)?, cmd),

@@ -128,6 +128,8 @@ pub enum Cmd {
         actor: ActorArgs,
     },
     #[command(subcommand)]
+    Pr(PrCmd),
+    #[command(subcommand)]
     Pipeline(PipelineCmd),
     /// Check skill and script files against this binary: every chaperone
     /// command, flag and value they call, the handoff fields they write and
@@ -154,6 +156,30 @@ pub enum Cmd {
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
+}
+
+/// The lane's pull request
+#[derive(Subcommand, Debug)]
+pub enum PrCmd {
+    /// Under the lane's run lock (a second run is a conflict, exit 4), on
+    /// a clean worktree at the lane's branch tip: `check run` diff and
+    /// tests (a pass on the same tree replays), refused over the
+    /// pipeline's code line limit or when the tests fail. Then `git push -u
+    /// origin <branch>` and `gh pr create`, or `gh pr edit` when the lane
+    /// holds a PR, with a body made from ledger facts; a new PR is recorded
+    /// as `pr.opened` on that commit
+    Open {
+        #[arg(long)]
+        work: i64,
+        /// Default: the work item's title
+        #[arg(long)]
+        title: Option<String>,
+        /// Open it as a draft
+        #[arg(long)]
+        draft: bool,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
 }
 
 /// The pipeline documents this binary runs
@@ -190,6 +216,7 @@ impl Cmd {
             Cmd::Check(CheckCmd::Waive { .. }) => Some("check waive"),
             Cmd::Check(CheckCmd::Prune) => None,
             Cmd::Verify { .. } => Some("verify"),
+            Cmd::Pr(PrCmd::Open { .. }) => Some("pr open"),
             Cmd::Reviews(ReviewsCmd::Record { .. }) => Some("reviews record"),
             Cmd::Reviews(ReviewsCmd::Get { .. }) | Cmd::Jobs(JobsCmd::Get { .. }) => None,
             Cmd::Work(WorkCmd::Create { .. }) => Some("work create"),
