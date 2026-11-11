@@ -850,19 +850,19 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 ))),
                 _ => {}
             }
-            if to == "accepted" && raised_by.as_deref() != Some(crate::plan::EVENT_CHECK) {
-                refuse!(invalid(&format!(
-                    "only a plan check's finding is accepted; finding {check}/{key} is not one"
-                )));
-            }
             if to == "answered" && severity != "question" {
                 refuse!(invalid(&format!(
                     "only a question is answered; finding {check}/{key} is a {severity}"
                 )));
             }
             let reason = p.rest.get("reason").and_then(Value::as_str);
-            if matches!(to, "disputed" | "waived") && reason.is_none() {
+            if matches!(to, "disputed" | "waived" | "accepted") && reason.is_none() {
                 refuse!(invalid(&format!("a finding goes {to} only with a reason")));
+            }
+            if to == "accepted" && raised_by.as_deref() != Some(crate::plan::EVENT_CHECK) {
+                refuse!(invalid(&format!(
+                    "only a plan check's finding is accepted; finding {check}/{key} is not one"
+                )));
             }
             if reason.is_some_and(|r| !one_line(r)) {
                 refuse!(invalid(&format!(

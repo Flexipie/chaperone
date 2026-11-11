@@ -506,7 +506,8 @@ fn plan_answered(ledger: &Ledger, work: i64) -> Result<(), CliError> {
     }
     Err(refuse(format!(
         "{} plan finding(s) have no answer: {}; answer each with `chaperone finding accept \
-         <event> <key> --reason <how>` or `chaperone finding dispute <event> <key> --reason <why>`",
+         <event> <key> --reason <how>`, `chaperone finding dispute <event> <key> --reason <why>` \
+         or, for a question, `chaperone finding answer <event> <key> --reason <answer>`",
         open.len(),
         open.join("; ")
     )))
@@ -1290,6 +1291,7 @@ pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outc
         FindingCmd::Dispute(args) => ("disputed", args),
         FindingCmd::Waive(args) => ("waived", args),
         FindingCmd::Accept(args) => ("accepted", args),
+        FindingCmd::Answer(args) => ("answered", args),
         FindingCmd::List { work } => return items(ledger.lane_findings(work)?),
     };
     meta.dry_run = args.dry_run.then_some(true);

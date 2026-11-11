@@ -299,6 +299,7 @@ impl Cmd {
             Cmd::Finding(FindingCmd::Dispute(_)) => Some("finding dispute"),
             Cmd::Finding(FindingCmd::Waive(_)) => Some("finding waive"),
             Cmd::Finding(FindingCmd::Accept(_)) => Some("finding accept"),
+            Cmd::Finding(FindingCmd::Answer(_)) => Some("finding answer"),
             Cmd::Finding(FindingCmd::List { .. }) => None,
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
@@ -874,6 +875,8 @@ pub enum FindingCmd {
     /// Say the lane will act on an open plan check finding, and how. Only
     /// from a session that has held the lane; the review is shown it
     Accept(FindingArgs),
+    /// Answer an open question finding, as anyone may
+    Answer(FindingArgs),
 }
 
 /// One finding, addressed as the ledger does, and why

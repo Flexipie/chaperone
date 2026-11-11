@@ -142,7 +142,8 @@ fn moves_follow_the_table() {
         1 f31 waived r - session s1 has held lane 1; a finding goes waived
         1 f30 refuted - - session s1 has held lane 1; a finding goes refuted
         2 f31 disputed r - only the lane disputes or accepts a finding
-        1 f31 accepted - - only a plan check's finding is accepted
+        1 f31 accepted - - a finding goes accepted only with a reason
+        1 f31 accepted r - only a plan check's finding is accepted
         1 f31 disputed - - a finding goes disputed only with a reason
         2 f31 waived _ - reason is one non-blank line of at most 500 characters
         2 f31 waived N - reason is one non-blank line
@@ -277,5 +278,51 @@ fn the_harness_rules_from_the_lanes_session() {
         .map(|f| (&*f.finding_key, &*f.status))
         .collect();
     assert_eq!(got, [("a", "open"), ("b", "verified"), ("c", "open")]);
+    common::assert_consistent(&path);
+}
+
+/// A plan check's findings are the lane's to answer: it accepts one with a
+/// reason; none blocks; the newest plan check, whatever its outcome,
+/// decides which need answers.
+#[test]
+fn the_newest_plan_checks_findings_are_answered_and_never_block() {
+    let (_dir, path, ledger) = common::ledger();
+    review(&ledger, &[]);
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    let plan = |payload: serde_json::Value| {
+        let mut payload = payload;
+        payload["check"] = json!("plan_check");
+        payload["head_sha"] = json!("abc1234");
+        payload["producer"] = harness.clone();
+        let m = Mutation::Event {
+            kind: EventKind::CheckFinished,
+            lane_id: Some(1),
+            spec_id: None,
+            payload: serde_json::from_value(payload).unwrap(),
+        };
+        let at = "2099-01-01T00:00:00.000Z";
+        common::committed(ledger.apply(&actor("9"), None, at, m).unwrap()).id
+    };
+    let found = ["p1", "p2"]
+        .map(|k| json!({"finding_key": k, "severity": "blocker", "title": "t", "body": "b"}));
+    let check = plan(json!({"outcome": "ran", "findings": found}));
+    assert!(ledger.blocking_findings(1).unwrap().is_empty());
+    mv(&ledger, check, ("1", "p1", "accepted"), "r", "").unwrap();
+    let answers = || {
+        let found = ledger.plan_findings(1).unwrap().into_iter();
+        found
+            .map(|f| (f.finding_key, f.status, f.reason))
+            .collect::<Vec<_>>()
+    };
+    let r = Some("r".to_string());
+    assert_eq!(
+        answers(),
+        [
+            ("p1".into(), "accepted".into(), r),
+            ("p2".into(), "open".into(), None)
+        ]
+    );
+    plan(json!({"outcome": "skipped", "reason": "no_answer"}));
+    assert!(answers().is_empty());
     common::assert_consistent(&path);
 }

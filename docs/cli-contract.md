@@ -140,6 +140,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `finding dispute` | `<event> <key> --reason <r>` | write |
 | `finding waive` | `<event> <key> --reason <r>` | write |
 | `finding accept` | `<event> <key> --reason <r>` | write |
+| `finding answer` | `<event> <key> --reason <r>` | write |
 | `dossier note` | `<key> --note <text> [--link <kind>:<ref>]... [--supersedes <event id>]` | write |
 | `dossier get` | `<key>` | read |
 | `evidence show` | `<sha256 or prefix>` | read, no ledger |
@@ -202,7 +203,9 @@ refused as `finding <event>/<key> is already <status>`, not replayed. Both print
 other being `finding dispute`. It moves an `open` plan check finding to `accepted`, only from a
 session that has held the lane, and is refused on any other check's finding. `--reason` is
 required as for `dispute` (how the lane will act on it) and the review lenses are shown it. It
-prints as `dispute` does. While a finding of the lane's newest plan check is `open`, `check run
+prints as `dispute` does. `finding answer` makes the `open` to `answered` move on a
+`question`, from any session, with the answer as `--reason`: how the lane answers a plan
+check's question. While a finding of the lane's newest plan check is `open`, `check run
 diff` and `check run review` (so `verify`) are refused (events.md, plan findings).
 
 `finding list` is new (#212). It prints, oldest first, every finding of the lane's complete
@@ -672,7 +675,7 @@ Each command is one transaction that appends one event (events.md, write rules).
 | `work update --status cancelled`, `work cancel` | ungated | `lane.cancelled` |
 | `work update`, any other change | ungated | `lane.updated`, or `pr.opened` when the PR goes from null to set |
 | `work claim`, `release`, `ready` | ungated | the matching `lane.*` kind |
-| `finding dispute`, `finding waive`, `finding accept` | ungated | `finding.updated` |
+| `finding dispute`, `finding waive`, `finding accept`, `finding answer` | ungated | `finding.updated` |
 | `work heartbeat` | none | none |
 | `migrate` | none | none (schema only) |
 

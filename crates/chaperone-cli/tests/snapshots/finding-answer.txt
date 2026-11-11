@@ -1,0 +1,16 @@
+Answer an open question finding, as anyone may
+
+Usage: chaperone finding answer [OPTIONS] --reason <REASON> <EVENT> <KEY>
+
+Arguments:
+  <EVENT>  The event id of the check.finished that raised it (`work events`)
+  <KEY>    The finding's key in that check (its id in `reviews get`)
+
+Options:
+      --db <DB>            Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --reason <REASON>    Why; kept on the event and redacted at write
+      --dry-run            Run the real write and roll it back; meta.dry_run is true
+      --format <FORMAT>    Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --agent <AGENT>      Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>  Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help               Print help
