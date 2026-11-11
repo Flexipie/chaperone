@@ -170,6 +170,16 @@ pub enum Cmd {
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
     Migrate,
+    /// Write the Claude Code plugin embedded in this binary as a
+    /// marketplace in the user data dir, replacing what was there, and
+    /// register it with `claude plugin marketplace add` and `claude plugin
+    /// install chaperone@chaperone --scope user`. Safe to run again.
+    /// Never reads the ledger
+    Install,
+    /// `claude plugin uninstall` and `claude plugin marketplace remove` for
+    /// what `install` registered (a refusal of what is not there is
+    /// reported, not an error), then delete the marketplace directory
+    Uninstall,
 }
 
 /// The lane's pull request
@@ -267,7 +277,9 @@ impl Cmd {
             | Cmd::Stats { .. }
             | Cmd::Impact { .. }
             | Cmd::Pipeline(_)
-            | Cmd::Doctor { .. } => None,
+            | Cmd::Doctor { .. }
+            | Cmd::Install
+            | Cmd::Uninstall => None,
         }
     }
 }

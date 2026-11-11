@@ -1,0 +1,5 @@
+{
+  "name": "chaperone",
+  "description": "The Chaperone lane pipeline, installed by the chaperone binary it runs",
+  "author": { "name": "Chaperone" }
+}
