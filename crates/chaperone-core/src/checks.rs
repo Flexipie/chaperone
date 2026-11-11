@@ -198,6 +198,31 @@ pub struct BlockingFinding {
     pub title: String,
 }
 
+/// A finding of a complete harness review ([`Ledger::lane_findings`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LaneFinding {
+    pub check_event_id: i64,
+    pub finding_key: String,
+    pub severity: String,
+    pub title: String,
+    pub body: String,
+    pub path: Option<String>,
+    pub line: Option<i64>,
+    /// The commit the review that raised it read.
+    pub head_sha: Option<String>,
+    pub status: String,
+    /// Counted by the `no_blocking_findings` gate.
+    pub blocks: bool,
+}
+
+/// The SQL condition on a `findings` row raised by a complete harness
+/// review of lane `?1`, any commit's (the gate's `findings.open_blocking`).
+pub(crate) const COMPLETE_REVIEWS: &str = "check_event_id IN (
+    SELECT id FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+      AND json_extract(payload_json, '$.check') = 'review'
+      AND json_extract(payload_json, '$.producer.kind') = 'harness'
+      AND json_extract(payload_json, '$.complete') = 1)";
+
 fn invalid<T>(msg: String) -> Checked<T> {
     Ok(Err(Refusal::InvalidInput(msg)))
 }
@@ -1109,6 +1134,36 @@ impl Ledger {
                 severity: r.get(2)?,
                 status: r.get(3)?,
                 title: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Lane `id`'s findings of every complete harness review, oldest
+    /// first, each with whether it still blocks by the gate's rule.
+    pub fn lane_findings(&self, id: i64) -> Result<Vec<LaneFinding>, LedgerError> {
+        let mut stmt = self.conn().prepare(&format!(
+            "SELECT check_event_id, finding_key, severity, title, body, path,
+                    (SELECT json_extract(j.value, '$.line')
+                       FROM events e, json_each(e.payload_json, '$.findings') j
+                      WHERE e.id = f.check_event_id
+                        AND json_extract(j.value, '$.finding_key') = f.finding_key),
+                    head_sha, status, {}
+               FROM findings f WHERE lane_id = ?1 AND {COMPLETE_REVIEWS} ORDER BY id",
+            blocking()
+        ))?;
+        let rows = stmt.query_map([id], |r| {
+            Ok(LaneFinding {
+                check_event_id: r.get(0)?,
+                finding_key: r.get(1)?,
+                severity: r.get(2)?,
+                title: r.get(3)?,
+                body: r.get(4)?,
+                path: r.get(5)?,
+                line: r.get(6)?,
+                head_sha: r.get(7)?,
+                status: r.get(8)?,
+                blocks: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)

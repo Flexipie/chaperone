@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::checks::{BODY_CHARS, FindingMove, NOTE_CHARS, Recorded, RunInput, blocking};
+use crate::checks::{
+    BODY_CHARS, COMPLETE_REVIEWS, FindingMove, NOTE_CHARS, Recorded, RunInput, blocking,
+};
 use crate::git::ChangedFile;
 use crate::ledger::{
     Actor, Checked, Evidence, Finding, Findings, Ledger, LedgerError, Payload, Refusal,
@@ -601,11 +603,7 @@ pub fn verify(
 pub fn earlier(ledger: &Ledger, work: i64) -> Result<Vec<Finding>, LedgerError> {
     let mut stmt = ledger.conn().prepare(&format!(
         "SELECT check_event_id, finding_key, severity, title, body, path, head_sha FROM findings
-         WHERE lane_id = ?1 AND {} AND status != 'disputed' AND check_event_id IN (
-           SELECT id FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
-             AND json_extract(payload_json, '$.check') = 'review'
-             AND json_extract(payload_json, '$.producer.kind') = 'harness'
-             AND json_extract(payload_json, '$.complete') = 1)
+         WHERE lane_id = ?1 AND {} AND status != 'disputed' AND {COMPLETE_REVIEWS}
          ORDER BY id",
         blocking()
     ))?;

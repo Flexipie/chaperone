@@ -279,7 +279,7 @@ fn read_stdin() -> Result<String, CliError> {
     Ok(buf)
 }
 
-fn items(v: Vec<impl Serialize>) -> Result<Outcome, CliError> {
+pub(crate) fn items(v: Vec<impl Serialize>) -> Result<Outcome, CliError> {
     Ok(Outcome::Page(Page {
         items: v.into_iter().map(value).collect::<Result<_, _>>()?,
         next_cursor: None,

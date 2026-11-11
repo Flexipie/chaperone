@@ -8,12 +8,10 @@ complete review of any commit of the lane. `question`, `convention`, `nit` and
 
 ## Read them
 
-- Review, only after verify stopped on "N finding(s) still block" (after "review not
-  complete" it starts a new paid run): `chaperone check run review --work <N>` replays the
-  head's review: `event_id`, and `payload.findings[]` with `finding_key`, `severity`,
-  `title`, `body`, `path` and `line`.
-- An earlier commit's review: no command lists it. Copy each blocking finding's `event_id`,
-  key and title into `lane-state.md` when you first read it, and keep its status there.
+- Review: `chaperone finding list --work <N>` lists every finding of every complete review
+  of the lane, any commit's: `check_event_id`, `finding_key`, `severity`, `title`, `body`,
+  `path`, `line`, `head_sha` (the commit it was raised on), `status`, and `blocks`, true for
+  exactly the ones verify's "N finding(s) still block" counts. Work the ones with `blocks`.
 - Verdict: `chaperone check run verdict --work <N>` replays it: `decision`, `why`,
   `not_proven`.
 

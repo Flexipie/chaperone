@@ -1,8 +1,9 @@
-A review finding's status: the lane disputes it, the owner waives it
+A lane's review findings: list them, the lane disputes one, the owner waives one
 
 Usage: chaperone finding [OPTIONS] <COMMAND>
 
 Commands:
+  list     Every finding of the lane's complete harness reviews, of any commit, oldest first; blocks is true for those the no_blocking_findings gate counts
   dispute  Say an open or verified finding is wrong. Only from a session that has held the lane; it still blocks until a session that never has rules on it
   waive    Stop an open, verified or disputed finding blocking. The owner's: refused from any session that has held the lane
   help     Print this message or the help of the given subcommand(s)

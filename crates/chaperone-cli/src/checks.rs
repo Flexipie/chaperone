@@ -35,7 +35,7 @@ use crate::cli::{
     WaiveKind,
 };
 use crate::output::{CliError, ErrorBody, Meta, Outcome};
-use crate::work::{observed_head, one};
+use crate::work::{items, observed_head, one};
 
 /// Where spawn and the skills call daisy (R15); `CHAPERONE_DAISY_CLI`
 /// overrides it.
@@ -1267,6 +1267,7 @@ pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outc
     let (status, args) = match cmd {
         FindingCmd::Dispute(args) => ("disputed", args),
         FindingCmd::Waive(args) => ("waived", args),
+        FindingCmd::List { work } => return items(ledger.lane_findings(work)?),
     };
     meta.dry_run = args.dry_run.then_some(true);
     let input = FindingMove {
