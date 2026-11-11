@@ -539,11 +539,12 @@ recorded, is `internal`. It prints `{work_id, pr, merge_sha, done_by}`: `done_by
 (this run handed off done), `already` (the lane was done) or `lane` (its lease is live, so the
 lane hands off done itself, and a run after the lease lapses finishes it).
 
-`install` writes the Claude Code plugin embedded in the binary (every file under the repo's
-`plugin/`, listed by `build.rs`) as a one-plugin marketplace named `chaperone` in
+`install` writes the Claude Code plugin embedded in the binary (every file git tracks under the
+repo's `plugin/`, listed by `build.rs`, executable ones mode 0755) as a one-plugin marketplace named `chaperone` in
 `<data dir>/chaperone/marketplace/`: `.claude-plugin/marketplace.json` and the plugin under
-`chaperone/`, whose `plugin.json` gets the version `<binary version>+<7-char sha>`. It deletes
-the directory first, so a file the binary no longer embeds goes. Then `claude plugin
+`chaperone/`, whose `plugin.json` gets the version `<binary version>+<7-char sha>`. It writes
+a fresh tree beside the directory and renames it into place, so a file the binary no longer
+embeds goes and a session never reads a half-written plugin. Then `claude plugin
 marketplace add <dir>` and `claude plugin install chaperone@chaperone --scope user` (`claude`
 found on `PATH`, 120 s per call); a non-zero exit is `internal`. Both pass when already done,
 and Claude Code loads a plugin from a local marketplace in place, so a second run is the
@@ -551,7 +552,7 @@ update. `uninstall` runs `claude plugin uninstall chaperone@chaperone --scope us
 `claude plugin marketplace remove chaperone`, whose exit is reported and never an error (they
 exit 1 when nothing is installed), then deletes the directory. Neither reads the ledger or
 Claude Code's settings. They print `{dir, plugin, version, ran}` (`uninstall` without
-`version`), `ran` one `{args, exit, stderr}` per call.
+`version`), `ran` one `{args, exit, output}` per call, `output` its stderr or else its stdout.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

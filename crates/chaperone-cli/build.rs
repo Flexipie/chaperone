@@ -1,8 +1,10 @@
 //! The commit this binary is built from, as `CHAPERONE_GIT_SHA` (empty
 //! outside a git checkout), so `chaperone doctor --repo` can tell an
 //! installed binary that lags main. And every file under the repo's
-//! `plugin/`, as `OUT_DIR/plugin.rs`, for `chaperone install`.
+//! `plugin/` with whether it is executable, as `OUT_DIR/plugin.rs`, for
+//! `chaperone install`.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -41,16 +43,26 @@ fn main() {
             println!("cargo:rerun-if-changed={path}");
         }
     }
-    let root = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../plugin");
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let root = Path::new(&manifest).join("../../plugin");
     println!("cargo:rerun-if-changed={}", root.display());
+    // Tracked files only, so a stray `.DS_Store` or draft never ships;
+    // outside a checkout, every file. Git names them from this crate's dir.
     let mut files = Vec::new();
-    walk(&root, &mut files);
+    match git(&["ls-files", "-z", "../../plugin"]) {
+        Some(out) => files.extend(
+            out.split_terminator('\0')
+                .map(|f| Path::new(&manifest).join(f)),
+        ),
+        None => walk(&root, &mut files),
+    }
     files.sort();
     let mut src = String::from("&[\n");
     for path in files {
         let rel = path.strip_prefix(&root).unwrap().to_str().unwrap();
         let abs = path.to_str().unwrap();
-        src += &format!("    ({rel:?}, include_bytes!({abs:?})),\n");
+        let exec = std::fs::metadata(&path).unwrap().permissions().mode() & 0o111 != 0;
+        src += &format!("    ({rel:?}, include_bytes!({abs:?}), {exec}),\n");
     }
     src += "]\n";
     let out = Path::new(&std::env::var("OUT_DIR").unwrap()).join("plugin.rs");
