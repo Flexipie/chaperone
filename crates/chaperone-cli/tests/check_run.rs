@@ -200,14 +200,21 @@ fn refusals_write_nothing_and_the_worktree_freezes() {
     let (base, db) = (setup(dir.path()), dir.path().join("ledger.db"));
     let wt = dir.path().join("wt").to_str().unwrap().to_string();
     let (empty, gone) = (dir.path().to_str().unwrap(), format!("{wt}/gone"));
+    // `rel` stands for a relative path an older binary let a claim store.
     for (claim, why) in [
         (&[][..], "has no worktree to measure"),
-        (&["--worktree", "wt"], "has no worktree to measure"),
+        (&["rel"], "has no worktree to measure"),
         (&["--worktree", &gone], "has no worktree to measure"),
         (&["--worktree", empty], "could not read the commit in"),
         (&["--worktree", &wt], "could not diff"),
     ] {
-        let (id, before) = (lane(&db, claim), events(&db));
+        let id = lane(&db, if claim == ["rel"] { &[] } else { claim });
+        if claim == ["rel"] {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            let sql = "UPDATE lanes SET worktree_path = 'wt' WHERE id = ?1";
+            assert_eq!(conn.execute(sql, [&id]).unwrap(), 1);
+        }
+        let before = events(&db);
         let (code, err) = run(&db, &["check", "run", "diff", "--work", &id]);
         assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
         assert!(err["message"].as_str().unwrap().contains(why), "{err}");

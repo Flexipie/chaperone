@@ -86,6 +86,9 @@ Ready is not a status (events.md, folded rows). `transition_ok(from, to)` is dai
 
 `claim` moves `queued` to `claimed` and `release` moves it back. Moving to `blocked`
 needs `--blocker` or `--reason`.
+`claim --worktree` takes an absolute path: every reader of `worktree_path` (`check run`,
+`verify`, `pr open`, the hooks) would resolve a relative one against its own directory,
+so a relative one is refused (`invalid_input`, nothing written).
 
 ## Commands in M1
 
