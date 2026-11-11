@@ -136,6 +136,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
 | `usage get` | `<id>` | read |
 | `attention record` | `--work <id> --type asked\|answered\|nudged\|sent_back\|revived\|stopped --by orchestrator\|owner [--reason <R12 id>] [--round <k>] [--answers <event id>] [--note <one line>] [--idempotency-key]` | write |
+| `finding list` | `--work <id>` | read |
 | `finding dispute` | `<event> <key> --reason <r>` | write |
 | `finding waive` | `<event> <key> --reason <r>` | write |
 | `dossier note` | `<key> --note <text> [--link <kind>:<ref>]... [--supersedes <event id>]` | write |
@@ -194,6 +195,16 @@ redacted. A move the table does not allow, the wrong session or a bad reason is
 `<event>/<key>`; nothing is written. The same move again (a retry after a lost answer) is
 refused as `finding <event>/<key> is already <status>`, not replayed. Both print
 `{event_id, work_id, kind, replayed, at, payload}`.
+
+`finding list` is new (#212). It prints, oldest first, every finding of the lane's complete
+harness reviews (`check.finished` `review` from the harness with `complete: true`), of any
+commit, as items `{check_event_id, finding_key, severity, title, body, path, line, head_sha,
+status, blocks}`. `check_event_id` and `finding_key` address the finding for `finding dispute`
+and `finding waive`; `head_sha` is the commit the review read; `line` is the lens's, from the
+review's payload. `blocks` is the `no_blocking_findings` gate's rule: unsettled (`open`,
+`verified` or `disputed`) and of a severity that blocks, so the count of `blocks` is
+`findings.open_blocking`. An incomplete review's findings, and those of other checks, are not
+listed. An unknown work id lists nothing, as `work events`.
 
 `dossier note` and `dossier get` are new (#83, [ADR 0007](decisions/0007-issue-dossier.md)).
 `<key>` is `owner/repo#N` or `TEAM-123` (`normalize_key`); a bare `#N` is `invalid_input`.

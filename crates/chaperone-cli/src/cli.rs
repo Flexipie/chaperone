@@ -295,6 +295,7 @@ impl Cmd {
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
             Cmd::Finding(FindingCmd::Dispute(_)) => Some("finding dispute"),
             Cmd::Finding(FindingCmd::Waive(_)) => Some("finding waive"),
+            Cmd::Finding(FindingCmd::List { .. }) => None,
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
             Cmd::Hook {
@@ -846,9 +847,17 @@ pub enum UsageCmd {
     Get { id: i64 },
 }
 
-/// A review finding's status: the lane disputes it, the owner waives it
+/// A lane's review findings: list them, the lane disputes one, the owner
+/// waives one
 #[derive(Subcommand, Debug)]
 pub enum FindingCmd {
+    /// Every finding of the lane's complete harness reviews, of any commit,
+    /// oldest first; blocks is true for those the no_blocking_findings gate
+    /// counts
+    List {
+        #[arg(long)]
+        work: i64,
+    },
     /// Say an open or verified finding is wrong. Only from a session that
     /// has held the lane; it still blocks until a session that never has
     /// rules on it

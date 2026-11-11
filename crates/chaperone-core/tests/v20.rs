@@ -267,6 +267,16 @@ impl V20 {
         }
     }
 
+    /// `finding list` marks as blocking exactly what the gate counts on
+    /// HEAD, and lists `listed` findings (complete reviews' only).
+    fn agrees(&self, listed: usize) {
+        let found = self.ledger.lane_findings(1).unwrap();
+        let blocks = found.iter().filter(|f| f.blocks).count();
+        let facts = self.ledger.project(1, Some(HEAD)).unwrap();
+        let open = facts.get("findings.open_blocking");
+        assert_eq!((open, found.len()), (&Fact::Int(blocks as i64), listed));
+    }
+
     /// The harness's `check` on `head`, as `check run` records it.
     fn run(&self, check: &str, head: &str, fields: Value) -> Recorded {
         let mut input = RunInput {
@@ -444,13 +454,16 @@ fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
     let review = lane.run("review", HEAD, json!({"complete": true})).event_id;
     let blocking = denied("no_blocking_findings", &["findings.open_blocking"]);
     assert_eq!(lane.ready(HEAD), blocking);
+    lane.agrees(6);
     // Refuted stops blocking; disputed still blocks; waived stops.
     lane.rule(&lane.owner, review, "correctness-blocker", "refuted");
     lane.rule(&lane.lane, review, "correctness-risk", "disputed");
     assert_eq!(lane.ready(HEAD), blocking);
+    lane.agrees(6);
     lane.rule(&lane.owner, review, "correctness-risk", "waived");
     // Another tree's review's blockers, not raised again here, still block.
     assert_eq!(lane.ready(HEAD), blocking);
+    lane.agrees(6);
     lane.rule(
         &lane.owner,
         earlier.event_id,
@@ -458,6 +471,7 @@ fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
         "refuted",
     );
     lane.rule(&lane.owner, earlier.event_id, "correctness-risk", "waived");
+    lane.agrees(6);
     assert_eq!(lane.ready(HEAD), denied("plan_or_no_code", &PLAN));
     lane.run("plan_check", OTHER, json!({}));
     let smoke = denied("smoke_or_no_code", &SMOKE);
