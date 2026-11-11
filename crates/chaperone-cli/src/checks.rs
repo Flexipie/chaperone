@@ -358,16 +358,19 @@ pub fn merge(
     let pr = item
         .pr_ref
         .ok_or_else(|| refuse(format!("work item {work} has no PR")))?;
-    let (gh, head) = (OsStr::new("gh"), head.as_deref());
-    let merged = merge::merge(ledger, actor, gh, work, &pr, head, "chaperone merge")
+    let (gh, herdr, head) = (OsStr::new("gh"), OsStr::new("herdr"), head.as_deref());
+    let merged = merge::merge(ledger, actor, gh, herdr, work, &pr, head, "chaperone merge")
         .map_err(CliError::Internal)?
         .map_err(refuse)?;
-    let done_by = match merged.done {
-        Done::Was => "already",
-        Done::HandedOff => "merge",
-        Done::ByLane => "lane",
+    let (done_by, told, tell_error) = match merged.done {
+        Done::Was => ("already", false, None),
+        Done::HandedOff => ("merge", false, None),
+        Done::ByLane(told) => ("lane", told.is_ok(), told.err()),
     };
-    one(json!({"work_id": work, "pr": pr, "merge_sha": merged.sha, "done_by": done_by}))
+    one(
+        json!({"work_id": work, "pr": pr, "merge_sha": merged.sha, "done_by": done_by,
+        "told": told, "tell_error": tell_error}),
+    )
 }
 
 /// A PR's body from ledger facts: of the lane's own words only its title,

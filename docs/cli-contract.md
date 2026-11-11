@@ -129,7 +129,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `check prune` | | read, removes directories |
 | `verify` | `--work <id>` | write |
 | `pr open` | `--work <id> [--title <t>] [--draft]` | write, pushes, calls gh |
-| `merge` | `--work <id> [--head <sha>]` | write, calls gh |
+| `merge` | `--work <id> [--head <sha>]` | write, calls gh and herdr |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -545,9 +545,14 @@ recorded as merged. Then `gh pr merge <n> -R <owner/repo> --squash --delete-bran
 or `--auto`), and `pr.merged` as `work merged` records it. A PR GitHub has merged at that head is
 only recorded, so a second run merges nothing. When the lane's lease is not live it then hands
 off `done` itself. A gh failure, or a done handoff the ledger refuses after the merge is
-recorded, is `internal`. It prints `{work_id, pr, merge_sha, done_by}`: `done_by` is `merge`
-(this run handed off done), `already` (the lane was done) or `lane` (its lease is live, so the
-lane hands off done itself, and a run after the lease lapses finishes it).
+recorded, is `internal`. When the lease is live it instead tells the lane's recorded agent to
+hand off done, as chaperone-ui's Merge does: `herdr agent prompt <agent> <text>` (found on
+`PATH`, 30 s), the text naming the PR, the merge commit and the item's `source_key` (else
+`work <id>`). Best effort: a prompt that fails is reported, never an error after the merge. It
+prints `{work_id, pr, merge_sha, done_by, told, tell_error}`: `done_by` is `merge` (this run
+handed off done), `already` (the lane was done) or `lane` (its lease is live, so the lane hands
+off done itself, and a run after the lease lapses finishes it); `told` is true when the prompt
+reached the agent, and `tell_error` says why it did not (else null).
 
 `install` writes the Claude Code plugin embedded in the binary (every file git tracks under the
 repo's `plugin/`, listed by `build.rs`, executable ones mode 0755) as a one-plugin marketplace named `chaperone` in

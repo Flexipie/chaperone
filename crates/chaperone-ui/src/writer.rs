@@ -371,7 +371,8 @@ fn merge(
     pr: &str,
     head: &str,
 ) -> Result<String, String> {
-    let m = match merge::merge(ledger, actor, gh, lane.work, pr, Some(head), "chaperone-ui")? {
+    let from = "chaperone-ui";
+    let m = match merge::merge(ledger, actor, gh, herdr, lane.work, pr, Some(head), from)? {
         Ok(m) => m,
         Err(why) => return Err(format!("Not merged: {why}.")),
     };
@@ -379,17 +380,8 @@ fn merge(
     Ok(match m.done {
         Done::Was => format!("{merged}."),
         Done::HandedOff => format!("{merged}; handed off done."),
-        Done::ByLane => {
-            let prompt = format!(
-                "Owner (chaperone-ui): merged {pr} as {} (work merged recorded). Hand off {} \
-                 done the /ship way.",
-                m.sha, lane.key
-            );
-            match cli("herdr", herdr, &["agent", "prompt", &lane.agent, &prompt]) {
-                Ok(_) => format!("{merged}; asked the lane to hand off done."),
-                Err(e) => format!("{merged}; the lane hands off done ({e})."),
-            }
-        }
+        Done::ByLane(Ok(())) => format!("{merged}; asked the lane to hand off done."),
+        Done::ByLane(Err(e)) => format!("{merged}; the lane hands off done ({e})."),
     })
 }
 

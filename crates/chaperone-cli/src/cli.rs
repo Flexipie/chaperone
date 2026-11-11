@@ -133,7 +133,8 @@ pub enum Cmd {
     /// YES verdict on --head, the lane ready and GitHub's PR head still
     /// --head, `gh pr merge --squash --delete-branch --match-head-commit`,
     /// then `pr.merged`, then the done handoff unless the lane's lease is
-    /// live. Refused from any session or agent that has held the lane
+    /// live, when `herdr agent prompt` tells its agent to hand off done.
+    /// Refused from any session or agent that has held the lane
     Merge {
         #[arg(long)]
         work: i64,
