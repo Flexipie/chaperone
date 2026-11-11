@@ -53,7 +53,10 @@ pub fn merge(
                   AND kind IN ('lane.claimed', 'lane.taken_over')
                   AND (actor_session = ?2 OR actor_agent = ?3)";
     let args = (work, &actor.session, &actor.agent);
-    if actor.session.is_none() || exists(ledger.conn(), held, args).map_err(read)? {
+    if actor.session.is_none() {
+        return Ok(Err("merge needs a session: pass --session".into()));
+    }
+    if exists(ledger.conn(), held, args).map_err(read)? {
         return Ok(Err("only the owner merges this lane; ask the owner".into()));
     }
     let now = ledger.now().map_err(read)?;
