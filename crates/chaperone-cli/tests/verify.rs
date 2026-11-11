@@ -406,3 +406,40 @@ fn an_accepted_plan_finding_the_diff_ignores_blocks() {
     assert!(shown("# Review: correctness"));
     assert!(!shown("# Verify the review's findings"));
 }
+
+/// A changed plan answer on an unchanged commit reviews again: the stored
+/// review replays only while the answers its lenses were shown stand. The
+/// lane disputes the plan finding, then the owner waives it.
+#[test]
+fn a_changed_plan_answer_reviews_the_same_commit_again() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    let plan = &lane.findings()[0];
+    let (event, key) = (
+        plan["check_event_id"].to_string(),
+        plan["finding_key"].as_str(),
+    );
+    let answer = |who, verb| {
+        let args = [
+            "finding",
+            verb,
+            &event,
+            key.unwrap(),
+            "--reason",
+            "not needed",
+        ];
+        assert_eq!(lane.run(who, &args).0, 0);
+    };
+    answer("lane", "dispute");
+    let review = || {
+        let (code, out) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+        assert_eq!(code, 0, "{out}");
+        (out["event_id"].clone(), out["replayed"] == true)
+    };
+    let (first, _) = review();
+    assert_eq!(review(), (first.clone(), true));
+    answer("owner", "waive");
+    let sessions = lane.sessions();
+    let (second, replayed) = review();
+    assert!(second != first && !replayed, "{second} {first}");
+    assert_eq!(lane.sessions(), sessions + 4);
+}

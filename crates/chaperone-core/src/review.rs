@@ -713,6 +713,11 @@ pub fn replay(
     }
     input.check = "review".into();
     input.profile = Some(plan.hash.into());
+    let shown = plan_findings(ledger, input.work)?;
+    if !shown.is_empty() {
+        let digest = format!("{:x}", Sha256::digest(&shown));
+        input.fields.insert("plan_answers".into(), json!(digest));
+    }
     if let Some(stored) = ledger.run_replay(&ledger.run_key(input)?)? {
         return Ok(Ok(Some(stored)));
     }
@@ -730,7 +735,8 @@ pub fn replay(
         if let Some(Value::Object(row)) = &mut verifier {
             row.remove("rulings");
         }
-        input.fields = Map::from_iter([("verifier".into(), verifier.unwrap_or_default())]);
+        let verifier = verifier.unwrap_or_default();
+        input.fields.insert("verifier".into(), verifier);
         return Ok(ledger.carry(actor, input, newest)?.map(Some));
     }
     let done: i64 = ledger.conn().query_row(
@@ -828,7 +834,7 @@ pub fn finish(
         }
     }
     let rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
-    input.fields = Map::from_iter([
+    input.fields.extend([
         ("base".into(), json!(facts.base)),
         ("lenses".into(), json!(rows)),
         ("verifier".into(), verified),

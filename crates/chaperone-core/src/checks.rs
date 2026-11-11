@@ -51,6 +51,13 @@ pub struct CheckInput {
 /// A field of a tree-keyed check and the value it must hold, or none.
 pub(crate) type TreeFilter = Option<(&'static str, rusqlite::types::Value)>;
 
+/// A review's `plan_answers`: the digest of the plan findings and answers
+/// its lenses were shown, absent when there were none. A result is reused
+/// only under the same one, so a changed answer reviews again.
+fn plan_answers(input: &RunInput) -> Option<&str> {
+    input.fields.get("plan_answers").and_then(Value::as_str)
+}
+
 /// The event whose session ran `r`: its `carried_from`, else itself.
 pub(crate) fn session_of(r: &Recorded) -> i64 {
     let from = r.payload.rest.get("carried_from").and_then(Value::as_i64);
@@ -422,7 +429,7 @@ impl Ledger {
 
     /// `run:<lane>:<check>:<head>:<profile or ->:<attempt>`. The attempt is
     /// the id of the lane's newest result for this check that is not a pass
-    /// on this commit and profile (0 for none): a pass replays, a failure
+    /// on this commit, profile and [`plan_answers`] (0 for none): a pass replays, a failure
     /// or a review that is not complete runs again, and a run back on an earlier commit after another
     /// appends, as `check record`'s flip back does. Read before the write
     /// lock; the lane's run lock keeps two runs from reading it at once.
@@ -433,8 +440,15 @@ impl Ledger {
                AND NOT (json_extract(payload_json, '$.head_sha') IS ?3
                  AND json_extract(payload_json, '$.profile') IS ?4
                  AND json_extract(payload_json, '$.result') IS NOT 'fail'
-                 AND json_extract(payload_json, '$.complete') IS NOT 0)",
-            params![input.work, input.check, input.head, input.profile],
+                 AND json_extract(payload_json, '$.complete') IS NOT 0
+                 AND json_extract(payload_json, '$.plan_answers') IS ?5)",
+            params![
+                input.work,
+                input.check,
+                input.head,
+                input.profile,
+                plan_answers(input)
+            ],
             |r| r.get(0),
         )?;
         let (work, check, head) = (input.work, &input.check, &input.head);
@@ -471,6 +485,7 @@ impl Ledger {
                    AND (?5 IS NULL OR json_extract(payload_json, ?5) = ?6)
                    AND (?7 IS NULL OR json_extract(payload_json, '$.head_sha') = ?7
                      AND coalesce(json_extract(payload_json, '$.carried_from'), id) = ?8)
+                   AND json_extract(payload_json, '$.plan_answers') IS ?9
                  ORDER BY id DESC LIMIT 1",
                 params![
                     input.work,
@@ -480,7 +495,8 @@ impl Ledger {
                     field,
                     value,
                     here.map(|h| h.0),
-                    here.map(|h| h.1)
+                    here.map(|h| h.1),
+                    plan_answers(input)
                 ],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
