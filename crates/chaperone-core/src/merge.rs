@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::checks::MergedInput;
 use crate::child;
-use crate::ledger::{Actor, Checked, Ledger, LedgerError};
+use crate::ledger::{Actor, Checked, Ledger, LedgerError, has_held};
 use crate::pipeline::sha_prefix_eq;
 use crate::work::HandoffInput;
 
@@ -46,6 +46,15 @@ pub fn merge(
     from: &str,
 ) -> Result<Result<Merged, String>, String> {
     let read = |e: LedgerError| e.to_string();
+    // The owner's, by `work ready`'s rule.
+    let Some(session) = actor.session.as_deref() else {
+        return Ok(Err("merge needs a session".into()));
+    };
+    if has_held(ledger.conn(), work, session).map_err(read)? {
+        return Ok(Err(format!(
+            "merge is the owner's; session {session} has held work item {work}"
+        )));
+    }
     let now = ledger.now().map_err(read)?;
     // What the confirm showed, read again now: a YES verdict on the
     // handoff head the owner confirmed, on the PR the lane holds.

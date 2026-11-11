@@ -1,10 +1,10 @@
-//! `chaperone check`, `verify`, `pr open`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
+//! `chaperone check`, `verify`, `pr open`, `merge`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction. `check run` reads git in the lane's
 //! worktree, and runs tests and the review's and the verdict's sessions in
 //! a checkout of its commit, before its write, under the lane's run lock.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{DirBuilder, File};
 use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
@@ -19,6 +19,7 @@ use chaperone_core::child;
 use chaperone_core::dossier::NoteInput;
 use chaperone_core::git::{self, ChangedFile};
 use chaperone_core::ledger::{self, Actor, Evidence, Kept, Ledger, LedgerError, Refusal};
+use chaperone_core::merge::{self, Done};
 use chaperone_core::pipeline::{self, Cli, Fact, Pipeline};
 use chaperone_core::plan;
 use chaperone_core::review::{self, Agents, Facts};
@@ -344,6 +345,36 @@ pub fn pr_open(
     }
     let created = item.pr_ref.is_none() && listed.is_none();
     one(json!({"work_id": work, "pr": pr, "head": head, "created": created, "steps": steps}))
+}
+
+/// `merge`: [`merge::merge`] of the lane's PR at `head`, by default its
+/// newest handoff's commit.
+pub fn merge(
+    ledger: &Ledger,
+    work: i64,
+    head: Option<String>,
+    actor: &Actor,
+) -> Result<Outcome, CliError> {
+    let item = ledger.work_get(work, &ledger.now()?)??;
+    let pr = item
+        .pr_ref
+        .ok_or_else(|| refuse(format!("work item {work} has no PR")))?;
+    let head = match head {
+        Some(head) => head,
+        None => ledger
+            .work_handoffs(work)?
+            .pop()
+            .and_then(|h| h.handoff.commit)
+            .unwrap_or_default(),
+    };
+    let gh = OsStr::new("gh");
+    let merged = merge::merge(ledger, actor, gh, work, &pr, &head, "chaperone merge")
+        .map_err(CliError::Internal)?
+        .map_err(refuse)?;
+    let left = matches!(merged.done, Done::ByLane).then_some("the lane's agent hands off done");
+    one(
+        json!({"work_id": work, "pr": pr, "merge_sha": merged.sha, "done": left.is_none(), "left": left}),
+    )
 }
 
 /// A PR's body from ledger facts: of the lane's own words only its title,
