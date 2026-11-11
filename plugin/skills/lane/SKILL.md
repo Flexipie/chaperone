@@ -44,7 +44,7 @@ After a compaction, read it, then `chaperone work get $2`.
 
 ## 2. Understand
 
-Read `judgement.md`, then the task (`gh issue view` for a GitHub key, the tracker's tool
+Read `${CLAUDE_SKILL_DIR}/judgement.md`, then the task (`gh issue view` for a GitHub key, the tracker's tool
 otherwise), `chaperone spec get --key $0` and `chaperone dossier get $0` (either may be
 `not_found`), then the code it touches. Then hand off progress with the goal:
 the plan check, intent lens, verdict and PR body read `brief.goal` from the newest handoff.
@@ -105,7 +105,7 @@ files. A code change with no smoke that ran cannot be ready: after a real attemp
 - `tests`: "tests failed". `chaperone check run tests --work $2` replays it: `commands` has
   each argv and its exit. Run the failing one locally, fix, commit, back to 5.
 - `review`, "N finding(s) still block" or "review not complete"; `verdict`, "the verdict is
-  not yes": read `findings.md`.
+  not yes": read `${CLAUDE_SKILL_DIR}/findings.md`.
 - "the lane moved": you committed meanwhile. Back to 5.
 - Any other `why` is a refusal that says why: fix the cause or Needs you. Exit 4: another
   run holds the lane; wait for it, never start a second.
