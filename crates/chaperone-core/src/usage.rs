@@ -134,8 +134,10 @@ impl Ledger {
 
     /// One `usage.reported` (source and origin `harness`) for a session
     /// the harness ran: `labels` say what ran it, then the session's id,
-    /// cost and counts. Its message is `run:<session id>`, so a retry
-    /// appends nothing. A session that left no id wrote nothing to count.
+    /// cost and counts, and R11's token fields (Codex's when `labels` say
+    /// `cli` `codex`, else Claude's). Its message is `run:<session id>`,
+    /// so a retry appends nothing. A session that left no id wrote nothing
+    /// to count.
     pub fn usage_run(
         &self,
         actor: &Actor,
@@ -155,6 +157,27 @@ impl Ledger {
             ("cost_usd".into(), json!(run.cost_usd)),
             ("raw".into(), scan::counts(&run.model_usage)),
         ]);
+        let u = &run.model_usage;
+        let tokens = if labels.get("cli") == Some(&json!("codex")) {
+            scan::codex_tokens(u)
+        } else {
+            // Claude's `modelUsage` counts per model: summed, and unknown
+            // when any model lacks the count.
+            let models = u.as_object().filter(|m| !m.is_empty());
+            let sum = |k: &str| {
+                models?
+                    .values()
+                    .map(|m| m.get(k).and_then(Value::as_u64))
+                    .sum()
+            };
+            scan::claude_tokens([
+                sum("inputTokens"),
+                sum("cacheReadInputTokens"),
+                sum("cacheCreationInputTokens"),
+                sum("outputTokens"),
+            ])
+        };
+        labels.extend(tokens.as_object().cloned().unwrap_or_default());
         let payload = Payload {
             source: Some("harness".into()),
             rest: labels,

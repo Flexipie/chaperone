@@ -344,7 +344,9 @@ events (`usage get`), never a stored counter. Message text never enters the payl
   `run:<session_id>` (so the key is `usage:<lane_id>:run:<session_id>`), the session's
   `session_id` and `cost_usd` (the CLI's own figure, null for Codex, which reports none), `raw`
   (the CLI's usage object, counts only), and labels saying what ran it: `phase` (`review`, `verdict` or `plan`),
-  `lens`, `cli` and `model` (the runner's). The token fields are null: unknown, never 0. A
+  `lens`, `cli` and `model` (the runner's). The token fields are R11's, read as the transcripts
+  are: for Claude from the result's `modelUsage`, each count summed over its models (null when
+  a model lacks it: unknown, never 0), for Codex from `turn.completed`'s `usage`. A
   session that left no id (it never started, or Codex printed no `thread.started`) writes none.
 - **Cursor** and other CLIs are not read. Their lanes have no usage events, so `usage get`
   says `known: false`, never a guessed zero.
