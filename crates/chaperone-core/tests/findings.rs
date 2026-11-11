@@ -141,7 +141,8 @@ fn moves_follow_the_table() {
         1 f31 verified - - session s1 has held lane 1; a finding goes verified
         1 f31 waived r - session s1 has held lane 1; a finding goes waived
         1 f30 refuted - - session s1 has held lane 1; a finding goes refuted
-        2 f31 disputed r - only the lane disputes a finding
+        2 f31 disputed r - only the lane disputes or accepts a finding
+        1 f31 accepted - - only a plan check's finding is accepted
         1 f31 disputed - - a finding goes disputed only with a reason
         2 f31 waived _ - reason is one non-blank line of at most 500 characters
         2 f31 waived N - reason is one non-blank line

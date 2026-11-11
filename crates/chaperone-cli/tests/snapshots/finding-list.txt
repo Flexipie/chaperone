@@ -1,4 +1,4 @@
-Every finding of the lane's complete harness reviews, of any commit, oldest first; blocks is true for those the no_blocking_findings gate counts
+Every finding of the lane's complete harness reviews, of any commit, and of its newest plan check, oldest first, with the reason of each one's newest move; blocks is true for those the no_blocking_findings gate counts
 
 Usage: chaperone finding list [OPTIONS] --work <WORK>
 

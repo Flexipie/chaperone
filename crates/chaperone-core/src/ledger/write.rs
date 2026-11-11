@@ -43,8 +43,9 @@ pub const SESSION_CHECKS: &[&str] = &[
 /// which only its producer writes on a lane stamped with one.
 const HARNESS_CHECKS: &[&str] = &["diff", "tests", "review", "merge_verdict", "plan_check"];
 
-/// Who may make a finding move (events.md, finding statuses). The lane's
-/// only move on a finding is to dispute it, so it never settles its own.
+/// Who may make a finding move (events.md, finding statuses). The lane
+/// disputes a finding, or accepts a plan check's, so it never settles a
+/// review's.
 enum By {
     /// Anyone, for a `question` only (the guard checks the severity).
     Anyone,
@@ -69,6 +70,7 @@ const FINDING_MOVES: &[(&str, &str, By)] = &[
     ("disputed", "waived", By::Independent),
     ("open", "disputed", By::Lane),
     ("verified", "disputed", By::Lane),
+    ("open", "accepted", By::Lane),
 ];
 
 pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
@@ -800,20 +802,21 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                     "finding.updated status is one of {statuses:?}"
                 )));
             }
-            // With whether the finding is a harness review's, the only kind
-            // the harness rules on.
-            let row: Option<(String, String, bool)> = tx
+            // With the check that raised it when the harness did: a review
+            // is the only kind the harness rules on, a plan check the only
+            // kind the lane accepts.
+            let row: Option<(String, String, Option<String>)> = tx
                 .query_row(
-                    "SELECT f.status, f.severity,
-                       json_extract(e.payload_json, '$.check') IS 'review'
-                       AND json_extract(e.payload_json, '$.producer.kind') IS 'harness'
+                    "SELECT f.status, f.severity, CASE
+                       WHEN json_extract(e.payload_json, '$.producer.kind') IS 'harness'
+                       THEN json_extract(e.payload_json, '$.check') END
                      FROM findings f JOIN events e ON e.id = f.check_event_id
                      WHERE f.lane_id = ?1 AND f.check_event_id = ?2 AND f.finding_key = ?3",
                     rusqlite::params![lane_id, check, key],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
-            let Some((from, severity, reviewed)) = row else {
+            let Some((from, severity, raised_by)) = row else {
                 refuse!(Refusal::NotFoundRef {
                     entity: "finding",
                     reference: format!("{check}/{key}"),
@@ -836,15 +839,21 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // the run: its authority is the binary's, and only that code
             // path sets this producer. Its moves only, on harness reviews'
             // findings only (`apply` takes any payload).
+            let reviewed = raised_by.as_deref() == Some("review");
             let ruled = harness && reviewed && matches!(to, "verified" | "refuted" | "fixed");
             match by {
                 By::Lane if !held => refuse!(invalid(&format!(
-                    "only the lane disputes a finding; session {session} has never held lane {lane_id}"
+                    "only the lane disputes or accepts a finding; session {session} has never held lane {lane_id}"
                 ))),
                 By::Independent if held && !ruled => refuse!(invalid(&format!(
                     "session {session} has held lane {lane_id}; a finding goes {to} from a session that never has"
                 ))),
                 _ => {}
+            }
+            if to == "accepted" && raised_by.as_deref() != Some(crate::plan::EVENT_CHECK) {
+                refuse!(invalid(&format!(
+                    "only a plan check's finding is accepted; finding {check}/{key} is not one"
+                )));
             }
             if to == "answered" && severity != "question" {
                 refuse!(invalid(&format!(

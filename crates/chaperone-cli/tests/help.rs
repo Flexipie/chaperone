@@ -124,6 +124,10 @@ fn help_matches_snapshots() {
             &["finding", "waive"],
             include_str!("snapshots/finding-waive.txt"),
         ),
+        (
+            &["finding", "accept"],
+            include_str!("snapshots/finding-accept.txt"),
+        ),
         (&["usage"], include_str!("snapshots/usage.txt")),
         (
             &["usage", "report"],

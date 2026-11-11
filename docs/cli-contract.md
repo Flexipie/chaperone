@@ -139,6 +139,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `finding list` | `--work <id>` | read |
 | `finding dispute` | `<event> <key> --reason <r>` | write |
 | `finding waive` | `<event> <key> --reason <r>` | write |
+| `finding accept` | `<event> <key> --reason <r>` | write |
 | `dossier note` | `<key> --note <text> [--link <kind>:<ref>]... [--supersedes <event id>]` | write |
 | `dossier get` | `<key>` | read |
 | `evidence show` | `<sha256 or prefix>` | read, no ledger |
@@ -197,16 +198,25 @@ redacted. A move the table does not allow, the wrong session or a bad reason is
 refused as `finding <event>/<key> is already <status>`, not replayed. Both print
 `{event_id, work_id, kind, replayed, at, payload}`.
 
+`finding accept` is new (#221): the lane's answer to a finding of its harness plan check, the
+other being `finding dispute`. It moves an `open` plan check finding to `accepted`, only from a
+session that has held the lane, and is refused on any other check's finding. `--reason` is
+required as for `dispute` (how the lane will act on it) and the review lenses are shown it. It
+prints as `dispute` does. While a finding of the lane's newest plan check is `open`, `check run
+diff` and `check run review` (so `verify`) are refused (events.md, plan findings).
+
 `finding list` is new (#212). It prints, oldest first, every finding of the lane's complete
 harness reviews (`check.finished` `review` from the harness with `complete: true`), of any
-commit, as items `{check_event_id, finding_key, severity, title, body, path, line, head_sha,
-status, blocks}`. `check_event_id` and `finding_key` address the finding for `finding dispute`
+commit, and of its newest plan check (#221), as items `{check_event_id, check, finding_key,
+severity, title, body, path, line, head_sha, status, reason, blocks}`. `check` is `review` or
+`plan_check`; `reason` is that of the finding's newest move, null when it has none; a plan
+check's finding never `blocks`. `check_event_id` and `finding_key` address the finding for `finding dispute`
 and `finding waive`; `head_sha` is the commit the review read; `line` is the lens's, from the
 review's payload. `blocks` is the `no_blocking_findings` gate's rule: unsettled (`open`,
 `verified` or `disputed`) and of a severity that blocks, so once the head has a complete
 review the count of `blocks` is `findings.open_blocking` (before that the gate stops at
-`review_complete` and the fact is absent). An incomplete review's findings, and those of other checks, are not
-listed. An unknown work id lists nothing, as `work events`.
+`review_complete` and the fact is absent). An incomplete review's findings, and those of other checks (an
+older plan check's included), are not listed. An unknown work id lists nothing, as `work events`.
 
 `dossier note` and `dossier get` are new (#83, [ADR 0007](decisions/0007-issue-dossier.md)).
 `<key>` is `owner/repo#N` or `TEAM-123` (`normalize_key`); a bare `#N` is `invalid_input`.
@@ -662,7 +672,7 @@ Each command is one transaction that appends one event (events.md, write rules).
 | `work update --status cancelled`, `work cancel` | ungated | `lane.cancelled` |
 | `work update`, any other change | ungated | `lane.updated`, or `pr.opened` when the PR goes from null to set |
 | `work claim`, `release`, `ready` | ungated | the matching `lane.*` kind |
-| `finding dispute`, `finding waive` | ungated | `finding.updated` |
+| `finding dispute`, `finding waive`, `finding accept` | ungated | `finding.updated` |
 | `work heartbeat` | none | none |
 | `migrate` | none | none (schema only) |
 

@@ -205,16 +205,16 @@ the same value, a trailing slash aside, still writes.
 | --- | --- | --- |
 | `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha`, `review` |
 | `check.finished` | `check record`, `check run`, `check waive`, `verify` (through `check run`), `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
-| `finding.updated` | `finding dispute`, `finding waive`; the other moves are core's (`Ledger::finding_update`) for the harness | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute or waive; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits) |
+| `finding.updated` | `finding dispute`, `finding waive`, `finding accept`; the other moves are core's (`Ledger::finding_update`) for the harness | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute, waive or accept; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits) |
 
 **Finding statuses.** A finding is folded `open`. Each `finding.updated` makes one of these
 moves, checked by the write; any other move, another status, or the same status again
 (`finding <event>/<key> is already <status>`) is `invalid_input`, an unknown finding is
 `not_found` with reference `<event>/<key>`, and nothing is written. `refuted`, `waived`,
-`fixed` and `answered` are final. "Lane" is a session that has held the lane (a
+`fixed`, `answered` and `accepted` are final. "Lane" is a session that has held the lane (a
 `lane.claimed` or `lane.taken_over`); "independent" is one that never has: the verifier,
-or the owner (the rule `work ready` uses). The lane's only move is to dispute, so it never
-settles its own finding. A `finding.updated` whose `producer.kind` is `harness` is the
+or the owner (the rule `work ready` uses). The lane disputes a finding, or accepts a harness
+plan check's (refused on any other check's finding), so it never settles a review's. A `finding.updated` whose `producer.kind` is `harness` is the
 verifier's ruling inside `check run review`: the binary ran the verifier, so it may make the
 `verified`, `refuted` and `fixed` moves whatever session started the run (usually the lane's
 own, in the background), and only on a finding whose `check.finished` is itself a harness
@@ -229,9 +229,21 @@ finding. Only that code path sets the producer; no command takes it as input.
 | `open`, `disputed` | `verified`, `refuted` | independent |
 | `open`, `verified` | `disputed` | lane |
 | `open`, `verified`, `disputed` | `waived` | independent (the owner) |
+| `open` | `accepted` | lane, and only on a finding of a harness `plan_check` |
 
 There is no `disputed` to `fixed`: a lane that concedes a disputed finding fixes it and
 waits for the verifier to rule. `open`, `verified` and `disputed` are unsettled.
+
+**Plan findings.** The findings of the lane's newest `plan_check` (any outcome, so the owner's
+waiver or a later run with no answer, which raise none, release older ones) are the lane's to
+answer before its code is checked: `accepted`, `disputed` (declined, with its reason) or, for a
+question, `answered`. While one is `open`, `check run diff` and `check run review` (so `verify`)
+are refused, naming each `<event>/<key>` and title and the commands that answer it. Every review
+lens (not the verifier) is shown them with their status and the reason of their newest move, and
+told that an `accepted` one the diff does not address is a `blocker`, and that a `disputed` one
+is not raised again unless the finding says why its reason is wrong. A plan check's finding never
+blocks: no gate counts it and `Ledger::blocking_findings`, which the merge verdict reads, leaves
+it out.
 
 A requested review with no finish projects the fact `daisy_review.state` as `running`, never `absent`, and `reviews get` reports it running.
 

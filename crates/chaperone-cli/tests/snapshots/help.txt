@@ -10,7 +10,7 @@ Commands:
   jobs       Recorded daisy jobs
   usage      Token usage per provider message, read from a lane's transcripts
   attention  Interventions on a lane by the orchestrator or the owner
-  finding    A lane's review findings: list them, the lane disputes one, the owner waives one
+  finding    A lane's review and plan check findings: list them, the lane disputes or accepts one, the owner waives one
   dossier    The agent-only record of an issue key: notes, and one capped read of what the ledger knows about the key. Data for agents, never a gate
   evidence   The evidence store beside the ledger: text a check or a harness session stored, named by its sha256
   overlap    Per file, the open lanes touching it: each lane's newest handoff (changed_files), then the commits on its worktree's HEAD since the merge-base with origin, all git calls within 5 s. Shared files first. Call it before starting work
