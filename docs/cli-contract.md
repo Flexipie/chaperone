@@ -603,13 +603,13 @@ Claude Code's settings. They print `{dir, plugin, version, ran}` (`uninstall` wi
 when the binary fails, so it is what keeps a hook silent). The lane is `$CHAPERONE_WORK`; when it
 is not a number, or the lane is unknown, done, cancelled or on a pipeline before schema 2 (v20),
 it prints nothing and exits 0, as on most errors. It prints the hook's own JSON, not an envelope,
-and opens the ledger read-only for every event but `stop` and `stop-failure`. `session-start` prints `additionalContext`: the lane's id, title,
+and opens the ledger read-only for every event but `stop-failure` (and `stop`'s usage write, below). `session-start` prints `additionalContext`: the lane's id, title,
 status, pipeline, branch, head, PR, the ready gates not passing yet (as the lane page reads them)
 and the lane's commands. `pre-bash` splits a Bash `tool_input.command` at `&&`, `||`, `;`, `|`, newlines,
 `$(`, parentheses and backticks, drops each part's leading `VAR=value` words, and denies a part
 that starts `gh pr create`, `gh pr merge` or `chaperone work ready` with `--yes` later in it,
-naming the command to run instead. `stop` first records the lane session's tokens, every turn, so the lane never has to: `usage report --work <lane>`'s write, reading only the folder of the hook's `transcript_path` (that session's project folder, its sessions matched by first `cwd` as always, and their subagents), since reading every transcript under `~/.claude` can pass the hook's 10 s timeout. Without a `transcript_path` it records nothing; any error is ignored, and with `DAISY_CLI_READONLY=1` it skips this write and stays a read. It then blocks once (never with `stop_hook_active`) when the newest handoff is ready and
-the branch tip, read as a ready handoff reads it, is not its commit. `stop-failure` records
+naming the command to run instead. `stop` blocks once (never with `stop_hook_active`) when the newest handoff is ready and
+the branch tip, read as a ready handoff reads it, is not its commit. After printing its answer, `stop` records the lane session's tokens, every turn, so the lane never has to: `usage report --work <lane>`'s write, on its own writable open, reading only the folder of the hook's `transcript_path` (that session's project folder, its sessions matched by first `cwd` as always, and their subagents), since reading every transcript under `~/.claude` can pass the hook's 10 s timeout. It waits at most 5 s for it (a busy ledger is left, with whole events written, and the next turn adds the rest). Without a `transcript_path` it records nothing, any error is ignored, and with `DAISY_CLI_READONLY=1` it skips this write and stays a read. `stop-failure` records
 `attention.recorded` type `stopped`, by `orchestrator`, its note the hook's `error`, as
 `$DAISY_AGENT` and `$DAISY_SESSION`; a repeat with nothing new on the lane replays, as `attention
 record` without a key does. It is a write, so
