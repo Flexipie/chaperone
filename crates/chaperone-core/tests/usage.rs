@@ -249,10 +249,8 @@ fn get_sums_per_source_and_transcript() {
         .iter()
         .find(|s| s["cli"] == "codex" && s["source"] == "parent")
         .unwrap();
-    assert_eq!(
-        (codex["cache_read"].clone(), codex["models"].clone()),
-        (json!(60), json!("gpt-x"))
-    );
+    let got = ["cache_read", "uncached_input", "input_total", "models"].map(|k| codex[k].clone());
+    assert_eq!(got, [json!(60), json!(40), json!(100), json!("gpt-x")]);
 }
 
 #[test]
@@ -390,9 +388,18 @@ fn a_harness_session_is_one_row() {
         "reasoning": null, "input_includes_cache": false, "output_includes_reasoning": true,
         "input_total": 119, "output_total": 6});
     assert_eq!(payload("claude"), want);
-    let tokens = ["input_total", "cache_read", "cache_write", "output_total"];
+    let tokens = [
+        "uncached_input",
+        "input_total",
+        "cache_read",
+        "cache_write",
+        "output_total",
+    ];
     let got = tokens.map(|k| payload("codex")[k].clone());
-    assert_eq!(got, [json!(50), json!(40), Value::Null, json!(6)]);
+    assert_eq!(
+        got,
+        [json!(10), json!(50), json!(40), Value::Null, json!(6)]
+    );
     let got = ledger.usage_get(id).unwrap().unwrap();
     let harness = &got["totals"]["harness"];
     assert_eq!(

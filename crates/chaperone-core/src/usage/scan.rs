@@ -267,8 +267,12 @@ pub(crate) fn claude_tokens([input, read, write, output]: [Option<u64>; 4]) -> V
 /// R11's token fields of a Codex usage object.
 pub(crate) fn codex_tokens(u: &Value) -> Value {
     let n = |k: &str| u.get(k).and_then(Value::as_u64);
+    // Codex's input_tokens already holds cached_input_tokens.
+    let uncached = n("input_tokens")
+        .zip(n("cached_input_tokens"))
+        .and_then(|(i, c)| i.checked_sub(c));
     json!({
-        "uncached_input": n("input_tokens"),
+        "uncached_input": uncached,
         "cache_read": n("cached_input_tokens"),
         "cache_write": n("cache_write_input_tokens"),
         "output": n("output_tokens"),

@@ -285,8 +285,9 @@ impl Ledger {
         )?;
         let mut totals = Map::new();
         for mut row in rows(&NAMES[..1], &[])? {
-            // Claude's uncached_input leaves the cache out and Codex's holds
-            // it, so the sum across CLIs means nothing; rows keep it per CLI.
+            // Codex events recorded before #214 hold the cache in
+            // uncached_input, so the sum across CLIs means nothing; rows keep
+            // it per CLI.
             row.remove("uncached_input");
             let source = row.remove("source");
             let source = source.as_ref().and_then(Value::as_str).unwrap_or_default();
