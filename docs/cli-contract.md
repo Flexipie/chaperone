@@ -229,7 +229,7 @@ or note is `not_found`. Notes are someone else's words: no gate reads them.
 Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_merge_h, with_pr, merged, tokens, peak_context, attention, send_back_rounds, plan_check, quality_gate, merge_verdict, verdict_on_head, head_reviewed, flat_rounds, reraised_findings, verified_findings, verified_findings_after_handoff, commits_after_handoff}`:
 
 - `claimed_at` is the first `lane.claimed` (a reopened lane keeps it, so its wait counts), `merged_at` the latest `pr.merged.merged_at`, and `claim_to_merge_h` the hours between them, only when every PR the lane held (`pr.opened` or a `changed.pr_ref.to`) has merged (`merged`).
-- `tokens` is keyed by `source` (`parent`, `subagent`) with the sums of `input_total`, `cache_read`, `cache_write` and `output_total`, skipping nulls as `usage get` does; null when the lane has no usage event. `peak_context` is the largest parent `input_total`.
+- `tokens` is keyed by `source` (`parent`, `subagent`, `harness`) with the sums of `input_total`, `cache_read`, `cache_write` and `output_total`, skipping nulls as `usage get` does; null when the lane has no usage event. `peak_context` is the largest parent `input_total`.
 - `attention` counts `attention.recorded` by `type`; `send_back_rounds` is the highest `sent_back` round.
 - `plan_check` and `quality_gate` are the latest `check.finished` of that check: `{outcome, head_sha, findings}` when it ran, `{outcome, head_sha, reason}` when skipped, null when absent.
 - `merge_verdict` is the latest `merge_verdict` that ran, `{decision, head_sha}`, null when none ran, so a missing verdict reads apart from a NO or a YES on an older head.
@@ -293,9 +293,10 @@ that commit's numstat against the merge base (committed files only, no renames; 
 read as remote-tracking refs, so a local branch named `origin/main` is never taken for one) and
 its tree, those two within one 10 s deadline. A lane with no worktree, a relative or missing
 one, a git call that fails or times out (not marked retryable yet), a numstat past 16 MiB and
-a base profile whose `[diff]` does not load are `invalid_input` and write nothing. The per-file
-list goes to the evidence store before the one `check.finished` that names it is written. It
-prints what `check record` prints.
+a base profile that is a link or no file, is not TOML (with or without `[diff]`) or whose
+`[diff]` does not load are `invalid_input` and write nothing. The per-file list goes to the
+evidence store before the one `check.finished` that names it is written. It prints what
+`check record` prints.
 
 `check run tests` takes the same lock and reads the commit the same way, then the `[tests]`
 table of `.chaperone/profile.toml` on the base branch (the first of `origin/HEAD`,
@@ -457,8 +458,9 @@ no code file against its base, as `diff` counts code (any file a `[diff] code` g
 branch's profile names, or not under `docs/` or ending in `.md`, with or without counted
 lines): the plan is attacked before code exists, so a commit with code is refused
 (`invalid_input`, giving the count of code files and lines, the first three paths and the
-owner's waiver). The plan file must be a regular file (a link to one is followed; the type is checked before it is opened, so a FIFO is refused, against accidents
-rather than a lane swapping the file in between) of at most 64 KiB of
+owner's waiver), and a base profile `diff` refuses is refused here too. The plan file must be a
+regular file (a link to one is followed; the type is checked before it is opened, so a FIFO is
+refused, against accidents rather than a lane swapping the file in between) of at most 64 KiB of
 UTF-8 text that is not blank; it may sit outside the worktree, where agents keep their plans.
 All of these write nothing. The plan is named as the evidence store keeps it, redacted, and
 that text is what the session is sent; a plan check that ran on the same tree, pipeline and

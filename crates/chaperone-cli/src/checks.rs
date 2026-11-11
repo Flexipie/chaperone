@@ -272,10 +272,11 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         mut input,
     } = start_run(ledger, work, "diff")?;
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
-    let (globs, profile) = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    let found = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
     // The profile says what code is, so a changed one measures again.
-    input.profile = profile;
-    let (code, code_lines) = code(&files, &globs);
+    input.profile = found.as_ref().map(|f| f.hash.clone());
+    let globs = found.as_ref().map_or(&[][..], |f| &f.code);
+    let (code, code_lines) = code(&files, globs);
     let added: u64 = files.iter().filter_map(|f| f.added).sum();
     let removed: u64 = files.iter().filter_map(|f| f.removed).sum();
     input.fields = Map::from_iter([
@@ -301,6 +302,10 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     let stored = Evidence::beside(db).put(&list).map_err(LedgerError::from)?;
     let truncated = json!(stored.truncated);
     input.fields.insert("files_truncated".into(), truncated);
+    if let Some(f) = &found {
+        let at = json!({"ref": f.base, "commit": f.commit});
+        input.fields.insert("profile_base".into(), at);
+    }
     input.evidence_ref = Some(stored.hash);
     one(ledger.check_run(actor, &input)??)
 }
@@ -547,7 +552,8 @@ fn run_plan(
     })?;
     let head = input.head.clone();
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
-    let (globs, _) = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    let found = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    let globs = found.map_or_else(Vec::new, |f| f.code);
     no_code(&files, &globs, &head, work)?;
     // Named as the store keeps it, redacted; written only once a session
     // runs on it (`plan::record`).
