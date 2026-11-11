@@ -78,6 +78,8 @@ with the symptom, the failing command and `--fix`. Commit with short plain messa
 the tree clean. Then:
 - `chaperone check run diff --work $2`: `code_lines` over the limit or `uncounted_files`
   over 0 will not pass. Cut, or Needs you with a proposed split.
+  A refused companion rule names a doc the change must update: update it, or, when the
+  change truly needs no edit there, commit a `No-companion: <rule> <why>` trailer.
 - Invoke the `chaperone:blast-radius` skill once; fix what it finds inside the slice.
 
 ## 5. Smoke, on the commit you will hand off
