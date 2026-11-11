@@ -333,8 +333,9 @@ events (`usage get`), never a stored counter. Message text never enters the payl
   `cwd` matches. Each `token_usage_record` is one response (`message_id` is its
   `response_id`), with the model from the latest `turn_context`. `input_tokens` already holds
   the cached count. In local records `total_tokens` is input plus output, and input is never
-  below cached. So `input_includes_cache` is true, `uncached_input` and `input_total` are
-  `input_tokens`, and `cache_read` is `cached_input_tokens`. A rollout with no
+  below cached. So `input_includes_cache` is true, `input_total` is `input_tokens`,
+  `uncached_input` is `input_tokens - cached_input_tokens` (null if either is null), and
+  `cache_read` is `cached_input_tokens`. A rollout with no
   `token_usage_record` (older Codex) is reported as `unknown` and writes nothing. A rollout
   whose `session_meta.source` has `subagent` is a subagent: `session_id` is its
   `parent_thread_id`, `agent_id` its own id, `agent_type` the spawn's `agent_role` and

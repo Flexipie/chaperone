@@ -711,8 +711,8 @@ has one row per transcript or harness session (`source`, `cli`, `session_id`, `a
 `agent_type`, `description`, `models`). Both carry `messages`, `peak_input_total` and the
 sums of `cache_read`, `cache_write`, `output`, `reasoning`, `input_total`, `output_total` and
 `cost_usd` (the CLI's own figure: only harness rows of a Claude session carry one, so a
-transcript source's is null). Only the transcript rows carry `uncached_input`, since its meaning differs
-by CLI (Codex's includes the cache). A sum skips the messages where that field is null, and is
+transcript source's is null). Only the transcript rows carry `uncached_input`, since Codex events
+recorded before #214 include the cache in it. A sum skips the messages where that field is null, and is
 null when every message has it null. `known` is false when the lane has no usage event.
 
 Where these numbers differ from `lane-stats`:

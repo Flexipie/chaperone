@@ -87,7 +87,7 @@ Classifiers are versioned because a regex edit would otherwise rewrite history:
 | `uncached_input`, `cache_read`, `cache_write`, `output`, `reasoning` | Null when that CLI has no such field. |
 | `input_includes_cache` | `true`, `false`, or `unknown`. |
 | `output_includes_reasoning` | `true`, `false`, or `unknown`. |
-| `input_total` | The OTel input number: all input tokens, cache included. Set only when the inclusion flag is known. Anthropic-shaped (`false`): `uncached_input + cache_read + cache_write`, null if any of those three is null. Inclusive (`true`): `uncached_input` already is the total, and `cache_read` / `cache_write` are subsets. `unknown`: `input_total` is null. |
+| `input_total` | The OTel input number: all input tokens, cache included. Set only when the inclusion flag is known. Anthropic-shaped (`false`): `uncached_input + cache_read + cache_write`, null if any of those three is null. Inclusive (`true`): the CLI's input count already is the total, and `cache_read` / `cache_write` are subsets of it. `uncached_input` leaves the cache out for every CLI. `unknown`: `input_total` is null. |
 | `output_total` | Same rule for reasoning. |
 | `cost_usd` | The CLI's own price, if it sent one. Else null. |
 | `raw` | The CLI object, for a later remap. No secrets (R13). |
