@@ -1,6 +1,7 @@
 //! `pr open` through the binary on a v20 lane whose `origin` is a local
 //! bare repo, with a fake `gh` first on `PATH` that logs its argv and keeps
-//! the body file it was given.
+//! the body it was given. Its `pr create` opens #7 and then fails, as a run
+//! that opened a PR and never recorded it; `pr list` lists #7 once opened.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -83,13 +84,15 @@ fn lane() -> Lane {
     std::fs::create_dir_all(wt.join(".chaperone")).unwrap();
     std::fs::create_dir(&bin).unwrap();
     let (log, body) = (dir.path().join("gh.log"), dir.path().join("body.md"));
+    let opened = dir.path().join("opened");
     let gh = bin.join("gh");
     std::fs::write(
         &gh,
         format!(
-            "#!/bin/sh\necho \"$*\" >> {log:?}\n\
-             for a; do [ \"$prev\" = --body-file ] && cp \"$a\" {body:?}; prev=$a; done\n\
-             [ \"$2\" = create ] && echo https://github.com/o/r/pull/7\nexit 0\n"
+            "#!/bin/sh\necho \"$*\" >> {log:?}\ncase $2 in\n\
+             list) cat {opened:?} 2>/dev/null;;\n\
+             create) cat > {body:?}; echo https://github.com/o/r/pull/7 > {opened:?}; exit 1;;\n\
+             edit) cat > {body:?};;\nesac\nexit 0\n"
         ),
     )
     .unwrap();
@@ -131,56 +134,58 @@ fn lane() -> Lane {
     lane
 }
 
-/// A passing lane is pushed, its PR created with a body of ledger facts and
-/// recorded once on the head; the same head again replays the checks and
-/// edits the body of the PR the lane holds.
+/// A passing lane's commit is pushed and its PR created; a PR created and
+/// not recorded is found on the next run, which replays the checks, edits
+/// its body of ledger facts and records it once on the head. A run after
+/// that edits the PR the lane holds and records nothing.
 #[test]
 fn pr_open_creates_the_pr_from_ledger_facts() {
     let lane = lane();
     let head = git(&lane.wt, &["rev-parse", "HEAD"], &[]);
     let open = ["pr", "open", "--work", "1"];
+    let (code, err) = lane.run("lane", &open);
+    assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
+    assert_eq!(lane.pushed(), head);
+    let list = "pr list --head feat --json url --jq .[0].url\n";
+    let create = "pr create --base main --head feat --title t --body-file -\n";
+    assert_eq!(lane.file("gh.log"), [list, create].concat());
+    assert!(lane.opened().is_empty());
+
     let (code, out) = lane.run("lane", &open);
     assert_eq!(code, 0, "{out}");
-    let steps = |out: &Value| {
-        let steps = out["steps"].as_array().unwrap().iter();
-        steps
-            .map(|s| (s["check"].clone(), s["head"].clone(), s["replayed"].clone()))
-            .collect::<Vec<_>>()
-    };
-    let ran = |replayed| ["diff", "tests"].map(|c| (json!(c), json!(head), json!(replayed)));
+    let steps = out["steps"].as_array().unwrap().iter();
+    let steps: Vec<_> = steps.map(|s| (&s["check"], &s["replayed"])).collect();
+    assert_eq!(
+        steps,
+        [
+            (&json!("diff"), &json!(true)),
+            (&json!("tests"), &json!(true))
+        ]
+    );
     assert_eq!(
         (&out["pr"], &out["head"], &out["created"]),
-        (&json!("o/r#7"), &json!(head), &json!(true))
+        (&json!("o/r#7"), &json!(head), &json!(false))
     );
-    assert_eq!(steps(&out), ran(false));
-    assert_eq!(lane.pushed(), head);
-    let file = lane.dir.path().join("pr-body-lane-1.md");
-    let file = file.to_str().unwrap();
-    let create = format!("pr create --base main --head feat --title t --body-file {file}\n");
-    assert_eq!(lane.file("gh.log"), create);
-    let body = lane.file("body.md");
-    assert!(body.contains("- Size: 1 code lines in 1 files\n"), "{body}");
-    assert!(
-        body.contains(&format!("- Tests: passed on {head}: `test ! -e FAIL`\n")),
-        "{body}"
+    let edit = "pr edit 7 --repo o/r --body-file -\n";
+    assert_eq!(lane.file("gh.log"), [list, create, list, edit].concat());
+    let body = format!(
+        "t\n\n- Size: 1 code lines in 1 files\n- Tests: passed on {head}: `test ! -e FAIL`\n\
+         - Plan check: skipped (waived)\n- Smoke: none\n\nMade by `chaperone pr open` from the ledger.\n"
     );
-    assert!(body.contains("- Plan check: skipped (waived)\n"), "{body}");
+    assert_eq!(lane.file("body.md"), body);
     assert_eq!(lane.opened(), std::slice::from_ref(&head));
 
-    let (code, out) = lane.run("lane", &open);
-    assert_eq!(code, 0, "{out}");
+    assert_eq!(lane.run("lane", &open).0, 0);
     assert_eq!(
-        (&out["pr"], &out["created"]),
-        (&json!("o/r#7"), &json!(false))
+        lane.file("gh.log"),
+        [list, create, list, edit, edit].concat()
     );
-    assert_eq!(steps(&out), ran(true));
-    let edit = format!("pr edit 7 --body-file {file}\n");
-    assert_eq!(lane.file("gh.log"), create + &edit);
-    assert_eq!(lane.opened(), std::slice::from_ref(&head));
+    assert_eq!(lane.opened(), [head]);
 }
 
-/// A dirty worktree, failing tests and a diff over v20's 400 code lines
-/// are each refused before any push or gh call.
+/// A dirty worktree, failing tests, a diff over v20's 400 code lines and
+/// one with a file git counts no lines of are each refused before any push
+/// or gh call.
 #[test]
 fn pr_open_refuses_what_cannot_pass() {
     let lane = lane();
@@ -200,5 +205,9 @@ fn pr_open_refuses_what_cannot_pass() {
     let big = "x\n".repeat(401);
     git(&lane.wt, &["add", "big.rs"], &[("big.rs", big.as_bytes())]);
     git(&lane.wt, &["commit", "-qm", "big"], &[]);
-    refused("over the pipeline's limit of 400");
+    refused("pipeline allows 400");
+    git(&lane.wt, &["rm", "-q", "big.rs"], &[]);
+    git(&lane.wt, &["add", "blob"], &[("blob", b"\0\x01")]);
+    git(&lane.wt, &["commit", "-qm", "blob"], &[]);
+    refused("and 1 uncounted");
 }

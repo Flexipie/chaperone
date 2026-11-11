@@ -1,4 +1,4 @@
-Under the lane's run lock (a second run is a conflict, exit 4), on a clean worktree at the lane's branch tip: `check run` diff and tests (a pass on the same tree replays), refused over the pipeline's code line limit or when the tests fail. Then `git push -u origin <branch>` and `gh pr create`, or `gh pr edit` when the lane holds a PR, with a body made from ledger facts; a new PR is recorded as `pr.opened` on that commit
+Under the lane's run lock (a second run is a conflict, exit 4), on a clean worktree at the lane's branch tip: `check run` diff and tests (a pass on the same tree replays), refused past the pipeline's code line limit, with a file git counts no lines of, or when the tests fail. Then `git push origin <commit>:refs/heads/<branch>` and `gh pr create`, or `gh pr edit` when the lane holds a PR or gh lists one for the branch, with a body made from ledger facts; a PR new to the ledger is recorded as `pr.opened` on that commit
 
 Usage: chaperone pr open [OPTIONS] --work <WORK>
 
@@ -6,8 +6,8 @@ Options:
       --db <DB>            Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
       --work <WORK>        
       --format <FORMAT>    Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
-      --title <TITLE>      Default: the work item's title
-      --draft              Open it as a draft
+      --title <TITLE>      Default on create: the work item's title; on edit, kept
+      --draft              Open it as a draft (create only)
       --agent <AGENT>      Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
       --session <SESSION>  Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
   -h, --help               Print help
