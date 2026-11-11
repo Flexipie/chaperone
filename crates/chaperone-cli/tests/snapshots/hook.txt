@@ -1,4 +1,4 @@
-The plugin's Claude Code hook for the lane $CHAPERONE_WORK: reads the hook's JSON on stdin and prints the hook's answer, not an envelope. Outside an open lane, and on any error, it prints nothing and exits 0
+The plugin's Claude Code hook for the lane $CHAPERONE_WORK: reads the hook's JSON on stdin and prints the hook's answer, not an envelope. Nothing outside an open lane on a v20 or newer pipeline; the plugin's shim keeps every failure silent
 
 Usage: chaperone hook [OPTIONS] <EVENT>
 

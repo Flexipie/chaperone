@@ -23,7 +23,7 @@ Commands:
   migrate    Create the ledger, or migrate it to this binary's version after a backup. Refuses a file that is not a Chaperone ledger
   install    Write the Claude Code plugin embedded in this binary as a marketplace in the user data dir, replacing what was there, and register it with `claude plugin marketplace add` and `claude plugin install chaperone@chaperone --scope user`. Safe to run again. Never reads the ledger
   uninstall  `claude plugin uninstall` and `claude plugin marketplace remove` for what `install` registered (a refusal of what is not there is reported, not an error), then delete the marketplace directory
-  hook       The plugin's Claude Code hook for the lane $CHAPERONE_WORK: reads the hook's JSON on stdin and prints the hook's answer, not an envelope. Outside an open lane, and on any error, it prints nothing and exits 0
+  hook       The plugin's Claude Code hook for the lane $CHAPERONE_WORK: reads the hook's JSON on stdin and prints the hook's answer, not an envelope. Nothing outside an open lane on a v20 or newer pipeline; the plugin's shim keeps every failure silent
   help       Print this message or the help of the given subcommand(s)
 
 Options:
