@@ -1,6 +1,7 @@
 //! The owner's merge of a lane's PR (#117), the UI's and the CLI's: as
 //! `/merge` does it, GitHub first, then `pr.merged`, then the done
-//! handoff when no live lease holds the lane.
+//! handoff when no live lease holds the lane, else a herdr prompt that
+//! tells the lane's agent to hand off done.
 
 use std::ffi::OsStr;
 use std::time::Duration;
@@ -13,8 +14,8 @@ use crate::ledger::{Actor, Checked, Ledger, LedgerError, exists};
 use crate::pipeline::sha_prefix_eq;
 use crate::work::HandoffInput;
 
-/// How long one gh call may take.
-const GH_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one gh or herdr call may take.
+const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct Merged {
     /// The merge commit.
@@ -28,19 +29,23 @@ pub enum Done {
     Was,
     /// Its lease was not live: the merge handed it off done.
     HandedOff,
-    /// Its lease is live: only its agent hands off done.
-    ByLane,
+    /// Its lease is live: only its agent hands off done. `Err` says why
+    /// the herdr prompt that tells it did not reach it.
+    ByLane(Result<(), String>),
 }
 
 /// Squash-merges `pr` at `head`, the handoff head the owner confirmed
 /// (default: the lane's handoff head), once the ledger and GitHub both
 /// still hold it; a PR already merged at that head is only recorded.
-/// `from` names the caller in the done handoff. `Ok(Err(why))` is a
-/// refusal, before any merge.
+/// `from` names the caller in the done handoff and the prompt; `herdr`
+/// is the CLI the prompt goes through. `Ok(Err(why))` is a refusal,
+/// before any merge.
+#[allow(clippy::too_many_arguments)]
 pub fn merge(
     ledger: &Ledger,
     actor: &Actor,
     gh: &OsStr,
+    herdr: &OsStr,
     work: i64,
     pr: &str,
     head: Option<&str>,
@@ -99,7 +104,7 @@ pub fn merge(
     let Some((repo, n)) = pr.split_once('#') else {
         return not(format!("{pr} is not owner/repo#N"));
     };
-    let cli = |args: &[&str]| child::cli("gh", gh, args, GH_TIMEOUT, "");
+    let cli = |args: &[&str]| child::cli("gh", gh, args, CLI_TIMEOUT, "");
     let view = || -> Result<Value, String> {
         let fields = "state,headRefOid,mergeCommit,mergedAt";
         let out = cli(&["pr", "view", n, "-R", repo, "--json", fields])?;
@@ -171,7 +176,19 @@ pub fn merge(
         return ok(Done::Was);
     }
     if item.lease_state == "active" {
-        return ok(Done::ByLane);
+        let key = item.source_key.unwrap_or_else(|| format!("work {work}"));
+        let prompt = format!(
+            "Owner ({from}): merged {pr} as {sha} (work merged recorded). Hand off {key} done \
+             the /ship way."
+        );
+        let told = match item.agent {
+            Some(agent) => {
+                let args = ["agent", "prompt", &agent, &prompt];
+                child::cli("herdr", herdr, &args, CLI_TIMEOUT, "").map(drop)
+            }
+            None => Err("no agent recorded for the lane".into()),
+        };
+        return ok(Done::ByLane(told));
     }
     let newest = page.detail.handoffs.first().map(|h| h.handoff.clone());
     let input = HandoffInput {

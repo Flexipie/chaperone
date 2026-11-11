@@ -1,6 +1,7 @@
 //! `merge` through the binary, with a fake `gh` first on `PATH` that logs
 //! its argv, answers `pr view` from view.json and turns it MERGED on `pr
-//! merge`. The gates, GitHub's head and the replay are writer.rs's tests.
+//! merge`, and a fake `herdr` that logs its argv. The gates, GitHub's head
+//! and the replay are writer.rs's tests.
 
 use std::process::Command;
 
@@ -10,7 +11,8 @@ const BIN: &str = env!("CARGO_BIN_EXE_chaperone");
 
 /// The lane's session, and its agent under a new session, are refused
 /// before any gh call; the owner's run without --head merges the handoff
-/// head with the exact argv.
+/// head with the exact argv and, the lease live, tells the lane once. A
+/// herdr that fails is reported, and the merge still succeeds.
 #[test]
 fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
     let dir = tempfile::tempdir().unwrap();
@@ -30,8 +32,17 @@ fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
         ),
     )
     .unwrap();
-    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
-    std::fs::set_permissions(&gh, mode).unwrap();
+    let herdr_log = dir.path().join("herdr.log");
+    let herdr = bin.join("herdr");
+    let fake_herdr = |exit: u8| {
+        let body = format!("#!/bin/sh\necho \"$*\" >> {herdr_log:?}\necho down >&2\nexit {exit}\n");
+        std::fs::write(&herdr, body).unwrap();
+    };
+    fake_herdr(0);
+    for f in [&gh, &herdr] {
+        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+        std::fs::set_permissions(f, mode).unwrap();
+    }
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     let run = |agent: &str, session: &str, args: &[&str]| -> (bool, Value) {
         let out = Command::new(BIN)
@@ -99,7 +110,20 @@ fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
 
     let (ok, out) = run("owner", "owner", &["merge", "--work", "1"]);
     assert!(ok, "{out}");
-    let done = json!({"work_id": 1, "pr": "o/r#1", "merge_sha": "e".repeat(40), "done_by": "lane"});
+    let sha = "e".repeat(40);
+    let mut done = json!({"work_id": 1, "pr": "o/r#1", "merge_sha": sha, "done_by": "lane",
+        "told": true, "tell_error": null});
+    assert_eq!(out, done);
+    let told = format!(
+        "agent prompt lane Owner (chaperone merge): merged o/r#1 as {sha} (work merged \
+         recorded). Hand off work 1 done the /ship way.\n"
+    );
+    assert_eq!(std::fs::read_to_string(&herdr_log).unwrap(), told);
+    fake_herdr(1);
+    let (ok, out) = run("owner", "owner", &["merge", "--work", "1"]);
+    assert!(ok, "{out}");
+    done["told"] = json!(false);
+    done["tell_error"] = json!("herdr agent prompt: down");
     assert_eq!(out, done);
     let log = std::fs::read_to_string(&log).unwrap();
     let merges: Vec<_> = log.lines().filter(|l| l.starts_with("pr merge")).collect();
