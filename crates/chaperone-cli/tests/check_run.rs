@@ -901,6 +901,8 @@ fn a_v20_smoke_claim_runs_its_command() {
     );
     std::fs::write(wt.join("smoke.sh"), "echo hello from smoke\n").unwrap();
     std::fs::write(wt.join("bad.sh"), "echo boom\nexit 3\n").unwrap();
+    // Named like a bash option, it still runs as a script.
+    std::fs::write(wt.join("-s"), "echo boom\nexit 3\n").unwrap();
     let claim = |how: &str, file: &str| {
         let args = ["check", "record", "--work", &id, "--check", "smoke"];
         let rest = ["--head", &base, "--outcome", "ran", how, file];
@@ -917,11 +919,13 @@ fn a_v20_smoke_claim_runs_its_command() {
         "{err}"
     );
 
-    for (script, exit) in [("smoke.sh", 0), ("bad.sh", 3)] {
+    for (script, exit) in [("smoke.sh", 0), ("bad.sh", 3), ("./-s", 3)] {
         let (code, kept) = claim("--run", script);
         assert_eq!(code, 0, "{kept}");
         let p = &kept["payload"];
-        assert_eq!(p["run"], json!({"argv": ["bash", script], "exit": exit}));
+        let path = script.trim_start_matches("./");
+        let argv = json!({"argv": ["bash", "--", path], "exit": exit});
+        assert_eq!(p["run"], argv);
         let file = &p["evidence_files"][0];
         let stored = Evidence::beside(&db).get(file["sha256"].as_str().unwrap());
         let stored = stored.unwrap();

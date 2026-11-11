@@ -332,12 +332,12 @@ first: the check and the count, then each file is read and named, then the recor
 rolled back (so a session that held the lane, or any other refusal, stops here); only then is
 each file stored in the evidence store (redacted, its last 256 KiB), before the event that
 carries `evidence_files` commits. A refusal is `invalid_input` and writes no event and no file.
-`--run <script>` (#225) goes with a `smoke` that ran only and counts toward the 12: the script
+`--run <script>` (#225) goes with a `smoke` that ran only, never with `--evidence`: the script
 is read by the same rules, then, after the trial record (which carries the run as if it passed),
-the CLI runs `bash <script>` in the worktree's root as `check run` runs a command (stdin empty,
+the CLI runs `bash -- <script>` in the worktree's root as `check run` runs a command (stdin empty,
 the session's and git's repository variables removed, the end of each stream kept, a 30-minute
-deadline). The script's text, `$ ["bash", "<script>"]`, its stderr and stdout, then
-`exit <code>` (`null`, and `(timed out)` at the deadline, when it has no code) is the first
+deadline). The script's text, `$ ["bash", "--", "<script>"]`, its stderr and stdout, then
+`exit <code>` (`null`, and `(timed out)` at the deadline, when it has no code) is the claim's
 evidence file, named by the script's path, and the payload carries `run: {argv, exit}`. A run
 that exits non-zero is recorded too, and claims nothing (`smoke.claimed` needs `exit` 0); a
 script that cannot start writes nothing. On a lane stamped `v20`, a session `smoke` that ran

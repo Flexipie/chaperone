@@ -105,7 +105,7 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
                 .chain(&evidence)
                 .map(|path| attach(wt, path))
                 .collect::<Result<_, _>>()?;
-            let argv = || vec!["bash".to_string(), read[0].0.path.clone()];
+            let argv = || vec!["bash".into(), "--".into(), read[0].0.path.clone()];
             if run.is_some() {
                 input.run = Some(json!({"argv": argv(), "exit": 0}));
             }
@@ -996,7 +996,7 @@ fn attach(wt: Option<&str>, path: &Path) -> Result<(Attached, Kept), CliError> {
     Ok((file, kept))
 }
 
-/// A smoke claim's `argv` (bash and its script, `script` its text) run in
+/// A smoke claim's `argv` (bash, `--` and its script, `script` its text) run in
 /// the worktree `wt`'s root as `check run` runs a command: the script,
 /// the command and the end of its stderr and stdout, then its exit code,
 /// as the evidence file named for the script, and that code (null when it
@@ -1015,7 +1015,7 @@ fn run_script(
     let kept = Kept::of(&text);
     let stored = &kept.stored;
     let file = Attached {
-        path: argv[1].clone(),
+        path: argv[2].clone(),
         sha256: stored.hash.clone(),
         bytes: text.len() as u64,
         truncated: stored.truncated,

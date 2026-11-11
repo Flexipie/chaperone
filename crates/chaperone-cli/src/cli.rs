@@ -722,9 +722,9 @@ pub enum CheckCmd {
         evidence: Vec<PathBuf>,
         /// smoke that ran only: a script, by the --evidence file rules, that
         /// the CLI runs with bash in the worktree's root; the claim keeps
-        /// the script, its output and exit code as the first evidence file.
+        /// the script, its output and exit code as its evidence file.
         /// Required for a smoke that ran on a v20 lane
-        #[arg(long)]
+        #[arg(long, conflicts_with = "evidence")]
         run: Option<PathBuf>,
         #[command(flatten)]
         actor: ActorArgs,
