@@ -63,7 +63,13 @@ code-line estimate against `code_lines`, and for a bug the root cause as `file:l
 up to `plan_timeout` seconds). Then:
 - `outcome` `ran`: the gate is met. Fix the plan for each finding that holds; a `question`
   or one that needs a product call is Needs you. Run again only after a real design change
-  (each run is a paid session; the same plan replays).
+  (each run is a paid session; the same plan replays). Then, before the diff check, answer
+  every finding (`finding list --work $2` lists them, `check` `plan_check`):
+  `chaperone finding accept <event> <key> --reason "<how the plan acts on it>"`, or
+  `chaperone finding dispute <event> <key> --reason "<why it does not hold>"`, or for a
+  `question` `chaperone finding answer <event> <key> --reason "<the answer>"`. Until each
+  has an answer, `check run diff`, `check run review` and `verify` refuse. The review is
+  shown the answers: an accepted one the diff does not address blocks.
 - `skipped`, `no_answer`: run again. Refused at `plan_attempts`: Needs you.
 - Refused because the commit already changes code: Needs you (the owner may waive).
 

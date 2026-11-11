@@ -62,6 +62,25 @@ impl Lane {
         out
     }
 
+    /// `finding list --work 1`'s items.
+    fn findings(&self) -> Vec<Value> {
+        let mut list = Command::new(BIN);
+        let list = list.arg("--db").arg(&self.db);
+        let out = list.args(["finding", "list", "--work", "1"]).output();
+        let out: Value = serde_json::from_slice(&out.unwrap().stdout).unwrap();
+        out["data"]["items"].as_array().unwrap().clone()
+    }
+
+    /// Session `who` makes `verb` (`accept`, `dispute`, `waive`) on the
+    /// plan check's one finding, reason `r`.
+    fn answer(&self, who: &str, verb: &str) {
+        let plan = &self.findings()[0];
+        let (event, key) = (&plan["check_event_id"], plan["finding_key"].as_str());
+        let args = format!("finding {verb} {event} {} --reason r", key.unwrap());
+        let args: Vec<_> = args.split(' ').collect();
+        assert_eq!(self.run(who, &args).0, 0);
+    }
+
     fn head(&self) -> String {
         git(&self.wt, &["rev-parse", "HEAD"], &[])
     }
@@ -115,6 +134,11 @@ fn says(header: &str, answer: Value) -> Value {
 /// the verifier rules `rulings`; the plan check raises a risk, every other
 /// lens finds nothing and the verdict says yes.
 fn claude(correctness: Value, rulings: Value) -> Value {
+    lenses(correctness, json!({"findings": []}), rulings)
+}
+
+/// [`claude`] with `intent` the intent lens's answer.
+fn lenses(correctness: Value, intent: Value, rulings: Value) -> Value {
     let none = json!({"findings": []});
     let yes = json!({"decision": "yes", "why": "w", "proven": ["p"], "not_proven": []});
     let risk = json!({"findings": [{"severity": "risk", "title": "r", "body": "why",
@@ -128,7 +152,7 @@ fn claude(correctness: Value, rulings: Value) -> Value {
         says("# Merge verdict", yes),
         says("# Review: correctness", correctness),
         says("# Review: design and tests", none.clone()),
-        says("# Review: the change against its goal", none),
+        says("# Review: the change against its goal", intent),
     ])
 }
 
@@ -221,6 +245,7 @@ fn steps(out: &Value) -> Vec<(String, bool, bool)> {
 #[test]
 fn a_lane_is_ready_only_on_a_commit_verify_passed() {
     let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
     lane.smoke();
     let out = lane.verify();
     let all = |replayed| ["diff", "tests", "review", "verdict"].map(|c| (c.into(), true, replayed));
@@ -252,6 +277,7 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
 #[test]
 fn stop_blocks_once_when_the_head_moved_past_a_ready_handoff() {
     let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
     lane.smoke();
     lane.verify();
     assert_eq!(lane.handoff().0, 0);
@@ -293,6 +319,7 @@ fn a_blocking_finding_stops_verify_before_the_verdict() {
         .clone();
     let rulings = json!([{"key": key, "verdict": "verified", "why": "it is"}]);
     let lane = lane(claude(said, rulings));
+    lane.answer("lane", "accept");
     let out = lane.verify();
     let stopped = json!({"check": "review", "why": "1 finding(s) still block"});
     assert_eq!(out["stopped"], stopped);
@@ -314,4 +341,74 @@ fn a_second_verify_on_the_lane_is_a_conflict() {
     drop(held);
     let (code, err) = lane.run("lane", &["verify", "--work", "9"]);
     assert_eq!((code, &err["code"]), (1, &json!("not_found")));
+}
+
+/// The plan check's risk refuses diff (so verify) and review until the lane
+/// answers it. Accepted, every lens is shown it with the answer, and an
+/// intent lens that finds the diff does not address it blocks verify.
+#[test]
+fn an_accepted_plan_finding_the_diff_ignores_blocks() {
+    let said = json!({"findings": [{"severity": "blocker", "title": "accepted r not done",
+        "body": "why", "path": "lib.rs", "line": null}]});
+    let key = review::findings("intent", said.clone()).unwrap()[0]
+        .finding_key
+        .clone();
+    let rulings = json!([{"key": key, "verdict": "verified", "why": "it is"}]);
+    let lane = lane(lenses(json!({"findings": []}), said, rulings));
+    let out = lane.verify();
+    let why = out["stopped"]["why"].as_str().unwrap();
+    assert_eq!(out["stopped"]["check"], "diff");
+    assert!(
+        why.starts_with("1 plan finding(s) have no answer: 4/plan-"),
+        "{why}"
+    );
+    let (code, err) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+    assert_eq!((code, err["message"].as_str()), (1, Some(why)));
+    let plan = &lane.findings()[0];
+    assert_eq!(
+        (&plan["check"], &plan["status"], &plan["blocks"]),
+        (&json!("plan_check"), &json!("open"), &json!(false))
+    );
+
+    lane.answer("lane", "accept");
+    let plan = &lane.findings()[0];
+    assert_eq!(
+        (&plan["status"], &plan["reason"]),
+        (&json!("accepted"), &json!("r"))
+    );
+    let out = lane.verify();
+    let stopped = json!({"check": "review", "why": "1 finding(s) still block"});
+    assert_eq!(out["stopped"], stopped);
+    let log = std::fs::read_to_string(lane.dir.path().join("bin/claude.log")).unwrap();
+    let shown = |header: &str| {
+        let line = log
+            .lines()
+            .find(|l| l.contains(&format!(r#""prompt":"{header}"#)));
+        line.unwrap()
+            .contains(r#"\"status\":\"accepted\",\"title\""#)
+    };
+    assert!(shown("# Review: the change against its goal"));
+    assert!(shown("# Review: correctness"));
+    assert!(!shown("# Verify the review's findings"));
+}
+
+/// A changed plan answer on an unchanged commit reviews again: the stored
+/// review replays only while the answers its lenses were shown stand. The
+/// lane disputes the plan finding, then the owner waives it.
+#[test]
+fn a_changed_plan_answer_reviews_the_same_commit_again() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "dispute");
+    let review = || {
+        let (code, out) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+        assert_eq!(code, 0, "{out}");
+        (out["event_id"].clone(), out["replayed"] == true)
+    };
+    let (first, _) = review();
+    assert_eq!(review(), (first.clone(), true));
+    lane.answer("owner", "waive");
+    let sessions = lane.sessions();
+    let (second, replayed) = review();
+    assert!(second != first && !replayed, "{second} {first}");
+    assert_eq!(lane.sessions(), sessions + 4);
 }

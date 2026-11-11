@@ -70,6 +70,9 @@ pub struct Facts {
     /// The newest smoke on the commit (`verdict::smoke`): the intent
     /// lens's too.
     pub smoke: Value,
+    /// The plan check's findings with the lane's answers ([`plan_findings`]):
+    /// every lens's, not the verifier's.
+    pub plan: String,
 }
 
 /// A lens as the pipeline defines it.
@@ -361,6 +364,7 @@ pub fn run(
     store: &Evidence,
 ) -> io::Result<Review> {
     let (change, diff_cut) = change(facts);
+    let change = change + &facts.plan;
     let schema = schema();
     let lenses = std::thread::scope(|s| {
         let threads: Vec<_> = planned
@@ -621,6 +625,33 @@ pub fn earlier(ledger: &Ledger, work: i64) -> Result<Vec<Finding>, LedgerError> 
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The lenses' section on lane `work`'s newest plan check: each finding
+/// with the lane's answer, and what a lens does with it. Empty when it
+/// raised none.
+pub fn plan_findings(ledger: &Ledger, work: i64) -> Result<String, LedgerError> {
+    let found = ledger.plan_findings(work)?;
+    if found.is_empty() {
+        return Ok(String::new());
+    }
+    let lines: String = found
+        .iter()
+        .map(|f| {
+            let line = json!({"key": f.finding_key, "severity": f.severity, "title": f.title,
+                "body": f.body, "path": f.path, "status": f.status, "reason": f.reason});
+            line.to_string() + "\n"
+        })
+        .collect();
+    Ok(format!(
+        "\n## The plan check's findings and the lane's answers\n\n\
+         A review of the lane's plan, before its code, raised these. `status` is the lane's \
+         answer: `accepted` (it would act on it), `disputed` (it declined, for `reason`), \
+         `answered` (a question), or `waived` by the owner. An `accepted` one the diff does not \
+         address: report it, as a `blocker`. A `disputed` one: do not raise it again unless \
+         your finding says why its reason is wrong.\n\n{}",
+        fenced("jsonl", &lines)
+    ))
+}
+
 /// What the lane is for, as the ledger holds it, for the intent lens: its
 /// title, its slice of the spec when it has one, and the goal its newest
 /// handoff states. Nothing else the lane wrote (its summary, merge case,
@@ -682,6 +713,11 @@ pub fn replay(
     }
     input.check = "review".into();
     input.profile = Some(plan.hash.into());
+    let shown = plan_findings(ledger, input.work)?;
+    if !shown.is_empty() {
+        let digest = format!("{:x}", Sha256::digest(&shown));
+        input.fields.insert("plan_answers".into(), json!(digest));
+    }
     if let Some(stored) = ledger.run_replay(&ledger.run_key(input)?)? {
         return Ok(Ok(Some(stored)));
     }
@@ -699,7 +735,8 @@ pub fn replay(
         if let Some(Value::Object(row)) = &mut verifier {
             row.remove("rulings");
         }
-        input.fields = Map::from_iter([("verifier".into(), verifier.unwrap_or_default())]);
+        let verifier = verifier.unwrap_or_default();
+        input.fields.insert("verifier".into(), verifier);
         return Ok(ledger.carry(actor, input, newest)?.map(Some));
     }
     let done: i64 = ledger.conn().query_row(
@@ -797,7 +834,7 @@ pub fn finish(
         }
     }
     let rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
-    input.fields = Map::from_iter([
+    input.fields.extend([
         ("base".into(), json!(facts.base)),
         ("lenses".into(), json!(rows)),
         ("verifier".into(), verified),
@@ -925,6 +962,7 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
             diff,
             goal: "GOAL".into(),
             smoke: Value::Null,
+            plan: String::new(),
         }
     }
 

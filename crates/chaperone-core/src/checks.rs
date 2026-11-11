@@ -51,6 +51,13 @@ pub struct CheckInput {
 /// A field of a tree-keyed check and the value it must hold, or none.
 pub(crate) type TreeFilter = Option<(&'static str, rusqlite::types::Value)>;
 
+/// A review's `plan_answers`: the digest of the plan findings and answers
+/// its lenses were shown, absent when there were none. A result is reused
+/// only under the same one, so a changed answer reviews again.
+fn plan_answers(input: &RunInput) -> Option<&str> {
+    input.fields.get("plan_answers").and_then(Value::as_str)
+}
+
 /// The event whose session ran `r`: its `carried_from`, else itself.
 pub(crate) fn session_of(r: &Recorded) -> i64 {
     let from = r.payload.rest.get("carried_from").and_then(Value::as_i64);
@@ -198,10 +205,13 @@ pub struct BlockingFinding {
     pub title: String,
 }
 
-/// A finding of a complete harness review ([`Ledger::lane_findings`]).
+/// A finding of a complete harness review or of the newest plan check
+/// ([`Ledger::lane_findings`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LaneFinding {
     pub check_event_id: i64,
+    /// `review` or `plan_check`.
+    pub check: String,
     pub finding_key: String,
     pub severity: String,
     pub title: String,
@@ -211,6 +221,8 @@ pub struct LaneFinding {
     /// The commit the review that raised it read.
     pub head_sha: Option<String>,
     pub status: String,
+    /// The reason of its newest move, when that move gave one.
+    pub reason: Option<String>,
     /// Counted by the `no_blocking_findings` gate.
     pub blocks: bool,
 }
@@ -222,6 +234,20 @@ pub(crate) const COMPLETE_REVIEWS: &str = "check_event_id IN (
       AND json_extract(payload_json, '$.check') = 'review'
       AND json_extract(payload_json, '$.producer.kind') = 'harness'
       AND json_extract(payload_json, '$.complete') = 1)";
+
+/// The SQL condition on a `findings` row raised by lane `?1`'s newest plan
+/// check, whatever its outcome (an owner's waiver or a later run with no
+/// answer raises none, so it releases older ones): the findings the lane
+/// answers before its diff check, and the ones the review lenses are shown.
+pub(crate) const PLAN_FINDINGS: &str = "check_event_id = (
+    SELECT max(id) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+      AND json_extract(payload_json, '$.check') = 'plan_check')";
+
+/// The SQL condition on a `findings` row raised by any of lane `?1`'s
+/// plan checks.
+const ANY_PLAN: &str = "check_event_id IN (
+    SELECT id FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+      AND json_extract(payload_json, '$.check') = 'plan_check')";
 
 fn invalid<T>(msg: String) -> Checked<T> {
     Ok(Err(Refusal::InvalidInput(msg)))
@@ -403,7 +429,7 @@ impl Ledger {
 
     /// `run:<lane>:<check>:<head>:<profile or ->:<attempt>`. The attempt is
     /// the id of the lane's newest result for this check that is not a pass
-    /// on this commit and profile (0 for none): a pass replays, a failure
+    /// on this commit, profile and `plan_answers` (0 for none): a pass replays, a failure
     /// or a review that is not complete runs again, and a run back on an earlier commit after another
     /// appends, as `check record`'s flip back does. Read before the write
     /// lock; the lane's run lock keeps two runs from reading it at once.
@@ -414,8 +440,15 @@ impl Ledger {
                AND NOT (json_extract(payload_json, '$.head_sha') IS ?3
                  AND json_extract(payload_json, '$.profile') IS ?4
                  AND json_extract(payload_json, '$.result') IS NOT 'fail'
-                 AND json_extract(payload_json, '$.complete') IS NOT 0)",
-            params![input.work, input.check, input.head, input.profile],
+                 AND json_extract(payload_json, '$.complete') IS NOT 0
+                 AND json_extract(payload_json, '$.plan_answers') IS ?5)",
+            params![
+                input.work,
+                input.check,
+                input.head,
+                input.profile,
+                plan_answers(input)
+            ],
             |r| r.get(0),
         )?;
         let (work, check, head) = (input.work, &input.check, &input.head);
@@ -452,6 +485,7 @@ impl Ledger {
                    AND (?5 IS NULL OR json_extract(payload_json, ?5) = ?6)
                    AND (?7 IS NULL OR json_extract(payload_json, '$.head_sha') = ?7
                      AND coalesce(json_extract(payload_json, '$.carried_from'), id) = ?8)
+                   AND json_extract(payload_json, '$.plan_answers') IS ?9
                  ORDER BY id DESC LIMIT 1",
                 params![
                     input.work,
@@ -461,7 +495,8 @@ impl Ledger {
                     field,
                     value,
                     here.map(|h| h.0),
-                    here.map(|h| h.1)
+                    here.map(|h| h.1),
+                    plan_answers(input)
                 ],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
@@ -1120,11 +1155,12 @@ impl Ledger {
 
     /// Lane `id`'s findings that still block, oldest first, from every
     /// round: unsettled (open, verified or disputed) and of a severity not
-    /// in [`NON_BLOCKING_SEVERITIES`], compared exactly.
+    /// in [`NON_BLOCKING_SEVERITIES`], compared exactly. A plan check's
+    /// never block: the lane answers them and the review reads the answers.
     pub fn blocking_findings(&self, id: i64) -> Result<Vec<BlockingFinding>, LedgerError> {
         let mut stmt = self.conn().prepare(&format!(
             "SELECT check_event_id, finding_key, severity, status, title FROM findings
-              WHERE lane_id = ?1 AND {} ORDER BY id",
+              WHERE lane_id = ?1 AND {} AND NOT {ANY_PLAN} ORDER BY id",
             blocking()
         ))?;
         let rows = stmt.query_map([id], |r| {
@@ -1139,17 +1175,33 @@ impl Ledger {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// Lane `id`'s findings of every complete harness review, oldest
-    /// first, each with whether it still blocks by the gate's rule.
+    /// Lane `id`'s findings of every complete harness review and of its
+    /// newest plan check, oldest first, each with the reason of
+    /// its newest move and whether it still blocks by the gate's rule (a
+    /// plan check's never does).
     pub fn lane_findings(&self, id: i64) -> Result<Vec<LaneFinding>, LedgerError> {
+        self.findings_where(id, &format!("{COMPLETE_REVIEWS} OR {PLAN_FINDINGS}"))
+    }
+
+    /// Lane `id`'s findings of its newest plan check, oldest first: those
+    /// still `open` have no answer from the lane.
+    pub fn plan_findings(&self, id: i64) -> Result<Vec<LaneFinding>, LedgerError> {
+        self.findings_where(id, PLAN_FINDINGS)
+    }
+
+    fn findings_where(&self, id: i64, raised: &str) -> Result<Vec<LaneFinding>, LedgerError> {
         let mut stmt = self.conn().prepare(&format!(
             "SELECT check_event_id, finding_key, severity, title, body, path,
                     (SELECT json_extract(j.value, '$.line')
                        FROM events e, json_each(e.payload_json, '$.findings') j
                       WHERE e.id = f.check_event_id
                         AND json_extract(j.value, '$.finding_key') = f.finding_key),
-                    head_sha, status, {}
-               FROM findings f WHERE lane_id = ?1 AND {COMPLETE_REVIEWS} ORDER BY id",
+                    head_sha, status, {COMPLETE_REVIEWS} AND {},
+                    (SELECT json_extract(payload_json, '$.check') FROM events
+                      WHERE id = f.check_event_id),
+                    (SELECT json_extract(payload_json, '$.reason') FROM events
+                      WHERE id = f.event_id AND kind = 'finding.updated')
+               FROM findings f WHERE lane_id = ?1 AND ({raised}) ORDER BY id",
             blocking()
         ))?;
         let rows = stmt.query_map([id], |r| {
@@ -1164,6 +1216,8 @@ impl Ledger {
                 head_sha: r.get(7)?,
                 status: r.get(8)?,
                 blocks: r.get(9)?,
+                check: r.get(10)?,
+                reason: r.get(11)?,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)

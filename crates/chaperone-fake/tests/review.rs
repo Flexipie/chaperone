@@ -93,6 +93,7 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
         goal: "GOAL add a widget".into(),
         smoke: json!({"harness": null, "lane_claim": {"outcome": "ran", "evidence_files": [
             {"path": "out.log", "end": "SMOKE SAW"}]}}),
+        plan: String::new(),
     };
     let store = Evidence::beside(&dir.path().join("ledger.db"));
     Env {
@@ -705,6 +706,7 @@ fn judge_with(env: &Env, ledger: &Ledger, head: &str, tree: &str, smoke: bool) -
         diff: "+x\n".into(),
         goal: review::goal(ledger, &item).unwrap(),
         smoke: Value::Null,
+        plan: String::new(),
     };
     let (dir, agents) = (env.checkout(), env.agents());
     let got = verdict::record(

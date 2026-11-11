@@ -493,6 +493,26 @@ fn start_run(ledger: &Ledger, work: i64, check: &str) -> Result<Run, CliError> {
     Ok(Run { wt, item, input })
 }
 
+/// Refuses while a finding of the lane's newest plan check has no answer
+/// from the lane, naming each and the commands that answer it.
+fn plan_answered(ledger: &Ledger, work: i64) -> Result<(), CliError> {
+    let open = ledger.plan_findings(work)?.into_iter();
+    let open: Vec<_> = open
+        .filter(|f| f.status == "open")
+        .map(|f| format!("{}/{} ({})", f.check_event_id, f.finding_key, f.title))
+        .collect();
+    if open.is_empty() {
+        return Ok(());
+    }
+    Err(refuse(format!(
+        "{} plan finding(s) have no answer: {}; answer each with `chaperone finding accept \
+         <event> <key> --reason <how>`, `chaperone finding dispute <event> <key> --reason <why>` \
+         or, for a question, `chaperone finding answer <event> <key> --reason <answer>`",
+        open.len(),
+        open.join("; ")
+    )))
+}
+
 fn refuse(why: String) -> CliError {
     Refusal::InvalidInput(why).into()
 }
@@ -506,6 +526,7 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         item,
         mut input,
     } = start_run(ledger, work, "diff")?;
+    plan_answered(ledger, work)?;
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
     let found = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
     // The profile says what code is, so a changed one measures again.
@@ -745,6 +766,7 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         item,
         mut input,
     } = start_run(ledger, work, "review")?;
+    plan_answered(ledger, work)?;
     let plan = review::plan(lane_pipeline(&item)?).map_err(|e| {
         refuse(format!(
             "{e}; a lane on it records reviews with `check record` and `reviews record`"
@@ -1054,6 +1076,7 @@ fn change(
         diff,
         goal: review::goal(ledger, item)?,
         smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
+        plan: review::plan_findings(ledger, item.id)?,
     };
     Ok((checkout, facts))
 }
@@ -1334,6 +1357,8 @@ pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outc
     let (status, args) = match cmd {
         FindingCmd::Dispute(args) => ("disputed", args),
         FindingCmd::Waive(args) => ("waived", args),
+        FindingCmd::Accept(args) => ("accepted", args),
+        FindingCmd::Answer(args) => ("answered", args),
         FindingCmd::List { work } => return items(ledger.lane_findings(work)?),
     };
     meta.dry_run = args.dry_run.then_some(true);

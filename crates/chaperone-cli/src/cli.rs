@@ -298,6 +298,8 @@ impl Cmd {
             Cmd::Attention(AttentionCmd::Record { .. }) => Some("attention record"),
             Cmd::Finding(FindingCmd::Dispute(_)) => Some("finding dispute"),
             Cmd::Finding(FindingCmd::Waive(_)) => Some("finding waive"),
+            Cmd::Finding(FindingCmd::Accept(_)) => Some("finding accept"),
+            Cmd::Finding(FindingCmd::Answer(_)) => Some("finding answer"),
             Cmd::Finding(FindingCmd::List { .. }) => None,
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
@@ -851,13 +853,14 @@ pub enum UsageCmd {
     Get { id: i64 },
 }
 
-/// A lane's review findings: list them, the lane disputes one, the owner
-/// waives one
+/// A lane's review and plan check findings: list them, the lane disputes
+/// or accepts one, the owner waives one
 #[derive(Subcommand, Debug)]
 pub enum FindingCmd {
     /// Every finding of the lane's complete harness reviews, of any commit,
-    /// oldest first; blocks is true for those the no_blocking_findings gate
-    /// counts
+    /// and of its newest plan check, oldest first, with the reason of each
+    /// one's newest move; blocks is true for those the no_blocking_findings
+    /// gate counts
     List {
         #[arg(long)]
         work: i64,
@@ -869,6 +872,11 @@ pub enum FindingCmd {
     /// Stop an open, verified or disputed finding blocking. The owner's:
     /// refused from any session that has held the lane
     Waive(FindingArgs),
+    /// Say the lane will act on an open plan check finding, and how. Only
+    /// from a session that has held the lane; the review is shown it
+    Accept(FindingArgs),
+    /// Answer an open question finding, as anyone may
+    Answer(FindingArgs),
 }
 
 /// One finding, addressed as the ledger does, and why
