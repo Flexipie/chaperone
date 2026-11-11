@@ -40,6 +40,12 @@
 # answering a one-word prompt. Codex takes no spending cap, so the Codex lens's budget is
 # recorded but only its timeout bounds it.
 #
+# A lens skips a diff smaller than its `<lens>_min_code_lines` (the harness `diff`'s code
+# lines on the commit; with no diff measured, or uncounted files, it runs), recorded on the review as skipped.
+# v20 sets it for Codex only, at 200 (#223): in the first 9 v20 reviews (median 53 code lines)
+# Codex raised nothing and took 29% of review input tokens, and in wave 3 it raised nothing on
+# any lane under 210 lines but found real bugs no other lens caught at 221.
+#
 # Arguments are as in v19: `field` and `left`/`right` are fact paths; a compared value is
 # exactly one of `value`, `value_from` or `limit`; `all`/`any` take `of` (gate ids), `not`
 # takes `of` (one gate id). Under schema 2 a gate may read only a fact the projection sets
@@ -65,6 +71,7 @@ verdict_attempts = 2
 plan_attempts = 2
 lens_budget = 400
 lens_timeout = 900
+codex_min_code_lines = 200
 verifier_budget = 400
 verifier_timeout = 900
 verdict_budget = 400

@@ -454,7 +454,12 @@ applies: a file a rule such as `-diff` hides has no text in the diff, and the ev
 such files in `uncounted_files`. A CLI that cannot start, a checkout that cannot be made and
 a diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings.
 
-The four lenses run at once, each a fresh headless session in the checkout (no lane
+A lens whose `[limits]` holds `<lens>_min_code_lines` (v20: `codex_min_code_lines`, 200)
+is skipped when the harness `diff` on the commit counts fewer code lines: no session, its row
+in `lenses` says `skipped` and why, and the review can still be complete. With no harness
+`diff` on the commit, or one with `uncounted_files`, the lens runs. Its CLI is still asked `--version` first.
+
+The lenses run at once, each a fresh headless session in the checkout (no lane
 variables, Claude Code's sandbox; Codex read-only, without the user's config, `.rules` files
 or the checkout's `AGENTS.md`), given its prompt file and then the facts: the commit, the merge
 base, the changed files with their counts and the diff, cut after 128 KiB at a line with a
