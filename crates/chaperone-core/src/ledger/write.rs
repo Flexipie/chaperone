@@ -725,16 +725,14 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // harness's run of one (`check run verdict`) is the binary's
             // whoever started it, as with the verifier's rulings below.
             // Actor::check has made sure there is a session. Under a schema 2
-            // pipeline a session's smoke is only the lane's claim (no
-            // `result`, never `smoke.passed`), so the lane records its own.
+            // pipeline a session's smoke is only the lane's claim, so the lane
+            // records its own; one carrying `result` is refused below.
             let session = event.actor.session.as_deref().unwrap_or_default();
             let check = p.check.as_deref().unwrap_or_default();
             if SESSION_CHECKS.contains(&check)
                 && !harness
                 && has_held(tx, lane_id, session)?
-                && !(check == "smoke"
-                    && !p.rest.contains_key("result")
-                    && stamped_schema(tx, lane_id)? == Some(2))
+                && !(check == "smoke" && stamped_schema(tx, lane_id)? == Some(2))
             {
                 refuse!(invalid(&format!(
                     "session {session} has held lane {lane_id}; record checks from a fresh session"

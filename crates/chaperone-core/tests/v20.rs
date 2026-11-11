@@ -60,9 +60,20 @@ fn refused(r: Result<impl std::fmt::Debug, Refusal>, says: &str) {
 }
 
 /// A `check.finished` `ran` on lane `work` from `producer`, as no command
-/// writes it but `apply` takes it.
+/// writes it but `apply` takes it, written by `fresh`/`s2`.
 fn raw(
     ledger: &Ledger,
+    work: i64,
+    check: &str,
+    producer: &str,
+    rest: Value,
+) -> Result<Applied, Refusal> {
+    raw_as(ledger, &pair("fresh", "s2"), work, check, producer, rest)
+}
+
+fn raw_as(
+    ledger: &Ledger,
+    actor: &Actor,
     work: i64,
     check: &str,
     producer: &str,
@@ -85,10 +96,7 @@ fn raw(
         payload: p,
     };
     let at = ledger.now().unwrap();
-    match ledger
-        .apply(&pair("fresh", "s2"), None, &at, event)
-        .unwrap()
-    {
+    match ledger.apply(actor, None, &at, event).unwrap() {
         Applied::Refused(r) => Err(r),
         applied => Ok(applied),
     }
@@ -203,6 +211,9 @@ fn the_lane_records_its_own_smoke_claim_on_v20_only() {
     let facts = ledger.project(1, Some(HEAD)).unwrap();
     assert_eq!(facts.get("smoke.claimed"), &Fact::Bool(true));
     assert_eq!(facts.get("smoke.passed"), &Fact::Absent);
+    let result = json!({"result": "pass"});
+    let with_result = raw_as(&ledger, &pair("lane", "s1"), 1, "smoke", "session", result);
+    refused(with_result, "harness runs");
     refused(smoke(2).unwrap(), "has held lane 2");
 }
 

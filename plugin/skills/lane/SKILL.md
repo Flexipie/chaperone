@@ -15,8 +15,8 @@ Limits (an error means the lane is not claimed yet: run this again after step 1)
 
 !`chaperone pipeline limits --work $2 --format jsonl || true`
 
-`$G` stands for the path `git rev-parse --absolute-git-dir` prints. The plan, the handoff
-JSON and `lane-state.md` live there, never in a commit.
+For `$G` below, write out the path `git rev-parse --absolute-git-dir` prints (a shell
+variable does not last between calls). The plan, handoff JSON and `lane-state.md` live there.
 
 ## Never
 
@@ -40,16 +40,14 @@ After a compaction, read it, then `chaperone work get $2`.
   `chaperone work claim $2 --pipeline v20 --worktree "$(git rev-parse --show-toplevel)" --branch "$(git branch --show-current)" --lease-secs 86400`
 - `pipeline_id` `v20`, `agent` and `session` yours, `worktree_path` and `branch` this
   worktree's: claimed already. If `lease_state` is not `active`, `chaperone work heartbeat $2`.
-- Anything else (another pipeline, holder, worktree or branch): Needs you. `--pipeline`
-  works on the first claim only.
+- Anything else (another pipeline, holder, worktree or branch): Needs you.
 
 ## 2. Understand
 
-Read the task (`gh issue view` for a GitHub key, the tracker's tool otherwise),
-`chaperone spec get --key $0` and `chaperone dossier get $0` (either may be `not_found`),
-then the code it touches. How: `judgement.md`, "Goal". Then hand off progress with the goal:
-the plan check, the intent lens, the verdict and the PR body read `brief.goal` from the
-newest handoff.
+Read `judgement.md`, then the task (`gh issue view` for a GitHub key, the tracker's tool
+otherwise), `chaperone spec get --key $0` and `chaperone dossier get $0` (either may be
+`not_found`), then the code it touches. Then hand off progress with the goal:
+the plan check, intent lens, verdict and PR body read `brief.goal` from the newest handoff.
 
 Every handoff is `chaperone work handoff $2 "$G/handoff.json"`. Each one replaces the last:
 always write `summary`, `status`, `next_action` and the whole `brief`. Here: `status`
@@ -69,13 +67,15 @@ up to `plan_timeout` seconds). Then:
 - `skipped`, `no_answer`: run again. Refused at `plan_attempts`: Needs you.
 - Refused because the commit already changes code: Needs you (the owner may waive).
 
-A lane whose diff changes no code skips steps 3 and 5. Code is every file but `.md` files
-and `docs/`, plus what the base profile's `[diff] code` names.
+A lane whose diff changes no code skips step 3, and step 5 unless the base profile declares
+`[smoke]` (the verdict needs its pass). Code is every file but `.md` files and `docs/`, plus
+what the base profile's `[diff] code` names.
 
 ## 4. Implement
 
-The smallest complete change (`judgement.md`). A bug whose cause is not plain: invoke the
-`chaperone:diagnose` skill. Commit with short plain messages; leave the tree clean. Then:
+The smallest complete change. A bug whose cause is not plain: invoke `chaperone:diagnose`
+with the symptom, the failing command and `--fix`. Commit with short plain messages; leave
+the tree clean. Then:
 - `chaperone check run diff --work $2`: `code_lines` over the limit or `uncounted_files`
   over 0 will not pass. Cut, or Needs you with a proposed split.
 - Invoke the `chaperone:blast-radius` skill once; fix what it finds inside the slice.
@@ -85,9 +85,9 @@ The smallest complete change (`judgement.md`). A bug whose cause is not plain: i
 Before every verify: the review and the verdict read the smoke on the commit, and a NO
 stands for the tree even if a smoke comes later. Every new commit needs a new one.
 
-`chaperone check run smoke --work $2`. Refused for no `[smoke]` in the base profile: run the
-plan's smoke yourself, put each command and its output in `smoke-$2.log` at the worktree
-root, then record your claim:
+`chaperone check run smoke --work $2`. `result` `fail`: read its `commands`, fix, commit, run
+it again. Refused for no `[smoke]` in the base profile: run the plan's smoke yourself, put
+each command and its output in `smoke-$2.log` at the worktree root, and record your claim:
 
 ```
 chaperone check record --work $2 --check smoke --head "$(git rev-parse HEAD)" --outcome ran --evidence smoke-$2.log
@@ -99,21 +99,21 @@ files. A code change with no smoke that ran cannot be ready: after a real attemp
 
 ## 6. Verify
 
-`chaperone verify --work $2` with `run_in_background: true`, then end the turn: it runs diff,
-tests, the review (four lenses and a verifier) and the verdict, and can take 45 minutes.
-Never commit while it runs. Its `stopped`:
+`chaperone verify --work $2` with `run_in_background: true`, then end the turn (it can take
+45 minutes). Never commit while it runs. Its `stopped`, by `check` and `why`:
 - `null`: every step passed. Go to 7.
 - `tests`: "tests failed". `chaperone check run tests --work $2` replays it: `commands` has
   each argv and its exit. Run the failing one locally, fix, commit, back to 5.
-- `review` or `verdict`: read `findings.md`.
+- `review`, "N finding(s) still block" or "review not complete"; `verdict`, "the verdict is
+  not yes": read `findings.md`.
 - "the lane moved": you committed meanwhile. Back to 5.
-- Any other refusal: its message says why. Fix the cause or Needs you. Exit 4: another run
-  holds the lane; wait for it, never start a second.
+- Any other `why` is a refusal that says why: fix the cause or Needs you. Exit 4: another
+  run holds the lane; wait for it, never start a second.
 
 ## 7. Open the PR
 
 `chaperone pr open --work $2` pushes and opens or updates the PR, its body from the ledger.
-Its refusals name the fix. Note the `pr` it prints.
+Its refusals name the fix; a gh failure (`internal`): retry once, then Needs you. Note `pr`.
 
 ## 8. Ready handoff
 
@@ -123,7 +123,9 @@ On the commit verify passed (`git rev-parse HEAD` is its `head`):
 {"summary": "<what changed and what proves it>", "status": "review", "ready": true,
  "commit": "<full sha>", "pull_request": "<owner/repo#N>", "changed_files": ["<path>"],
  "next_action": "needs you: review and merge <owner/repo#N>",
- "brief": {"goal": "", "merge_case": "", "decisions": [], "look_at": [{"path": "", "line": 1, "why": ""}], "check_by_hand": []}}
+ "brief": {"goal": "<goal, as in step 2>", "merge_case": "<why this is safe to merge>",
+  "decisions": ["<decision>"], "look_at": [{"path": "<path>", "line": 1, "why": "<why>"}],
+  "check_by_hand": ["<what only a person can check>"]}}
 ```
 
 A `gate_denied` names the first gate that fails. `smoke_or_no_code`: step 5.
@@ -147,7 +149,7 @@ prod data, a user's files, money); the plan departs from a recorded decision; th
 passes `code_lines`; a check you cannot pass after a real attempt; a finding you disputed;
 or a refusal only the owner can lift.
 
-Hand off `status` `blocked` (`active` from `review`, which cannot go to blocked), `blockers`
-and `open_questions` one line each, `next_action` `needs you: <what to decide>`; end the
-turn. Answered: add it to `brief.decisions`, hand off `active` with `next_action`
-`resolved: <answer>; <next step>`, go on.
+Hand off `status` `blocked`, or `active` when the lane is in `review` (review cannot move to
+blocked), `blockers` and `open_questions` one line each, `next_action` `needs you: <what to
+decide>`; end the turn. Answered: add it to `brief.decisions`, hand off `active` with
+`next_action` `resolved: <answer>; <next step>`, go on.
