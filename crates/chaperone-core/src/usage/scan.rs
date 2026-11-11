@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -45,8 +45,17 @@ pub(crate) fn claude(config: &Path, worktree: &str, scan: &mut Scan) -> io::Resu
     let Some(projects) = dir(&config.join("projects"))? else {
         return Ok(());
     };
+    let projects = projects.map(|p| p.map(|p| p.path()));
+    claude_projects(projects.collect::<io::Result<_>>()?, worktree, scan)
+}
+
+/// [`claude`]'s sessions in these folders of `<config>/projects`.
+pub(crate) fn claude_projects(
+    projects: Vec<PathBuf>,
+    worktree: &str,
+    scan: &mut Scan,
+) -> io::Result<()> {
     for project in projects {
-        let project = project?.path();
         if !project.is_dir() {
             continue;
         }

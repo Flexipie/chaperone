@@ -12,7 +12,7 @@ use chaperone_core::usage::Roots;
 use chaperone_core::work::is_terminal;
 use serde_json::{Value, json};
 
-use crate::checks::{home, lane_pipeline};
+use crate::checks::lane_pipeline;
 use crate::cli::{ActorArgs, HookEvent};
 use crate::work::observed_head;
 
@@ -102,12 +102,17 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
         }
         HookEvent::Stop => {
             // The lane's own session tokens, recorded every turn without
-            // the lane asking; a report that finds nothing new writes nothing.
-            let roots = Roots {
-                claude: home("CLAUDE_CONFIG_DIR", ".claude"),
-                codex: None,
-            };
-            if std::env::var_os("DAISY_CLI_READONLY").is_none_or(|v| v != "1") {
+            // the lane asking, from its own transcript's folder only (a
+            // whole ~/.claude scan can pass the hook's timeout). A report
+            // that finds nothing new writes nothing.
+            let project = input["transcript_path"].as_str().map(Path::new);
+            if let Some(project) = project.and_then(Path::parent)
+                && std::env::var_os("DAISY_CLI_READONLY").is_none_or(|v| v != "1")
+            {
+                let roots = Roots {
+                    claude_project: Some(project.into()),
+                    ..Roots::default()
+                };
                 let _ = ledger.usage_report(&ActorArgs::default().resolve(), work, &roots);
             }
             if input["stop_hook_active"] == true {

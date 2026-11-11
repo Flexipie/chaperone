@@ -608,7 +608,7 @@ status, pipeline, branch, head, PR, the ready gates not passing yet (as the lane
 and the lane's commands. `pre-bash` splits a Bash `tool_input.command` at `&&`, `||`, `;`, `|`, newlines,
 `$(`, parentheses and backticks, drops each part's leading `VAR=value` words, and denies a part
 that starts `gh pr create`, `gh pr merge` or `chaperone work ready` with `--yes` later in it,
-naming the command to run instead. `stop` first records the lane session's tokens, as `usage report --work <lane>` does with Claude's default config dir only (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), every turn, so the lane never has to; any error is ignored, and with `DAISY_CLI_READONLY=1` it skips this write and stays a read. It then blocks once (never with `stop_hook_active`) when the newest handoff is ready and
+naming the command to run instead. `stop` first records the lane session's tokens, every turn, so the lane never has to: `usage report --work <lane>`'s write, reading only the folder of the hook's `transcript_path` (that session's project folder, its sessions matched by first `cwd` as always, and their subagents), since reading every transcript under `~/.claude` can pass the hook's 10 s timeout. Without a `transcript_path` it records nothing; any error is ignored, and with `DAISY_CLI_READONLY=1` it skips this write and stays a read. It then blocks once (never with `stop_hook_active`) when the newest handoff is ready and
 the branch tip, read as a ready handoff reads it, is not its commit. `stop-failure` records
 `attention.recorded` type `stopped`, by `orchestrator`, its note the hook's `error`, as
 `$DAISY_AGENT` and `$DAISY_SESSION`; a repeat with nothing new on the lane replays, as `attention

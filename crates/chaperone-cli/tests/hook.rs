@@ -56,8 +56,6 @@ impl Lane {
         let mut cmd = Command::new(BIN);
         cmd.arg("--db").arg(&self.db).args(["hook", event]);
         cmd.envs([("DAISY_AGENT", "lane"), ("DAISY_SESSION", "lane")]);
-        // Transcripts are read from the lane's temp dir, never ~/.claude.
-        cmd.env("CLAUDE_CONFIG_DIR", self.dir.path());
         match work {
             Some(work) => cmd.env("CHAPERONE_WORK", work),
             None => cmd.env_remove("CHAPERONE_WORK"),
@@ -226,8 +224,9 @@ fn stop_reports_the_lanes_usage() {
     ];
     let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
     std::fs::write(project.join("s1.jsonl"), text).unwrap();
+    let input = json!({"transcript_path": project.join("s1.jsonl")});
     for _ in 0..2 {
-        assert_eq!(lane.hook(Some("2"), "stop", json!({})), "");
+        assert_eq!(lane.hook(Some("2"), "stop", input.clone()), "");
     }
     let usage: Vec<Value> = lane
         .events()

@@ -1312,6 +1312,7 @@ pub fn usage(ledger: &Ledger, cmd: UsageCmd) -> Result<Outcome, CliError> {
             let roots = Roots {
                 claude: claude_dir.or_else(|| home("CLAUDE_CONFIG_DIR", ".claude")),
                 codex: codex_dir.or_else(|| home("CODEX_HOME", ".codex")),
+                claude_project: None,
             };
             one(ledger.usage_report(&actor.resolve(), work, &roots)??)
         }
@@ -1321,7 +1322,7 @@ pub fn usage(ledger: &Ledger, cmd: UsageCmd) -> Result<Outcome, CliError> {
 
 /// A CLI's default home: its variable as given (so a typo is refused, as
 /// with a flag), else `~/<dir>` when that folder exists.
-pub(crate) fn home(var: &str, dir: &str) -> Option<std::path::PathBuf> {
+fn home(var: &str, dir: &str) -> Option<std::path::PathBuf> {
     std::env::var_os(var)
         .map(Into::into)
         .or_else(|| dirs::home_dir().map(|h| h.join(dir)).filter(|p| p.is_dir()))
