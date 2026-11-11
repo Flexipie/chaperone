@@ -336,6 +336,14 @@ impl Ledger {
                 "lease_secs must be between {MIN_LEASE_SECS} and {MAX_LEASE_SECS}, got {secs}"
             ))));
         }
+        // Every reader resolves a relative path against its own directory.
+        if let Some(wt) = &input.worktree_path
+            && !std::path::Path::new(wt).is_absolute()
+        {
+            return Ok(Err(Refusal::InvalidInput(format!(
+                "worktree must be an absolute path, got '{wt}'"
+            ))));
+        }
         self.write_lane(actor, id, at, dry_run, |_, item| {
             use EventKind::*;
             if is_terminal(&item.status) {
@@ -1879,5 +1887,33 @@ mod tests {
         assert_eq!(claim("/x", Some("b")), frozen("worktree_path"));
         assert_eq!(claim("/wt", Some("c")), frozen("branch"));
         assert_eq!(claim("/wt", Some("b/")), frozen("branch"));
+    }
+
+    /// A relative worktree is refused and writes nothing; an absolute one
+    /// is claimed.
+    #[test]
+    fn a_relative_worktree_is_refused() {
+        let (_dir, ledger) = ledger();
+        create(&ledger, None, None).unwrap();
+        let claim = |wt: &str| {
+            let input = ClaimInput {
+                worktree_path: Some(wt.into()),
+                ..ClaimInput::default()
+            };
+            ledger.work_claim(&pair("a", "s1"), 1, &input, Some(T0), false)
+        };
+        let events = || -> i64 {
+            let sql = "SELECT count(*) FROM events";
+            ledger.conn().query_row(sql, [], |r| r.get(0)).unwrap()
+        };
+        let before = events();
+        let why = "worktree must be an absolute path, got 'rel/dir'";
+        let refused = claim("rel/dir").unwrap().map(|_| ());
+        assert_eq!(refused, Err(Refusal::InvalidInput(why.into())));
+        assert_eq!(events(), before);
+        let item = ledger.work_get(1, T0).unwrap().unwrap();
+        assert_eq!((item.session, item.worktree_path), (None, None));
+        let item = claim("/abs/wt").unwrap().unwrap();
+        assert_eq!(item.worktree_path.as_deref(), Some("/abs/wt"));
     }
 }

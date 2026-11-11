@@ -265,10 +265,13 @@ fn refusals_write_nothing() {
         ledger.usage_report(&a, bare, &roots).unwrap(),
         Err(Refusal::InvalidInput(m)) if m.contains("no worktree_path")
     ));
-    // `/` (trimmed to nothing) or a relative path would match every
-    // transcript or none.
+    // `/` (trimmed to nothing) or a relative path (which only an older
+    // binary's claim could store) would match every transcript or none.
     for wt in ["/", "wt"] {
-        let odd = lane(&ledger, Some(wt));
+        let odd = lane(&ledger, None);
+        let sql = "UPDATE lanes SET worktree_path = ?2 WHERE id = ?1";
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(conn.execute(sql, rusqlite::params![odd, wt]).unwrap(), 1);
         assert!(matches!(
             ledger.usage_report(&a, odd, &roots).unwrap(),
             Err(Refusal::InvalidInput(m)) if m.contains("absolute folder")

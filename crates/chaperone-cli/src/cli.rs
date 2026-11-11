@@ -388,6 +388,7 @@ pub enum WorkCmd {
     /// and a session
     Claim {
         id: i64,
+        /// Absolute path of the lane's worktree
         #[arg(long)]
         worktree: Option<String>,
         #[arg(long)]

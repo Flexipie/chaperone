@@ -7,7 +7,7 @@ Arguments:
 
 Options:
       --db <DB>                  Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
-      --worktree <WORKTREE>      
+      --worktree <WORKTREE>      Absolute path of the lane's worktree
       --branch <BRANCH>          
       --format <FORMAT>          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
       --base-sha <BASE_SHA>      
