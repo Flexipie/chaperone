@@ -903,6 +903,9 @@ fn a_v20_smoke_claim_runs_its_command() {
     std::fs::write(wt.join("bad.sh"), "echo boom\nexit 3\n").unwrap();
     // Named like a bash option, it still runs as a script.
     std::fs::write(wt.join("-s"), "echo boom\nexit 3\n").unwrap();
+    // Output past the 16 KiB a stream keeps, and a secret in the script.
+    let long = "printf '%20000s' x\n# ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n";
+    std::fs::write(wt.join("long.sh"), long).unwrap();
     let claim = |how: &str, file: &str| {
         let args = ["check", "record", "--work", &id, "--check", "smoke"];
         let rest = ["--head", &base, "--outcome", "ran", how, file];
@@ -937,6 +940,13 @@ fn a_v20_smoke_claim_runs_its_command() {
         assert!(stored.contains(printed), "{stored}");
         assert!(stored.ends_with(&format!("exit {exit}\n")), "{stored}");
     }
+    let (code, kept) = claim("--run", "long.sh");
+    assert_eq!(code, 0, "{kept}");
+    let file = &kept["payload"]["evidence_files"][0];
+    assert_eq!(
+        (&file["truncated"], &file["redactions"]),
+        (&json!(true), &json!(1))
+    );
 }
 
 /// A harness `smoke` passes v19's `smoke_recorded` whoever starts it, so

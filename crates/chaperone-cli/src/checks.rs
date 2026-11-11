@@ -112,7 +112,7 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             let files: Vec<_> = read.iter().map(|(file, _)| file.clone()).collect();
             ledger.check_record_with(&actor, &input, &files, true)??;
             if run.is_some() {
-                let (ran, exit) = run_script(wt, argv(), &read[0].1.text)?;
+                let (ran, exit) = run_script(wt, argv(), &read[0])?;
                 input.run = Some(json!({"argv": argv(), "exit": exit}));
                 read[0] = ran;
             }
@@ -996,30 +996,32 @@ fn attach(wt: Option<&str>, path: &Path) -> Result<(Attached, Kept), CliError> {
     Ok((file, kept))
 }
 
-/// A smoke claim's `argv` (bash, `--` and its script, `script` its text) run in
+/// A smoke claim's `argv` (bash, `--` and its script, `script` as read) run in
 /// the worktree `wt`'s root as `check run` runs a command: the script,
 /// the command and the end of its stderr and stdout, then its exit code,
 /// as the evidence file named for the script, and that code (null when it
-/// was killed or timed out). A script that cannot start writes nothing.
+/// was killed or timed out). It is truncated when a stream lost its start
+/// too, and counts the script's redactions. A script that cannot start
+/// writes nothing.
 fn run_script(
     wt: Option<&str>,
     argv: Vec<String>,
-    script: &str,
+    (script, read): &(Attached, Kept),
 ) -> Result<((Attached, Kept), Value), CliError> {
     let dir = Path::new(wt.unwrap_or_default());
     let deadline = Instant::now() + TESTS_TIMEOUT;
     let ran = run_commands(std::slice::from_ref(&argv), dir, None, deadline)?;
     let exit = ran.commands[0]["exit"].clone();
     let end = if ran.timed_out { " (timed out)" } else { "" };
-    let text = format!("{script}\n{}\nexit {exit}{end}\n", ran.text);
+    let text = format!("{}\n{}\nexit {exit}{end}\n", read.text, ran.text);
     let kept = Kept::of(&text);
     let stored = &kept.stored;
     let file = Attached {
         path: argv[2].clone(),
         sha256: stored.hash.clone(),
         bytes: text.len() as u64,
-        truncated: stored.truncated,
-        redactions: stored.redactions,
+        truncated: stored.truncated || ran.cut,
+        redactions: stored.redactions + script.redactions,
     };
     Ok(((file, kept), exit))
 }
