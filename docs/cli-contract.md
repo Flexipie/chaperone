@@ -202,8 +202,9 @@ commit, as items `{check_event_id, finding_key, severity, title, body, path, lin
 status, blocks}`. `check_event_id` and `finding_key` address the finding for `finding dispute`
 and `finding waive`; `head_sha` is the commit the review read; `line` is the lens's, from the
 review's payload. `blocks` is the `no_blocking_findings` gate's rule: unsettled (`open`,
-`verified` or `disputed`) and of a severity that blocks, so the count of `blocks` is
-`findings.open_blocking`. An incomplete review's findings, and those of other checks, are not
+`verified` or `disputed`) and of a severity that blocks, so once the head has a complete
+review the count of `blocks` is `findings.open_blocking` (before that the gate stops at
+`review_complete` and the fact is absent). An incomplete review's findings, and those of other checks, are not
 listed. An unknown work id lists nothing, as `work events`.
 
 `dossier note` and `dossier get` are new (#83, [ADR 0007](decisions/0007-issue-dossier.md)).
