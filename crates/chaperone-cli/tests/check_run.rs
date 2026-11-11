@@ -193,7 +193,7 @@ fn a_run_measures_the_lane_commit() {
 
 /// A commit that changes a file a base profile's companion rule names
 /// without one it needs is refused and writes nothing; the needed file, or
-/// a lane commit's `No-companion` trailer naming the rule, passes. A rule
+/// a lane commit's `No-companion` trailer naming the rule and why, passes. A rule
 /// with an empty list does not load.
 #[test]
 fn a_companion_rule_needs_its_file() {
@@ -231,6 +231,10 @@ fn a_companion_rule_needs_its_file() {
     assert!(err["message"].as_str().unwrap().contains(why), "{err}");
     assert_eq!(events(&db), before);
 
+    let bare = "skip\n\nNo-companion: contract";
+    git(&wt, &["commit", "-q", "--allow-empty", "-m", bare], &[]);
+    assert_eq!(run(&db, &diff).0, 1, "a waiver needs a why");
+    git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
     let waive = "skip\n\nNo-companion: contract no behaviour change";
     git(&wt, &["commit", "-q", "--allow-empty", "-m", waive], &[]);
     assert_eq!(run(&db, &diff).0, 0);

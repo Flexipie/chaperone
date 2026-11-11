@@ -337,7 +337,7 @@ commit that breaks a companion rule of the base profile: each `[[companions]]` h
 (no space or `:`), `when` and `needs` (non-empty glob lists), and a commit that changes a file
 `when` names must change one `needs` names. The refusal names each broken rule, the file that
 triggered it and the files it needs. A lane commit (merge base to the lane's commit) whose
-message has the trailer `No-companion: <name> <why>` waives that rule, so a change that truly
+message has the trailer `No-companion: <name> <why>`, the why not empty, waives that rule, so a change that truly
 needs no doc edit says so in its history; git's log is read for it only when a rule is broken.
 A binary older than the table ignores it. The per-file list goes to the
 evidence store before the one `check.finished` that names it is written. It prints what

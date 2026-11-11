@@ -550,7 +550,7 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
 /// Refuses a commit whose `files` break a companion rule (a file the
 /// rule's `when` names changed, none its `needs` names did) unless a lane
 /// commit, `base..head`, waives it with a `No-companion: <rule> <why>`
-/// trailer. The log is read only when a rule is broken.
+/// trailer whose why is not empty. The log is read only when a rule is broken.
 fn companions(
     wt: &Path,
     base: &str,
@@ -575,9 +575,14 @@ fn companions(
     let format = "--format=%(trailers:key=No-companion,valueonly)";
     let args = ["log", format, "--end-of-options", &range, "--"];
     let (log, _) = harness_git(wt, &args, Instant::now() + RUN_TIMEOUT)?;
+    // The rule's name, then a reason: a bare name records no why.
     let waived = |name: &str| {
-        let word = |l: &str| l.trim().split([' ', '\t', ':']).next() == Some(name);
-        log.lines().any(word)
+        let given = |r: &str| {
+            let r = r.trim_start_matches(':');
+            r.starts_with(char::is_whitespace) && !r.trim().is_empty()
+        };
+        log.lines()
+            .any(|l| l.trim().strip_prefix(name).is_some_and(given))
     };
     let why: Vec<_> = broken
         .iter()
