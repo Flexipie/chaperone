@@ -1123,6 +1123,13 @@ fn change(
         goal: review::goal(ledger, item)?,
         smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
         plan: review::plan_findings(ledger, item.id)?,
+        code_lines: match ledger
+            .project(item.id, Some(head))?
+            .get("commit.code_lines")
+        {
+            Fact::Int(n) => Some(*n),
+            _ => None,
+        },
     };
     Ok((checkout, facts))
 }

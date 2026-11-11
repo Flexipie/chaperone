@@ -73,6 +73,8 @@ pub struct Facts {
     /// The plan check's findings with the lane's answers ([`plan_findings`]):
     /// every lens's, not the verifier's.
     pub plan: String,
+    /// The code lines of the harness `diff` on `head`; none without one.
+    pub code_lines: Option<i64>,
 }
 
 /// A lens as the pipeline defines it.
@@ -81,15 +83,24 @@ pub struct Planned<'a> {
     pub lens: &'static str,
     pub check: &'a Check,
     pub runner: &'a Runner,
+    /// The limit `<lens>_min_code_lines`: a smaller diff skips the lens.
+    pub min_code_lines: Option<i64>,
 }
 
-/// Each lens's check and runner, or why the pipeline cannot run a review:
-/// a check is missing, or a Claude runner names no model (`claude -p` is
-/// always given one).
+/// Each lens's check, runner and minimum diff size, or why the pipeline
+/// cannot run a review: a check is missing, or a Claude runner names no
+/// model (`claude -p` is always given one).
 pub fn lenses(pipeline: &Pipeline) -> Result<Vec<Planned<'_>>, String> {
     LENSES
         .iter()
-        .map(|&lens| planned(pipeline, lens, &format!("review_{lens}")))
+        .map(|&lens| {
+            let mut p = planned(pipeline, lens, &format!("review_{lens}"))?;
+            p.min_code_lines = pipeline
+                .limits
+                .get(&format!("{lens}_min_code_lines"))
+                .copied();
+            Ok(p)
+        })
         .collect()
 }
 
@@ -160,6 +171,7 @@ pub(crate) fn planned<'a>(
         lens,
         check,
         runner,
+        min_code_lines: None,
     })
 }
 
@@ -338,6 +350,8 @@ pub struct Lens<T = Vec<Finding>> {
 
 pub struct Review {
     pub lenses: Vec<Lens>,
+    /// Each lens the diff is too small for, and why: no session started.
+    pub skipped: Vec<(&'static str, String)>,
     pub diff_bytes: usize,
     pub diff_cut: bool,
 }
@@ -354,8 +368,9 @@ impl Review {
 
 /// Runs every lens at once in `dir`, the checkout of `facts.head`, each
 /// under its runner's model, tools, budget and timeout, and stores each
-/// one's prompt and answer in `store`. Fails only when the store does: a
-/// lens's own failure is its outcome.
+/// one's prompt and answer in `store`; a lens whose `min_code_lines` is
+/// more than the diff's measured code lines is skipped. Fails only when
+/// the store does: a lens's own failure is its outcome.
 pub fn run(
     planned: &[Planned<'_>],
     agents: &Agents<'_>,
@@ -366,9 +381,20 @@ pub fn run(
     let (change, diff_cut) = change(facts);
     let change = change + &facts.plan;
     let schema = schema();
+    let mut skipped = Vec::new();
+    for p in planned {
+        if let (Some(min), Some(n)) = (p.min_code_lines, facts.code_lines)
+            && n < min
+        {
+            let why = format!("{n} code lines, under {}_min_code_lines {min}", p.lens);
+            skipped.push((p.lens, why));
+        }
+    }
+    let runs = planned
+        .iter()
+        .filter(|p| skipped.iter().all(|s| s.0 != p.lens));
     let lenses = std::thread::scope(|s| {
-        let threads: Vec<_> = planned
-            .iter()
+        let threads: Vec<_> = runs
             .map(|p| {
                 let prompt = prompt(p, &facts.goal, &facts.smoke, &change);
                 let schema = &schema;
@@ -386,6 +412,7 @@ pub fn run(
     })?;
     Ok(Review {
         lenses,
+        skipped,
         diff_bytes: facts.diff.len(),
         diff_cut,
     })
@@ -800,8 +827,8 @@ pub fn record(
 /// Writes what the sessions did: a `usage.reported` for each that left a
 /// session id, first, as they cost whether or not the review is recorded;
 /// then the review's one `check.finished` under `input`'s key. It is
-/// `complete` when every lens ran and the verifier ran or had nothing to
-/// rule on. A finding's body and a ruling's why are cut to daisy's 600
+/// `complete` when every lens not skipped ran and the verifier ran or had
+/// nothing to rule on. A finding's body and a ruling's why are cut to daisy's 600
 /// characters, a title and an error to a note's 500; the whole answer is
 /// evidence.
 pub fn finish(
@@ -833,7 +860,9 @@ pub fn finish(
             verified["rulings"] = json!(rulings.collect::<Vec<_>>());
         }
     }
-    let rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
+    let mut rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
+    let skipped = review.skipped.iter();
+    rows.extend(skipped.map(|(lens, why)| json!({"lens": lens, "ran": false, "skipped": why})));
     input.fields.extend([
         ("base".into(), json!(facts.base)),
         ("lenses".into(), json!(rows)),
@@ -931,7 +960,7 @@ mod tests {
     const PIPELINE: &str = r#"
 schema = 2
 id = "t"
-limits = { budget = 150, timeout = 20, review_attempts = 3 }
+limits = { budget = 150, timeout = 20, review_attempts = 3, codex_min_code_lines = 200 }
 runners.lens = { cli = "claude", model = "opus", budget_limit = "budget", timeout_limit = "timeout" }
 runners.second = { cli = "codex", budget_limit = "budget", timeout_limit = "timeout" }
 checks.review_correctness = { runner = "lens", prompt = "p.md" }
@@ -963,6 +992,7 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
             goal: "GOAL".into(),
             smoke: Value::Null,
             plan: String::new(),
+            code_lines: None,
         }
     }
 
@@ -975,6 +1005,8 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
             .map(|l| (l.lens, l.check.prompt.as_str(), l.runner.cli))
             .collect();
         let claude = |lens, prompt| (lens, prompt, Cli::Claude);
+        let mins: Vec<_> = planned.iter().map(|l| l.min_code_lines).collect();
+        assert_eq!(mins, [None, None, None, Some(200)]);
         assert_eq!(
             named,
             [

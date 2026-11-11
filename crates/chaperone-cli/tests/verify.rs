@@ -121,6 +121,18 @@ impl Lane {
         let sql = format!("SELECT count(*) FROM events WHERE {filter}");
         conn.query_row(&sql, [], |r| r.get(0)).unwrap()
     }
+
+    /// The newest review's codex row and whether the review is complete.
+    fn codex(&self) -> (Value, Value) {
+        let conn = rusqlite::Connection::open(&self.db).unwrap();
+        let sql = "SELECT payload_json FROM events WHERE payload_json->>'check' = 'review'
+                     ORDER BY id DESC LIMIT 1";
+        let p: String = conn.query_row(sql, [], |r| r.get(0)).unwrap();
+        let p: Value = serde_json::from_str(&p).unwrap();
+        let rows = p["lenses"].as_array().unwrap();
+        let codex = rows.iter().find(|r| r["lens"] == "codex").unwrap();
+        (codex.clone(), p["complete"].clone())
+    }
 }
 
 /// A Claude session's answer to the prompt that starts with `header`.
@@ -253,10 +265,18 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
         (steps(&out), &out["stopped"]),
         (all(false).into(), &Value::Null)
     );
-    // The plan, four lenses and the verdict; nothing found, so no verifier.
-    assert_eq!(lane.sessions(), 6);
+    // The plan, three lenses and the verdict; nothing found, so no verifier.
+    // Codex is skipped: one code line, under v20's 200.
+    assert_eq!(lane.sessions(), 5);
+    let skipped = json!({"lens": "codex", "ran": false,
+        "skipped": "1 code lines, under codex_min_code_lines 200"});
+    assert_eq!(lane.codex(), (skipped, json!(true)));
+    assert_eq!(
+        lane.events("kind = 'usage.reported' AND payload_json LIKE '%codex%'"),
+        0
+    );
     assert_eq!(steps(&lane.verify()), all(true));
-    assert_eq!(lane.sessions(), 6);
+    assert_eq!(lane.sessions(), 5);
     let (code, err) = lane.handoff();
     assert_eq!(code, 0, "{err}");
 
@@ -270,6 +290,27 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
     assert_eq!((code, &err["code"]), (1, &json!("gate_denied")), "{err}");
     assert_eq!(steps(&lane.verify()), all(false));
     assert_eq!(lane.handoff().0, 0);
+}
+
+/// A diff of 200 code lines (the lane's one and 199 more), v20's minimum,
+/// runs the Codex lens too.
+#[test]
+fn a_diff_at_the_minimum_runs_the_codex_lens() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    let lines = "x\n".repeat(199);
+    let files: &[(&str, &[u8])] = &[("big.rs", lines.as_bytes())];
+    git(&lane.wt, &["add", "big.rs"], files);
+    git(&lane.wt, &["commit", "-qm", "big"], &[]);
+    let out = lane.verify();
+    assert_eq!(out["stopped"], Value::Null, "{out}");
+    let (codex, complete) = lane.codex();
+    assert_eq!(
+        (&codex["ran"], &codex["skipped"], complete),
+        (&json!(true), &Value::Null, json!(true))
+    );
+    // The plan, four lenses and the verdict.
+    assert_eq!(lane.sessions(), 6);
 }
 
 /// The plugin's stop hook on a ready lane: nothing while the branch is at
