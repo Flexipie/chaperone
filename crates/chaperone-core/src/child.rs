@@ -3,6 +3,7 @@
 //! calls of `overlap`, `impact` and the UI's diff, agent sessions and the
 //! commands of `check run tests`.
 
+use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -10,6 +11,7 @@ use std::time::{Duration, Instant};
 
 /// How long an agent has to stop its tools before its group is killed.
 const GRACE: Duration = Duration::from_secs(2);
+const OUT_CAP: usize = 1 << 20;
 
 pub struct Done {
     pub status: ExitStatus,
@@ -62,6 +64,36 @@ pub fn run_input(
 /// more memory than that; `cut` says either stream lost its start.
 pub fn run_tail(cmd: &mut Command, deadline: Instant, tail: usize) -> Result<Done, Failed> {
     start(cmd, None, true, deadline, Keep::Tail(tail))
+}
+
+/// The `name` CLI at `cmd` with `args`: its stdout, else its stderr. Run
+/// from the temp dir, so gh never reads or changes a checkout (`-R`
+/// names the repo). A call past `limit` fails; `late` ends the timeout's
+/// message.
+pub fn cli(
+    name: &str,
+    cmd: &OsStr,
+    args: &[&str],
+    limit: Duration,
+    late: &str,
+) -> Result<String, String> {
+    let call = format!("{name} {}", args[..2].join(" "));
+    let deadline = Instant::now() + limit;
+    let mut command = Command::new(cmd);
+    command.args(args).current_dir(std::env::temp_dir());
+    let out = run(&mut command, deadline, OUT_CAP).map_err(|e| match e {
+        Failed::Spawn(e) => format!("{name} did not start: {e}"),
+        Failed::TimedOut => format!("{call}: no answer in {}s{late}", limit.as_secs()),
+        Failed::Wait(e) => format!("{call}: {e}"),
+    })?;
+    if out.cut {
+        return Err(format!("{call}: answer past {OUT_CAP} bytes"));
+    }
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.out).into_owned());
+    }
+    let err = String::from_utf8_lossy(&out.err);
+    Err(format!("{call}: {}", err.trim()))
 }
 
 /// What a pipe's reader keeps: the first bytes (stdout's cap, stderr whole)
