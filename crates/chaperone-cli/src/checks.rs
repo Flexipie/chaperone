@@ -1,4 +1,4 @@
-//! `chaperone check`, `verify`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
+//! `chaperone check`, `verify`, `pr open`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction. `check run` reads git in the lane's
 //! worktree, and runs tests and the review's and the verdict's sessions in
@@ -25,7 +25,7 @@ use chaperone_core::review::{self, Agents, Facts};
 use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
-use chaperone_core::work::{WorkItem, is_terminal};
+use chaperone_core::work::{UpdateInput, WorkItem, is_terminal};
 use chaperone_graph::{code_globs, commands_in, declares, glob};
 use serde_json::{Map, Value, json};
 
@@ -51,6 +51,8 @@ const TESTS_TIMEOUT: Duration = Duration::from_secs(1800);
 /// `check run review`'s checkout of the lane's commit, which fetches its
 /// whole history.
 const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
+/// `pr open`'s push and its gh call, each.
+const FORGE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Of each test command's stdout and stderr, the end kept as evidence.
 const TAIL_BYTES: usize = 16 * 1024;
 /// A plan file: a document a person reads, far above any real one.
@@ -211,6 +213,187 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         }
     }
     one(json!({"work_id": work, "steps": steps, "stopped": stopped}))
+}
+
+/// `pr open`: under the lane's run lock, on a clean worktree at the lane's
+/// branch tip, `check run` diff and tests on that commit, refused over the
+/// pipeline's `code_lines` limit or when the tests fail. Then the push and
+/// `gh pr create`, or `gh pr edit` on the PR the lane holds, with
+/// [`pr_body`]; a new PR is `pr.opened` on the commit.
+pub fn pr_open(
+    ledger: &Ledger,
+    db: &Path,
+    work: i64,
+    title: Option<String>,
+    draft: bool,
+    gh: &Path,
+    actor: &Actor,
+) -> Result<Outcome, CliError> {
+    let _lock = ledger::lock_lane(db, work)??;
+    let Run { wt, item, input } = start_run(ledger, work, "diff")?;
+    let (head, branch) = (input.head, item.branch.clone().unwrap_or_default());
+    let found = tree_after(&wt, &head, Instant::now() + RUN_TIMEOUT)?;
+    if branch.is_empty() || found.dirty || found.head_moved || found.cut {
+        return Err(refuse(format!(
+            "pr open needs the worktree {} clean at the tip of the lane's branch ({branch}, \
+             {head}): commit or stash the change, check out the branch, and run again",
+            wt.display()
+        )));
+    }
+    let mut steps = Vec::new();
+    let mut step = |check: &str, ran: Result<Outcome, CliError>| match ran? {
+        Outcome::One(rec) if rec["payload"]["head_sha"] == head => {
+            steps.push(
+                json!({"check": check, "head": head, "event_id": rec["event_id"],
+                "replayed": rec["replayed"], "passed": true}),
+            );
+            Ok(rec["payload"].clone())
+        }
+        _ => Err(refuse(format!("the lane moved from {head}; run again"))),
+    };
+    let diff = step("diff", run_diff(ledger, db, work, actor))?;
+    let limit = lane_pipeline(&item)?.limits.get("code_lines");
+    if let Some(limit) = limit.filter(|l| diff["code_lines"].as_i64() > Some(**l)) {
+        return Err(refuse(format!(
+            "the diff is {} code lines, over the pipeline's limit of {limit}: split the lane",
+            diff["code_lines"]
+        )));
+    }
+    let tests = step("tests", run_tests(ledger, db, work, actor, "tests"))?;
+    if tests["result"] != "pass" {
+        return Err(refuse(format!(
+            "the tests failed on {head} (`check run tests` evidence {}): fix them and run again",
+            tests["evidence_ref"]
+        )));
+    }
+    let base = git::base_rev(diff["base"].as_str().unwrap_or_default());
+    let deadline = Instant::now() + FORGE_TIMEOUT;
+    let (named, _) = harness_git(&wt, &["rev-parse", "--abbrev-ref", &base], deadline)?;
+    let base = named.trim().strip_prefix("origin/").ok_or_else(|| {
+        refuse(format!(
+            "the lane's base {base} is no origin branch for the PR"
+        ))
+    })?;
+    harness_git(&wt, &["push", "-u", "origin", &branch], deadline)?;
+    let file = std::path::absolute(db).map_err(LedgerError::from)?;
+    let file = file.with_file_name(format!("pr-body-lane-{work}.md"));
+    std::fs::write(&file, pr_body(ledger, db, &item, &head, &diff, &tests)?)
+        .map_err(LedgerError::from)?;
+    let (path, title) = (file.to_string_lossy(), title.unwrap_or(item.title.clone()));
+    let held = item.pr_ref.as_deref().and_then(|pr| pr.rsplit_once('#'));
+    let mut args = match held {
+        Some((_, n)) => vec!["pr", "edit", n],
+        None => vec![
+            "pr", "create", "--base", base, "--head", &branch, "--title", &title,
+        ],
+    };
+    args.extend(["--body-file", &path]);
+    args.extend((draft && held.is_none()).then_some("--draft"));
+    let ran = child::run(
+        Command::new(gh).args(&args).current_dir(&wt),
+        deadline,
+        1 << 20,
+    );
+    let _ = std::fs::remove_file(&file);
+    let failed = |why: &str| CliError::Internal(format!("gh pr {}: {why}", args[1]));
+    let done = match ran {
+        Ok(done) if done.status.success() => done,
+        Ok(done) => return Err(failed(String::from_utf8_lossy(&done.err).trim())),
+        Err(child::Failed::TimedOut) => return Err(failed("timed out")),
+        Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => {
+            return Err(failed(&e.to_string()));
+        }
+    };
+    let pr = match &item.pr_ref {
+        Some(pr) => pr.clone(),
+        None => {
+            // gh prints the new PR's URL: https://github.com/<owner>/<repo>/pull/<n>.
+            let out = String::from_utf8_lossy(&done.out);
+            let url = out.trim();
+            let pr = url.split_once("/pull/").and_then(|(repo, n)| {
+                let mut parts = repo.rsplit('/');
+                let (name, owner) = (parts.next()?, parts.next()?);
+                Some(format!("{owner}/{name}#{n}"))
+            });
+            let pr = pr.ok_or_else(|| failed(&format!("no PR URL in {url:?}")))?;
+            let input = UpdateInput {
+                pr_ref: Some(pr.clone()),
+                head_sha: Some(head.clone()),
+                ..UpdateInput::default()
+            };
+            ledger.work_update(actor, work, &input, None, None, false)??;
+            pr
+        }
+    };
+    let created = item.pr_ref.is_none();
+    one(json!({"work_id": work, "pr": pr, "head": head, "created": created, "steps": steps}))
+}
+
+/// A PR's body from ledger facts: of the lane's own words only its title,
+/// or the goal its newest handoff states.
+fn pr_body(
+    ledger: &Ledger,
+    db: &Path,
+    item: &WorkItem,
+    head: &str,
+    diff: &Value,
+    tests: &Value,
+) -> Result<String, CliError> {
+    let brief = ledger
+        .work_handoffs(item.id)?
+        .pop()
+        .and_then(|h| h.handoff.brief);
+    let goal = brief.map(|b| b.goal).filter(|g| !g.is_empty());
+    let mut body = goal.unwrap_or(item.title.clone()) + "\n\n";
+    if let Some(key) = &item.source_key {
+        body += &format!("Tracker: {key}\n\n");
+    }
+    let commands = tests["commands"].as_array().into_iter().flatten();
+    let commands: Vec<_> = commands
+        .map(|c| {
+            let argv = c["argv"].as_array().into_iter().flatten();
+            format!(
+                "`{}`",
+                argv.filter_map(Value::as_str).collect::<Vec<_>>().join(" ")
+            )
+        })
+        .collect();
+    let facts = ledger.project(item.id, Some(head))?;
+    let plan = match (
+        facts.get("plan_check.outcome"),
+        facts.get("plan_check.reason"),
+    ) {
+        (Fact::Str(outcome), Fact::Str(reason)) => format!("{outcome} ({reason})"),
+        (Fact::Str(outcome), _) => outcome.clone(),
+        _ => "none".into(),
+    };
+    let smoke = verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?;
+    let mut smokes = Vec::new();
+    if let Some(result) = smoke["harness"]["result"].as_str() {
+        smokes.push(format!("harness run {result}"));
+    }
+    let claim = &smoke["lane_claim"];
+    if let Some(outcome) = claim["outcome"].as_str() {
+        let files = claim["evidence_files"].as_array().into_iter().flatten();
+        let ids: Vec<_> = files.filter_map(|f| f["sha256"].as_str()).collect();
+        smokes.push(format!(
+            "session claim {outcome}, evidence {}",
+            ids.join(", ")
+        ));
+    }
+    body += &format!(
+        "- Size: {} code lines in {} files\n- Tests: passed on {head}: {}\n\
+         - Plan check: {plan}\n- Smoke: {}\n\nMade by `chaperone pr open` from the ledger.\n",
+        diff["code_lines"],
+        diff["files"],
+        commands.join(", "),
+        if smokes.is_empty() {
+            "none".into()
+        } else {
+            smokes.join("; ")
+        },
+    );
+    Ok(body)
 }
 
 /// A `check run` under way, its caller holding the lane's run lock: the

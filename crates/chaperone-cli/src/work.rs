@@ -113,6 +113,7 @@ pub fn run(
                 spec,
                 lane_key: lane,
                 lane_pos,
+                head_sha: None,
             };
             one(ledger.work_update(
                 &actor.resolve(),
