@@ -506,7 +506,7 @@ fn plan_answered(ledger: &Ledger, work: i64) -> Result<(), CliError> {
     }
     Err(refuse(format!(
         "{} plan finding(s) have no answer: {}; answer each with `chaperone finding accept \
-         <event> <key>` or `chaperone finding dispute <event> <key> --reason <why>`",
+         <event> <key> --reason <how>` or `chaperone finding dispute <event> <key> --reason <why>`",
         open.len(),
         open.join("; ")
     )))
