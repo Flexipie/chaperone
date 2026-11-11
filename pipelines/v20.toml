@@ -30,10 +30,10 @@
 #   for (`review_<lens>`, `review_verifier`, `verdict`, `plan`), and the prompt files in
 #   pipelines/prompts/, whose digests are in the hash.
 #
-# Runners. The lenses, the verifier, the verdict and the plan check run on the strongest
-# Claude model, named by its full id (`claude-opus-5-5`, not the `opus` alias) so the hash
-# names one model; the Codex lens runs on Codex's default model. Claude sessions get only the
-# read tools (Read, Grep, Glob): the runner starts them with `--permission-mode dontAsk` and a
+# Runners. The lenses, the verifier, the verdict and the plan check run on Claude Opus 5.5,
+# named by its full id (`claude-opus-5-5`, not the `opus` alias) so the hash names one model;
+# the Codex lens runs on Codex's default model. Claude sessions get only the read tools
+# (Read, Grep, Glob): the runner starts them with `--permission-mode dontAsk` and a
 # sandbox, under which a Bash call that is not allow-listed is denied, so listing Bash would
 # be a control that does nothing. The budgets (US cents) and timeouts (seconds) are
 # placeholders to tune once the pilot measures real cost: one Claude session spent $0.26

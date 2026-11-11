@@ -167,9 +167,13 @@ fn a_run_measures_the_lane_commit() {
     let id = lane(&db, &claim("prompt"));
     let measured = || {
         let p = &run(&db, &["check", "run", "diff", "--work", &id]).1["payload"];
-        [p["code_lines"].clone(), p["changes_code"].clone()]
+        [
+            p["code_lines"].clone(),
+            p["changes_code"].clone(),
+            p["profile_base"].clone(),
+        ]
     };
-    assert_eq!(measured(), [json!(0), json!(false)]);
+    assert_eq!(measured(), [json!(0), json!(false), Value::Null]);
     git(&wt, &["checkout", "-q", "main"], &[]);
     let profile: &[(&str, &[u8])] = &[(
         ".chaperone/profile.toml",
@@ -182,8 +186,9 @@ fn a_run_measures_the_lane_commit() {
         &["update-ref", "refs/remotes/origin/main", "HEAD"],
         &[],
     );
+    let at = json!({"ref": "origin/main", "commit": git(&wt, &["rev-parse", "HEAD"], &[])});
     git(&wt, &["checkout", "-q", "prompt"], &[]);
-    assert_eq!(measured(), [json!(1), json!(true)]);
+    assert_eq!(measured(), [json!(1), json!(true), at]);
 }
 
 /// Nothing to measure, git that fails and a run already on the lane are

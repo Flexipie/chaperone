@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 pub use entry::{Rules, Unmatched, glob};
 pub use worktree::{
-    BaseTests, Error, REPO_PROFILE, Tests, code_globs, commands_in, declares, impact_in,
+    BaseCode, BaseTests, Error, REPO_PROFILE, Tests, code_globs, commands_in, declares, impact_in,
     profile_file, rules, rules_in,
 };
 
