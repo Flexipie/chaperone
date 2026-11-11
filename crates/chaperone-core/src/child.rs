@@ -21,6 +21,9 @@ pub struct Done {
     /// start.
     pub cut: bool,
     pub err: Vec<u8>,
+    /// [`run_tail`] only: the deadline stopped it, and the streams are what
+    /// it printed before.
+    pub timed_out: bool,
 }
 
 pub enum Failed {
@@ -61,7 +64,9 @@ pub fn run_input(
 
 /// [`run_input`] with stdin empty that keeps only the last `tail` bytes of
 /// stdout and of stderr, so a command that prints without end costs no
-/// more memory than that; `cut` says either stream lost its start.
+/// more memory than that; `cut` says either stream lost its start. At the
+/// deadline the child is stopped as [`run_input`] stops it and what it
+/// printed is still returned, with `timed_out`.
 pub fn run_tail(cmd: &mut Command, deadline: Instant, tail: usize) -> Result<Done, Failed> {
     start(cmd, None, true, deadline, Keep::Tail(tail))
 }
@@ -178,13 +183,26 @@ fn start(
             Ok(None) => {
                 let stopped = if group { stop(&mut child) } else { Ok(()) };
                 let _ = child.kill();
-                let _ = child.wait();
-                return Err(match stopped {
-                    Ok(()) => Failed::TimedOut,
-                    Err(e) => Failed::Wait(std::io::Error::other(format!(
+                let status = child.wait();
+                if let Err(e) = stopped {
+                    return Err(Failed::Wait(std::io::Error::other(format!(
                         "timed out, and its process group was not killed: {e}"
-                    ))),
-                });
+                    ))));
+                }
+                // With its group killed the pipes close; the grace bounds a
+                // process that left the group and still holds one.
+                if let (Keep::Tail(_), Ok(status)) = (keep, status) {
+                    let (out, out_cut) = out.recv_timeout(GRACE).unwrap_or_default();
+                    let (err, err_cut) = err.recv_timeout(GRACE).unwrap_or_default();
+                    return Ok(Done {
+                        status,
+                        out,
+                        cut: out_cut || err_cut,
+                        err,
+                        timed_out: true,
+                    });
+                }
+                return Err(Failed::TimedOut);
             }
             Err(e) => return Err(Failed::Wait(e)),
         }
@@ -216,6 +234,7 @@ fn start(
         out,
         cut,
         err,
+        timed_out: false,
     })
 }
 

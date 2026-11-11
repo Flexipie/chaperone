@@ -940,6 +940,36 @@ fn a_v20_smoke_claim_runs_its_command() {
         assert!(stored.contains(printed), "{stored}");
         assert!(stored.ends_with(&format!("exit {exit}\n")), "{stored}");
     }
+    // A skipped smoke ran nothing: no run goes with it, and none starts.
+    let before = events(&db);
+    let skipped = [
+        "check",
+        "record",
+        "--work",
+        &id,
+        "--check",
+        "smoke",
+        "--head",
+        &base,
+        "--outcome",
+        "skipped",
+        "--reason",
+        "nothing_runs",
+        "--run",
+        "smoke.sh",
+    ];
+    let (code, err) = run(&db, &skipped);
+    assert_eq!(
+        (code, &err["code"], events(&db)),
+        (1, &json!("invalid_input"), before)
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("--run goes with a smoke that ran"),
+        "{err}"
+    );
     let (code, kept) = claim("--run", "long.sh");
     assert_eq!(code, 0, "{kept}");
     let file = &kept["payload"]["evidence_files"][0];

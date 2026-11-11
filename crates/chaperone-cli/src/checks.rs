@@ -1331,7 +1331,8 @@ fn run_commands(
                 ran.text += &String::from_utf8_lossy(&done.err);
                 ran.text += &String::from_utf8_lossy(&done.out);
                 ran.cut |= done.cut;
-                done.status.code()
+                ran.timed_out |= done.timed_out;
+                done.status.code().filter(|_| !done.timed_out)
             }
             Err(child::Failed::TimedOut) => {
                 ran.timed_out = true;
