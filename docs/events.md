@@ -268,7 +268,7 @@ find merges on the partial index `events_merged` (migration 0006, ledger v6),
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `attention.recorded` | `attention record` | `type` (`asked`, `answered`, `nudged`, `sent_back`, `revived`), `by` (`orchestrator` or `owner`: who handled it; for `asked`, who the question went to), `reason` (`asked` only: one of R12's question ids, below), `round` (`sent_back` only, 1 or more), `answers` (`answered` only: the event id of the `asked` it answers, on the same lane), `note` (one non-blank line of at most 500 characters as sent, redacted at write; the answer itself for `answered`) |
+| `attention.recorded` | `attention record` | `type` (`asked`, `answered`, `nudged`, `sent_back`, `revived`, `stopped`: the lane's turn ended on an API error, from `hook stop-failure`), `by` (`orchestrator` or `owner`: who handled it; for `asked` and `stopped`, who it goes to), `reason` (`asked` only: one of R12's question ids, below), `round` (`sent_back` only, 1 or more), `answers` (`answered` only: the event id of the `asked` it answers, on the same lane), `note` (one non-blank line of at most 500 characters as sent, redacted at write; the answer itself for `answered`) |
 
 One intervention on a lane by the orchestrator or the owner. It changes no column but
 `head_event_id`, is not a lane action in `work events`, and no gate reads it. Time to an

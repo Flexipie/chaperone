@@ -141,6 +141,7 @@ fn help_matches_snapshots() {
         (&["migrate"], include_str!("snapshots/migrate.txt")),
         (&["install"], include_str!("snapshots/install.txt")),
         (&["uninstall"], include_str!("snapshots/uninstall.txt")),
+        (&["hook"], include_str!("snapshots/hook.txt")),
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_chaperone"))
             .args(args)

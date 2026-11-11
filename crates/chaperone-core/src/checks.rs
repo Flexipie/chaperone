@@ -109,7 +109,14 @@ pub struct RunInput {
     pub version: String,
 }
 
-pub const ATTENTION_TYPES: &[&str] = &["asked", "answered", "nudged", "sent_back", "revived"];
+pub const ATTENTION_TYPES: &[&str] = &[
+    "asked",
+    "answered",
+    "nudged",
+    "sent_back",
+    "revived",
+    "stopped",
+];
 pub const ATTENTION_BY: &[&str] = &["orchestrator", "owner"];
 pub const QUESTION_REASONS: &[&str] = &[
     "question.done_ambiguous",

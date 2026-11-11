@@ -89,7 +89,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `check run`, `check waive`, `verify`, `pr open`, `merge`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` and `hook` also takes `--agent` and `--session`, and every write but `migrate`, `hook`, `check record`, `check run`, `check waive`, `verify`, `pr open`, `merge`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -131,7 +131,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `jobs get` | `<job id>` | read |
 | `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
 | `usage get` | `<id>` | read |
-| `attention record` | `--work <id> --type asked\|answered\|nudged\|sent_back\|revived --by orchestrator\|owner [--reason <R12 id>] [--round <k>] [--answers <event id>] [--note <one line>] [--idempotency-key]` | write |
+| `attention record` | `--work <id> --type asked\|answered\|nudged\|sent_back\|revived\|stopped --by orchestrator\|owner [--reason <R12 id>] [--round <k>] [--answers <event id>] [--note <one line>] [--idempotency-key]` | write |
 | `finding dispute` | `<event> <key> --reason <r>` | write |
 | `finding waive` | `<event> <key> --reason <r>` | write |
 | `dossier note` | `<key> --note <text> [--link <kind>:<ref>]... [--supersedes <event id>]` | write |
@@ -139,6 +139,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 | `install` | | no ledger, writes the marketplace dir, calls claude |
 | `uninstall` | | no ledger, removes the marketplace dir, calls claude |
+| `hook` | `session-start\|pre-bash\|stop\|stop-failure` (stdin: the hook's JSON) | read; `stop-failure` writes |
 
 `work create --kind` and `--pr-flow` are Chaperone's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
 
@@ -553,6 +554,20 @@ update. `uninstall` runs `claude plugin uninstall chaperone@chaperone --scope us
 exit 1 when nothing is installed), then deletes the directory. Neither reads the ledger or
 Claude Code's settings. They print `{dir, plugin, version, ran}` (`uninstall` without
 `version`), `ran` one `{args, exit, output}` per call, `output` its stderr or else its stdout.
+
+`hook <event>` is the plugin's Claude Code hook (`plugin/hooks/hooks.json`, run through
+`chaperone-hook.sh`, which is silent without `$CHAPERONE_WORK`, without `chaperone` on `PATH` and
+when the binary fails). The lane is `$CHAPERONE_WORK`; when it is not a number, or the lane is
+unknown, done or cancelled, and on any error, it prints nothing and exits 0. It prints the hook's
+own JSON, not an envelope. `session-start` prints `additionalContext`: the lane's id, title,
+status, pipeline, branch, head, PR, the ready gates not passing yet (as the lane page reads them)
+and the lane's commands. `pre-bash` denies a Bash `tool_input.command` holding the words `gh pr
+create`, `gh pr merge` or `chaperone work ready --yes` in that order, naming the command to run
+instead. `stop` blocks once (never with `stop_hook_active`) when the newest handoff is ready and
+the branch tip, read as a ready handoff reads it, is not its commit. `stop-failure` records
+`attention.recorded` type `stopped`, by `orchestrator`, its note and idempotency key the hook's
+`error`, as `$DAISY_AGENT` and `$DAISY_SESSION`: one per error kind per lane. It is a write, so
+`DAISY_CLI_READONLY=1` refuses it as any other.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

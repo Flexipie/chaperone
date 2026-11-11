@@ -180,6 +180,23 @@ pub enum Cmd {
     /// what `install` registered (a refusal of what is not there is
     /// reported, not an error), then delete the marketplace directory
     Uninstall,
+    /// The plugin's Claude Code hook for the lane $CHAPERONE_WORK: reads
+    /// the hook's JSON on stdin and prints the hook's answer, not an
+    /// envelope. Outside an open lane, and on any error, it prints nothing
+    /// and exits 0
+    Hook { event: HookEvent },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum HookEvent {
+    /// The lane's state, gates not passing yet and commands, as context
+    SessionStart,
+    /// Deny `gh pr create`, `gh pr merge` and `chaperone work ready --yes`
+    PreBash,
+    /// Block a stop once the branch moved past the lane's ready handoff
+    Stop,
+    /// Record the API error the turn stopped on, once per error kind
+    StopFailure,
 }
 
 /// The lane's pull request
@@ -273,7 +290,11 @@ impl Cmd {
             Cmd::Finding(FindingCmd::Waive(_)) => Some("finding waive"),
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
-            Cmd::Overlap { .. }
+            Cmd::Hook {
+                event: HookEvent::StopFailure,
+            } => Some("hook stop-failure"),
+            Cmd::Hook { .. }
+            | Cmd::Overlap { .. }
             | Cmd::Stats { .. }
             | Cmd::Impact { .. }
             | Cmd::Pipeline(_)
