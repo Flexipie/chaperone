@@ -31,7 +31,7 @@
 #   pipelines/prompts/, whose digests are in the hash.
 #
 # Runners. The lenses, the verifier, the verdict and the plan check run on the strongest
-# Claude model, named by its full id (`claude-fable-5-2`, not the `fable` alias) so the hash
+# Claude model, named by its full id (`claude-opus-5-5`, not the `opus` alias) so the hash
 # names one model; the Codex lens runs on Codex's default model. Claude sessions get only the
 # read tools (Read, Grep, Glob): the runner starts them with `--permission-mode dontAsk` and a
 # sandbox, under which a Bash call that is not allow-listed is denied, so listing Bash would
@@ -76,7 +76,7 @@ plan_timeout = 600
 
 [runners.lens]
 cli = "claude"
-model = "claude-fable-5-2"
+model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
 budget_limit = "lens_budget"
 timeout_limit = "lens_timeout"
@@ -88,21 +88,21 @@ timeout_limit = "lens_timeout"
 
 [runners.verifier]
 cli = "claude"
-model = "claude-fable-5-2"
+model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
 budget_limit = "verifier_budget"
 timeout_limit = "verifier_timeout"
 
 [runners.verdict]
 cli = "claude"
-model = "claude-fable-5-2"
+model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
 budget_limit = "verdict_budget"
 timeout_limit = "verdict_timeout"
 
 [runners.plan]
 cli = "claude"
-model = "claude-fable-5-2"
+model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
 budget_limit = "plan_budget"
 timeout_limit = "plan_timeout"
