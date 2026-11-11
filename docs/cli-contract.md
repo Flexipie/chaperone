@@ -560,16 +560,19 @@ Claude Code's settings. They print `{dir, plugin, version, ran}` (`uninstall` wi
 
 `hook <event>` is the plugin's Claude Code hook (`plugin/hooks/hooks.json`, run through
 `chaperone-hook.sh`, which is silent without `$CHAPERONE_WORK`, without `chaperone` on `PATH` and
-when the binary fails). The lane is `$CHAPERONE_WORK`; when it is not a number, or the lane is
-unknown, done or cancelled, and on any error, it prints nothing and exits 0. It prints the hook's
-own JSON, not an envelope. `session-start` prints `additionalContext`: the lane's id, title,
+when the binary fails, so it is what keeps a hook silent). The lane is `$CHAPERONE_WORK`; when it
+is not a number, or the lane is unknown, done, cancelled or on a pipeline before schema 2 (v20),
+it prints nothing and exits 0, as on most errors. It prints the hook's own JSON, not an envelope,
+and opens the ledger read-only for every event but `stop-failure`. `session-start` prints `additionalContext`: the lane's id, title,
 status, pipeline, branch, head, PR, the ready gates not passing yet (as the lane page reads them)
-and the lane's commands. `pre-bash` denies a Bash `tool_input.command` holding the words `gh pr
-create`, `gh pr merge` or `chaperone work ready --yes` in that order, naming the command to run
-instead. `stop` blocks once (never with `stop_hook_active`) when the newest handoff is ready and
+and the lane's commands. `pre-bash` splits a Bash `tool_input.command` at `&&`, `||`, `;`, `|`, newlines,
+`$(`, parentheses and backticks, drops each part's leading `VAR=value` words, and denies a part
+that starts `gh pr create`, `gh pr merge` or `chaperone work ready` with `--yes` later in it,
+naming the command to run instead. `stop` blocks once (never with `stop_hook_active`) when the newest handoff is ready and
 the branch tip, read as a ready handoff reads it, is not its commit. `stop-failure` records
-`attention.recorded` type `stopped`, by `orchestrator`, its note and idempotency key the hook's
-`error`, as `$DAISY_AGENT` and `$DAISY_SESSION`: one per error kind per lane. It is a write, so
+`attention.recorded` type `stopped`, by `orchestrator`, its note the hook's `error`, as
+`$DAISY_AGENT` and `$DAISY_SESSION`; a repeat with nothing new on the lane replays, as `attention
+record` without a key does. It is a write, so
 `DAISY_CLI_READONLY=1` refuses it as any other.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into

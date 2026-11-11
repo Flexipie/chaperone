@@ -182,8 +182,8 @@ pub enum Cmd {
     Uninstall,
     /// The plugin's Claude Code hook for the lane $CHAPERONE_WORK: reads
     /// the hook's JSON on stdin and prints the hook's answer, not an
-    /// envelope. Outside an open lane, and on any error, it prints nothing
-    /// and exits 0
+    /// envelope. Nothing outside an open lane on a v20 or newer pipeline;
+    /// the plugin's shim keeps every failure silent
     Hook { event: HookEvent },
 }
 
@@ -235,6 +235,7 @@ pub enum PipelineCmd {
     /// The `[limits]` table of the lane's pipeline, else of the one a new
     /// claim stamps: {pipeline: {id, hash}, limits}
     Limits {
+        /// The lane (default: the pipeline a new claim stamps)
         #[arg(long)]
         work: Option<i64>,
     },

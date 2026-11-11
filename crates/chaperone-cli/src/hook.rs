@@ -1,7 +1,6 @@
 //! `chaperone hook <event>`: the plugin's Claude Code hooks for the lane
-//! named by `CHAPERONE_WORK`. Nudges toward the binary's commands, never
-//! gates: outside an open lane, and on any error, nothing is printed and
-//! the exit is 0, so a hook never breaks a session.
+//! named by `CHAPERONE_WORK`, on a schema 2 pipeline (v20 on). Nudges
+//! toward the binary's commands, never gates: anything else prints nothing.
 
 use std::io::Read;
 use std::path::Path;
@@ -12,6 +11,7 @@ use chaperone_core::pipeline::sha_prefix_eq;
 use chaperone_core::work::is_terminal;
 use serde_json::{Value, json};
 
+use crate::checks::lane_pipeline;
 use crate::cli::{ActorArgs, HookEvent};
 use crate::work::observed_head;
 
@@ -27,9 +27,13 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).ok()?;
     let input: Value = serde_json::from_str(&input).ok()?;
-    let ledger = Ledger::open(db).ok()?;
+    let ledger = match event {
+        HookEvent::StopFailure => Ledger::open(db),
+        _ => Ledger::open_read_only(db),
+    }
+    .ok()?;
     let item = ledger.work_get(work, &ledger.now().ok()?).ok()?.ok()?;
-    if is_terminal(&item.status) {
+    if is_terminal(&item.status) || lane_pipeline(&item).ok()?.schema < 2 {
         return None;
     }
     let head = || observed_head(item.worktree_path.as_deref(), item.branch.as_deref());
@@ -41,7 +45,7 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
                 .filter(|g| !g.passed)
                 .map(|g| g.gate.as_str())
                 .collect();
-            let none = "none".to_string();
+            let at = head().ok().flatten();
             let title: String = item.title.chars().take(200).collect();
             let context = format!(
                 "Chaperone lane: work {work}, \"{title}\", status {}, pipeline {}.\n\
@@ -51,12 +55,12 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
                  `chaperone check run smoke --work {work}`, `chaperone verify --work {work}`, \
                  `chaperone pr open --work {work}`. The owner merges.",
                 item.status,
-                item.pipeline_id.as_ref().unwrap_or(&none),
-                item.branch.as_ref().unwrap_or(&none),
-                head().ok().flatten().unwrap_or(none.clone()),
-                item.pr_ref.as_ref().unwrap_or(&none),
+                item.pipeline_id.as_deref().unwrap_or("none"),
+                item.branch.as_deref().unwrap_or("none"),
+                at.as_deref().unwrap_or("none"),
+                item.pr_ref.as_deref().unwrap_or("none"),
                 match failing.is_empty() {
-                    true => none.clone(),
+                    true => "none".into(),
                     false => failing.join(", "),
                 },
             );
@@ -65,16 +69,26 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
         }
         HookEvent::PreBash => {
             let command = input["tool_input"]["command"].as_str()?;
-            // The words in order, others between them: `gh -R o/r pr create`.
-            let has = |seq: &[&str]| {
-                let mut words = command.split_whitespace();
-                seq.iter().all(|s| words.any(|w| w == *s))
-            };
-            let reason = if has(&["gh", "pr", "create"]) {
+            // Each command a separator starts, less its leading `VAR=value`
+            // words; a command is denied by its first words only.
+            let parts = command.split(['&', '|', ';', '\n', '(', ')', '`']);
+            let parts: Vec<Vec<&str>> = parts
+                .map(|p| {
+                    p.split_whitespace()
+                        .skip_while(|w| w.contains('='))
+                        .collect()
+                })
+                .collect();
+            let starts = |seq: &[&str]| parts.iter().any(|p| p.starts_with(seq));
+            let ready = ["chaperone", "work", "ready"];
+            let reason = if starts(&["gh", "pr", "create"]) {
                 format!("Open the PR with `chaperone pr open --work {work}`.")
-            } else if has(&["gh", "pr", "merge"]) {
+            } else if starts(&["gh", "pr", "merge"]) {
                 "The owner merges, with `chaperone merge`.".to_string()
-            } else if has(&["chaperone", "work", "ready", "--yes"]) {
+            } else if parts
+                .iter()
+                .any(|p| p.starts_with(&ready) && p.contains(&"--yes"))
+            {
                 format!(
                     "`work ready --yes` is the owner's override. Run `chaperone verify --work \
                      {work}` and hand off ready."
@@ -111,7 +125,6 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
                 kind: "stopped".into(),
                 by: "orchestrator".into(),
                 note: Some(kind.into()),
-                idempotency_key: Some(kind.into()),
                 ..AttentionInput::default()
             };
             let _ = ledger.attention_record(&ActorArgs::default().resolve(), &record);

@@ -159,9 +159,9 @@ impl Ledger {
                     "phase.entered" => s(4)?,
                     "check.finished" => pair(s(5)?, s(6)?),
                     "attention.recorded" => {
-                        // On `asked`, `by` is who the question went to.
+                        // On `asked` and `stopped`, `by` is who it goes to.
                         let kind = s(7)?;
-                        let word = if kind.as_deref() == Some("asked") {
+                        let word = if matches!(kind.as_deref(), Some("asked" | "stopped")) {
                             "to"
                         } else {
                             "by"

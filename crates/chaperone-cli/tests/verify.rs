@@ -3,8 +3,9 @@
 //! one, so these tests need the workspace built (`cargo nextest run
 //! --workspace` builds it).
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use chaperone_core::ledger::lock_lane;
 use chaperone_core::review;
@@ -244,6 +245,41 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
     assert_eq!((code, &err["code"]), (1, &json!("gate_denied")), "{err}");
     assert_eq!(steps(&lane.verify()), all(false));
     assert_eq!(lane.handoff().0, 0);
+}
+
+/// The plugin's stop hook on a ready lane: nothing while the branch is at
+/// the handoff, a block once it moves on, never with `stop_hook_active`.
+#[test]
+fn stop_blocks_once_when_the_head_moved_past_a_ready_handoff() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.smoke();
+    lane.verify();
+    assert_eq!(lane.handoff().0, 0);
+    let stop = |active: bool| {
+        let mut hook = Command::new(BIN);
+        let hook = hook.arg("--db").arg(&lane.db).args(["hook", "stop"]);
+        let hook = hook.env("CHAPERONE_WORK", "1").stdin(Stdio::piped());
+        let mut child = hook.stdout(Stdio::piped()).spawn().unwrap();
+        let input = json!({"stop_hook_active": active}).to_string();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    };
+    assert_eq!(stop(false), "");
+    git(
+        &lane.wt,
+        &["commit", "-qam", "more"],
+        &[("lib.rs", b"a\nc\n")],
+    );
+    let out: Value = serde_json::from_str(&stop(false)).unwrap();
+    assert_eq!(out["decision"], "block");
+    let reason = out["reason"].as_str().unwrap();
+    assert!(reason.contains("chaperone verify --work 1"), "{reason}");
+    assert_eq!(stop(true), "");
 }
 
 /// A blocker the verifier verifies stops verify after the review: no
