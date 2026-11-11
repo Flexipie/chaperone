@@ -51,7 +51,7 @@ const TESTS_TIMEOUT: Duration = Duration::from_secs(1800);
 /// `check run review`'s checkout of the lane's commit, which fetches its
 /// whole history.
 const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
-/// `pr open`'s push and its gh call, each.
+/// `pr open`'s push and each of its gh calls.
 const FORGE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Of each test command's stdout and stderr, the end kept as evidence.
 const TAIL_BYTES: usize = 16 * 1024;
@@ -215,11 +215,12 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     one(json!({"work_id": work, "steps": steps, "stopped": stopped}))
 }
 
-/// `pr open`: under the lane's run lock, on a clean worktree at the lane's
-/// branch tip, `check run` diff and tests on that commit, refused over the
-/// pipeline's `code_lines` limit or when the tests fail. Then the push and
-/// `gh pr create`, or `gh pr edit` on the PR the lane holds, with
-/// [`pr_body`]; a new PR is `pr.opened` on the commit.
+/// `pr open`: under the lane's run lock, on a clean worktree at the tip of
+/// the lane's branch, `check run` diff and tests on that commit, refused
+/// past the pipeline's `code_lines` limit or when the tests fail. Then the
+/// push of that commit and `gh pr create`, or `gh pr edit` on the PR the
+/// lane holds or gh lists for the branch, with [`pr_body`]; a PR new to the
+/// ledger is `pr.opened` on the commit.
 pub fn pr_open(
     ledger: &Ledger,
     db: &Path,
@@ -232,13 +233,20 @@ pub fn pr_open(
     let _lock = ledger::lock_lane(db, work)??;
     let Run { wt, item, input } = start_run(ledger, work, "diff")?;
     let (head, branch) = (input.head, item.branch.clone().unwrap_or_default());
+    // `start_run` reads HEAD when the branch is gone.
+    let tip = format!("refs/heads/{branch}");
+    let tip = git::commit(Path::new("git"), &wt, &tip, Instant::now() + RUN_TIMEOUT);
     let found = tree_after(&wt, &head, Instant::now() + RUN_TIMEOUT)?;
-    if branch.is_empty() || found.dirty || found.head_moved || found.cut {
+    if tip.map_err(refuse)?.is_none() || found.dirty || found.head_moved || found.cut {
         return Err(refuse(format!(
             "pr open needs the worktree {} clean at the tip of the lane's branch ({branch}, \
              {head}): commit or stash the change, check out the branch, and run again",
             wt.display()
         )));
+    }
+    // Before any push: a PR the ledger then refuses would go unrecorded.
+    if item.pr_ref.is_none() {
+        ledger.work_update(actor, work, &UpdateInput::default(), None, None, true)??;
     }
     let mut steps = Vec::new();
     let mut step = |check: &str, ran: Result<Outcome, CliError>| match ran? {
@@ -252,13 +260,19 @@ pub fn pr_open(
         _ => Err(refuse(format!("the lane moved from {head}; run again"))),
     };
     let diff = step("diff", run_diff(ledger, db, work, actor))?;
-    let limit = lane_pipeline(&item)?.limits.get("code_lines");
-    if let Some(limit) = limit.filter(|l| diff["code_lines"].as_i64() > Some(**l)) {
+    let (lines, uncounted) = (&diff["code_lines"], &diff["uncounted_files"]);
+    let over = |limit: &&i64| lines.as_i64().is_none_or(|n| n > **limit) || uncounted != 0;
+    if let Some(limit) = lane_pipeline(&item)?.limits.get("code_lines").filter(over) {
         return Err(refuse(format!(
-            "the diff is {} code lines, over the pipeline's limit of {limit}: split the lane",
-            diff["code_lines"]
+            "the diff has {lines} code lines and {uncounted} uncounted (binary) files; the \
+             pipeline allows {limit} and none: split the lane"
         )));
     }
+    let base = git::base_rev(diff["base"].as_str().unwrap_or_default());
+    let args = ["rev-parse", "--abbrev-ref", &base];
+    let (named, _) = harness_git(&wt, &args, Instant::now() + RUN_TIMEOUT)?;
+    let no_origin = || refuse(format!("the base {base} is no origin branch"));
+    let base = named.trim().strip_prefix("origin/").ok_or_else(no_origin)?;
     let tests = step("tests", run_tests(ledger, db, work, actor, "tests"))?;
     if tests["result"] != "pass" {
         return Err(refuse(format!(
@@ -266,66 +280,69 @@ pub fn pr_open(
             tests["evidence_ref"]
         )));
     }
-    let base = git::base_rev(diff["base"].as_str().unwrap_or_default());
-    let deadline = Instant::now() + FORGE_TIMEOUT;
-    let (named, _) = harness_git(&wt, &["rev-parse", "--abbrev-ref", &base], deadline)?;
-    let base = named.trim().strip_prefix("origin/").ok_or_else(|| {
-        refuse(format!(
-            "the lane's base {base} is no origin branch for the PR"
-        ))
-    })?;
-    harness_git(&wt, &["push", "-u", "origin", &branch], deadline)?;
-    let file = std::path::absolute(db).map_err(LedgerError::from)?;
-    let file = file.with_file_name(format!("pr-body-lane-{work}.md"));
-    std::fs::write(&file, pr_body(ledger, db, &item, &head, &diff, &tests)?)
-        .map_err(LedgerError::from)?;
-    let (path, title) = (file.to_string_lossy(), title.unwrap_or(item.title.clone()));
-    let held = item.pr_ref.as_deref().and_then(|pr| pr.rsplit_once('#'));
-    let mut args = match held {
-        Some((_, n)) => vec!["pr", "edit", n],
-        None => vec![
-            "pr", "create", "--base", base, "--head", &branch, "--title", &title,
-        ],
+    let body = pr_body(ledger, db, &item, &head, &diff, &tests)?;
+    let gh = |args: &[&str], input: Option<&[u8]>| {
+        let failed = |why: &str| CliError::Internal(format!("gh pr {}: {why}", args[1]));
+        let mut cmd = Command::new(gh);
+        let deadline = Instant::now() + FORGE_TIMEOUT;
+        match child::run_input(cmd.args(args).current_dir(&wt), input, deadline, 1 << 20) {
+            Ok(done) if done.status.success() => {
+                Ok(String::from_utf8_lossy(&done.out).into_owned())
+            }
+            Ok(done) => Err(failed(String::from_utf8_lossy(&done.err).trim())),
+            Err(child::Failed::TimedOut) => Err(failed("timed out")),
+            Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => Err(failed(&e.to_string())),
+        }
     };
-    args.extend(["--body-file", &path]);
+    // gh names a PR by its URL: https://github.com/<owner>/<repo>/pull/<n>.
+    let pr_of = |url: &str| {
+        let (repo, n) = url.trim().split_once("/pull/")?;
+        let mut parts = repo.rsplit('/');
+        let (name, owner) = (parts.next()?, parts.next()?);
+        Some(format!("{owner}/{name}#{n}"))
+    };
+    // One a run opened and never recorded.
+    let listed = match item.pr_ref {
+        Some(_) => None,
+        None => pr_of(&gh(
+            &[
+                "pr", "list", "--head", &branch, "--json", "url", "--jq", ".[0].url",
+            ],
+            None,
+        )?),
+    };
+    let held = item.pr_ref.clone().or(listed.clone());
+    let push = format!("{head}:refs/heads/{branch}");
+    harness_git(
+        &wt,
+        &["push", "origin", &push],
+        Instant::now() + FORGE_TIMEOUT,
+    )?;
+    let mut args = match held.as_deref().and_then(|pr| pr.rsplit_once('#')) {
+        Some((repo, n)) => vec!["pr", "edit", n, "--repo", repo],
+        None => vec!["pr", "create", "--base", base, "--head", &branch],
+    };
+    let title = title.or(held.is_none().then(|| item.title.clone()));
+    if let Some(title) = &title {
+        args.extend(["--title", title]);
+    }
+    args.extend(["--body-file", "-"]);
     args.extend((draft && held.is_none()).then_some("--draft"));
-    let ran = child::run(
-        Command::new(gh).args(&args).current_dir(&wt),
-        deadline,
-        1 << 20,
-    );
-    let _ = std::fs::remove_file(&file);
-    let failed = |why: &str| CliError::Internal(format!("gh pr {}: {why}", args[1]));
-    let done = match ran {
-        Ok(done) if done.status.success() => done,
-        Ok(done) => return Err(failed(String::from_utf8_lossy(&done.err).trim())),
-        Err(child::Failed::TimedOut) => return Err(failed("timed out")),
-        Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => {
-            return Err(failed(&e.to_string()));
-        }
+    let out = gh(&args, Some(body.as_bytes()))?;
+    let pr = match held {
+        Some(pr) => pr,
+        None => pr_of(&out)
+            .ok_or_else(|| CliError::Internal(format!("gh pr create: no PR URL in {out:?}")))?,
     };
-    let pr = match &item.pr_ref {
-        Some(pr) => pr.clone(),
-        None => {
-            // gh prints the new PR's URL: https://github.com/<owner>/<repo>/pull/<n>.
-            let out = String::from_utf8_lossy(&done.out);
-            let url = out.trim();
-            let pr = url.split_once("/pull/").and_then(|(repo, n)| {
-                let mut parts = repo.rsplit('/');
-                let (name, owner) = (parts.next()?, parts.next()?);
-                Some(format!("{owner}/{name}#{n}"))
-            });
-            let pr = pr.ok_or_else(|| failed(&format!("no PR URL in {url:?}")))?;
-            let input = UpdateInput {
-                pr_ref: Some(pr.clone()),
-                head_sha: Some(head.clone()),
-                ..UpdateInput::default()
-            };
-            ledger.work_update(actor, work, &input, None, None, false)??;
-            pr
-        }
-    };
-    let created = item.pr_ref.is_none();
+    if item.pr_ref.is_none() {
+        let input = UpdateInput {
+            pr_ref: Some(pr.clone()),
+            head_sha: Some(head.clone()),
+            ..UpdateInput::default()
+        };
+        ledger.work_update(actor, work, &input, None, None, false)??;
+    }
+    let created = item.pr_ref.is_none() && listed.is_none();
     one(json!({"work_id": work, "pr": pr, "head": head, "created": created, "steps": steps}))
 }
 
@@ -374,12 +391,8 @@ fn pr_body(
     }
     let claim = &smoke["lane_claim"];
     if let Some(outcome) = claim["outcome"].as_str() {
-        let files = claim["evidence_files"].as_array().into_iter().flatten();
-        let ids: Vec<_> = files.filter_map(|f| f["sha256"].as_str()).collect();
-        smokes.push(format!(
-            "session claim {outcome}, evidence {}",
-            ids.join(", ")
-        ));
+        let files = claim["evidence_files"].as_array().map_or(0, Vec::len);
+        smokes.push(format!("session claim {outcome}, {files} evidence files"));
     }
     body += &format!(
         "- Size: {} code lines in {} files\n- Tests: passed on {head}: {}\n\

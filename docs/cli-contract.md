@@ -503,21 +503,23 @@ the commit it ran on), and `stopped` is null when all four passed, else `{check,
 refusal's message, why the step did not pass, or `the lane moved from <sha> to <sha>`.
 
 `pr open --work <id>` opens the lane's PR under the lane's run lock (a second run is
-`conflict`). It refuses (`invalid_input`, nothing pushed, gh not called) a lane with no branch,
-a worktree with any change or untracked file or not at the tip of the lane's branch, a lane
-that moves while it runs, a `check run diff` over the lane's pipeline `[limits] code_lines`
-(the number `code_lines_at_most` reads; no limit, no refusal), `check run tests` that did not
-pass, and a base that is no `origin/` branch. Diff and tests run as `check run` runs them, so a
-pass on the same tree replays. Then `git push -u origin <branch>` in the worktree, and `gh`
-(found on `PATH`, run in the worktree, 120 s each): `gh pr create --base <base> --head <branch>
---title <t> --body-file <file> [--draft]` (the title defaults to the item's), or for a lane
-that holds a PR `gh pr edit <n> --body-file <file>`. The body is made from ledger facts only:
-the newest handoff's goal or the title, the tracker key, the diff's code lines and files, the
-test commands that passed on the head, the plan check's outcome and the head's smoke (the
-harness's result, a session's claim with its evidence ids). A created PR is recorded as
-`work update --pr` records it, `pr.opened` with `head_sha` the head; an edit writes nothing. A
-gh failure is `internal`. It prints `{work_id, pr, head, created, steps}`, `steps` as
-`verify`'s.
+`conflict`). It refuses (`invalid_input`, nothing pushed, gh not called) a worktree without the
+lane's branch, with any change or untracked file, or not at that branch's tip; a lane with no PR
+whose `work update` the ledger would refuse (a dry run); a lane that moves while it runs; a
+`check run diff` past the pipeline's `[limits] code_lines` (the number `code_lines_at_most`
+reads), with an uncounted file or missing a count (no limit, no refusal); a base that is no
+`origin/` branch; and `check run tests` that did not pass. Diff and tests run as `check run`
+runs them, so a pass on the same tree replays. A lane with no PR first asks `gh pr list --head
+<branch>` for an open one a run opened and never recorded. Then `git push origin
+<head>:refs/heads/<branch>`, and `gh` (found on `PATH`, run in the worktree, 120 s per call,
+the body on stdin): `gh pr create --base <base> --head <branch> --title <t> --body-file -
+[--draft]` (the title defaults to the item's), or for a held or listed PR `gh pr edit <n> --repo
+<owner/repo> [--title <t>] --body-file -`. The body is ledger facts only: the newest handoff's
+goal or the title, the tracker key, the diff's code lines and files, the test commands that
+passed on the head, the plan check's outcome and the head's smoke (the harness's result, a
+session's claim and its evidence file count). A PR new to the lane is `pr.opened` with
+`head_sha` the head, as `work update --pr` records it. A gh failure is `internal`. It prints
+`{work_id, pr, head, created, steps}`, `steps` as `verify`'s.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

@@ -163,18 +163,19 @@ pub enum Cmd {
 pub enum PrCmd {
     /// Under the lane's run lock (a second run is a conflict, exit 4), on
     /// a clean worktree at the lane's branch tip: `check run` diff and
-    /// tests (a pass on the same tree replays), refused over the
-    /// pipeline's code line limit or when the tests fail. Then `git push -u
-    /// origin <branch>` and `gh pr create`, or `gh pr edit` when the lane
-    /// holds a PR, with a body made from ledger facts; a new PR is recorded
-    /// as `pr.opened` on that commit
+    /// tests (a pass on the same tree replays), refused past the
+    /// pipeline's code line limit, with a file git counts no lines of, or
+    /// when the tests fail. Then `git push origin <commit>:refs/heads/<branch>`
+    /// and `gh pr create`, or `gh pr edit` when the lane holds a PR or gh
+    /// lists one for the branch, with a body made from ledger facts; a PR
+    /// new to the ledger is recorded as `pr.opened` on that commit
     Open {
         #[arg(long)]
         work: i64,
-        /// Default: the work item's title
+        /// Default on create: the work item's title; on edit, kept
         #[arg(long)]
         title: Option<String>,
-        /// Open it as a draft
+        /// Open it as a draft (create only)
         #[arg(long)]
         draft: bool,
         #[command(flatten)]
