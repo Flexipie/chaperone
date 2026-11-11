@@ -228,7 +228,8 @@ or note is `not_found`. Notes are someone else's words: no gate reads them.
 
 `evidence show` is new (#213). It prints a file from the evidence store beside `--db`
 (`evidence/sha256/<2>/<hash>`): a harness session's `prompt_ref` or `answer_ref`, a check's
-`evidence_ref`, a smoke claim's `sha256` (`work events` names them). `<ref>` is the sha256 or a
+`evidence_ref`, a smoke claim's `sha256`, as the `check.finished` event names them (`check run`
+prints the event). `<ref>` is the sha256 or a
 prefix of 12 to 64 of its lowercase hex digits that names one file. The file is hashed again
 before anything is printed. The answer is the stored text, not an envelope: piped, its exact bytes;
 on a terminal, control characters other than newline and tab are printed escaped (`\u{1b}`), so a

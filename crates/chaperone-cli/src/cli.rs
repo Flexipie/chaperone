@@ -950,7 +950,8 @@ pub enum DossierCmd {
 #[derive(Subcommand, Debug)]
 pub enum EvidenceCmd {
     /// Print the text stored under a hash (a `prompt_ref`, `answer_ref` or
-    /// `evidence_ref` from `work events`), hashed again, not in an envelope:
+    /// `evidence_ref` of a check event, as `check run` prints it), hashed
+    /// again, not in an envelope:
     /// piped, its bytes; on a terminal, control characters other than
     /// newline and tab escaped. Refused: an unknown ref (not_found), a ref that
     /// is not 12 to 64 lowercase hex or a prefix two files share
