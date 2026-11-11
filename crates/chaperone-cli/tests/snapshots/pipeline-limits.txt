@@ -1,0 +1,9 @@
+The `[limits]` table of the lane's pipeline, else of the one a new claim stamps: {pipeline: {id, hash}, limits}
+
+Usage: chaperone pipeline limits [OPTIONS]
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --work <WORK>      
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

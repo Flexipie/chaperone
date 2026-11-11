@@ -134,6 +134,10 @@ fn help_matches_snapshots() {
             include_str!("snapshots/pipeline-current.txt"),
         ),
         (
+            &["pipeline", "limits"],
+            include_str!("snapshots/pipeline-limits.txt"),
+        ),
+        (
             &["pipeline", "history"],
             include_str!("snapshots/pipeline-history.txt"),
         ),
