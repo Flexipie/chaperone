@@ -23,11 +23,13 @@ use crate::runner::Run;
 const ENTITY: &str = "work item";
 
 /// The transcript homes to read: the Claude config dir (`~/.claude`) and
-/// the Codex home (`~/.codex`). At least one; each must exist.
+/// the Codex home (`~/.codex`), or one folder of `<claude>/projects` (a
+/// hook's own transcript's). At least one; each but the folder must exist.
 #[derive(Clone, Debug, Default)]
 pub struct Roots {
     pub claude: Option<PathBuf>,
     pub codex: Option<PathBuf>,
+    pub claude_project: Option<PathBuf>,
 }
 
 /// What `usage report` did. `existing` messages were already on the lane;
@@ -79,7 +81,7 @@ impl Ledger {
                 "work item {work} has worktree_path {stored:?}; usage needs an absolute folder below /"
             ));
         }
-        if roots.claude.is_none() && roots.codex.is_none() {
+        if roots.claude.is_none() && roots.codex.is_none() && roots.claude_project.is_none() {
             return invalid(
                 "no transcript folder to read; pass --claude-dir or --codex-dir".into(),
             );
@@ -95,6 +97,9 @@ impl Ledger {
                 return invalid(format!("{} is not a folder", root.display()));
             }
             read(root, &worktree, &mut found)?;
+        }
+        if let Some(project) = &roots.claude_project {
+            scan::claude_projects(vec![project.clone()], &worktree, &mut found)?;
         }
         let have: HashSet<String> = self
             .conn()

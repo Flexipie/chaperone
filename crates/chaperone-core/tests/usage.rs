@@ -116,6 +116,7 @@ fn homes(root: &Path) -> Roots {
     Roots {
         claude: Some(claude),
         codex: Some(codex),
+        claude_project: None,
     }
 }
 
@@ -278,7 +279,7 @@ fn refusals_write_nothing() {
     let id = lane(&ledger, Some(WT));
     let typo = Roots {
         claude: Some(dir.path().join("nope")),
-        codex: None,
+        ..Roots::default()
     };
     assert!(matches!(
         ledger.usage_report(&a, id, &typo).unwrap(),

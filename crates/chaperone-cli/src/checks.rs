@@ -1379,6 +1379,7 @@ pub fn usage(ledger: &Ledger, cmd: UsageCmd) -> Result<Outcome, CliError> {
             let roots = Roots {
                 claude: claude_dir.or_else(|| home("CLAUDE_CONFIG_DIR", ".claude")),
                 codex: codex_dir.or_else(|| home("CODEX_HOME", ".codex")),
+                claude_project: None,
             };
             one(ledger.usage_report(&actor.resolve(), work, &roots)??)
         }

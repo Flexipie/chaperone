@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 const BIN: &str = env!("CARGO_BIN_EXE_chaperone");
 
 struct Lane {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     db: PathBuf,
 }
 
@@ -18,7 +18,7 @@ impl Lane {
     fn new() -> Lane {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("ledger.db");
-        let lane = Lane { _dir: dir, db };
+        let lane = Lane { dir, db };
         lane.cli(&["migrate"]);
         lane.cli(&["work", "create", "--title", "t"]);
         lane.cli(&["work", "claim", "1", "--pipeline", "v20"]);
@@ -203,4 +203,40 @@ fn the_shim_is_silent_unless_chaperone_answers() {
             "{work:?} {path} {exit}"
         );
     }
+}
+
+/// `stop` records the lane session's tokens from its transcript, once.
+#[test]
+fn stop_reports_the_lanes_usage() {
+    let lane = Lane::new();
+    let wt = lane.dir.path().join("wt");
+    let project = lane.dir.path().join("projects/p");
+    std::fs::create_dir_all(&project).unwrap();
+    let cwd = wt.to_str().unwrap();
+    lane.cli(&["work", "create", "--title", "u"]);
+    lane.cli(&["work", "claim", "2", "--pipeline", "v20", "--worktree", cwd]);
+    let usage = json!({"input_tokens": 5, "cache_read_input_tokens": 7,
+        "cache_creation_input_tokens": 1, "output_tokens": 2});
+    let lines = [
+        json!({"type": "user", "cwd": cwd}),
+        json!({"type": "assistant", "message": {"id": "m1", "model": "claude-x",
+            "usage": usage, "stop_reason": "end_turn"}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(project.join("s1.jsonl"), text).unwrap();
+    let input = json!({"transcript_path": project.join("s1.jsonl")});
+    for _ in 0..2 {
+        assert_eq!(lane.hook(Some("2"), "stop", input.clone()), "");
+    }
+    let usage: Vec<Value> = lane
+        .events()
+        .into_iter()
+        .filter(|(k, _)| k == "usage.reported")
+        .map(|(_, p)| p)
+        .collect();
+    assert_eq!(usage.len(), 1);
+    assert_eq!(
+        (&usage[0]["source"], &usage[0]["input_total"]),
+        (&json!("parent"), &json!(13))
+    );
 }

@@ -3,11 +3,13 @@
 //! toward the binary's commands, never gates: anything else prints nothing.
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chaperone_core::checks::AttentionInput;
 use chaperone_core::ledger::Ledger;
 use chaperone_core::pipeline::sha_prefix_eq;
+use chaperone_core::usage::Roots;
 use chaperone_core::work::is_terminal;
 use serde_json::{Value, json};
 
@@ -15,14 +17,49 @@ use crate::checks::lane_pipeline;
 use crate::cli::{ActorArgs, HookEvent};
 use crate::work::observed_head;
 
+/// How long `stop` waits on its usage write after its answer is printed,
+/// inside the hook's 10 s timeout.
+const USAGE_DEADLINE: Duration = Duration::from_secs(5);
+
 pub fn run(event: HookEvent, db: &Path) -> ! {
-    if let Some(out) = answer(event, db) {
+    let mut usage = None;
+    if let Some(out) = answer(event, db, &mut usage) {
         println!("{out}");
+    }
+    if let Some((work, project)) = usage {
+        report_usage(db, work, project);
     }
     std::process::exit(0)
 }
 
-fn answer(event: HookEvent, db: &Path) -> Option<Value> {
+/// The lane session's own tokens, recorded every turn without the lane
+/// asking, from its transcript's folder only (a whole ~/.claude scan can
+/// pass the hook's timeout), once the answer is out. A writable open, so
+/// never under `DAISY_CLI_READONLY=1`. A busy ledger is left after
+/// [`USAGE_DEADLINE`]: each event is its own transaction, so only whole
+/// ones are written, and the next turn adds the rest.
+fn report_usage(db: &Path, work: i64, project: PathBuf) {
+    if std::env::var_os("DAISY_CLI_READONLY").is_some_and(|v| v == "1") {
+        return;
+    }
+    let db = db.to_path_buf();
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok(ledger) = Ledger::open(&db) {
+            let roots = Roots {
+                claude_project: Some(project),
+                ..Roots::default()
+            };
+            let _ = ledger.usage_report(&ActorArgs::default().resolve(), work, &roots);
+        }
+        let _ = done.send(());
+    });
+    let _ = wait.recv_timeout(USAGE_DEADLINE);
+}
+
+/// The hook's answer; for `stop` on a lane it reads, `usage` is set to the
+/// lane and its transcript's folder.
+fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Option<Value> {
     let work: i64 = std::env::var("CHAPERONE_WORK").ok()?.parse().ok()?;
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).ok()?;
@@ -100,6 +137,8 @@ fn answer(event: HookEvent, db: &Path) -> Option<Value> {
                 "permissionDecision": "deny", "permissionDecisionReason": reason}}))
         }
         HookEvent::Stop => {
+            let project = input["transcript_path"].as_str().map(Path::new);
+            *usage = project.and_then(Path::parent).map(|p| (work, p.into()));
             if input["stop_hook_active"] == true {
                 return None;
             }
