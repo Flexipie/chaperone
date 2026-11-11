@@ -85,6 +85,9 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
             let gh = Path::new("gh");
             checks::pr_open(&ledger, &path, work, title, draft, gh, &actor.resolve())
         }
+        Cmd::Merge { work, head, actor } => {
+            checks::merge(&Ledger::open(&path)?, work, head, &actor.resolve())
+        }
         Cmd::Reviews(cmd) => checks::reviews(&Ledger::open(&path)?, cmd),
         Cmd::Jobs(cmd) => checks::jobs(&Ledger::open(&path)?, cmd),
         Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),

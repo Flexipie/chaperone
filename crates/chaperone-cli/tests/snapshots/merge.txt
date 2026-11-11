@@ -1,0 +1,12 @@
+The owner's merge of the lane's PR, as chaperone-ui's Merge: on a YES verdict on --head, the lane ready and GitHub's PR head still --head, `gh pr merge --squash --delete-branch --match-head-commit`, then `pr.merged`, then the done handoff unless the lane's lease is live. Refused from any session that has held the lane
+
+Usage: chaperone merge [OPTIONS] --work <WORK>
+
+Options:
+      --db <DB>            Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --work <WORK>        
+      --format <FORMAT>    Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --head <HEAD>        The head you confirm (default: the lane's handoff head)
+      --agent <AGENT>      Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>  Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help               Print help

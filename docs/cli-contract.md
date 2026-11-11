@@ -89,7 +89,7 @@ needs `--blocker` or `--reason`.
 
 ## Commands in M1
 
-Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `check run`, `check waive`, `verify`, `pr open`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` also takes `--agent` and `--session`, and every write but `migrate`, `check record`, `check run`, `check waive`, `verify`, `pr open`, `merge`, `reviews record`, `usage report`, `work merged`, `attention record` and `dossier note` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -125,6 +125,7 @@ Every write except `migrate` also takes `--agent` and `--session`, and every wri
 | `check prune` | | read, removes directories |
 | `verify` | `--work <id>` | write |
 | `pr open` | `--work <id> [--title <t>] [--draft]` | write, pushes, calls gh |
+| `merge` | `--work <id> [--head <sha>]` | write, calls gh |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
 | `jobs get` | `<job id>` | read |
@@ -520,6 +521,20 @@ passed on the head, the plan check's outcome and the head's smoke (the harness's
 session's claim and its evidence file count). A PR new to the lane is `pr.opened` with
 `head_sha` the head, as `work update --pr` records it. A gh failure is `internal`. It prints
 `{work_id, pr, head, created, steps}`, `steps` as `verify`'s.
+
+`merge --work <id> [--head <sha>]` is the owner's merge of the lane's PR (its `pr_ref`), as
+chaperone-ui's Merge does it. `--head` is the head the owner confirms; it defaults to the newest
+handoff's commit. It refuses (`invalid_input`, no `gh pr merge`) from a session that has held the
+lane (as `work ready`), a lane with no PR, a verdict that is not YES or not on the handoff head, a
+handoff head that is not `--head`, a lane that is not ready (unless its merge is recorded), and a
+PR that GitHub (`gh pr view`) has at another head, closed, or open though recorded as merged.
+Then `gh pr merge <n> -R <owner/repo> --squash --delete-branch --match-head-commit <head>`
+(found on `PATH`, run in the temp dir, 30 s per call, never `--admin` or `--auto`), and
+`pr.merged` as `work merged` records it. A PR GitHub has merged at that head is only recorded, so
+a second run merges nothing. When the lane's lease is not live it then hands off `done` itself;
+when it is, only the lane's agent does. A gh failure, or a done handoff the ledger refuses after
+the merge is recorded, is `internal`. It prints `{work_id, pr, merge_sha, done, left}`, `left`
+null or `the lane's agent hands off done`.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

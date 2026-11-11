@@ -127,6 +127,7 @@ fn help_matches_snapshots() {
         (&["verify"], include_str!("snapshots/verify.txt")),
         (&["pr"], include_str!("snapshots/pr.txt")),
         (&["pr", "open"], include_str!("snapshots/pr-open.txt")),
+        (&["merge"], include_str!("snapshots/merge.txt")),
         (&["pipeline"], include_str!("snapshots/pipeline.txt")),
         (
             &["pipeline", "current"],

@@ -129,6 +129,20 @@ pub enum Cmd {
     },
     #[command(subcommand)]
     Pr(PrCmd),
+    /// The owner's merge of the lane's PR, as chaperone-ui's Merge: on a
+    /// YES verdict on --head, the lane ready and GitHub's PR head still
+    /// --head, `gh pr merge --squash --delete-branch --match-head-commit`,
+    /// then `pr.merged`, then the done handoff unless the lane's lease is
+    /// live. Refused from any session that has held the lane
+    Merge {
+        #[arg(long)]
+        work: i64,
+        /// The head you confirm (default: the lane's handoff head)
+        #[arg(long)]
+        head: Option<String>,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
     #[command(subcommand)]
     Pipeline(PipelineCmd),
     /// Check skill and script files against this binary: every chaperone
@@ -218,6 +232,7 @@ impl Cmd {
             Cmd::Check(CheckCmd::Prune) => None,
             Cmd::Verify { .. } => Some("verify"),
             Cmd::Pr(PrCmd::Open { .. }) => Some("pr open"),
+            Cmd::Merge { .. } => Some("merge"),
             Cmd::Reviews(ReviewsCmd::Record { .. }) => Some("reviews record"),
             Cmd::Reviews(ReviewsCmd::Get { .. }) | Cmd::Jobs(JobsCmd::Get { .. }) => None,
             Cmd::Work(WorkCmd::Create { .. }) => Some("work create"),
