@@ -724,11 +724,17 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // own handoff. Reviews are daisy's worker's (events.md). The
             // harness's run of one (`check run verdict`) is the binary's
             // whoever started it, as with the verifier's rulings below.
-            // Actor::check has made sure there is a session.
+            // Actor::check has made sure there is a session. Under a schema 2
+            // pipeline a session's smoke is only the lane's claim (no
+            // `result`, never `smoke.passed`), so the lane records its own.
             let session = event.actor.session.as_deref().unwrap_or_default();
-            if SESSION_CHECKS.contains(&p.check.as_deref().unwrap_or_default())
+            let check = p.check.as_deref().unwrap_or_default();
+            if SESSION_CHECKS.contains(&check)
                 && !harness
                 && has_held(tx, lane_id, session)?
+                && !(check == "smoke"
+                    && !p.rest.contains_key("result")
+                    && stamped_schema(tx, lane_id)? == Some(2))
             {
                 refuse!(invalid(&format!(
                     "session {session} has held lane {lane_id}; record checks from a fresh session"
@@ -745,7 +751,6 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // producer), so no other producer writes one there. The owner's
             // plan waiver is the one session plan check, and a session's
             // smoke is its claim, which may not carry a harness `result`.
-            let check = p.check.as_deref().unwrap_or_default();
             let harness_only = HARNESS_CHECKS.contains(&check) && !plan_waiver(p)
                 || check == "smoke" && p.rest.contains_key("result");
             if !harness && harness_only && stamped_schema(tx, lane_id)? == Some(2) {

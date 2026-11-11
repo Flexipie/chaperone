@@ -271,7 +271,8 @@ claim stay.
 
 `check record` is new (#16, next to `reviews record`). The recorder passes its own
 `--session`. The write is refused when that session is any session that has held the
-lane (events.md, producer). `--head` is 7 to
+lane (events.md, producer), except a `smoke` on a lane stamped `v20`, which is only the lane's
+claim there and may come from the lane's own session. `--head` is 7 to
 40 lowercase hex digits. `--reason` is required with `skipped` and must be one the check allows
 (events.md). `--decision` is required for `merge_verdict` and refused for every other
 check. `--findings <n>` is required for a `plan_check` or `quality_gate` that ran and

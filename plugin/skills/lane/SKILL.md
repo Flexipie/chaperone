@@ -9,7 +9,7 @@ allowed-tools: Bash(chaperone pipeline limits *)
 # Lane
 
 Task `$0`, work item `$2`. Work in this worktree only. Every write acts as `$DAISY_AGENT` and
-`$DAISY_SESSION`, the pair the spawner set; never pass others, except for the smoke (step 5).
+`$DAISY_SESSION`, the pair the spawner set; never pass others.
 
 Limits (an error means the lane is not claimed yet: run this again after step 1):
 
@@ -87,10 +87,10 @@ stands for the tree even if a smoke comes later. Every new commit needs a new on
 
 `chaperone check run smoke --work $2`. Refused for no `[smoke]` in the base profile: run the
 plan's smoke yourself, put each command and its output in `smoke-$2.log` at the worktree
-root, then record the claim from a session name of its own (the write refuses the lane's):
+root, then record your claim:
 
 ```
-chaperone check record --work $2 --check smoke --head "$(git rev-parse HEAD)" --outcome ran --evidence smoke-$2.log --session "${DAISY_SESSION}:smoke"
+chaperone check record --work $2 --check smoke --head "$(git rev-parse HEAD)" --outcome ran --evidence smoke-$2.log
 rm smoke-$2.log
 ```
 

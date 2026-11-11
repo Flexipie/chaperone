@@ -360,7 +360,9 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 
 - `{kind: "session", agent, session}`: a fresh subagent, through `check record`. The
   write is refused (`invalid_input`, nothing written) when `producer.session` equals the
-  session of anyone who has held the lane (every `lane.claimed` and `lane.taken_over`). A subagent that
+  session of anyone who has held the lane (every `lane.claimed` and `lane.taken_over`), except
+  a `smoke` on a schema 2 lane (`v20`): there it is only the lane's claim, so the lane's own
+  session records it. A subagent that
   inherits `DAISY_SESSION` is refused, so it fails closed until it passes its own
   `--session`. This is an honor system until adapters own sessions
   ([R4](research/r4-agent-cli-integration.md)).
