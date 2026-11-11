@@ -26,7 +26,7 @@ use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
 use chaperone_core::work::{WorkItem, is_terminal};
-use chaperone_graph::{commands_in, declares, glob};
+use chaperone_graph::{code_globs, commands_in, declares, glob};
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
@@ -40,9 +40,9 @@ use crate::work::{observed_head, one};
 /// overrides it.
 const DAISY_CLI: &str = "/Applications/daisy.app/Contents/MacOS/daisy-cli";
 const DAISY_TIMEOUT: Duration = Duration::from_secs(30);
-/// Not code: docs and Markdown. A lock file is code: a dependency bump
-/// changes what runs. No profile says what code is yet, so every other
-/// changed file counts. The profile should own this list later.
+/// Not code: docs and Markdown, unless the base profile's `[diff] code`
+/// names the file. A lock file is code: a dependency bump changes what
+/// runs.
 const NOT_CODE: [&str; 2] = ["docs/**", "**/*.md"];
 /// The git calls that read the lane's commit, its tree and its numstat.
 const RUN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -272,7 +272,10 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         mut input,
     } = start_run(ledger, work, "diff")?;
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
-    let (code, code_lines) = code(&files);
+    let (globs, profile) = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    // The profile says what code is, so a changed one measures again.
+    input.profile = profile;
+    let (code, code_lines) = code(&files, &globs);
     let added: u64 = files.iter().filter_map(|f| f.added).sum();
     let removed: u64 = files.iter().filter_map(|f| f.removed).sum();
     input.fields = Map::from_iter([
@@ -302,12 +305,12 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     one(ledger.check_run(actor, &input)??)
 }
 
-/// Of `files`, the code ones (not [`NOT_CODE`]), and their lines added
-/// plus removed.
-fn code(files: &[ChangedFile]) -> (Vec<&str>, u64) {
-    let code = files
-        .iter()
-        .filter(|f| !NOT_CODE.iter().any(|g| glob(g, &f.path)));
+/// Of `files`, the code ones (named by `globs`, else not [`NOT_CODE`]),
+/// and their lines added plus removed.
+fn code<'a>(files: &'a [ChangedFile], globs: &[String]) -> (Vec<&'a str>, u64) {
+    let code = files.iter().filter(|f| {
+        globs.iter().any(|g| glob(g, &f.path)) || !NOT_CODE.iter().any(|g| glob(g, &f.path))
+    });
     code.fold((Vec::new(), 0), |(mut paths, lines), f| {
         paths.push(f.path.as_str());
         (paths, lines + f.added.unwrap_or(0) + f.removed.unwrap_or(0))
@@ -544,7 +547,8 @@ fn run_plan(
     })?;
     let head = input.head.clone();
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
-    no_code(&files, &head, work)?;
+    let (globs, _) = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    no_code(&files, &globs, &head, work)?;
     // Named as the store keeps it, redacted; written only once a session
     // runs on it (`plan::record`).
     let kept = Kept::of(&plan_text(file)?);
@@ -580,8 +584,8 @@ fn run_plan(
 
 /// Refuses a commit `head` whose `files` change code, naming up to three
 /// of them and the owner's waiver: the plan check runs before any code.
-fn no_code(files: &[ChangedFile], head: &str, work: i64) -> Result<(), CliError> {
-    let (code, lines) = code(files);
+fn no_code(files: &[ChangedFile], globs: &[String], head: &str, work: i64) -> Result<(), CliError> {
+    let (code, lines) = code(files, globs);
     if code.is_empty() {
         return Ok(());
     }
@@ -1206,7 +1210,7 @@ mod tests {
             untracked: false,
         };
         let docs = [file("docs/a.md"), file("README.md")];
-        assert!(no_code(&docs, "abc1234", 7).is_ok());
+        assert!(no_code(&docs, &[], "abc1234", 7).is_ok());
         let code = [
             file("a.rs"),
             file("b.rs"),
@@ -1214,7 +1218,7 @@ mod tests {
             file("c.rs"),
             file("d.rs"),
         ];
-        let Err(CliError::Refused(Refusal::InvalidInput(why))) = no_code(&code, "abc1234", 7)
+        let Err(CliError::Refused(Refusal::InvalidInput(why))) = no_code(&code, &[], "abc1234", 7)
         else {
             panic!("code is refused");
         };

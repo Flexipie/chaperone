@@ -379,6 +379,35 @@ pub fn declares(bin: &Path, dir: &Path, table: &str, deadline: Instant) -> Resul
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Diff {
+    code: Vec<String>,
+}
+
+/// The `[diff] code` globs of the base branch's [`REPO_PROFILE`] for the
+/// repo `dir` is in (a file matching one is code even under docs or in
+/// Markdown), and the sha256 of the profile's text. No profile or no
+/// `[diff]` names none; a `[diff]` that does not load refuses.
+pub fn code_globs(
+    bin: &Path,
+    dir: &Path,
+    deadline: Instant,
+) -> Result<(Vec<String>, Option<String>), Error> {
+    let Some(found) = base_profile(bin, dir, deadline)? else {
+        return Ok((Vec::new(), None));
+    };
+    let bad =
+        |e: toml::de::Error| Error::Invalid(format!("profile {}: {}", found.at(), e.message()));
+    let mut profile: toml::Table = toml::from_str(&found.text).map_err(bad)?;
+    let diff = profile.remove("diff").map(toml::Value::try_into::<Diff>);
+    let globs = diff
+        .transpose()
+        .map_err(bad)?
+        .map_or_else(Vec::new, |d| d.code);
+    Ok((globs, Some(format!("{:x}", Sha256::digest(&found.text)))))
+}
+
 /// A profile as a base branch holds it: the base, the commit it pointed
 /// at and the text.
 struct BaseProfile {
