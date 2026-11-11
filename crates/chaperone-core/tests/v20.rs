@@ -323,8 +323,8 @@ impl V20 {
         self.run("merge_verdict", head, fields);
     }
 
-    /// A fresh session's smoke claim on `head`, with an evidence file, as
-    /// `check record --check smoke --evidence` writes it.
+    /// A fresh session's smoke claim on `head`, its run and evidence file, as
+    /// `check record --check smoke --run` writes it.
     fn claim(&self, head: &str) {
         let input = CheckInput {
             work: 1,
