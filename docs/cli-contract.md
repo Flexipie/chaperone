@@ -526,7 +526,9 @@ runs them, so a pass on the same tree replays. A lane with no PR first asks `gh 
 the body on stdin): `gh pr create --base <base> --head <branch> --title <t> --body-file -
 [--draft]` (the title defaults to the item's), or for a held or listed PR `gh pr edit <n> --repo
 <owner/repo> [--title <t>] --body-file -`. The body is ledger facts only: the newest handoff's
-goal or the title, the tracker key, the diff's code lines and files, the test commands that
+goal or the title, the tracker key, for a GitHub lane (`source_id` `owner/repo#N`) `Closes
+#N` when the PR is in the issue's repo, else (another repo, or no PR yet) `Closes
+owner/repo#N`, the diff's code lines and files, the test commands that
 passed on the head, the plan check's outcome and the head's smoke (the harness's result, a
 session's claim and its evidence file count). A PR new to the lane is `pr.opened` with
 `head_sha` the head, as `work update --pr` records it. A gh failure is `internal`. It prints

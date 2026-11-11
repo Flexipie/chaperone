@@ -281,7 +281,6 @@ pub fn pr_open(
             tests["evidence_ref"]
         )));
     }
-    let body = pr_body(ledger, db, &item, &head, &diff, &tests)?;
     let gh = |args: &[&str], input: Option<&[u8]>| {
         let failed = |why: &str| CliError::Internal(format!("gh pr {}: {why}", args[1]));
         let mut cmd = Command::new(gh);
@@ -313,6 +312,7 @@ pub fn pr_open(
         )?),
     };
     let held = item.pr_ref.clone().or(listed.clone());
+    let body = pr_body(ledger, db, &item, held.as_deref(), &head, &diff, &tests)?;
     let push = format!("{head}:refs/heads/{branch}");
     harness_git(
         &wt,
@@ -371,11 +371,13 @@ pub fn merge(
 }
 
 /// A PR's body from ledger facts: of the lane's own words only its title,
-/// or the goal its newest handoff states.
+/// or the goal its newest handoff states. A GitHub lane's issue is closed
+/// as `#N` only when `pr` (the PR, once it exists) is in the issue's repo.
 fn pr_body(
     ledger: &Ledger,
     db: &Path,
     item: &WorkItem,
+    pr: Option<&str>,
     head: &str,
     diff: &Value,
     tests: &Value,
@@ -388,6 +390,16 @@ fn pr_body(
     let mut body = goal.unwrap_or(item.title.clone()) + "\n\n";
     if let Some(key) = &item.source_key {
         body += &format!("Tracker: {key}\n\n");
+    }
+    let issue = item
+        .source_id
+        .as_deref()
+        .filter(|_| item.source == "github");
+    let issue = issue.and_then(|id| id.split_once('#'));
+    if let Some((repo, n)) = issue.filter(|(r, n)| r.contains('/') && n.parse::<u64>().is_ok()) {
+        let pr_repo = pr.and_then(|pr| pr.split_once('#')).map(|(r, _)| r);
+        let local = pr_repo.is_some_and(|r| r.eq_ignore_ascii_case(repo));
+        body += &format!("Closes {}#{n}\n\n", if local { "" } else { repo });
     }
     let commands = tests["commands"].as_array().into_iter().flatten();
     let commands: Vec<_> = commands
