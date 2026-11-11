@@ -140,6 +140,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `finding waive` | `<event> <key> --reason <r>` | write |
 | `dossier note` | `<key> --note <text> [--link <kind>:<ref>]... [--supersedes <event id>]` | write |
 | `dossier get` | `<key>` | read |
+| `evidence show` | `<sha256 or prefix>` | read, no ledger |
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 | `install` | | no ledger, writes the marketplace dir, calls claude |
 | `uninstall` | | no ledger, removes the marketplace dir, calls claude |
@@ -224,6 +225,18 @@ cut from the end of notes, then files, handoff decisions, handoffs and lanes; th
 cut. Each section's `omitted` counts what it left out by list (`slice_decisions` and
 `spec_decisions` in `slice`), and `strings` the strings it cut short. A key with no slice, spec, lane
 or note is `not_found`. Notes are someone else's words: no gate reads them.
+
+`evidence show` is new (#213). It prints a file from the evidence store beside `--db`
+(`evidence/sha256/<2>/<hash>`): a harness session's `prompt_ref` or `answer_ref`, a check's
+`evidence_ref`, a smoke claim's `sha256` (`work events` names them). `<ref>` is the sha256 or a
+prefix of 12 to 64 of its lowercase hex digits that names one file. The file is hashed again
+before anything is printed. The answer is the stored text, not an envelope: piped, its exact bytes;
+on a terminal, control characters other than newline and tab are printed escaped (`\u{1b}`), so a
+stored escape sequence cannot change what is shown. Errors are the usual envelope on stderr: a ref
+that names no file is `not_found` (`details.entity` `evidence`, `details.reference` the ref as
+given), a ref that is not 12 to 64 lowercase hex digits or a prefix two files share is
+`invalid_input`, and a file whose bytes no longer match its name is `internal`. It never opens the
+ledger.
 
 `work ready` is the owner's override. It is refused (`invalid_input`) from any session that has held the lane, the same honor-system rule as `check record`. It answers daisy's way: `{id, ready, ready_reason}` from the board (read for that item only, without `overlaps`), or `{id, ready_override, on_board: false}` for a done or cancelled item.
 

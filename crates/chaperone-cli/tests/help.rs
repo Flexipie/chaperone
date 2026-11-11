@@ -106,6 +106,11 @@ fn help_matches_snapshots() {
             &["dossier", "get"],
             include_str!("snapshots/dossier-get.txt"),
         ),
+        (&["evidence"], include_str!("snapshots/evidence.txt")),
+        (
+            &["evidence", "show"],
+            include_str!("snapshots/evidence-show.txt"),
+        ),
         (&["finding"], include_str!("snapshots/finding.txt")),
         (
             &["finding", "dispute"],

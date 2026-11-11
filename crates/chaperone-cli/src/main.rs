@@ -4,6 +4,7 @@
 mod checks;
 mod cli;
 mod doctor;
+mod evidence;
 mod hook;
 mod impact;
 mod output;
@@ -22,7 +23,7 @@ use clap::Parser;
 use clap::error::ErrorKind;
 use serde_json::json;
 
-use cli::{Cli, Cmd, Format, PipelineCmd, PrCmd};
+use cli::{Cli, Cmd, EvidenceCmd, Format, PipelineCmd, PrCmd};
 use output::{CliError, Meta, Outcome};
 
 fn main() {
@@ -96,6 +97,7 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Attention(cmd) => checks::attention(&Ledger::open(&path)?, cmd),
         Cmd::Finding(cmd) => checks::finding(&Ledger::open(&path)?, cmd, meta),
         Cmd::Dossier(cmd) => checks::dossier(&Ledger::open(&path)?, cmd),
+        Cmd::Evidence(EvidenceCmd::Show { reference }) => evidence::show(&path, &reference),
         Cmd::Stats { merged_since, work } => {
             let cohort = match merged_since {
                 Some(since) => Cohort::MergedSince(since),
