@@ -7,7 +7,7 @@ use chaperone_core::checks::{Attached, CheckInput, FindingMove, Recorded, RunInp
 use chaperone_core::ledger::{
     Actor, Applied, EventKind, Finding, Findings, Ledger, Mutation, Payload, Refusal,
 };
-use chaperone_core::pipeline::{self, Denied, FactBundle, Phase, Route};
+use chaperone_core::pipeline::{self, Denied, Fact, FactBundle, Phase, Route};
 use chaperone_core::review;
 use chaperone_core::verdict::{self, Harness};
 use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput};
@@ -60,9 +60,20 @@ fn refused(r: Result<impl std::fmt::Debug, Refusal>, says: &str) {
 }
 
 /// A `check.finished` `ran` on lane `work` from `producer`, as no command
-/// writes it but `apply` takes it.
+/// writes it but `apply` takes it, written by `fresh`/`s2`.
 fn raw(
     ledger: &Ledger,
+    work: i64,
+    check: &str,
+    producer: &str,
+    rest: Value,
+) -> Result<Applied, Refusal> {
+    raw_as(ledger, &pair("fresh", "s2"), work, check, producer, rest)
+}
+
+fn raw_as(
+    ledger: &Ledger,
+    actor: &Actor,
     work: i64,
     check: &str,
     producer: &str,
@@ -85,10 +96,7 @@ fn raw(
         payload: p,
     };
     let at = ledger.now().unwrap();
-    match ledger
-        .apply(&pair("fresh", "s2"), None, &at, event)
-        .unwrap()
-    {
+    match ledger.apply(actor, None, &at, event).unwrap() {
         Applied::Refused(r) => Err(r),
         applied => Ok(applied),
     }
@@ -172,6 +180,41 @@ fn harness_checks_are_the_harness_s_on_a_v20_lane() {
         let v19 = raw(&ledger, 2, check, "session", json!({"result": "pass"}));
         assert!(matches!(v19, Ok(Applied::Committed(_))), "{check}: {v19:?}");
     }
+}
+
+/// On a v20 lane the lane's own session records its smoke, which is only
+/// a claim: claimed, never passed. A v19 lane still refuses that session.
+#[test]
+fn the_lane_records_its_own_smoke_claim_on_v20_only() {
+    let (_dir, ledger) = open();
+    lane(&ledger, 1, Some("v20")).unwrap();
+    lane(&ledger, 2, None).unwrap();
+    let file = Attached {
+        path: "out.txt".into(),
+        sha256: "0".into(),
+        bytes: 1,
+        truncated: false,
+        redactions: 0,
+    };
+    let smoke = |work| {
+        let input = CheckInput {
+            work,
+            check: "smoke".into(),
+            head: HEAD.into(),
+            outcome: "ran".into(),
+            ..CheckInput::default()
+        };
+        let lane = pair("lane", "s1");
+        ledger.check_record_with(&lane, &input, std::slice::from_ref(&file), false)
+    };
+    smoke(1).unwrap().unwrap();
+    let facts = ledger.project(1, Some(HEAD)).unwrap();
+    assert_eq!(facts.get("smoke.claimed"), &Fact::Bool(true));
+    assert_eq!(facts.get("smoke.passed"), &Fact::Absent);
+    let result = json!({"result": "pass"});
+    let with_result = raw_as(&ledger, &pair("lane", "s1"), 1, "smoke", "session", result);
+    refused(with_result, "harness runs");
+    refused(smoke(2).unwrap(), "has held lane 2");
 }
 
 /// Another commit, and one with the same tree as `HEAD` (an amend).

@@ -8,9 +8,12 @@ complete review of any commit of the lane. `question`, `convention`, `nit` and
 
 ## Read them
 
-- Review: `chaperone check run review --work <N>` replays the review on the head (no
-  session): `event_id`, and `payload.findings[]` with `finding_key`, `severity`, `title`,
-  `body`, `path` and `line`. `payload.complete` false is "review not complete".
+- Review, only after verify stopped on "N finding(s) still block" (after "review not
+  complete" it starts a new paid run): `chaperone check run review --work <N>` replays the
+  head's review: `event_id`, and `payload.findings[]` with `finding_key`, `severity`,
+  `title`, `body`, `path` and `line`.
+- An earlier commit's review: no command lists it. Copy each blocking finding's `event_id`,
+  key and title into `lane-state.md` when you first read it, and keep its status there.
 - Verdict: `chaperone check run verdict --work <N>` replays it: `decision`, `why`,
   `not_proven`.
 
@@ -24,7 +27,8 @@ Weigh it (`judgement.md`, "Weighing a finding"), then one of:
   A dispute still blocks until the owner waives it or an independent session refutes it,
   so then Needs you, naming the finding. Never argue in prose, the PR or the handoff.
 
-Fix several findings at once, then back to step 5 (smoke) and verify once. A big fix round
+Fix several findings at once, then back to step 5 (smoke) and verify once. A third verify
+on this lane that stops at `review` or `verdict`: Needs you. A big fix round
 goes to a fresh subagent given the worktree, `lane-state.md` and the findings, so this
 session keeps a short report, not the whole fix.
 
@@ -37,6 +41,6 @@ reviews, complete or not; past that it is refused: Needs you.
 
 A NO stands for the tree: the same tree replays it. Only a commit that changes the tree, or
 the owner waiving or an independent session refuting a finding raised before it, reopens it.
-A new smoke claim alone does not. Fix what `why` names; for something `not_proven`, add the
+A new smoke claim alone does not. Never change the tree only to rerun the verdict. Fix what `why` names; for something `not_proven`, add the
 proof the tree can carry (a test the bar allows) or Needs you. `skipped` with `no_answer`:
 run verify again; past `verdict_attempts`: Needs you.

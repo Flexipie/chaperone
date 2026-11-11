@@ -685,8 +685,8 @@ pub enum SpecCmd {
 #[derive(Subcommand, Debug)]
 pub enum CheckCmd {
     /// Record one check result on a work item. Refused from any session
-    /// that has held it: pass your own --session. The same result again
-    /// replays and writes nothing
+    /// that has held it, except a smoke claim on a v20 lane: pass your own
+    /// --session. The same result again replays and writes nothing
     Record {
         #[arg(long)]
         work: i64,

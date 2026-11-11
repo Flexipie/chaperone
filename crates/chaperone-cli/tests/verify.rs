@@ -66,7 +66,7 @@ impl Lane {
         git(&self.wt, &["rev-parse", "HEAD"], &[])
     }
 
-    /// The owner's smoke claim on the lane's commit, with evidence.
+    /// The lane's smoke claim on its commit, with evidence.
     fn smoke(&self) {
         std::fs::write(self.wt.join("out.log"), "it ran\n").unwrap();
         let claim = format!(
@@ -74,7 +74,7 @@ impl Lane {
             self.head()
         );
         let claim: Vec<_> = claim.split(' ').collect();
-        assert_eq!(self.run("owner", &claim).0, 0);
+        assert_eq!(self.run("lane", &claim).0, 0);
     }
 
     /// A ready handoff of the lane's commit.

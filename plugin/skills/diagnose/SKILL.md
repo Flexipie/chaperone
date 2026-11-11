@@ -21,7 +21,7 @@ fix (`--fix`) or only report. No `--fix`: report only, change nothing.
 ## 0. Cheap first
 
 One read-only pass: read the error, the stack and the code it names. Check whether the
-same check fails on the base branch. If this pass names the cause and a narrow fix with
+same check fails on the base branch, in a separate worktree; never switch this one. If this pass names the cause and a narrow fix with
 evidence, skip to step 4.
 
 ## 1. A loop that shows the bug
