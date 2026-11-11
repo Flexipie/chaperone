@@ -19,7 +19,7 @@ complete review of any commit of the lane. `question`, `convention`, `nit` and
 
 ## Each blocking finding
 
-Weigh it (`judgement.md`, "Weighing a finding"), then one of:
+Weigh it (`judgement.md` beside this file, "Weighing a finding"), then one of:
 - It holds: fix it at the root and commit. Nothing to record: the next verify reviews the
   new tree, and its verifier rules an earlier finding `fixed` only when it can name the line
   that fixes it. One it cannot stays open and blocks.
