@@ -8,17 +8,6 @@ use std::process::Command;
 
 use serde_json::Value;
 
-fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            walk(&path, files);
-        } else {
-            files.push(path);
-        }
-    }
-}
-
 #[test]
 fn install_writes_the_embedded_plugin_and_registers_it() {
     let tmp = tempfile::tempdir().unwrap();
@@ -55,13 +44,13 @@ fn install_writes_the_embedded_plugin_and_registers_it() {
     let data = run("install");
     assert!(!stale.exists());
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugin");
-    let mut files = Vec::new();
-    walk(&root, &mut files);
-    assert!(files.len() >= 2);
-    for file in files {
-        let rel = file.strip_prefix(&root).unwrap();
+    let mut git = Command::new("git");
+    let tracked = git.arg("-C").arg(&root).args(["ls-files", "-z"]).output();
+    let tracked = String::from_utf8(tracked.unwrap().stdout).unwrap();
+    assert!(tracked.split_terminator('\0').count() >= 2);
+    for rel in tracked.split_terminator('\0').map(Path::new) {
         let (want, got) = (
-            std::fs::read(&file).unwrap(),
+            std::fs::read(root.join(rel)).unwrap(),
             std::fs::read(dir.join("chaperone").join(rel)).unwrap(),
         );
         if rel == Path::new(".claude-plugin/plugin.json") {
@@ -79,6 +68,10 @@ fn install_writes_the_embedded_plugin_and_registers_it() {
             assert_eq!(got, want, "{rel:?}");
         }
     }
+    let index = std::fs::read(dir.join(".claude-plugin/marketplace.json")).unwrap();
+    let index: Value = serde_json::from_slice(&index).unwrap();
+    assert_eq!(index["plugins"][0]["name"], "chaperone");
+    assert_eq!(index["plugins"][0]["source"], "./chaperone");
     let added = format!(
         "plugin marketplace add {}\nplugin install chaperone@chaperone --scope user\n",
         dir.display()
