@@ -110,6 +110,11 @@ kind = "command"
 name = "overlap"
 path = "crates/chaperone-cli/src/overlap.rs"
 
+[[entry_points]]
+kind = "command"
+name = "evidence"
+path = "crates/chaperone-cli/src/evidence.rs"
+
 # Every tracked file must be in exactly one area, or impact --entry-points refuses.
 [areas]
 cli = ["crates/chaperone-cli/**"]
