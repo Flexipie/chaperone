@@ -30,7 +30,7 @@ pub struct FindingRow {
     pub check: String,
     pub head_sha: Option<String>,
     pub severity: String,
-    /// open | fixed | answered | verified | refuted | disputed | waived
+    /// open | fixed | answered | verified | refuted | disputed | waived | accepted
     pub status: String,
     pub path: Option<String>,
     pub title: String,
