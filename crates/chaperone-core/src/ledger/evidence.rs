@@ -101,11 +101,36 @@ impl Evidence {
         File::open(&dir)?.sync_all()
     }
 
+    /// The hash a unique prefix of 12 to 64 lowercase hex digits names.
+    pub fn resolve(&self, prefix: &str) -> io::Result<String> {
+        if !(12..=64).contains(&prefix.len()) || !is_hex(prefix) {
+            let why = "an evidence ref is 12 to 64 lowercase hex digits";
+            return Err(io::Error::new(ErrorKind::InvalidInput, why));
+        }
+        let mut found = Vec::new();
+        for entry in fs::read_dir(self.dir.join(&prefix[..2]))? {
+            let name = entry?.file_name();
+            // Not an unfinished file.
+            if let Some(name) = name.to_str().filter(|n| n.len() == 64)
+                && name.starts_with(prefix)
+            {
+                found.push(name.to_string());
+            }
+        }
+        match found.len() {
+            0 => Err(io::Error::new(ErrorKind::NotFound, "no evidence file")),
+            1 => Ok(found.remove(0)),
+            n => {
+                let why = format!("evidence ref {prefix} matches {n} files; give more digits");
+                Err(io::Error::new(ErrorKind::InvalidInput, why))
+            }
+        }
+    }
+
     /// The text stored as `hash`, hashed again: a file that was edited or
     /// cut is an error, never an answer.
     pub fn get(&self, hash: &str) -> io::Result<String> {
-        let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
-        if hash.len() != 64 || !hash.bytes().all(hex) {
+        if hash.len() != 64 || !is_hex(hash) {
             let why = "an evidence hash is 64 lowercase hex digits";
             return Err(io::Error::new(ErrorKind::InvalidInput, why));
         }
@@ -116,6 +141,11 @@ impl Evidence {
         }
         String::from_utf8(bytes).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
     }
+}
+
+fn is_hex(s: &str) -> bool {
+    s.bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
@@ -202,6 +232,25 @@ mod tests {
                 });
             }
         });
+    }
+
+    /// A prefix names the one file it starts; a short, upper case,
+    /// unknown or shared one does not.
+    #[test]
+    fn a_prefix_names_one_file() {
+        let (_dir, store, files) = store();
+        let hash = store.put("seen").unwrap().hash;
+        assert_eq!(store.resolve(&hash[..12]).unwrap(), hash);
+        assert_eq!(store.resolve(&hash).unwrap(), hash);
+        let kind = |r: &str| store.resolve(r).unwrap_err().kind();
+        assert_eq!(kind(&hash[..11]), ErrorKind::InvalidInput);
+        assert_eq!(kind(&hash[..12].to_uppercase()), ErrorKind::InvalidInput);
+        assert_eq!(kind(&"0".repeat(12)), ErrorKind::NotFound);
+        let mut twin = hash[..12].to_string();
+        twin.push_str(&"0".repeat(52));
+        fs::write(files.join(&hash[..2]).join(&twin), "x").unwrap();
+        assert_eq!(kind(&hash[..12]), ErrorKind::InvalidInput);
+        assert_eq!(store.resolve(&hash[..13]).unwrap(), hash);
     }
 
     /// A read refuses a name that is no hash, a file that is not there and

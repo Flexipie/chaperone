@@ -1,0 +1,12 @@
+The evidence store beside the ledger: text a check or a harness session stored, named by its sha256
+
+Usage: chaperone evidence [OPTIONS] <COMMAND>
+
+Commands:
+  show  Print the text stored under a hash (a `prompt_ref`, `answer_ref` or `evidence_ref` of a check event, as `check run` prints it), hashed again, not in an envelope: piped, its bytes; on a terminal, control characters other than newline and tab escaped. Refused: an unknown ref (not_found), a ref that is not 12 to 64 lowercase hex or a prefix two files share (invalid_input), a file whose bytes no longer match its name (internal). Never opens the ledger
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

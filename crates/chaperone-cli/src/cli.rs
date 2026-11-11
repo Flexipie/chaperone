@@ -60,6 +60,8 @@ pub enum Cmd {
     Finding(FindingCmd),
     #[command(subcommand)]
     Dossier(DossierCmd),
+    #[command(subcommand)]
+    Evidence(EvidenceCmd),
     /// Per file, the open lanes touching it: each lane's newest handoff
     /// (changed_files), then the commits on its worktree's HEAD since the
     /// merge-base with origin, all git calls within 5 s. Shared files
@@ -299,6 +301,7 @@ impl Cmd {
             Cmd::Finding(FindingCmd::List { .. }) => None,
             Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
             Cmd::Dossier(DossierCmd::Get { .. }) => None,
+            Cmd::Evidence(EvidenceCmd::Show { .. }) => None,
             Cmd::Hook {
                 event: HookEvent::StopFailure,
             } => Some("hook stop-failure"),
@@ -949,5 +952,24 @@ pub enum DossierCmd {
     Get {
         /// The issue key: CORE-1234, PER-12 or owner/repo#12
         key: String,
+    },
+}
+
+/// The evidence store beside the ledger: text a check or a harness session
+/// stored, named by its sha256
+#[derive(Subcommand, Debug)]
+pub enum EvidenceCmd {
+    /// Print the text stored under a hash (a `prompt_ref`, `answer_ref` or
+    /// `evidence_ref` of a check event, as `check run` prints it), hashed
+    /// again, not in an envelope:
+    /// piped, its bytes; on a terminal, control characters other than
+    /// newline and tab escaped. Refused: an unknown ref (not_found), a ref that
+    /// is not 12 to 64 lowercase hex or a prefix two files share
+    /// (invalid_input), a file whose bytes no longer match its name
+    /// (internal). Never opens the ledger
+    Show {
+        /// The sha256, or a unique prefix of at least 12 of its digits
+        #[arg(value_name = "REF")]
+        reference: String,
     },
 }
