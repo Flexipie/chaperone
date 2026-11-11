@@ -73,7 +73,8 @@ pub struct Facts {
     /// The plan check's findings with the lane's answers ([`plan_findings`]):
     /// every lens's, not the verifier's.
     pub plan: String,
-    /// The code lines of the harness `diff` on `head`; none without one.
+    /// The code lines of the harness `diff` on `head`; none without one, or
+    /// when it has uncounted files.
     pub code_lines: Option<i64>,
 }
 

@@ -41,7 +41,7 @@
 # recorded but only its timeout bounds it.
 #
 # A lens skips a diff smaller than its `<lens>_min_code_lines` (the harness `diff`'s code
-# lines on the commit; with no diff measured it runs), recorded on the review as skipped.
+# lines on the commit; with no diff measured, or uncounted files, it runs), recorded on the review as skipped.
 # v20 sets it for Codex only, at 200 (#223): in the first 9 v20 reviews (median 53 code lines)
 # Codex raised nothing and took 29% of review input tokens, and in wave 3 it raised nothing on
 # any lane under 210 lines but found real bugs no other lens caught at 221.

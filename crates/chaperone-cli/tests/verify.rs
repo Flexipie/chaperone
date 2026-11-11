@@ -313,6 +313,18 @@ fn a_diff_at_the_minimum_runs_the_codex_lens() {
     assert_eq!(lane.sessions(), 6);
 }
 
+/// A small diff with a file git counts no lines of (binary) is no size to
+/// skip on: the Codex lens runs.
+#[test]
+fn a_diff_with_an_uncounted_file_runs_the_codex_lens() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    git(&lane.wt, &["add", "a.bin"], &[("a.bin", b"\0\x01")]);
+    git(&lane.wt, &["commit", "-qm", "bin"], &[]);
+    lane.verify();
+    assert_eq!(lane.codex().0["ran"], true);
+}
+
 /// The plugin's stop hook on a ready lane: nothing while the branch is at
 /// the handoff, a block once it moves on, never with `stop_hook_active`.
 #[test]

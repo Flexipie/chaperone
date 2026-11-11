@@ -1115,6 +1115,15 @@ fn change(
             )));
         }
     };
+    // A count that leaves files out is no size to skip a lens on.
+    let measured = ledger.project(item.id, Some(head))?;
+    let code_lines = match (
+        measured.get("commit.code_lines"),
+        measured.get("commit.uncounted_files"),
+    ) {
+        (Fact::Int(n), Fact::Int(0)) => Some(*n),
+        _ => None,
+    };
     let facts = Facts {
         base,
         head: head.into(),
@@ -1123,13 +1132,7 @@ fn change(
         goal: review::goal(ledger, item)?,
         smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
         plan: review::plan_findings(ledger, item.id)?,
-        code_lines: match ledger
-            .project(item.id, Some(head))?
-            .get("commit.code_lines")
-        {
-            Fact::Int(n) => Some(*n),
-            _ => None,
-        },
+        code_lines,
     };
     Ok((checkout, facts))
 }
