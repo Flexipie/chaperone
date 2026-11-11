@@ -73,8 +73,8 @@ impl Lane {
 
 /// Lane 1 on v20 on branch `feat`, one commit (one code line) past `main`
 /// on `origin`; the base profile's test fails when a file `FAIL` exists.
-/// Its plan check is waived by the owner.
-fn lane() -> Lane {
+/// Its plan check is waived by the owner; `create` adds to `work create`.
+fn lane(create: &[&str]) -> Lane {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, bin) = (
         dir.path().join("ledger.db"),
@@ -123,7 +123,8 @@ fn lane() -> Lane {
     let lane = Lane { dir, db, wt };
     let wt = lane.wt.to_str().unwrap();
     let claim = ["work", "claim", "1", "--worktree", wt, "--branch", "feat"];
-    assert_eq!(lane.run("lane", &["work", "create", "--title", "t"]).0, 0);
+    let create = [&["work", "create", "--title", "t"], create].concat();
+    assert_eq!(lane.run("lane", &create).0, 0);
     assert_eq!(
         lane.run("lane", &[&claim[..], &["--pipeline", "v20"]].concat())
             .0,
@@ -140,7 +141,7 @@ fn lane() -> Lane {
 /// that edits the PR the lane holds and records nothing.
 #[test]
 fn pr_open_creates_the_pr_from_ledger_facts() {
-    let lane = lane();
+    let lane = lane(&[]);
     let head = git(&lane.wt, &["rev-parse", "HEAD"], &[]);
     let open = ["pr", "open", "--work", "1"];
     let (code, err) = lane.run("lane", &open);
@@ -188,7 +189,7 @@ fn pr_open_creates_the_pr_from_ledger_facts() {
 /// or gh call.
 #[test]
 fn pr_open_refuses_what_cannot_pass() {
-    let lane = lane();
+    let lane = lane(&[]);
     let refused = |says: &str| {
         let (code, err) = lane.run("lane", &["pr", "open", "--work", "1"]);
         assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
@@ -210,4 +211,23 @@ fn pr_open_refuses_what_cannot_pass() {
     git(&lane.wt, &["add", "blob"], &[("blob", b"\0\x01")]);
     git(&lane.wt, &["commit", "-qm", "blob"], &[]);
     refused("and 1 uncounted");
+}
+
+/// A GitHub lane's body closes its issue: by its full key before the PR
+/// exists, as `#N` once the PR is in the issue's repo, and always by its
+/// full key from a PR in another repo.
+#[test]
+fn pr_open_closes_a_github_lanes_issue() {
+    let open = ["pr", "open", "--work", "1"];
+    for (issue, created, edited) in [
+        ("o/r#5", "Closes o/r#5", "Closes #5"),
+        ("x/y#5", "Closes x/y#5", "Closes x/y#5"),
+    ] {
+        let lane = lane(&["--source", "github", "--source-id", issue]);
+        let closes = |line: &str| format!("Tracker: {issue}\n\n{line}\n\n- Size");
+        assert_eq!(lane.run("lane", &open).0, 1);
+        assert!(lane.file("body.md").contains(&closes(created)));
+        assert_eq!(lane.run("lane", &open).0, 0);
+        assert!(lane.file("body.md").contains(&closes(edited)));
+    }
 }
