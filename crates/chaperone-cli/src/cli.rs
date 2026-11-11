@@ -779,7 +779,8 @@ pub enum RunKind {
     /// the commit the harness makes and removes each run; the checkout
     /// must stay at the commit and clean
     Tests,
-    /// Four review lenses on the commit's diff, in that checkout, each on
+    /// The review lenses on the commit's diff (one with a minimum the diff is
+    /// under is skipped), in that checkout, each on
     /// the CLI its pipeline runner names, then a verifier that tries to
     /// refute each finding; the lane's pipeline names them (none before v20)
     Review,
