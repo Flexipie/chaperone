@@ -11,18 +11,17 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use chaperone_core::checks::{AttentionInput, MergedInput, NOTE_CHARS};
+use chaperone_core::checks::{AttentionInput, NOTE_CHARS};
 use chaperone_core::child;
 use chaperone_core::ledger::{Actor, Ledger, LedgerError, Refusal};
-use chaperone_core::pipeline::sha_prefix_eq;
+use chaperone_core::merge::{self, Done};
 use chaperone_core::spec::decide::DecideInput;
-use chaperone_core::work::{HandoffInput, OWNER_UI, PAUSED_BY_OWNER, UpdateInput};
+use chaperone_core::work::{OWNER_UI, PAUSED_BY_OWNER, UpdateInput};
 use serde_json::Value;
 
 use crate::board::short;
@@ -34,7 +33,6 @@ const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 /// spawn answers once the worktree and item exist; setup and the agent
 /// start in the background.
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
-const OUT_CAP: usize = 1 << 20;
 const PAUSE: &str = "Paused by the owner: stop where you are and don't change the work item; \
                      wait for the owner.";
 
@@ -188,38 +186,9 @@ fn done<T>(c: Result<Result<T, Refusal>, LedgerError>) -> Result<T, String> {
     }
 }
 
-/// The `name` CLI at `cmd` with `args`: its stdout, else its stderr. Run
-/// from the temp dir, so gh never reads or changes a checkout (`-R`
-/// names the repo). A call past [`CLI_TIMEOUT`] fails.
+/// [`child::cli`] within [`CLI_TIMEOUT`].
 fn cli(name: &str, cmd: &OsString, args: &[&str]) -> Result<String, String> {
-    cli_within(name, cmd, args, CLI_TIMEOUT, "")
-}
-
-/// [`cli`] with its own time limit; `late` ends the timeout's message.
-fn cli_within(
-    name: &str,
-    cmd: &OsString,
-    args: &[&str],
-    limit: Duration,
-    late: &str,
-) -> Result<String, String> {
-    let call = format!("{name} {}", args[..2].join(" "));
-    let deadline = Instant::now() + limit;
-    let mut command = Command::new(cmd);
-    command.args(args).current_dir(std::env::temp_dir());
-    let out = child::run(&mut command, deadline, OUT_CAP).map_err(|e| match e {
-        child::Failed::Spawn(e) => format!("{name} did not start: {e}"),
-        child::Failed::TimedOut => format!("{call}: no answer in {}s{late}", limit.as_secs()),
-        child::Failed::Wait(e) => format!("{call}: {e}"),
-    })?;
-    if out.cut {
-        return Err(format!("{call}: answer past {OUT_CAP} bytes"));
-    }
-    if out.status.success() {
-        return Ok(String::from_utf8_lossy(&out.out).into_owned());
-    }
-    let err = String::from_utf8_lossy(&out.err);
-    Err(format!("{call}: {}", err.trim()))
+    child::cli(name, cmd, args, CLI_TIMEOUT, "")
 }
 
 /// One line of at most [`NOTE_CHARS`], what an attention note takes.
@@ -270,7 +239,7 @@ pub fn run(
                 let late = "; the agent may have been told to stop, but the pause is not \
                             recorded: press Pause again";
                 let args = ["agent", "prompt", agent, PAUSE];
-                cli_within("herdr", herdr, &args, CLI_TIMEOUT, late)?;
+                child::cli("herdr", herdr, &args, CLI_TIMEOUT, late)?;
             }
             done(ledger.work_update(actor, work, &input, stamp, None, false)).map_err(|e| {
                 match &agent {
@@ -382,7 +351,7 @@ pub fn run(
 fn start(spawn: &OsString, key: &str, repo_path: &str) -> Result<String, String> {
     let args = ["--repo", repo_path, "--no-focus", key];
     let late = "; the lane may still appear, check the board before starting it again";
-    let out = cli_within("spawn", spawn, &args, SPAWN_TIMEOUT, late)?;
+    let out = child::cli("spawn", spawn, &args, SPAWN_TIMEOUT, late)?;
     let line: Value = serde_json::from_str(&out).unwrap_or(Value::Null);
     let ids = line["work_ids"].as_array().map(|ids| {
         let ids: Vec<String> = ids.iter().map(Value::to_string).collect();
@@ -410,144 +379,33 @@ fn merge(
     pr: &str,
     head: &str,
 ) -> Result<String, String> {
-    let read = |e: LedgerError| e.to_string();
-    let now = ledger.now().map_err(read)?;
-    // What the confirm showed, read again now: a YES verdict on the
-    // handoff head the owner confirmed, on the PR the lane holds.
-    let page = ledger.lane_page(lane.work, Some(&lane.key)).map_err(read)?;
-    let gates = page.gates.as_ref();
-    let passed = |id: &str| gates.is_some_and(|g| g.passed(id));
-    let handed = gates.and_then(|g| g.head.as_deref()).unwrap_or_default();
-    let item = done(ledger.work_get(lane.work, &now))?;
-    let board = ledger.work_board_item(lane.work, &now).map_err(read)?;
-    let not = |why: String| Err(format!("Not merged: {why}."));
-    if !passed("verdict_is_yes") {
-        return not("the verdict is not YES".into());
-    }
-    if !passed("verdict_on_head") {
-        return not(format!(
-            "the verdict is not on the handoff head {}",
-            short(handed)
-        ));
-    }
-    if !sha_prefix_eq(head, handed, 7..=40, true) {
-        return not(format!(
-            "the lane handed off {} since you confirmed {}",
-            short(handed),
-            short(head)
-        ));
-    }
-    if item.pr_ref.as_deref() != Some(pr) {
-        return not(format!(
-            "the lane's PR is now {}",
-            item.pr_ref.as_deref().unwrap_or("none")
-        ));
-    }
-    // A recorded merge is finished, whatever the lane says since.
-    if page.merged.is_none() && !board.is_some_and(|b| b.ready) {
-        return not("the lane is not ready".into());
-    }
-    let Some((repo, n)) = pr.split_once('#') else {
-        return not(format!("{pr} is not owner/repo#N"));
+    let m = match merge::merge(ledger, actor, gh, lane.work, pr, head, "chaperone-ui")? {
+        Ok(m) => m,
+        Err(why) => return Err(format!("Not merged: {why}.")),
     };
-    let view = || -> Result<Value, String> {
-        let fields = "state,headRefOid,mergeCommit,mergedAt";
-        let out = cli("gh", gh, &["pr", "view", n, "-R", repo, "--json", fields])?;
-        serde_json::from_str(&out).map_err(|e| format!("gh pr view: {e}"))
-    };
-    let mut v = view()?;
-    let oid = v["headRefOid"].as_str().unwrap_or_default().to_string();
-    if !sha_prefix_eq(head, &oid, 7..=40, false) {
-        return not(format!(
-            "the PR head moved to {}; the verdict is on {}",
-            short(&oid),
-            short(head)
-        ));
-    }
-    // Never --admin or --auto; GitHub refuses a head that moved since.
-    match v["state"].as_str().unwrap_or_default() {
-        // Finish skipped the confirm and the ready check: it only records.
-        "OPEN" if page.merged.is_some() => {
-            return not(format!("{pr} is recorded as merged but GitHub has it open"));
-        }
-        "OPEN" => {
-            let squash = ["--squash", "--delete-branch", "--match-head-commit", &oid];
-            let merge = cli(
-                "gh",
-                gh,
-                &[["pr", "merge", n, "-R", repo].as_slice(), &squash].concat(),
+    let merged = format!("Merged {pr} as {}", short(&m.sha));
+    Ok(match m.done {
+        Done::Was => format!("{merged}."),
+        Done::HandedOff => format!("{merged}; handed off done."),
+        Done::ByLane => {
+            let prompt = format!(
+                "Owner (chaperone-ui): merged {pr} as {} (work merged recorded). Hand off {} \
+                 done the /ship way.",
+                m.sha, lane.key
             );
-            // gh can fail after GitHub merged (say, deleting the branch).
-            v = match (view(), &merge) {
-                (Ok(v), _) => v,
-                (Err(e), Ok(_)) => {
-                    return Err(format!("Merged on GitHub; {e} (Merge again records it)"));
-                }
-                (Err(_), Err(e)) => return Err(e.clone()),
-            };
-            if v["state"] != "MERGED" || v["headRefOid"] != oid.as_str() {
-                merge?;
-                return Err(format!("Not merged yet: GitHub has {pr} queued or open."));
-            }
-        }
-        // A merge cut short before it was recorded: record it now.
-        "MERGED" => {}
-        state => return not(format!("{pr} is {state} on GitHub")),
-    }
-    let sha = v["mergeCommit"]["oid"].as_str().unwrap_or_default();
-    let at = v["mergedAt"].as_str().unwrap_or_default();
-    let input = MergedInput {
-        work: lane.work,
-        pr: pr.into(),
-        merge_sha: sha.into(),
-        head: oid,
-        // GitHub gives seconds; the ledger takes milliseconds (cli-contract.md).
-        merged_at: format!("{}.000Z", at.trim_end_matches('Z')),
-        patch_id: None,
-    };
-    let merged = format!("Merged {pr} as {}", short(sha));
-    done(ledger.work_merged(actor, &input)).map_err(|e| {
-        format!("{merged} on GitHub; recording failed: {e} (Merge again records it).")
-    })?;
-    // Only the lane's agent hands off done while its lease is live;
-    // owner-ui does once it is not.
-    let now = ledger.now().map_err(read)?;
-    let item = done(ledger.work_get(lane.work, &now))?;
-    if item.status == "done" {
-        return Ok(format!("{merged}."));
-    }
-    if item.lease_state == "active" {
-        let prompt = format!(
-            "Owner (chaperone-ui): merged {pr} as {sha} (work merged recorded). Hand off {} \
-             done the /ship way.",
-            lane.key
-        );
-        return Ok(
             match cli("herdr", herdr, &["agent", "prompt", &lane.agent, &prompt]) {
                 Ok(_) => format!("{merged}; asked the lane to hand off done."),
                 Err(e) => format!("{merged}; the lane hands off done ({e})."),
-            },
-        );
-    }
-    let newest = page.detail.handoffs.first().map(|h| h.handoff.clone());
-    let input = HandoffInput {
-        summary: format!("{merged} from chaperone-ui."),
-        status: Some("done".into()),
-        ready: Some(false),
-        next_action: Some(format!("done: merged as {sha}")),
-        commit: Some(handed.into()),
-        ..newest.unwrap_or_default()
-    };
-    done(ledger.work_handoff(actor, lane.work, &input, None, None, false))
-        .map_err(|e| format!("{merged}; the done handoff failed: {e}"))?;
-    Ok(format!("{merged}; handed off done."))
+            }
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chaperone_core::checks::CheckInput;
-    use chaperone_core::work::{ClaimInput, CreateInput};
+    use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput};
 
     /// An event's kind, agent, session, `by` and attention type.
     type Row = (String, String, String, Option<String>, Option<String>);
