@@ -235,6 +235,10 @@ fn a_companion_rule_needs_its_file() {
     git(&wt, &["commit", "-q", "--allow-empty", "-m", bare], &[]);
     assert_eq!(run(&db, &diff).0, 1, "a waiver needs a why");
     git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
+    let folded = "skip\n\nNo-companion: other because\n contract is named on a continuation";
+    git(&wt, &["commit", "-q", "--allow-empty", "-m", folded], &[]);
+    assert_eq!(run(&db, &diff).0, 1, "a continuation line waives nothing");
+    git(&wt, &["reset", "-q", "--hard", "HEAD~1"], &[]);
     let waive = "skip\n\nNo-companion: contract no behaviour change";
     git(&wt, &["commit", "-q", "--allow-empty", "-m", waive], &[]);
     assert_eq!(run(&db, &diff).0, 0);
@@ -245,26 +249,30 @@ fn a_companion_rule_needs_its_file() {
     assert_eq!(run(&db, &diff).0, 0);
 
     git(&wt, &["checkout", "-q", "main"], &[]);
-    let empty = format!("{rule}needs = []\n");
-    git(
-        &wt,
-        &["add", "."],
-        &[(".chaperone/profile.toml", empty.as_bytes())],
-    );
-    git(&wt, &["commit", "-qm", "empty"], &[]);
-    git(
-        &wt,
-        &["update-ref", "refs/remotes/origin/main", "HEAD"],
-        &[],
-    );
-    let (code, err) = run(&db, &diff);
-    assert_eq!(code, 1, "{err}");
-    assert!(
-        err["message"]
-            .as_str()
-            .unwrap()
-            .contains("non-empty `when` and `needs`")
-    );
+    let needs = "needs = [\"docs/contract.md\"]\n";
+    let bad = [
+        format!("{rule}needs = []\n"),
+        rule.replace("contract", "a b") + needs,
+        rule.replace("contract", "a:b") + needs,
+        rule.replace("contract", "") + needs,
+    ];
+    for profile in bad {
+        let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", profile.as_bytes())];
+        git(&wt, &["add", "."], files);
+        git(&wt, &["commit", "-qm", "bad"], &[]);
+        git(
+            &wt,
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+            &[],
+        );
+        let (code, err) = run(&db, &diff);
+        assert_eq!(code, 1, "{profile}: {err}");
+        let message = err["message"].as_str().unwrap();
+        assert!(
+            message.contains("non-empty `when` and `needs`"),
+            "{profile}: {err}"
+        );
+    }
 }
 
 /// Nothing to measure, git that fails and a run already on the lane are

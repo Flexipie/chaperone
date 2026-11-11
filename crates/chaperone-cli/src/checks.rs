@@ -572,10 +572,11 @@ fn companions(
         return Ok(());
     }
     let range = format!("{}..{head}", git::base_rev(base));
-    let format = "--format=%(trailers:key=No-companion,valueonly)";
+    let format = "--format=%(trailers:key=No-companion,valueonly,unfold)";
     let args = ["log", format, "--end-of-options", &range, "--"];
     let (log, _) = harness_git(wt, &args, Instant::now() + RUN_TIMEOUT)?;
-    // The rule's name, then a reason: a bare name records no why.
+    // One line per trailer (`unfold`: a continuation line is no trailer of
+    // its own): the rule's name, then a reason; a bare name records no why.
     let waived = |name: &str| {
         let given = |r: &str| {
             let r = r.trim_start_matches(':');
