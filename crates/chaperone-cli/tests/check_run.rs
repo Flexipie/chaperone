@@ -160,6 +160,30 @@ fn a_run_measures_the_lane_commit() {
     let p = &run(&db, &["check", "run", "diff", "--work", &id]).1["payload"];
     let got = ["files", "uncounted_files", "code_lines", "changes_code"].map(|k| &p[k]);
     assert_eq!(got, [&json!(3), &json!(1), &json!(1), &json!(true)]);
+
+    git(&wt, &["checkout", "-qb", "prompt", &base], &[]);
+    git(&wt, &["add", "."], &[("pipelines/p.md", b"x\n")]);
+    git(&wt, &["commit", "-qm", "prompt"], &[]);
+    let id = lane(&db, &claim("prompt"));
+    let measured = || {
+        let p = &run(&db, &["check", "run", "diff", "--work", &id]).1["payload"];
+        [p["code_lines"].clone(), p["changes_code"].clone()]
+    };
+    assert_eq!(measured(), [json!(0), json!(false)]);
+    git(&wt, &["checkout", "-q", "main"], &[]);
+    let profile: &[(&str, &[u8])] = &[(
+        ".chaperone/profile.toml",
+        b"[diff]\ncode = [\"pipelines/**\"]\n",
+    )];
+    git(&wt, &["add", "."], profile);
+    git(&wt, &["commit", "-qm", "profile"], &[]);
+    git(
+        &wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(&wt, &["checkout", "-q", "prompt"], &[]);
+    assert_eq!(measured(), [json!(1), json!(true)]);
 }
 
 /// Nothing to measure, git that fails and a run already on the lane are

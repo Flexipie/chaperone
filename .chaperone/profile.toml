@@ -23,6 +23,11 @@ stack = "none"
 [review]
 daisy = false
 
+# Files that are code even under docs or in Markdown: prompts and skills are
+# pipeline behaviour.
+[diff]
+code = ["pipelines/**", "plugin/**"]
+
 [lanes]
 enabled = true
 

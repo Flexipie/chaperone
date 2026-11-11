@@ -292,9 +292,10 @@ lane is on (the tip of its `branch`, else `HEAD`, as a ready handoff reads it, w
 that commit's numstat against the merge base (committed files only, no renames; the bases are
 read as remote-tracking refs, so a local branch named `origin/main` is never taken for one) and
 its tree, those two within one 10 s deadline. A lane with no worktree, a relative or missing
-one, a git call that fails or times out (not marked retryable yet), and a numstat past 16 MiB
-are `invalid_input` and write nothing. The per-file list goes to the evidence store before the
-one `check.finished` that names it is written. It prints what `check record` prints.
+one, a git call that fails or times out (not marked retryable yet), a numstat past 16 MiB and
+a base profile whose `[diff]` does not load are `invalid_input` and write nothing. The per-file
+list goes to the evidence store before the one `check.finished` that names it is written. It
+prints what `check record` prints.
 
 `check run tests` takes the same lock and reads the commit the same way, then the `[tests]`
 table of `.chaperone/profile.toml` on the base branch (the first of `origin/HEAD`,
@@ -452,11 +453,11 @@ after it, or by changing the code, which is deliberate. It prints the `check.fin
 required here and refused on every other check. The lane's stamped pipeline must name a `plan`
 check with a runner and a prompt, and `[limits]` must hold `plan_attempts`, 1 or more (none
 before v20, so a lane on v17 to v19 is refused and keeps `check record`). The commit must change
-no code file against its base, as `diff` counts code (any file not under `docs/` or ending in
-`.md`, with or without counted lines): the plan is attacked before code exists, so
-a commit with code is refused (`invalid_input`, giving the count of code files and lines, the
-first three paths and the owner's waiver). The plan file must be a regular file (a link to one
-is followed; the type is checked before it is opened, so a FIFO is refused, against accidents
+no code file against its base, as `diff` counts code (any file a `[diff] code` glob of the base
+branch's profile names, or not under `docs/` or ending in `.md`, with or without counted
+lines): the plan is attacked before code exists, so a commit with code is refused
+(`invalid_input`, giving the count of code files and lines, the first three paths and the
+owner's waiver). The plan file must be a regular file (a link to one is followed; the type is checked before it is opened, so a FIFO is refused, against accidents
 rather than a lane swapping the file in between) of at most 64 KiB of
 UTF-8 text that is not blank; it may sit outside the worktree, where agents keep their plans.
 All of these write nothing. The plan is named as the evidence store keeps it, redacted, and
