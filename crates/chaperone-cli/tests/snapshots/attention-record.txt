@@ -10,7 +10,7 @@ Options:
       --format <FORMAT>
           Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
       --type <KIND>
-          [possible values: asked, answered, nudged, sent_back, revived]
+          [possible values: asked, answered, nudged, sent_back, revived, stopped]
       --by <BY>
           Who handled it (for asked, who the question went to) [possible values: orchestrator, owner]
       --reason <REASON>

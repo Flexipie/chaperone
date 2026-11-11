@@ -1,3 +1,36 @@
 {
-  "hooks": {}
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|compact",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/chaperone-hook.sh\" session-start", "timeout": 10 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "if": "Bash(gh pr create*)", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/chaperone-hook.sh\" pre-bash", "timeout": 5 },
+          { "type": "command", "if": "Bash(gh pr merge*)", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/chaperone-hook.sh\" pre-bash", "timeout": 5 },
+          { "type": "command", "if": "Bash(chaperone work ready*)", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/chaperone-hook.sh\" pre-bash", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/chaperone-hook.sh\" stop", "timeout": 10 }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/chaperone-hook.sh\" stop-failure", "timeout": 10 }
+        ]
+      }
+    ]
+  }
 }

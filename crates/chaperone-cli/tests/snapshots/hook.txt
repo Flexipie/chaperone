@@ -1,0 +1,24 @@
+The plugin's Claude Code hook for the lane $CHAPERONE_WORK: reads the hook's JSON on stdin and prints the hook's answer, not an envelope. Outside an open lane, and on any error, it prints nothing and exits 0
+
+Usage: chaperone hook [OPTIONS] <EVENT>
+
+Arguments:
+  <EVENT>
+          Possible values:
+          - session-start: The lane's state, gates not passing yet and commands, as context
+          - pre-bash:      Deny `gh pr create`, `gh pr merge` and `chaperone work ready --yes`
+          - stop:          Block a stop once the branch moved past the lane's ready handoff
+          - stop-failure:  Record the API error the turn stopped on, once per error kind
+
+Options:
+      --db <DB>
+          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+
+      --format <FORMAT>
+          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key
+          
+          [default: json]
+          [possible values: json, jsonl]
+
+  -h, --help
+          Print help (see a summary with '-h')
