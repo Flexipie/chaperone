@@ -429,7 +429,7 @@ impl Ledger {
 
     /// `run:<lane>:<check>:<head>:<profile or ->:<attempt>`. The attempt is
     /// the id of the lane's newest result for this check that is not a pass
-    /// on this commit, profile and [`plan_answers`] (0 for none): a pass replays, a failure
+    /// on this commit, profile and `plan_answers` (0 for none): a pass replays, a failure
     /// or a review that is not complete runs again, and a run back on an earlier commit after another
     /// appends, as `check record`'s flip back does. Read before the write
     /// lock; the lane's run lock keeps two runs from reading it at once.
