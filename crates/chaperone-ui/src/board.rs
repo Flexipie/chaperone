@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use chaperone_core::merge::short;
 use chaperone_core::work::{BoardLane, LaneBoard, SpecTitle, WorkItem};
 
 pub struct Repo<'a> {
@@ -66,11 +67,6 @@ pub fn name(key: Option<&str>, pos: Option<i64>, id: i64) -> String {
 /// A lane's repo slug, or what stands in for none.
 pub fn slug(repo: Option<&str>) -> &str {
     repo.unwrap_or("(no repo)")
-}
-
-/// A commit's first 7 characters.
-pub fn short(sha: &str) -> &str {
-    &sha[..sha.len().min(7)]
 }
 
 /// Now, in seconds since the epoch.

@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::checks::MergedInput;
 use crate::child;
-use crate::ledger::{Actor, Checked, Ledger, LedgerError, has_held};
+use crate::ledger::{Actor, Checked, Ledger, LedgerError, exists};
 use crate::pipeline::sha_prefix_eq;
 use crate::work::HandoffInput;
 
@@ -32,28 +32,29 @@ pub enum Done {
     ByLane,
 }
 
-/// Squash-merges `pr` at `head`, the handoff head the owner confirmed,
-/// once the ledger and GitHub both still hold it; a PR already merged at
-/// that head is only recorded. `from` names the caller in the done
-/// handoff. `Ok(Err(why))` is a refusal, before any merge.
+/// Squash-merges `pr` at `head`, the handoff head the owner confirmed
+/// (default: the lane's handoff head), once the ledger and GitHub both
+/// still hold it; a PR already merged at that head is only recorded.
+/// `from` names the caller in the done handoff. `Ok(Err(why))` is a
+/// refusal, before any merge.
 pub fn merge(
     ledger: &Ledger,
     actor: &Actor,
     gh: &OsStr,
     work: i64,
     pr: &str,
-    head: &str,
+    head: Option<&str>,
     from: &str,
 ) -> Result<Result<Merged, String>, String> {
     let read = |e: LedgerError| e.to_string();
-    // The owner's, by `work ready`'s rule.
-    let Some(session) = actor.session.as_deref() else {
-        return Ok(Err("merge needs a session".into()));
-    };
-    if has_held(ledger.conn(), work, session).map_err(read)? {
-        return Ok(Err(format!(
-            "merge is the owner's; session {session} has held work item {work}"
-        )));
+    // Never a session or an agent that has held the lane: an agent keeps
+    // its name under a made-up session.
+    let held = "SELECT 1 FROM events WHERE lane_id = ?1
+                  AND kind IN ('lane.claimed', 'lane.taken_over')
+                  AND (actor_session = ?2 OR actor_agent = ?3)";
+    let args = (work, &actor.session, &actor.agent);
+    if actor.session.is_none() || exists(ledger.conn(), held, args).map_err(read)? {
+        return Ok(Err("only the owner merges this lane; ask the owner".into()));
     }
     let now = ledger.now().map_err(read)?;
     // What the confirm showed, read again now: a YES verdict on the
@@ -62,6 +63,7 @@ pub fn merge(
     let gates = page.gates.as_ref();
     let passed = |id: &str| gates.is_some_and(|g| g.passed(id));
     let handed = gates.and_then(|g| g.head.as_deref()).unwrap_or_default();
+    let head = head.unwrap_or(handed);
     let item = done(ledger.work_get(work, &now))?;
     let board = ledger.work_board_item(work, &now).map_err(read)?;
     let not = |why: String| Ok(Err(why));
@@ -122,7 +124,9 @@ pub fn merge(
             v = match (view(), &merge) {
                 (Ok(v), _) => v,
                 (Err(e), Ok(_)) => {
-                    return Err(format!("Merged on GitHub; {e} (Merge again records it)"));
+                    return Err(format!(
+                        "Merged on GitHub; {e} (run merge again to record it)"
+                    ));
                 }
                 (Err(_), Err(e)) => return Err(e.clone()),
             };
@@ -148,7 +152,7 @@ pub fn merge(
     };
     let merged = format!("Merged {pr} as {}", short(sha));
     done(ledger.work_merged(actor, &input)).map_err(|e| {
-        format!("{merged} on GitHub; recording failed: {e} (Merge again records it).")
+        format!("{merged} on GitHub; recording failed: {e} (run merge again to record it).")
     })?;
     let ok = |done| {
         Ok(Ok(Merged {
@@ -180,14 +184,15 @@ pub fn merge(
     ok(Done::HandedOff)
 }
 
-fn done<T>(c: Checked<T>) -> Result<T, String> {
+/// A write's value, else its refusal or error as one line.
+pub fn done<T>(c: Checked<T>) -> Result<T, String> {
     match c {
         Ok(Ok(v)) => Ok(v),
-        Ok(Err(r)) => Err(format!("refused: {r:?}")),
+        Ok(Err(r)) => Err(format!("refused: {r}")),
         Err(e) => Err(e.to_string()),
     }
 }
 
-fn short(sha: &str) -> &str {
+pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
 }

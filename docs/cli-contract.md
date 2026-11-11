@@ -524,17 +524,18 @@ session's claim and its evidence file count). A PR new to the lane is `pr.opened
 
 `merge --work <id> [--head <sha>]` is the owner's merge of the lane's PR (its `pr_ref`), as
 chaperone-ui's Merge does it. `--head` is the head the owner confirms; it defaults to the newest
-handoff's commit. It refuses (`invalid_input`, no `gh pr merge`) from a session that has held the
-lane (as `work ready`), a lane with no PR, a verdict that is not YES or not on the handoff head, a
-handoff head that is not `--head`, a lane that is not ready (unless its merge is recorded), and a
-PR that GitHub (`gh pr view`) has at another head, closed, or open though recorded as merged.
-Then `gh pr merge <n> -R <owner/repo> --squash --delete-branch --match-head-commit <head>`
-(found on `PATH`, run in the temp dir, 30 s per call, never `--admin` or `--auto`), and
-`pr.merged` as `work merged` records it. A PR GitHub has merged at that head is only recorded, so
-a second run merges nothing. When the lane's lease is not live it then hands off `done` itself;
-when it is, only the lane's agent does. A gh failure, or a done handoff the ledger refuses after
-the merge is recorded, is `internal`. It prints `{work_id, pr, merge_sha, done, left}`, `left`
-null or `the lane's agent hands off done`.
+handoff's commit. It refuses (`invalid_input`, no `gh pr merge`) a session or an agent that has
+claimed or taken over the lane, a lane with no PR, a verdict that is not YES or not on the handoff
+head, a handoff head that is not `--head`, a lane that is not ready (unless its merge is
+recorded), and a PR that GitHub (`gh pr view`) has at another head, closed, or open though
+recorded as merged. Then `gh pr merge <n> -R <owner/repo> --squash --delete-branch
+--match-head-commit <head>` (found on `PATH`, run in the temp dir, 30 s per call, never `--admin`
+or `--auto`), and `pr.merged` as `work merged` records it. A PR GitHub has merged at that head is
+only recorded, so a second run merges nothing. When the lane's lease is not live it then hands
+off `done` itself. A gh failure, or a done handoff the ledger refuses after the merge is
+recorded, is `internal`. It prints `{work_id, pr, merge_sha, done_by}`: `done_by` is `merge`
+(this run handed off done), `already` (the lane was done) or `lane` (its lease is live, so the
+lane hands off done itself, and a run after the lease lapses finishes it).
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

@@ -320,6 +320,38 @@ pub enum Refusal {
     },
 }
 
+/// The message the CLI's error envelope carries.
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Refusal::InvalidInput(m) | Refusal::Conflict { message: m, .. } => f.write_str(m),
+            Refusal::NotFound { entity, id } => write!(f, "{entity} {id} not found"),
+            Refusal::NotFoundRef { entity, reference } => {
+                write!(f, "{entity} {reference} not found")
+            }
+            Refusal::LeaseHeld { by, until } => {
+                write!(f, "held by {by} until {until}; pass --takeover to take it")
+            }
+            Refusal::PipelineUnknown {
+                pipeline_id,
+                pipeline_hash,
+            } => write!(
+                f,
+                "this binary cannot load pipeline {pipeline_id} {pipeline_hash}"
+            ),
+            Refusal::GateDenied {
+                transition,
+                gate,
+                fact_paths,
+            } => write!(
+                f,
+                "gate {gate} denies {transition}; it read {}",
+                fact_paths.join(", ")
+            ),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Applied {
     Committed(Event),

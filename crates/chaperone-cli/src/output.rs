@@ -135,25 +135,23 @@ impl ErrorBody {
     pub fn from_cli(e: &CliError) -> ErrorBody {
         match e {
             CliError::Refused(r) => match r {
-                Refusal::InvalidInput(m) => body("invalid_input", m.clone(), None),
+                Refusal::InvalidInput(_) => body("invalid_input", r.to_string(), None),
                 Refusal::NotFound { entity, id } => body(
                     "not_found",
-                    format!("{entity} {id} not found"),
+                    r.to_string(),
                     Some(json!({ "entity": entity, "id": id })),
                 ),
                 Refusal::NotFoundRef { entity, reference } => body(
                     "not_found",
-                    format!("{entity} {reference} not found"),
+                    r.to_string(),
                     Some(json!({ "entity": entity, "reference": reference })),
                 ),
-                Refusal::Conflict { entity, message } => body(
-                    "conflict",
-                    message.clone(),
-                    Some(json!({ "entity": entity })),
-                ),
+                Refusal::Conflict { entity, .. } => {
+                    body("conflict", r.to_string(), Some(json!({ "entity": entity })))
+                }
                 Refusal::LeaseHeld { by, until } => body(
                     "conflict",
-                    format!("held by {by} until {until}; pass --takeover to take it"),
+                    r.to_string(),
                     Some(json!({ "by": by, "until": until })),
                 ),
                 Refusal::PipelineUnknown {
@@ -161,7 +159,7 @@ impl ErrorBody {
                     pipeline_hash,
                 } => body(
                     "pipeline_unknown",
-                    format!("this binary cannot load pipeline {pipeline_id} {pipeline_hash}"),
+                    r.to_string(),
                     Some(json!({ "pipeline_id": pipeline_id, "pipeline_hash": pipeline_hash })),
                 ),
                 Refusal::GateDenied {
@@ -170,10 +168,7 @@ impl ErrorBody {
                     fact_paths,
                 } => body(
                     "gate_denied",
-                    format!(
-                        "gate {gate} denies {transition}; it read {}",
-                        fact_paths.join(", ")
-                    ),
+                    r.to_string(),
                     Some(json!({
                         "transition": transition, "gate": gate, "fact_paths": fact_paths
                     })),
