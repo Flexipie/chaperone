@@ -75,9 +75,10 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             decision,
             findings,
             evidence,
+            run,
             actor,
         } => {
-            let input = CheckInput {
+            let mut input = CheckInput {
                 work,
                 check,
                 head,
@@ -85,26 +86,41 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
                 reason,
                 decision,
                 findings,
+                run: None,
             };
             let actor = actor.resolve();
-            if evidence.is_empty() {
+            if evidence.is_empty() && run.is_none() {
                 return one(ledger.check_record(&actor, &input)??);
             }
-            // Every rule before any file is stored: the files are read and
-            // named, the record is tried and rolled back, and only then are
-            // they written, before the record that names them.
-            evidence_ok(&input.check, evidence.len())?;
+            // Every rule before the script runs or any file is stored: the
+            // files are read and named, the record is tried and rolled back
+            // (the run as it would be if it passed), and only then does the
+            // script run and are they written, before the record that names
+            // them.
+            evidence_ok(&input.check, evidence.len() + usize::from(run.is_some()))?;
             let item = ledger.work_get(work, &ledger.now()?)??;
-            let read: Vec<_> = evidence
+            let wt = item.worktree_path.as_deref();
+            let mut read: Vec<_> = run
                 .iter()
-                .map(|path| attach(item.worktree_path.as_deref(), path))
+                .chain(&evidence)
+                .map(|path| attach(wt, path))
                 .collect::<Result<_, _>>()?;
+            let argv = || vec!["bash".into(), "--".into(), read[0].0.path.clone()];
+            if run.is_some() {
+                input.run = Some(json!({"argv": argv(), "exit": 0}));
+            }
             let files: Vec<_> = read.iter().map(|(file, _)| file.clone()).collect();
             ledger.check_record_with(&actor, &input, &files, true)??;
+            if run.is_some() {
+                let (ran, exit) = run_script(wt, argv(), &read[0])?;
+                input.run = Some(json!({"argv": argv(), "exit": exit}));
+                read[0] = ran;
+            }
             let store = Evidence::beside(db);
             for (_, kept) in &read {
                 store.write(kept).map_err(LedgerError::from)?;
             }
+            let files: Vec<_> = read.iter().map(|(file, _)| file.clone()).collect();
             one(ledger.check_record_with(&actor, &input, &files, false)??)
         }
         CheckCmd::Run {
@@ -980,6 +996,36 @@ fn attach(wt: Option<&str>, path: &Path) -> Result<(Attached, Kept), CliError> {
     Ok((file, kept))
 }
 
+/// A smoke claim's `argv` (bash, `--` and its script, `script` as read) run in
+/// the worktree `wt`'s root as `check run` runs a command: the script,
+/// the command and the end of its stderr and stdout, then its exit code,
+/// as the evidence file named for the script, and that code (null when it
+/// was killed or timed out). It is truncated when a stream lost its start
+/// too, and counts the script's redactions. A script that cannot start
+/// writes nothing.
+fn run_script(
+    wt: Option<&str>,
+    argv: Vec<String>,
+    (script, read): &(Attached, Kept),
+) -> Result<((Attached, Kept), Value), CliError> {
+    let dir = Path::new(wt.unwrap_or_default());
+    let deadline = Instant::now() + TESTS_TIMEOUT;
+    let ran = run_commands(std::slice::from_ref(&argv), dir, None, deadline)?;
+    let exit = ran.commands[0]["exit"].clone();
+    let end = if ran.timed_out { " (timed out)" } else { "" };
+    let text = format!("{}\n{}\nexit {exit}{end}\n", read.text, ran.text);
+    let kept = Kept::of(&text);
+    let stored = &kept.stored;
+    let file = Attached {
+        path: argv[2].clone(),
+        sha256: stored.hash.clone(),
+        bytes: text.len() as u64,
+        truncated: stored.truncated || ran.cut,
+        redactions: stored.redactions + script.redactions,
+    };
+    Ok(((file, kept), exit))
+}
+
 /// The UTF-8 text of the regular file at `path`, at most `max` bytes, or
 /// why not. The type is checked before the open: opening a FIFO would wait
 /// for a writer, with the lane's lock held. Between the check and the open
@@ -1285,7 +1331,8 @@ fn run_commands(
                 ran.text += &String::from_utf8_lossy(&done.err);
                 ran.text += &String::from_utf8_lossy(&done.out);
                 ran.cut |= done.cut;
-                done.status.code()
+                ran.timed_out |= done.timed_out;
+                done.status.code().filter(|_| !done.timed_out)
             }
             Err(child::Failed::TimedOut) => {
                 ran.timed_out = true;

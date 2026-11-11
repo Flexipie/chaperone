@@ -888,6 +888,104 @@ fn smoke_evidence_stays_in_the_worktree() {
     assert_eq!((events(&db), in_store()), before);
 }
 
+/// A smoke claim on a v20 lane runs its command: `--run` keeps the script,
+/// the output and the exit code, a failing run's too. The script alone as `--evidence` is refused, writing nothing.
+#[test]
+fn a_v20_smoke_claim_runs_its_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = setup(dir.path());
+    let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
+    let id = lane(
+        &db,
+        &["--pipeline", "v20", "--worktree", wt.to_str().unwrap()],
+    );
+    std::fs::write(wt.join("smoke.sh"), "echo hello from smoke\n").unwrap();
+    std::fs::write(wt.join("bad.sh"), "echo boom\nexit 3\n").unwrap();
+    // Named like a bash option, it still runs as a script.
+    std::fs::write(wt.join("-s"), "echo boom\nexit 3\n").unwrap();
+    // Output past the 16 KiB a stream keeps, and a secret in the script.
+    let long = "printf '%20000s' x\n# ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n";
+    std::fs::write(wt.join("long.sh"), long).unwrap();
+    let claim = |how: &str, file: &str| {
+        let args = ["check", "record", "--work", &id, "--check", "smoke"];
+        let rest = ["--head", &base, "--outcome", "ran", how, file];
+        run(&db, &[&args[..], &rest].concat())
+    };
+    let before = events(&db);
+    let (code, err) = claim("--evidence", "smoke.sh");
+    assert_eq!(
+        (code, &err["code"], events(&db)),
+        (1, &json!("invalid_input"), before)
+    );
+    assert!(
+        err["message"].as_str().unwrap().contains("--run <script>"),
+        "{err}"
+    );
+
+    for (script, exit) in [("smoke.sh", 0), ("bad.sh", 3), ("./-s", 3)] {
+        let (code, kept) = claim("--run", script);
+        assert_eq!(code, 0, "{kept}");
+        let p = &kept["payload"];
+        let path = script.trim_start_matches("./");
+        let argv = json!({"argv": ["bash", "--", path], "exit": exit});
+        assert_eq!(p["run"], argv);
+        let file = &p["evidence_files"][0];
+        let stored = Evidence::beside(&db).get(file["sha256"].as_str().unwrap());
+        let stored = stored.unwrap();
+        let printed = if exit == 0 {
+            "hello from smoke"
+        } else {
+            "boom"
+        };
+        assert!(stored.contains(printed), "{stored}");
+        assert!(stored.ends_with(&format!("exit {exit}\n")), "{stored}");
+    }
+    // The same run again, with the same output, replays and writes nothing.
+    let before = events(&db);
+    let (code, again) = claim("--run", "./-s");
+    assert_eq!(
+        (code, &again["replayed"], events(&db)),
+        (0, &json!(true), before)
+    );
+    // A skipped smoke ran nothing: no run goes with it, and none starts.
+    let before = events(&db);
+    let skipped = [
+        "check",
+        "record",
+        "--work",
+        &id,
+        "--check",
+        "smoke",
+        "--head",
+        &base,
+        "--outcome",
+        "skipped",
+        "--reason",
+        "nothing_runs",
+        "--run",
+        "smoke.sh",
+    ];
+    let (code, err) = run(&db, &skipped);
+    assert_eq!(
+        (code, &err["code"], events(&db)),
+        (1, &json!("invalid_input"), before)
+    );
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("--run goes with a smoke that ran"),
+        "{err}"
+    );
+    let (code, kept) = claim("--run", "long.sh");
+    assert_eq!(code, 0, "{kept}");
+    let file = &kept["payload"]["evidence_files"][0];
+    assert_eq!(
+        (&file["truncated"], &file["redactions"]),
+        (&json!(true), &json!(1))
+    );
+}
+
 /// A harness `smoke` passes v19's `smoke_recorded` whoever starts it, so
 /// `check run smoke` on a lane whose pipeline has no `verdict` (v17 to
 /// v19) is refused, even with a `[smoke]` in the base profile, and writes

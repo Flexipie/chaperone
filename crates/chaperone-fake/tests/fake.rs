@@ -142,6 +142,18 @@ fn an_exited_child_takes_its_group_with_it() {
     assert!(!alive(pid(&dir)), "the sleeper outlived the run");
 }
 
+/// `run_tail` at the deadline still returns what the child printed before.
+#[test]
+fn run_tail_keeps_the_output_of_a_timed_out_child() {
+    let (_dir, mut cmd) = sh("echo before; echo oops >&2; exec sleep 30");
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let done = child::run_tail(&mut cmd, deadline, 1024).ok().unwrap();
+    assert_eq!(
+        (&*done.out, &*done.err, done.timed_out),
+        (&b"before\n"[..], &b"oops\n"[..], true)
+    );
+}
+
 /// `run_tail` keeps the end of both streams, however much was printed.
 #[test]
 fn run_tail_keeps_the_end_of_both_streams() {

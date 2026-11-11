@@ -205,7 +205,10 @@ pub(crate) fn project(
         }
         let claimed = claim.is_some_and(|p: Payload| {
             let files = p.rest.get("evidence_files").and_then(Value::as_array);
-            p.outcome.as_deref() == Some("ran") && files.is_some_and(|f| !f.is_empty())
+            let exit = p.rest.get("run").map(|r| &r["exit"]);
+            p.outcome.as_deref() == Some("ran")
+                && files.is_some_and(|f| !f.is_empty())
+                && exit.is_none_or(|e| *e == json!(0))
         });
         f.set("smoke.claimed", claimed);
         f.set("review.complete", covering.is_some());
@@ -682,7 +685,17 @@ requires = ["quality_gate_before_pr"]
         let files = json!({"evidence_files": [{"path": "out.txt"}]});
         lane.on("smoke", OTHER, "session", files.clone());
         assert_eq!(at(HEAD).get("smoke.claimed"), &Fact::Bool(false));
-        lane.on("smoke", HEAD, "session", files);
+        lane.on("smoke", HEAD, "session", files.clone());
+        let f = at(HEAD);
+        assert_eq!(f.get("smoke.claimed"), &Fact::Bool(true));
+        // A claim whose run of its command failed claims nothing.
+        let mut failed = files.clone();
+        failed["run"] = json!({"argv": ["bash", "s.sh"], "exit": 3});
+        lane.on("smoke", HEAD, "session", failed);
+        assert_eq!(at(HEAD).get("smoke.claimed"), &Fact::Bool(false));
+        let mut passed = files;
+        passed["run"] = json!({"argv": ["bash", "s.sh"], "exit": 0});
+        lane.on("smoke", HEAD, "session", passed);
         let f = at(HEAD);
         assert_eq!(f.get("smoke.claimed"), &Fact::Bool(true));
         assert_eq!(f.get("smoke.passed"), &Fact::Absent);

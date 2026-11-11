@@ -720,6 +720,12 @@ pub enum CheckCmd {
         /// .git or .chaperone, at most 1 MiB; repeat for up to 12
         #[arg(long)]
         evidence: Vec<PathBuf>,
+        /// smoke that ran only: a script, by the --evidence file rules, that
+        /// the CLI runs with bash in the worktree's root; the claim keeps
+        /// the script, its output and exit code as its evidence file.
+        /// Required for a smoke that ran on a v20 lane
+        #[arg(long, conflicts_with = "evidence")]
+        run: Option<PathBuf>,
         #[command(flatten)]
         actor: ActorArgs,
     },

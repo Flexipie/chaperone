@@ -153,6 +153,7 @@ fn harness_checks_are_the_harness_s_on_a_v20_lane() {
             reason: reason.map(String::from),
             decision: (check == "merge_verdict").then(|| "yes".into()),
             findings: (check == "plan_check" && outcome == "ran").then_some(0),
+            run: None,
         };
         ledger.check_record(&fresh, &input).unwrap()
     };
@@ -160,7 +161,9 @@ fn harness_checks_are_the_harness_s_on_a_v20_lane() {
     refused(record(1, "merge_verdict", "ran", None), says);
     refused(record(1, "plan_check", "ran", None), says);
     refused(record(1, "plan_check", "skipped", Some("docs")), says);
-    record(1, "smoke", "ran", None).unwrap();
+    // A smoke claim that ran carries the run of its command.
+    refused(record(1, "smoke", "ran", None), "runs its command");
+    record(1, "smoke", "skipped", Some("nothing_runs")).unwrap();
     record(1, "quality_gate", "skipped", Some("no_code")).unwrap();
     ledger
         .plan_waive(&fresh, 1, HEAD, "coded first")
@@ -202,6 +205,7 @@ fn the_lane_records_its_own_smoke_claim_on_v20_only() {
             check: "smoke".into(),
             head: HEAD.into(),
             outcome: "ran".into(),
+            run: Some(json!({"argv": ["bash", "s.sh"], "exit": 0})),
             ..CheckInput::default()
         };
         let lane = pair("lane", "s1");
@@ -319,14 +323,15 @@ impl V20 {
         self.run("merge_verdict", head, fields);
     }
 
-    /// A fresh session's smoke claim on `head`, with an evidence file, as
-    /// `check record --check smoke --evidence` writes it.
+    /// A fresh session's smoke claim on `head`, its run and evidence file, as
+    /// `check record --check smoke --run` writes it.
     fn claim(&self, head: &str) {
         let input = CheckInput {
             work: 1,
             check: "smoke".into(),
             head: head.into(),
             outcome: "ran".into(),
+            run: Some(json!({"argv": ["bash", "s.sh"], "exit": 0})),
             ..CheckInput::default()
         };
         let file = Attached {

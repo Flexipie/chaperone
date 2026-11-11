@@ -85,11 +85,11 @@ impl Lane {
         git(&self.wt, &["rev-parse", "HEAD"], &[])
     }
 
-    /// The lane's smoke claim on its commit, with evidence.
+    /// The lane's smoke claim on its commit, its command run.
     fn smoke(&self) {
-        std::fs::write(self.wt.join("out.log"), "it ran\n").unwrap();
+        std::fs::write(self.wt.join("smoke.sh"), "echo it ran\n").unwrap();
         let claim = format!(
-            "check record --work 1 --check smoke --head {} --outcome ran --evidence out.log",
+            "check record --work 1 --check smoke --head {} --outcome ran --run smoke.sh",
             self.head()
         );
         let claim: Vec<_> = claim.split(' ').collect();

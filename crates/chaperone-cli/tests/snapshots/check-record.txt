@@ -13,6 +13,7 @@ Options:
       --decision <DECISION>  merge_verdict only, required there [possible values: yes, no]
       --findings <FINDINGS>  Findings raised; plan_check and quality_gate that ran only, required there
       --evidence <EVIDENCE>  smoke only: a text file the smoke wrote or showed, inside the lane's worktree (a relative path is read from its root), not under .git or .chaperone, at most 1 MiB; repeat for up to 12
+      --run <RUN>            smoke that ran only: a script, by the --evidence file rules, that the CLI runs with bash in the worktree's root; the claim keeps the script, its output and exit code as its evidence file. Required for a smoke that ran on a v20 lane
       --agent <AGENT>        Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
       --session <SESSION>    Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
   -h, --help                 Print help
