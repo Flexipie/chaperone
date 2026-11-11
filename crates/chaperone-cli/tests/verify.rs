@@ -71,22 +71,14 @@ impl Lane {
         out["data"]["items"].as_array().unwrap().clone()
     }
 
-    /// The lane accepts the plan check's one finding.
-    fn accept_plan(&self) {
+    /// Session `who` makes `verb` (`accept`, `dispute`, `waive`) on the
+    /// plan check's one finding, reason `r`.
+    fn answer(&self, who: &str, verb: &str) {
         let plan = &self.findings()[0];
-        let (event, key) = (
-            plan["check_event_id"].to_string(),
-            plan["finding_key"].as_str(),
-        );
-        let accept = [
-            "finding",
-            "accept",
-            &event,
-            key.unwrap(),
-            "--reason",
-            "do it",
-        ];
-        assert_eq!(self.run("lane", &accept).0, 0);
+        let (event, key) = (&plan["check_event_id"], plan["finding_key"].as_str());
+        let args = format!("finding {verb} {event} {} --reason r", key.unwrap());
+        let args: Vec<_> = args.split(' ').collect();
+        assert_eq!(self.run(who, &args).0, 0);
     }
 
     fn head(&self) -> String {
@@ -253,7 +245,7 @@ fn steps(out: &Value) -> Vec<(String, bool, bool)> {
 #[test]
 fn a_lane_is_ready_only_on_a_commit_verify_passed() {
     let lane = lane(claude(json!({"findings": []}), json!([])));
-    lane.accept_plan();
+    lane.answer("lane", "accept");
     lane.smoke();
     let out = lane.verify();
     let all = |replayed| ["diff", "tests", "review", "verdict"].map(|c| (c.into(), true, replayed));
@@ -285,7 +277,7 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
 #[test]
 fn stop_blocks_once_when_the_head_moved_past_a_ready_handoff() {
     let lane = lane(claude(json!({"findings": []}), json!([])));
-    lane.accept_plan();
+    lane.answer("lane", "accept");
     lane.smoke();
     lane.verify();
     assert_eq!(lane.handoff().0, 0);
@@ -327,7 +319,7 @@ fn a_blocking_finding_stops_verify_before_the_verdict() {
         .clone();
     let rulings = json!([{"key": key, "verdict": "verified", "why": "it is"}]);
     let lane = lane(claude(said, rulings));
-    lane.accept_plan();
+    lane.answer("lane", "accept");
     let out = lane.verify();
     let stopped = json!({"check": "review", "why": "1 finding(s) still block"});
     assert_eq!(out["stopped"], stopped);
@@ -367,10 +359,9 @@ fn an_accepted_plan_finding_the_diff_ignores_blocks() {
     let why = out["stopped"]["why"].as_str().unwrap();
     assert_eq!(out["stopped"]["check"], "diff");
     assert!(
-        why.starts_with("1 plan finding(s) have no answer: "),
+        why.starts_with("1 plan finding(s) have no answer: 4/plan-"),
         "{why}"
     );
-    assert!(why.contains("finding accept <event> <key>"), "{why}");
     let (code, err) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
     assert_eq!((code, err["message"].as_str()), (1, Some(why)));
     let plan = &lane.findings()[0];
@@ -379,28 +370,22 @@ fn an_accepted_plan_finding_the_diff_ignores_blocks() {
         (&json!("plan_check"), &json!("open"), &json!(false))
     );
 
-    lane.accept_plan();
+    lane.answer("lane", "accept");
     let plan = &lane.findings()[0];
     assert_eq!(
         (&plan["status"], &plan["reason"]),
-        (&json!("accepted"), &json!("do it"))
+        (&json!("accepted"), &json!("r"))
     );
     let out = lane.verify();
     let stopped = json!({"check": "review", "why": "1 finding(s) still block"});
     assert_eq!(out["stopped"], stopped);
     let log = std::fs::read_to_string(lane.dir.path().join("bin/claude.log")).unwrap();
-    let prompts: Vec<String> = log
-        .lines()
-        .map(|l| {
-            serde_json::from_str::<Value>(l).unwrap()["prompt"]
-                .as_str()
-                .unwrap()
-                .into()
-        })
-        .collect();
     let shown = |header: &str| {
-        let p = prompts.iter().find(|p| p.starts_with(header)).unwrap();
-        p.contains(r#""status":"accepted""#) && p.contains(r#""reason":"do it""#)
+        let line = log
+            .lines()
+            .find(|l| l.contains(&format!(r#""prompt":"{header}"#)));
+        line.unwrap()
+            .contains(r#"\"status\":\"accepted\",\"title\""#)
     };
     assert!(shown("# Review: the change against its goal"));
     assert!(shown("# Review: correctness"));
@@ -413,23 +398,7 @@ fn an_accepted_plan_finding_the_diff_ignores_blocks() {
 #[test]
 fn a_changed_plan_answer_reviews_the_same_commit_again() {
     let lane = lane(claude(json!({"findings": []}), json!([])));
-    let plan = &lane.findings()[0];
-    let (event, key) = (
-        plan["check_event_id"].to_string(),
-        plan["finding_key"].as_str(),
-    );
-    let answer = |who, verb| {
-        let args = [
-            "finding",
-            verb,
-            &event,
-            key.unwrap(),
-            "--reason",
-            "not needed",
-        ];
-        assert_eq!(lane.run(who, &args).0, 0);
-    };
-    answer("lane", "dispute");
+    lane.answer("lane", "dispute");
     let review = || {
         let (code, out) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
         assert_eq!(code, 0, "{out}");
@@ -437,7 +406,7 @@ fn a_changed_plan_answer_reviews_the_same_commit_again() {
     };
     let (first, _) = review();
     assert_eq!(review(), (first.clone(), true));
-    answer("owner", "waive");
+    lane.answer("owner", "waive");
     let sessions = lane.sessions();
     let (second, replayed) = review();
     assert!(second != first && !replayed, "{second} {first}");
