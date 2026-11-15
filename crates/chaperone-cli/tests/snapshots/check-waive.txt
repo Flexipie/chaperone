@@ -1,4 +1,4 @@
-Waive a check the harness runs for a lane that cannot pass it now: the plan check of a lane that coded before its plan was attacked. The owner's: refused from any session that has held the lane
+Waive a check the harness runs for a lane that cannot pass it now: the plan check of a lane that coded before its plan was attacked, or the size cap of a lane whose change only makes sense whole. The owner's: refused from any session that has held the lane
 
 Usage: chaperone check waive [OPTIONS] --work <WORK> --reason <REASON> <KIND>
 
@@ -6,6 +6,7 @@ Arguments:
   <KIND>
           Possible values:
           - plan: The plan check, on the commit the lane is on (none before v20)
+          - size: The `code_lines` cap, raised to --lines for this lane alone (v20's gate reads it)
 
 Options:
       --db <DB>
@@ -19,6 +20,9 @@ Options:
           
           [default: json]
           [possible values: json, jsonl]
+
+      --lines <LINES>
+          For size only, and required there: the lane's raised `code_lines` limit
 
       --reason <REASON>
           Why; one line, kept on the event and redacted at write

@@ -137,3 +137,8 @@ tests = ["crates/chaperone-core/tests/**", "crates/chaperone-fake/**"]
 build = ["Cargo.toml", "Cargo.lock", "crates/chaperone-core/Cargo.toml", "rust-toolchain.toml", "rustfmt.toml", "deny.toml", ".gitignore", ".config/**", ".github/**", ".chaperone/**"]
 docs = ["docs/**", "README.md", "CONTRIBUTING.md", "LICENSE-APACHE", "LICENSE-MIT"]
 spikes = ["spikes/**"]
+
+# Test files: `check run diff` counts their lines as `test_lines`, which the size cap
+# leaves out. Tests inside a source file still count as code.
+[size]
+tests = ["crates/*/tests/**"]

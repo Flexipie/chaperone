@@ -83,7 +83,10 @@ The smallest complete change. A bug whose cause is not plain: invoke `chaperone:
 with the symptom, the failing command and `--fix`. Commit with short plain messages; leave
 the tree clean. Then:
 - `chaperone check run diff --work $2`: `code_lines` over the limit or `uncounted_files`
-  over 0 will not pass. Cut, or Needs you with a proposed split.
+  over 0 will not pass. Test files (`test_lines`) do not count. Never get under by
+  compressing code, removing checks or dropping behavior: cut only what the done-when does
+  not need, split a piece that stands alone into its own PR, or, when the change only
+  makes sense whole, Needs you asking the owner for `check waive size` with the lines and why.
   A refused companion rule names a doc the change must update: update it, or, when the
   change truly needs no edit there, commit a `No-companion: <rule> <why>` trailer.
 - Invoke the `chaperone:blast-radius` skill once; fix what it finds inside the slice.

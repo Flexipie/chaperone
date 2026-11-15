@@ -41,7 +41,7 @@
 # recorded but only its timeout bounds it.
 #
 # A lens skips a diff smaller than its `<lens>_min_code_lines` (the harness `diff`'s code
-# lines on the commit; with no diff measured, or uncounted files, it runs), recorded on the review as skipped.
+# plus test lines on the commit, as #223 measured them; with no diff measured, or uncounted files, it runs), recorded on the review as skipped.
 # v20 sets it for Codex only, at 200 (#223): in the first 9 v20 reviews (median 53 code lines)
 # Codex raised nothing and took 29% of review input tokens, and in wave 3 it raised nothing on
 # any lane under 210 lines but found real bugs no other lens caught at 221.
@@ -166,10 +166,24 @@ id = "no_uncounted_files"
 fn = "eq"
 args = { field = "commit.uncounted_files", value = 0 }
 
+# The cap counts code lines only: files the base profile's `[size] tests` names are
+# `test_lines`, never gated (#245). The owner may raise one lane's cap with `check waive
+# size` (refused from any session that held the lane): `commit.size_waived` holds when the
+# lane's newest waiver allows at least `commit.code_lines`.
 [[gate]]
-id = "code_lines_at_most"
+id = "code_lines_under_cap"
 fn = "lte"
 args = { field = "commit.code_lines", limit = "code_lines" }
+
+[[gate]]
+id = "code_lines_waived"
+fn = "eq"
+args = { field = "commit.size_waived", value = true }
+
+[[gate]]
+id = "code_lines_at_most"
+fn = "any"
+args = { of = ["code_lines_under_cap", "code_lines_waived"] }
 
 [[gate]]
 id = "no_code_change"

@@ -128,6 +128,8 @@ fn a_lane_folds_from_its_events() {
     check(&ledger, id, "plan_check", None, Some(2));
     check(&ledger, id, "quality_gate", None, Some(0));
     check(&ledger, id, "merge_verdict", Some("yes"), None);
+    let waived = ledger.size_waive(&actor("owner"), id, HEAD, 500, "one piece");
+    waived.unwrap().unwrap();
     for (kind, round) in [
         ("nudged", None),
         ("sent_back", Some(1)),
@@ -182,6 +184,7 @@ fn a_lane_folds_from_its_events() {
     assert_eq!(lane["send_back_rounds"], 2);
     assert_eq!(lane["plan_check"]["findings"], 2);
     assert_eq!(lane["quality_gate"]["outcome"], "ran");
+    assert_eq!(lane["size_waiver"], json!({"lines": 500, "head_sha": HEAD}));
     // The verdict's 7-digit sha is a prefix of the merged head.
     assert_eq!(lane["verdict_on_head"], true);
     assert_eq!(lane["head_reviewed"], true);
@@ -199,6 +202,7 @@ fn a_lane_folds_from_its_events() {
     assert_eq!(cohort["context_tokens_per_merged_pr_median"], 400.0);
     assert_eq!(cohort["lanes_plan_checked"], 1);
     assert_eq!(cohort["lanes_quality_gated"], 1);
+    assert_eq!(cohort["lanes_size_waived"], 1);
     assert_eq!(cohort["lanes_verdict_on_head"], 1);
     assert_eq!(cohort["lanes_head_reviewed"], 1);
     assert_eq!(cohort["attention"]["sent_back"], 2);

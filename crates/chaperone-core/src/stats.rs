@@ -92,6 +92,8 @@ struct Lane {
     /// one reads its original's.
     plan_findings: BTreeMap<i64, Value>,
     quality_gate: Value,
+    /// The newest owner size waiver: its raised limit and commit.
+    size_waiver: Value,
     /// Verdicts that ran, in log order: head and whether it said yes.
     verdicts: Vec<(String, bool)>,
     /// Handoffs in log order: `at` and whether it is a real one (its
@@ -304,6 +306,7 @@ impl Lane {
             "send_back_rounds": self.rounds,
             "plan_check": self.plan_check,
             "quality_gate": self.quality_gate,
+            "size_waiver": self.size_waiver,
             "merge_verdict": self.verdicts.last().map(|(head, yes)| {
                 json!({ "decision": if *yes { "yes" } else { "no" }, "head_sha": head })
             }),
@@ -428,6 +431,9 @@ impl Lane {
                 } else {
                     self.quality_gate = v;
                 }
+            }
+            Some("size_waiver") => {
+                self.size_waiver = json!({ "lines": p.get("lines"), "head_sha": text("head_sha") });
             }
             Some("merge_verdict") if ran => {
                 let harness =
@@ -824,6 +830,7 @@ fn summarize(lanes: &[Lane]) -> Value {
         "plan_check_skipped": skipped(&|l| &l.plan_check),
         "lanes_quality_gated": count(&|l, r| r.with_pr && outcome(&l.quality_gate).as_deref() == Some("ran")),
         "quality_gate_skipped": skipped(&|l| &l.quality_gate),
+        "lanes_size_waived": count(&|l, _| !l.size_waiver.is_null()),
         "lanes_verdict_on_head": count(&|_, r| r.with_pr && r.verdict_on_head == Some(true)),
         "missing": missing,
         "sources": { "reviews": review_sources, "ready_point": ready_points },
