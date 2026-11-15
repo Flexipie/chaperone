@@ -456,7 +456,7 @@ such files in `uncounted_files`. A CLI that cannot start, a checkout that cannot
 a diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings.
 
 A lens whose `[limits]` holds `<lens>_min_code_lines` (v20: `codex_min_code_lines`, 200)
-is skipped when the harness `diff` on the commit counts fewer code lines: no session, its row
+is skipped when the harness `diff` on the commit counts fewer code plus test lines (`code_lines` and `test_lines`, as #223 measured them): no session, its row
 in `lenses` says `skipped` and why, and the review can still be complete. With no harness
 `diff` on the commit, or one with `uncounted_files`, the lens runs. Its CLI is still asked `--version` first.
 
