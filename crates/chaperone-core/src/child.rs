@@ -225,8 +225,8 @@ fn start(
             Err(_) => return Err(Failed::TimedOut),
         }
     }
-    // A reader only stops early by panicking, which is no result either.
-    // A pipe still held at the deadline: `run_tail` keeps what was read.
+    // A pipe still held at the deadline, or a reader that panicked: no
+    // result for `run`, and `run_tail` keeps what was read.
     let left = || deadline.saturating_duration_since(Instant::now());
     let ended = out.ended(left()) & err.ended(left());
     match keep {
