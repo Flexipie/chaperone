@@ -39,7 +39,8 @@ pub(crate) fn enter(
 /// The `gate.denied` that replaces `entered`, a guarded `phase.entered`
 /// on lane `lane_id`, when its transition does not hold; None when it does.
 /// A lane with no stamp is denied as `stamp_ok`, never passed on the newest
-/// pipeline; a stamp this binary cannot load is refused (`pipeline_unknown`).
+/// pipeline; a stamped id this binary has no document for is refused
+/// (`pipeline_unknown`).
 pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<Option<Event>> {
     let p = &entered.payload;
     // The guard has refused any transition but the host's.
@@ -83,7 +84,7 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
 /// Whether `transition` to `to` holds for lane `lane_id` on `head`, on its
 /// stamped pipeline and the facts its events project now. It only reads, so
 /// the board asks it too. A lane with no stamp is denied as `stamp_ok`; a
-/// stamp this binary cannot load is refused (`pipeline_unknown`).
+/// stamped id this binary has no document for is refused (`pipeline_unknown`).
 pub(crate) fn decide(
     conn: &Connection,
     lane_id: i64,
