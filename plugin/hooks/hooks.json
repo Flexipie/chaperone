@@ -25,6 +25,13 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/chaperone-hook.sh\" prompt", "timeout": 10 }
+        ]
+      }
+    ],
     "StopFailure": [
       {
         "hooks": [
