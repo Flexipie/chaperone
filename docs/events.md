@@ -207,13 +207,13 @@ the same value, a trailing slash aside, still writes.
 | --- | --- | --- |
 | `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha`, `review` |
 | `check.finished` | `check record`, `check run`, `check waive`, `verify` (through `check run`), `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
-| `finding.updated` | `finding dispute`, `finding waive`, `finding accept`, `finding answer`; the other moves are core's (`Ledger::finding_update`) for the harness | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute, waive or accept, and given by `finding answer`; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits) |
+| `finding.updated` | `finding dispute`, `finding waive`, `finding accept`, `finding answer`; the other moves are core's (`Ledger::finding_update`) for the harness | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute, waive or accept, and given by `finding answer`; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits), `waiver` (required to waive, refused on any other move: `{kind, ref}`, `kind` one of `fixed`, `disproved`, `scope`, `deferred`, `accepted`; `ref` one non-blank line of at most 500 characters, required for `fixed` and `disproved`; a `scope`, `deferred` or `accepted` waiver is refused from a session with any event on the lane but its own waivers of those kinds) |
 
 **Finding statuses.** A finding is folded `open`. Each `finding.updated` makes one of these
 moves, checked by the write; any other move, another status, or the same status again
 (`finding <event>/<key> is already <status>`) is `invalid_input`, an unknown finding is
 `not_found` with reference `<event>/<key>`, and nothing is written. `refuted`, `waived`,
-`fixed`, `answered` and `accepted` are final. "Lane" is a session that has held the lane (a
+`fixed` and `answered` are final; `accepted` is final but for a `scope` waiver. "Lane" is a session that has held the lane (a
 `lane.claimed` or `lane.taken_over`); "independent" is one that never has: the verifier,
 or the owner (the rule `work ready` uses). The lane disputes a finding, or accepts a harness
 plan check's (refused on any other check's finding), so it never settles a review's. A `finding.updated` whose `producer.kind` is `harness` is the
@@ -232,6 +232,7 @@ finding. Only that code path sets the producer; no command takes it as input.
 | `open`, `verified` | `disputed` | lane |
 | `open`, `verified`, `disputed` | `waived` | independent (the owner) |
 | `open` | `accepted` | lane, and only on a finding of a harness `plan_check` |
+| `accepted` | `waived` | independent, and only with `waiver.kind` `scope` (the work moved to the issue `ref` names) |
 
 There is no `disputed` to `fixed`: a lane that concedes a disputed finding fixes it and
 waits for the verifier to rule. `open`, `verified` and `disputed` are unsettled.

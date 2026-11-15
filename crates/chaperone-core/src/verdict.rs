@@ -557,7 +557,7 @@ mod tests {
             finding_key: "k".into(),
             status: "disputed".into(),
             reason: Some("it is fine".into()),
-            head_sha: None,
+            ..Default::default()
         };
         ledger
             .finding_update(&me(), &dispute, false)
@@ -643,6 +643,8 @@ mod tests {
             status: "waived".into(),
             reason: Some("not this PR".into()),
             head_sha: None,
+            waiver_kind: Some("disproved".into()),
+            waiver_ref: Some("t.rs:1".into()),
         };
         ledger
             .finding_update(&owner, &waive("k"), false)

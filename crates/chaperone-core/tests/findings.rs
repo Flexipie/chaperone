@@ -5,7 +5,7 @@
 mod common;
 
 use chaperone_core::checks::{FindingMove, Recorded};
-use chaperone_core::ledger::{EventKind, Ledger, Mutation, Payload, Refusal};
+use chaperone_core::ledger::{Actor, EventKind, Ledger, Mutation, Payload, Refusal};
 use chaperone_core::pipeline::Fact;
 use chaperone_core::work::{ClaimInput, CreateInput};
 use common::{actor, count, read_only};
@@ -25,6 +25,7 @@ const ALLOWED: &[(&str, &str)] = &[
     ("open", "disputed"),
     ("verified", "disputed"),
     ("open", "accepted"),
+    ("accepted", "waived"),
 ];
 const STATUSES: [&str; 8] = [
     "open", "fixed", "answered", "verified", "refuted", "disputed", "waived", "accepted",
@@ -95,15 +96,46 @@ fn mv(
         status: to.into(),
         reason: some(reason),
         head_sha: some(sha),
+        waiver_kind: (to == "waived").then(|| "disproved".into()),
+        waiver_ref: Some("t.rs:1".into()),
     };
     l.finding_update(&actor(who), &input, false).unwrap()
+}
+
+/// `who` waives `key` as `kind`, with `reference` when it is not blank.
+fn waive(
+    l: &Ledger,
+    check: i64,
+    (who, key): (&str, &str),
+    (kind, reference): (&str, &str),
+) -> Result<Recorded, Refusal> {
+    let input = FindingMove {
+        check_event_id: check,
+        finding_key: key.into(),
+        status: "waived".into(),
+        reason: Some("r".into()),
+        waiver_kind: (!kind.is_empty()).then(|| kind.into()),
+        waiver_ref: (!reference.is_empty()).then(|| reference.into()),
+        ..FindingMove::default()
+    };
+    let who = Actor {
+        agent: Some("a".into()),
+        session: (!who.is_empty()).then(|| format!("s{who}")),
+    };
+    l.finding_update(&who, &input, false).unwrap()
 }
 
 /// Walks `key` from open along `path`, each move by the session it allows:
 /// the lane's (s1) disputes and accepts, one that never held it (s2) does
 /// the rest.
 fn walk(l: &Ledger, check: i64, key: &str, path: &[&str]) {
-    for to in path.iter().filter(|s| **s != "open") {
+    for (i, to) in path.iter().enumerate().filter(|s| *s.1 != "open") {
+        // Work that moved after the plan is waived as scope, by a fresh session.
+        if i > 0 && path[i - 1] == "accepted" {
+            let moved = waive(l, check, ("3", key), ("scope", ""));
+            assert!(moved.is_ok(), "{key} to {to}: {moved:?}");
+            continue;
+        }
         let who = if ["disputed", "accepted"].contains(to) {
             "1"
         } else {
@@ -326,5 +358,66 @@ fn the_newest_plan_checks_findings_are_answered_and_never_block() {
     assert_eq!(answers(), ["p1 accepted Some(\"r\")", "p2 open None"]);
     plan(json!({"outcome": "skipped", "reason": "no_answer"}));
     assert!(answers().is_empty());
+    common::assert_consistent(&path);
+}
+
+/// A waiver says its kind. fixed and disproved name a ref; scope, deferred
+/// and accepted are countersigned by who writes them: a session with
+/// no event on the lane but its own such waivers. Only scope releases an
+/// accepted plan finding. Each refusal writes nothing.
+#[test]
+fn a_waiver_has_a_kind_a_ref_or_a_fresh_countersign() {
+    let (_dir, path, ledger) = common::ledger();
+    let (_, check) = review(&ledger, &["blocker:a", "blocker:b", "blocker:c"]);
+    let found = [json!({"finding_key": "p", "severity": "blocker", "title": "t", "body": "b"})];
+    let plan = plan_check(&ledger, json!({"outcome": "ran", "findings": found}));
+    walk(&ledger, plan, "p", &["accepted"]);
+    // Session 2 has written on the lane: it ruled c verified.
+    walk(&ledger, check, "c", &["verified"]);
+    let db = read_only(&path);
+    let events = || count(&db, "SELECT count(*) FROM events");
+    let cases = [
+        ((check, "5", "a"), ("", ""), "only with a waiver kind"),
+        ((check, "5", "a"), ("waved", "x"), "only with a waiver kind"),
+        (
+            (check, "5", "a"),
+            ("disproved", ""),
+            "a disproved waiver needs a ref",
+        ),
+        (
+            (check, "5", "a"),
+            ("fixed", ""),
+            "a fixed waiver needs a ref",
+        ),
+        ((check, "2", "a"), ("scope", "#243"), "countersigned"),
+        // No session: every write needs one (`Actor::check`).
+        (
+            (check, "", "a"),
+            ("deferred", "#9"),
+            "needs an agent and a session",
+        ),
+        (
+            (plan, "5", "p"),
+            ("deferred", "#243"),
+            "waived only as scope",
+        ),
+    ];
+    for ((check, who, key), kind, said) in cases {
+        let before = events();
+        let got = format!("{:?}", waive(&ledger, check, (who, key), kind).unwrap_err());
+        assert!(got.contains(said), "{who} {kind:?}: {got}");
+        assert_eq!(events(), before);
+    }
+    // 2 has now written a disproved waiver: a fixed-or-disproved waiver does
+    // not make a session fresh. 5 countersigns two, its own waivers only.
+    let got = waive(&ledger, check, ("2", "a"), ("disproved", "src/x.rs:10"));
+    assert_eq!(
+        got.unwrap().payload.rest["waiver"],
+        json!({"kind": "disproved", "ref": "src/x.rs:10"})
+    );
+    assert!(waive(&ledger, check, ("2", "b"), ("accepted", "")).is_err());
+    waive(&ledger, check, ("5", "b"), ("accepted", "")).unwrap();
+    let moved = waive(&ledger, plan, ("5", "p"), ("scope", "#243")).unwrap();
+    assert_eq!(moved.payload.rest["waiver"]["kind"], "scope");
     common::assert_consistent(&path);
 }

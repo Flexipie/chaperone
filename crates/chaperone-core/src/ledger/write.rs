@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
 use super::{Ledger, LedgerError, check_schema, fold, redact};
-use crate::checks::{NOTE_CHARS, one_line, sha_ok};
+use crate::checks::{NOTE_CHARS, WAIVER_KINDS, one_line, sha_ok};
 use crate::engine;
 use crate::pipeline::{REQUIRED_TRANSITIONS, Route};
 use crate::work::{OWNER_UI, PAUSED_BY_OWNER, SPEC_BY_KEY};
@@ -71,6 +71,8 @@ const FINDING_MOVES: &[(&str, &str, By)] = &[
     ("open", "disputed", By::Lane),
     ("verified", "disputed", By::Lane),
     ("open", "accepted", By::Lane),
+    // Only as a `scope` waiver: the work moved to another issue.
+    ("accepted", "waived", By::Independent),
 ];
 
 pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
@@ -880,6 +882,7 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                     "reason is one non-blank line of at most {NOTE_CHARS} characters"
                 )));
             }
+            check!(waiver(tx, lane_id, session, p, &from, to));
             // The verifier confirms a fix on a commit, so it names the commit.
             if to == "fixed" && !p.head_sha.as_deref().is_some_and(sha_ok) {
                 refuse!(invalid(
@@ -888,6 +891,66 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             }
         }
         _ => {}
+    }
+    Ok(Ok(()))
+}
+
+/// A waiver's kind and ref (events.md, `finding.updated`). `fixed` and
+/// `disproved` name their proof; the rest are countersigned by who writes
+/// them: a session with no event on the lane but its own earlier
+/// countersigned waivers, so the one who wants the lane through, having
+/// touched it, is never the only judge.
+fn waiver(
+    tx: &Connection,
+    lane_id: i64,
+    session: &str,
+    p: &Payload,
+    from: &str,
+    to: &str,
+) -> Checked<()> {
+    let w = p.rest.get("waiver");
+    if to != "waived" {
+        if w.is_some() {
+            refuse!(invalid("only a waived finding carries a waiver"));
+        }
+        return Ok(Ok(()));
+    }
+    let text = |k: &str| w.and_then(|w| w.get(k)).and_then(Value::as_str);
+    let Some(kind) = text("kind").filter(|k| WAIVER_KINDS.contains(k)) else {
+        refuse!(invalid(&format!(
+            "a finding is waived only with a waiver kind, one of {WAIVER_KINDS:?}"
+        )));
+    };
+    let reference = text("ref");
+    if reference.is_some_and(|r| !one_line(r)) {
+        refuse!(invalid(&format!(
+            "ref is one non-blank line of at most {NOTE_CHARS} characters"
+        )));
+    }
+    if from == "accepted" && kind != "scope" {
+        refuse!(invalid(
+            "an accepted plan finding is waived only as scope, with the issue the work moved to"
+        ));
+    }
+    if matches!(kind, "fixed" | "disproved") {
+        if reference.is_none() {
+            refuse!(invalid(&format!(
+                "a {kind} waiver needs a ref: the commit and test, or the file:line"
+            )));
+        }
+        return Ok(Ok(()));
+    }
+    if exists(
+        tx,
+        "SELECT 1 FROM events WHERE lane_id = ?1 AND actor_session = ?2
+               AND NOT (kind = 'finding.updated'
+                        AND ifnull(json_extract(payload_json, '$.waiver.kind'), '')
+                            IN ('scope', 'deferred', 'accepted'))",
+        rusqlite::params![lane_id, session],
+    )? {
+        refuse!(invalid(&format!(
+            "a {kind} waiver is countersigned: written by a session with no event on lane {lane_id} but its own scope, deferred or accepted waivers"
+        )));
     }
     Ok(Ok(()))
 }

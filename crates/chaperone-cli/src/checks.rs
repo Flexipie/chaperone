@@ -1412,13 +1412,14 @@ pub fn attention(ledger: &Ledger, cmd: AttentionCmd) -> Result<Outcome, CliError
 }
 
 pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outcome, CliError> {
-    let (status, args) = match cmd {
-        FindingCmd::Dispute(args) => ("disputed", args),
-        FindingCmd::Waive(args) => ("waived", args),
-        FindingCmd::Accept(args) => ("accepted", args),
-        FindingCmd::Answer(args) => ("answered", args),
+    let (status, args, waiver) = match cmd {
+        FindingCmd::Dispute(args) => ("disputed", args, None),
+        FindingCmd::Waive(w) => ("waived", w.finding, Some((w.kind, w.reference))),
+        FindingCmd::Accept(args) => ("accepted", args, None),
+        FindingCmd::Answer(args) => ("answered", args, None),
         FindingCmd::List { work } => return items(ledger.lane_findings(work)?),
     };
+    let (waiver_kind, waiver_ref) = waiver.unzip();
     meta.dry_run = args.dry_run.then_some(true);
     let input = FindingMove {
         check_event_id: args.event,
@@ -1426,6 +1427,8 @@ pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outc
         status: status.into(),
         reason: Some(args.reason),
         head_sha: None,
+        waiver_kind,
+        waiver_ref: waiver_ref.flatten(),
     };
     one(ledger.finding_update(&args.actor.resolve(), &input, args.dry_run)??)
 }

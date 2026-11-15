@@ -191,7 +191,16 @@ pub struct FindingMove {
     pub reason: Option<String>,
     /// The commit that fixes it; required for `fixed`.
     pub head_sha: Option<String>,
+    /// A waiver's kind, one of [`WAIVER_KINDS`]; required to waive.
+    pub waiver_kind: Option<String>,
+    /// What backs a waiver: the commit and test, the file:line, the owner
+    /// text or the follow-up issue. Required for `fixed` and `disproved`.
+    pub waiver_ref: Option<String>,
 }
+
+/// Why a finding is waived. `fixed` and `disproved` name their proof;
+/// the rest are countersigned: written by a session fresh to the lane.
+pub const WAIVER_KINDS: &[&str] = &["fixed", "disproved", "scope", "deferred", "accepted"];
 
 /// The severities that do not block. Nothing checks the severity a review
 /// writes, so the rest block, a misspelt or unknown one included: a read
@@ -1134,6 +1143,10 @@ impl Ledger {
         };
         if let Some(reason) = &input.reason {
             payload.rest.insert("reason".into(), json!(reason));
+        }
+        if let Some(kind) = &input.waiver_kind {
+            let waiver = json!({"kind": kind, "ref": input.waiver_ref});
+            payload.rest.insert("waiver".into(), waiver);
         }
         if let Some(producer) = producer {
             payload.rest.insert("producer".into(), producer.clone());

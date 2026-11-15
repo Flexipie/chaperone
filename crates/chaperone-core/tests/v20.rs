@@ -366,6 +366,8 @@ impl V20 {
             finding_key: key.into(),
             status: status.into(),
             reason: Some("because".into()),
+            waiver_kind: (status == "waived").then(|| "disproved".into()),
+            waiver_ref: Some("t.rs:1".into()),
             ..FindingMove::default()
         };
         self.ledger

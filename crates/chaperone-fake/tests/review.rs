@@ -1019,6 +1019,8 @@ fn a_no_stands_for_its_tree() {
             status: "waived".into(),
             reason: Some("not for this PR".into()),
             head_sha: None,
+            waiver_kind: Some("disproved".into()),
+            waiver_ref: Some("t.rs:1".into()),
         };
         ledger
             .finding_update(&owner, &waive, false)
@@ -1271,6 +1273,8 @@ fn mv(ledger: &Ledger, who: &Actor, f: &BlockingFinding, to: &str) {
         status: to.into(),
         reason: Some("said so".into()),
         head_sha: None,
+        waiver_kind: (to == "waived").then(|| "disproved".into()),
+        waiver_ref: Some("t.rs:1".into()),
     };
     ledger.finding_update(who, &input, false).unwrap().unwrap();
 }
