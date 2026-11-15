@@ -1303,7 +1303,7 @@ pub(crate) fn one_line(note: &str) -> bool {
     !note.trim().is_empty() && !note.chars().any(line_break) && note.chars().count() <= NOTE_CHARS
 }
 
-/// A character [`one_line`] refuses in a note.
+/// A character a one-line note refuses (`attention record --note`).
 pub fn line_break(c: char) -> bool {
     c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')
 }
