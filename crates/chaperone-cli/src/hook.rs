@@ -185,9 +185,17 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
                     true => "orchestrator".into(),
                     false => "owner".into(),
                 },
-                note: prompt.lines().next().map(|l| l.chars().take(500).collect()),
-                // Each prompt counts, the same text again too.
-                idempotency_key: ledger.now().ok(),
+                // A tab in pasted code would fail the one-line note check.
+                note: prompt.lines().next().map(|l| {
+                    let one = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
+                    l.chars()
+                        .map(|c| if one(c) { ' ' } else { c })
+                        .take(500)
+                        .collect()
+                }),
+                // Each prompt counts, the same text again too; keys are
+                // ledger-wide, so the lane is in it.
+                idempotency_key: Some(format!("prompt-{work}-{}", ledger.now().ok()?)),
                 ..AttentionInput::default()
             };
             let _ = ledger.attention_record(&ActorArgs::default().resolve(), &record);

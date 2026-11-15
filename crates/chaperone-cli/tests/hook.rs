@@ -180,6 +180,7 @@ fn prompt_records_what_was_typed_into_the_lane() {
         "Orchestrator: take option A.\nThen go on.",
         "Decide this yourself.",
         "Decide this yourself.",
+        "Run\tthis.",
     ] {
         assert_eq!(
             lane.hook(Some("1"), "prompt", json!({"prompt": prompt})),
@@ -196,6 +197,7 @@ fn prompt_records_what_was_typed_into_the_lane() {
         row("orchestrator", "Orchestrator: take option A."),
         row("owner", "Decide this yourself."),
         row("owner", "Decide this yourself."),
+        row("owner", "Run this."),
     ];
     assert_eq!(got, want);
     let out = Command::new(BIN)
@@ -205,7 +207,10 @@ fn prompt_records_what_was_typed_into_the_lane() {
         .output()
         .unwrap();
     let stats: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(stats["data"]["lanes"][0]["attention"], json!({"prompted": 3}));
+    assert_eq!(
+        stats["data"]["lanes"][0]["attention"],
+        json!({"prompted": 4})
+    );
 }
 
 /// Silent unless the lane is set and `chaperone` answers with exit 0; its
