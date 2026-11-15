@@ -20,8 +20,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::checks::{
-    BODY_CHARS, COMPLETE_REVIEWS, FindingMove, NOTE_CHARS, PLAN_FINDINGS, Recorded, RunInput,
-    blocking, findings_where,
+    BODY_CHARS, COMPLETE_REVIEWS, FindingMove, NON_BLOCKING_SEVERITIES, NOTE_CHARS, PLAN_FINDINGS,
+    Recorded, RunInput, blocking, findings_where,
 };
 use crate::git::ChangedFile;
 use crate::ledger::{
@@ -536,7 +536,9 @@ impl<T> Lens<T> {
 pub struct Ruling {
     pub key: String,
     /// `verified` or `refuted`, or `fixed` for an earlier finding (keyed
-    /// `<review>/<key>`): the finding's status it moves to.
+    /// `<review>/<key>`): the finding's status it moves to. Or `unproven`, on
+    /// a blocking finding of this review with no proof: [`finish`] writes it
+    /// as a `question`, and it moves no status.
     pub verdict: String,
     pub why: String,
 }
@@ -553,7 +555,8 @@ struct Rulings {
 /// and its runner's timeout (and for Claude its budget) bounds it like a
 /// lens; one that stops, or answers a ruling with no why, rules on
 /// nothing. A finding it does not rule on stays open. On `earlier`
-/// findings it may only rule `fixed`.
+/// findings it may only rule `fixed`, and `unproven` only on a finding
+/// whose severity blocks.
 pub fn verify(
     p: &Planned<'_>,
     agents: &Agents<'_>,
@@ -587,7 +590,11 @@ pub fn verify(
     let prompt = prompt(p, "", &Value::Null, &(change(facts).0 + &findings));
     let keys: BTreeSet<_> = found.iter().map(|f| f.finding_key.as_str()).collect();
     let fixable: BTreeSet<_> = earlier.iter().map(|f| f.finding_key.as_str()).collect();
-    let mut verdicts = vec!["verified", "refuted"];
+    let blocks = found
+        .iter()
+        .filter(|f| !NON_BLOCKING_SEVERITIES.contains(&f.severity.as_str()));
+    let provable: BTreeSet<_> = blocks.map(|f| f.finding_key.as_str()).collect();
+    let mut verdicts = vec!["verified", "refuted", "unproven"];
     if !earlier.is_empty() {
         verdicts.push("fixed");
     }
@@ -613,6 +620,7 @@ pub fn verify(
         for r in &said.rulings {
             let fits = match r.verdict.as_str() {
                 "verified" | "refuted" => keys.contains(r.key.as_str()),
+                "unproven" => provable.contains(r.key.as_str()),
                 "fixed" => fixable.contains(r.key.as_str()),
                 _ => return Err(format!("unknown verdict {:?}", r.verdict)),
             };
@@ -865,14 +873,21 @@ pub fn finish(
     let complete = review.lenses.iter().all(|l| l.outcome.is_ok())
         && verifier.is_none_or(|v| v.outcome.is_ok());
     let mut verified = Value::Null;
+    let mut unproven = Map::new();
     if let Some(v) = verifier {
         verified = v.row();
         if let Ok(rulings) = &v.outcome {
-            let rulings = rulings.iter().map(|r| Ruling {
-                why: cut(&r.why, BODY_CHARS),
-                ..r.clone()
-            });
-            verified["rulings"] = json!(rulings.collect::<Vec<_>>());
+            let rulings: Vec<_> = rulings
+                .iter()
+                .map(|r| Ruling {
+                    why: cut(&r.why, BODY_CHARS),
+                    ..r.clone()
+                })
+                .collect();
+            for r in rulings.iter().filter(|r| r.verdict == "unproven") {
+                unproven.insert(r.key.clone(), json!(r.why));
+            }
+            verified["rulings"] = json!(rulings);
         }
     }
     let mut rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
@@ -891,10 +906,20 @@ pub fn finish(
             json!(facts.files.iter().filter(|f| f.added.is_none()).count()),
         ),
     ]);
-    let found = review.found().map(|f| Finding {
-        title: cut(&f.title, NOTE_CHARS),
-        body: cut(&f.body, BODY_CHARS),
-        ..f.clone()
+    // A blocking finding the verifier ruled unproven is kept as a question,
+    // with the severity its lens gave and the verifier's why.
+    let found = review.found().map(|f| {
+        let mut f = Finding {
+            title: cut(&f.title, NOTE_CHARS),
+            body: cut(&f.body, BODY_CHARS),
+            ..f.clone()
+        };
+        if let Some(why) = unproven.get(&f.finding_key) {
+            let raised_as = std::mem::replace(&mut f.severity, "question".into());
+            f.rest.insert("raised_as".into(), json!(raised_as));
+            f.rest.insert("unproven".into(), why.clone());
+        }
+        f
     });
     input.findings = Some(Findings::List(found.collect()));
     ledger.check_run(actor, &input)
@@ -935,7 +960,8 @@ fn rule(ledger: &Ledger, actor: &Actor, id: i64, payload: &Payload) -> Checked<(
     let rulings = verifier.and_then(|v| v.get("rulings")).cloned();
     let rulings: Vec<Ruling> =
         serde_json::from_value(rulings.unwrap_or(json!([]))).map_err(io::Error::other)?;
-    for r in rulings {
+    // `unproven` moves no status: `finish` wrote that finding as a question.
+    for r in rulings.into_iter().filter(|r| r.verdict != "unproven") {
         let fixed = r.verdict == "fixed";
         let (review, key) = match fixed {
             true => r
