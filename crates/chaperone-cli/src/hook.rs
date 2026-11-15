@@ -65,7 +65,7 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
     std::io::stdin().read_to_string(&mut input).ok()?;
     let input: Value = serde_json::from_str(&input).ok()?;
     let ledger = match event {
-        HookEvent::StopFailure => Ledger::open(db),
+        HookEvent::StopFailure | HookEvent::Prompt => Ledger::open(db),
         _ => Ledger::open_read_only(db),
     }
     .ok()?;
@@ -164,6 +164,30 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
                 kind: "stopped".into(),
                 by: "orchestrator".into(),
                 note: Some(kind.into()),
+                ..AttentionInput::default()
+            };
+            let _ = ledger.attention_record(&ActorArgs::default().resolve(), &record);
+            None
+        }
+        HookEvent::Prompt => {
+            let prompt = input["prompt"].as_str()?.trim_start();
+            // A slash command (the spawner's `/chaperone:lane`), or a prompt
+            // chaperone's own tools sent (`Owner (`, `Owner check (`), which
+            // record their own attention or are none (`merge`'s notice).
+            if prompt.starts_with('/') || prompt.starts_with("Owner") {
+                return None;
+            }
+            let record = AttentionInput {
+                work,
+                kind: "prompted".into(),
+                // The orchestrate skill starts its prompts so; a best guess.
+                by: match prompt.starts_with("Orchestrator") {
+                    true => "orchestrator".into(),
+                    false => "owner".into(),
+                },
+                note: prompt.lines().next().map(|l| l.chars().take(500).collect()),
+                // Each prompt counts, the same text again too.
+                idempotency_key: ledger.now().ok(),
                 ..AttentionInput::default()
             };
             let _ = ledger.attention_record(&ActorArgs::default().resolve(), &record);

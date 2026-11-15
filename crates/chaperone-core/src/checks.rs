@@ -126,6 +126,7 @@ pub const ATTENTION_TYPES: &[&str] = &[
     "sent_back",
     "revived",
     "stopped",
+    "prompted",
 ];
 pub const ATTENTION_BY: &[&str] = &["orchestrator", "owner"];
 pub const QUESTION_REASONS: &[&str] = &[

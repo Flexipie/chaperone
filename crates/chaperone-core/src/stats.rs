@@ -58,6 +58,8 @@ struct Review {
     head: Option<String>,
     /// Each finding's `finding_key`, title and whether it was verified.
     findings: Vec<(String, String, bool)>,
+    /// Its findings the verifier ruled `same` as an earlier one.
+    same: i64,
 }
 
 #[derive(Default)]
@@ -224,7 +226,8 @@ impl Lane {
                     .insert(r.job.map_or((false, r.event), |job| (true, job)));
             }
         }
-        let reraised = by_title.values().map(|s| s.len() as i64 - 1).sum();
+        let same: i64 = self.reviews.iter().map(|r| r.same).sum();
+        let reraised = by_title.values().map(|s| s.len() as i64 - 1).sum::<i64>() + same;
         // R11: a review is before the handoff when it was recorded before the
         // first real one (the earliest handoff when none is real). A schema 2
         // lane hands off at planning, so its point is the ready point.
@@ -371,8 +374,16 @@ impl Lane {
                         .insert(pr.to_lowercase(), (head.into(), at.into(), e.day));
                 }
             }
-            "check.finished" => self.check(e),
+            "check.finished" => {
+                if text("reason") == Some("waived") {
+                    *self.attention.entry("waived".into()).or_default() += 1;
+                }
+                self.check(e);
+            }
             "finding.updated" => {
+                if text("status") == Some("waived") {
+                    *self.attention.entry("waived".into()).or_default() += 1;
+                }
                 // A ruling on a harness review's finding, by the verifier or the owner.
                 let verified = match text("status") {
                     Some("verified") => true,
@@ -443,6 +454,8 @@ impl Lane {
                     return;
                 }
                 let findings = p.get("findings").and_then(Value::as_array);
+                let same = findings.into_iter().flatten();
+                let same = same.filter(|f| f.get("same_as").is_some()).count() as i64;
                 let field = |f: &Value, k: &str| f.get(k).and_then(Value::as_str).map(String::from);
                 let findings = findings
                     .into_iter()
@@ -461,6 +474,7 @@ impl Lane {
                     score: p.get("score").and_then(Value::as_f64),
                     head: text("head_sha").map(String::from),
                     findings,
+                    same,
                 });
             }
             _ => {}

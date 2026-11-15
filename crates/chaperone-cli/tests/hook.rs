@@ -165,6 +165,49 @@ fn stop_failure_records_again_only_after_the_lane_moves() {
     assert_eq!(got, (&json!("stopped"), &json!("rate_limit")));
 }
 
+/// A prompt typed into the lane is attention `prompted`, by the
+/// orchestrator when it says so, and `stats` counts it; a slash command
+/// and a prompt chaperone's own tools sent are not. The same prompt twice
+/// counts twice.
+#[test]
+fn prompt_records_what_was_typed_into_the_lane() {
+    let lane = Lane::new();
+    let before = lane.events().len();
+    for prompt in [
+        "/chaperone:lane o/r#1 --work 1",
+        "Owner (chaperone-ui): yes. Carry on.",
+        "Owner check (chaperone-ui), round 1, on abc: fix it.",
+        "Orchestrator: take option A.\nThen go on.",
+        "Decide this yourself.",
+        "Decide this yourself.",
+    ] {
+        assert_eq!(
+            lane.hook(Some("1"), "prompt", json!({"prompt": prompt})),
+            ""
+        );
+    }
+    let events = lane.events();
+    let got: Vec<_> = events[before..]
+        .iter()
+        .map(|(k, p)| json!([k, p["type"], p["by"], p["note"]]))
+        .collect();
+    let row = |by, note| json!(["attention.recorded", "prompted", by, note]);
+    let want = [
+        row("orchestrator", "Orchestrator: take option A."),
+        row("owner", "Decide this yourself."),
+        row("owner", "Decide this yourself."),
+    ];
+    assert_eq!(got, want);
+    let out = Command::new(BIN)
+        .arg("--db")
+        .arg(&lane.db)
+        .args(["stats", "--work", "1"])
+        .output()
+        .unwrap();
+    let stats: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(stats["data"]["lanes"][0]["attention"], json!({"prompted": 3}));
+}
+
 /// Silent unless the lane is set and `chaperone` answers with exit 0; its
 /// stdin passes through and its stderr never shows.
 #[test]
