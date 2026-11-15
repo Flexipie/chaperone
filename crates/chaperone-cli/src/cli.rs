@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use chaperone_core::checks::{ATTENTION_BY, ATTENTION_TYPES, QUESTION_REASONS};
+use chaperone_core::checks::{ATTENTION_BY, ATTENTION_TYPES, QUESTION_REASONS, WAIVER_KINDS};
 use chaperone_core::cursor::DEFAULT_LIMIT;
 use chaperone_core::ledger::{Actor, KINDS, PR_FLOWS, SESSION_CHECKS};
 use clap::builder::PossibleValuesParser;
@@ -884,9 +884,11 @@ pub enum FindingCmd {
     /// has held the lane; it still blocks until a session that never has
     /// rules on it
     Dispute(FindingArgs),
-    /// Stop an open, verified or disputed finding blocking. The owner's:
-    /// refused from any session that has held the lane
-    Waive(FindingArgs),
+    /// Stop an open, verified or disputed finding blocking, or (scope only)
+    /// release an accepted plan finding. Refused from any session that has
+    /// held the lane: the owner's, or a fresh agent's (--kind). Never waive a finding where a gate
+    /// fails open on a path a lane can reach: fix it or ask the owner
+    Waive(WaiveArgs),
     /// Say the lane will act on an open plan check finding, and how. Only
     /// from a session that has held the lane; the review is shown it
     Accept(FindingArgs),
@@ -909,6 +911,22 @@ pub struct FindingArgs {
     pub dry_run: bool,
     #[command(flatten)]
     pub actor: ActorArgs,
+}
+
+/// A waiver: the finding, its kind and what backs it
+#[derive(Args, Debug)]
+pub struct WaiveArgs {
+    #[command(flatten)]
+    pub finding: FindingArgs,
+    /// fixed and disproved need --ref. scope, deferred and accepted are
+    /// countersigned: written by a fresh session, one with no event on the
+    /// lane but its own such waivers
+    #[arg(long, value_parser = PossibleValuesParser::new(WAIVER_KINDS))]
+    pub kind: String,
+    /// The commit and test, the file:line, the owner text or the follow-up
+    /// issue; one line of at most 500 characters
+    #[arg(long = "ref", value_name = "REF")]
+    pub reference: Option<String>,
 }
 
 /// Interventions on a lane by the orchestrator or the owner

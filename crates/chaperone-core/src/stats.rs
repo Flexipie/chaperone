@@ -86,6 +86,8 @@ struct Lane {
     tokens: BTreeMap<String, [Option<i64>; 4]>,
     peak: Option<i64>,
     attention: BTreeMap<String, i64>,
+    waivers: BTreeMap<String, i64>,
+    accepted_without_ref: Vec<String>,
     rounds: Option<i64>,
     plan_check: Value,
     /// Each plan check that ran, by event id, to its `findings`: a carried
@@ -303,6 +305,8 @@ impl Lane {
             "tokens": tokens,
             "peak_context": self.peak,
             "attention": self.attention,
+            "waivers": self.waivers,
+            "accepted_without_ref": self.accepted_without_ref,
             "send_back_rounds": self.rounds,
             "plan_check": self.plan_check,
             "quality_gate": self.quality_gate,
@@ -386,6 +390,14 @@ impl Lane {
             "finding.updated" => {
                 if text("status") == Some("waived") {
                     *self.attention.entry("waived".into()).or_default() += 1;
+                    let w = |k: &str| p.pointer(&format!("/waiver/{k}")).and_then(Value::as_str);
+                    let kind = w("kind").unwrap_or("none");
+                    *self.waivers.entry(kind.into()).or_default() += 1;
+                    if kind == "accepted" && w("ref").is_none() {
+                        let event = &p["check_event_id"];
+                        let key = text("finding_key").unwrap_or_default();
+                        self.accepted_without_ref.push(format!("{event}/{key}"));
+                    }
                 }
                 // A ruling on a harness review's finding, by the verifier or the owner.
                 let verified = match text("status") {
@@ -750,7 +762,15 @@ fn summarize(lanes: &[Lane]) -> Value {
     };
     let mut tokens: BTreeMap<&str, [Option<i64>; 4]> = BTreeMap::new();
     let mut attention: BTreeMap<&str, i64> = BTreeMap::new();
+    let mut waivers: BTreeMap<&str, i64> = BTreeMap::new();
+    let mut accepted_without_ref = Vec::new();
     for l in lanes {
+        for (kind, n) in &l.waivers {
+            *waivers.entry(kind).or_default() += n;
+        }
+        for f in &l.accepted_without_ref {
+            accepted_without_ref.push(json!({"work_id": l.id, "finding": f}));
+        }
         for (source, sums) in &l.tokens {
             let total = tokens.entry(source).or_default();
             for (t, n) in total.iter_mut().zip(sums) {
@@ -814,6 +834,8 @@ fn summarize(lanes: &[Lane]) -> Value {
         "claim_to_merge_h_median": median(rows.iter().filter_map(|r| r.claim_to_merge_h).collect()),
         "tokens": tokens,
         "attention": attention,
+        "waivers": waivers,
+        "accepted_without_ref": accepted_without_ref,
         "lanes_with_usage": count(&|_, r| r.context_tokens.is_some()),
         "peak_context_median": median(lanes.iter().filter_map(|l| l.peak.map(|p| p as f64)).collect()),
         "context_tokens_per_merged_pr_median": median(per_pr),

@@ -728,6 +728,7 @@ fn a_repeat_of_a_waived_finding_is_marked_same_and_does_not_block() {
     let prompt = prompt.as_str().unwrap();
     assert!(prompt.contains("earlier review findings"), "{prompt}");
     assert!(prompt.contains(r#""reason":"said so","severity":"risk","status":"waived""#));
+    assert!(prompt.contains(r#""waiver":"disproved""#), "{prompt}");
     let Some(Findings::List(found)) = &p.findings else {
         panic!("{p:?}")
     };
@@ -1019,6 +1020,8 @@ fn a_no_stands_for_its_tree() {
             status: "waived".into(),
             reason: Some("not for this PR".into()),
             head_sha: None,
+            waiver_kind: Some("disproved".into()),
+            waiver_ref: Some("t.rs:1".into()),
         };
         ledger
             .finding_update(&owner, &waive, false)
@@ -1271,6 +1274,8 @@ fn mv(ledger: &Ledger, who: &Actor, f: &BlockingFinding, to: &str) {
         status: to.into(),
         reason: Some("said so".into()),
         head_sha: None,
+        waiver_kind: (to == "waived").then(|| "disproved".into()),
+        waiver_ref: (to == "waived").then(|| "t.rs:1".into()),
     };
     ledger.finding_update(who, &input, false).unwrap().unwrap();
 }

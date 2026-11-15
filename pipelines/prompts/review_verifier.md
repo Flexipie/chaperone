@@ -43,7 +43,7 @@ When a finding of this review is the same point as an earlier finding (the same 
 the same place, however it is worded), rule it `same` with `same_as` the earlier one's key,
 instead of `verified` or `refuted`. It is kept as a `question` and does not block: the
 earlier one keeps its standing. `same_as` may only name an earlier finding that still
-blocks, or a `blocker` or `risk` the owner `waived`. Do not rule `same` when this commit makes the point new
+blocks, or a `blocker` or `risk` that was `waived`, whoever waived it. Do not rule `same` when this commit makes the point new
 (new code that fails the same way elsewhere), or against an earlier finding that was
 refuted or fixed: rule this one on its own.
 

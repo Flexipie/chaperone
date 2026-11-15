@@ -660,6 +660,10 @@ requires = ["quality_gate_before_pr"]
                 ..Payload::default()
             };
             p.rest.insert("reason".into(), json!("r"));
+            if status == "waived" {
+                let waiver = json!({"kind": "disproved", "ref": "t.rs:1"});
+                p.rest.insert("waiver".into(), waiver);
+            }
             self.apply(EventKind::FindingUpdated, p, T[2]);
         }
     }

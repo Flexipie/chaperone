@@ -5,7 +5,7 @@ mod common;
 
 use std::time::Duration;
 
-use chaperone_core::checks::{AttentionInput, CheckInput, MergedInput};
+use chaperone_core::checks::{AttentionInput, CheckInput, FindingMove, MergedInput};
 use chaperone_core::ledger::{EventKind, Ledger, Mutation, Payload, Refusal};
 use chaperone_core::stats::Cohort;
 use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput};
@@ -376,6 +376,9 @@ fn a_v20_lane_reads_the_harness_review() {
         if who == "h" {
             p["producer"] = harness.clone();
         }
+        if to == "waived" {
+            p["waiver"] = json!({"kind": "disproved", "ref": "t.rs:1"});
+        }
         apply(who, EventKind::FindingUpdated, p);
     };
     let first = review("1111111", true, &["k1", "k2"]);
@@ -436,4 +439,64 @@ fn a_v20_lane_reads_the_harness_review() {
     assert_eq!(cohort["lanes_reviewed"], 1);
     assert_eq!(cohort["sources"]["ready_point"], json!({"verdict": 1}));
     assert!(cohort["missing"].get("verified_findings").is_none());
+}
+
+/// Waivers counted by kind, per lane and for the cohort; an `accepted`
+/// one with no ref is listed for the owner, one with a ref is not.
+#[test]
+fn waivers_by_kind() {
+    let (_dir, path, ledger) = common::ledger();
+    let work = lane(&ledger);
+    let finding = |id: &str| {
+        json!({"id": id, "severity": "risk", "title": id, "body": "b", "path": "a.rs",
+               "line": 1, "verified": true, "lenses": [], "body_truncated": false})
+    };
+    let findings = ["f1", "f2", "f3", "f4"].map(finding);
+    let view = json!({
+        "job_id": 1, "source": "local", "status": "reviewed", "phase": "done", "done": true,
+        "repo": "o/r", "branch": "b", "head_sha": HEAD, "score": 1, "verdict": "safe",
+        "findings": findings,
+    });
+    ledger
+        .review_record(&actor("1"), work, 1, &view)
+        .unwrap()
+        .unwrap();
+    let sql = "SELECT max(id) FROM events WHERE kind = 'check.finished'";
+    let event = common::count(&common::read_only(&path), sql);
+    for (key, kind, reference) in [
+        ("f1", "disproved", Some("a.rs:1")),
+        ("f2", "scope", Some("#243")),
+        ("f3", "accepted", None),
+        ("f4", "accepted", Some("#250")),
+    ] {
+        let input = FindingMove {
+            check_event_id: event,
+            finding_key: key.into(),
+            status: "waived".into(),
+            reason: Some("r".into()),
+            waiver_kind: Some(kind.into()),
+            waiver_ref: reference.map(Into::into),
+            ..FindingMove::default()
+        };
+        let who = if kind == "disproved" { "8" } else { "fresh" };
+        ledger
+            .finding_update(&actor(who), &input, false)
+            .unwrap()
+            .unwrap();
+    }
+    // A waiver written before waivers had kinds counts as `none`.
+    let sql = "UPDATE events SET payload_json = json_remove(payload_json, '$.waiver')
+               WHERE kind = 'finding.updated' AND json_extract(payload_json, '$.finding_key') = 'f1'";
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute(sql, []).unwrap();
+    let got = stats(&ledger, Cohort::Work(vec![work]));
+    let counts = json!({"accepted": 2, "none": 1, "scope": 1});
+    let listed = format!("{event}/f3");
+    assert_eq!(got["lanes"][0]["waivers"], counts);
+    assert_eq!(got["lanes"][0]["accepted_without_ref"], json!([listed]));
+    assert_eq!(got["cohort"]["waivers"], counts);
+    assert_eq!(
+        got["cohort"]["accepted_without_ref"],
+        json!([{"work_id": work, "finding": listed}])
+    );
 }

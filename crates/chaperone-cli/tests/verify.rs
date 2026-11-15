@@ -76,7 +76,10 @@ impl Lane {
     fn answer(&self, who: &str, verb: &str) {
         let plan = &self.findings()[0];
         let (event, key) = (&plan["check_event_id"], plan["finding_key"].as_str());
-        let args = format!("finding {verb} {event} {} --reason r", key.unwrap());
+        let mut args = format!("finding {verb} {event} {} --reason r", key.unwrap());
+        if verb == "waive" {
+            args += " --kind disproved --ref t.rs:1";
+        }
         let args: Vec<_> = args.split(' ').collect();
         assert_eq!(self.run(who, &args).0, 0);
     }

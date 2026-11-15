@@ -1,6 +1,6 @@
-Stop an open, verified or disputed finding blocking. The owner's: refused from any session that has held the lane
+Stop an open, verified or disputed finding blocking, or (scope only) release an accepted plan finding. Refused from any session that has held the lane: the owner's, or a fresh agent's (--kind). Never waive a finding where a gate fails open on a path a lane can reach: fix it or ask the owner
 
-Usage: chaperone finding waive [OPTIONS] --reason <REASON> <EVENT> <KEY>
+Usage: chaperone finding waive [OPTIONS] --reason <REASON> --kind <KIND> <EVENT> <KEY>
 
 Arguments:
   <EVENT>  The event id of the check.finished that raised it (`work events`)
@@ -13,4 +13,6 @@ Options:
       --format <FORMAT>    Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
       --agent <AGENT>      Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
       --session <SESSION>  Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+      --kind <KIND>        fixed and disproved need --ref. scope, deferred and accepted are countersigned: written by a fresh session, one with no event on the lane but its own such waivers [possible values: fixed, disproved, scope, deferred, accepted]
+      --ref <REF>          The commit and test, the file:line, the owner text or the follow-up issue; one line of at most 500 characters
   -h, --help               Print help

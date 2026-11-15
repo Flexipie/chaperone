@@ -192,7 +192,16 @@ pub struct FindingMove {
     pub reason: Option<String>,
     /// The commit that fixes it; required for `fixed`.
     pub head_sha: Option<String>,
+    /// A waiver's kind, one of [`WAIVER_KINDS`]; required to waive.
+    pub waiver_kind: Option<String>,
+    /// What backs a waiver: the commit and test, the file:line, the owner
+    /// text or the follow-up issue. Required for `fixed` and `disproved`.
+    pub waiver_ref: Option<String>,
 }
+
+/// Why a finding is waived. `fixed` and `disproved` name their proof;
+/// the rest are countersigned: written by a session fresh to the lane.
+pub const WAIVER_KINDS: &[&str] = &["fixed", "disproved", "scope", "deferred", "accepted"];
 
 /// The severities that do not block. Nothing checks the severity a review
 /// writes, so the rest block, a misspelt or unknown one included: a read
@@ -227,6 +236,8 @@ pub struct LaneFinding {
     pub status: String,
     /// The reason of its newest move, when that move gave one.
     pub reason: Option<String>,
+    /// The kind of its waiver, when its newest move waived it with one.
+    pub waiver: Option<String>,
     /// Counted by the `no_blocking_findings` gate.
     pub blocks: bool,
 }
@@ -1164,6 +1175,10 @@ impl Ledger {
         if let Some(reason) = &input.reason {
             payload.rest.insert("reason".into(), json!(reason));
         }
+        if input.waiver_kind.is_some() || input.waiver_ref.is_some() {
+            let waiver = json!({"kind": input.waiver_kind, "ref": input.waiver_ref});
+            payload.rest.insert("waiver".into(), waiver);
+        }
         if let Some(producer) = producer {
             payload.rest.insert("producer".into(), producer.clone());
         }
@@ -1251,6 +1266,8 @@ pub(crate) fn findings_where(
                     (SELECT json_extract(payload_json, '$.check') FROM events
                       WHERE id = f.check_event_id),
                     (SELECT json_extract(payload_json, '$.reason') FROM events
+                      WHERE id = f.event_id AND kind = 'finding.updated'),
+                    (SELECT json_extract(payload_json, '$.waiver.kind') FROM events
                       WHERE id = f.event_id AND kind = 'finding.updated')
                FROM findings f WHERE lane_id = ?1 AND ({raised}) ORDER BY id",
         blocking()
@@ -1269,6 +1286,7 @@ pub(crate) fn findings_where(
             blocks: r.get(9)?,
             check: r.get(10)?,
             reason: r.get(11)?,
+            waiver: r.get(12)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
