@@ -228,8 +228,9 @@ diff` and `check run review` (so `verify`) are refused (events.md, plan findings
 `finding list` is new (#212). It prints, oldest first, every finding of the lane's complete
 harness reviews (`check.finished` `review` from the harness with `complete: true`), of any
 commit, and of its newest plan check (#221), as items `{check_event_id, check, finding_key,
-severity, title, body, path, line, head_sha, status, reason, blocks}`. `check` is `review` or
-`plan_check`; `reason` is that of the finding's newest move, null when it has none; a plan
+severity, title, body, path, line, head_sha, status, reason, waiver, blocks}`. `check` is `review` or
+`plan_check`; `reason` is that of the finding's newest move, null when it has none, and `waiver`
+that move's waiver kind (#235), null when it has none; a plan
 check's finding never `blocks`. `check_event_id` and `finding_key` address the finding for `finding dispute`
 and `finding waive`; `head_sha` is the commit the review read; `line` is the lens's, from the
 review's payload. `blocks` is the `no_blocking_findings` gate's rule: unsettled (`open`,

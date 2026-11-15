@@ -728,6 +728,7 @@ fn a_repeat_of_a_waived_finding_is_marked_same_and_does_not_block() {
     let prompt = prompt.as_str().unwrap();
     assert!(prompt.contains("earlier review findings"), "{prompt}");
     assert!(prompt.contains(r#""reason":"said so","severity":"risk","status":"waived""#));
+    assert!(prompt.contains(r#""waiver":"disproved""#), "{prompt}");
     let Some(Findings::List(found)) = &p.findings else {
         panic!("{p:?}")
     };

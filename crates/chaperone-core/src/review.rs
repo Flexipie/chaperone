@@ -715,6 +715,7 @@ pub fn earlier(ledger: &Ledger, work: i64) -> Result<Vec<Finding>, LedgerError> 
             ("raised_on".into(), json!(f.head_sha)),
             ("status".into(), json!(f.status)),
             ("reason".into(), json!(f.reason)),
+            ("waiver".into(), json!(f.waiver)),
             ("blocks".into(), json!(f.blocks)),
         ]),
     });
@@ -732,7 +733,7 @@ pub fn earlier_section(earlier: &[Finding]) -> String {
         .map(|f| {
             let line = json!({"key": f.finding_key, "severity": f.severity, "title": f.title,
                 "path": f.path, "status": f.rest["status"], "reason": f.rest["reason"],
-                "blocks": f.rest["blocks"]});
+                "waiver": f.rest["waiver"], "blocks": f.rest["blocks"]});
             line.to_string() + "\n"
         })
         .collect();
@@ -740,10 +741,12 @@ pub fn earlier_section(earlier: &[Finding]) -> String {
         "\n## The lane's earlier review findings\n\n\
          Reviews of the lane's earlier commits raised these. `status` is where each stands: \
          `open`, `verified` or `refuted` by the verifier, `disputed` by the lane (for `reason`), \
-         `fixed`, or `waived` by the owner (for `reason`); `blocks` says whether it still blocks. \
+         `fixed`, or `waived` (for `reason`; `waiver` is its kind: `fixed` or `disproved` by the \
+         owner, `scope`, `deferred` or `accepted` by a fresh agent that never held the lane); \
+         `blocks` says whether it still blocks. \
          Do not raise a `waived` one or one that still blocks again unless this commit makes it \
          new, or your finding says why its `reason` is wrong: it already stands, and a `waived` \
-         one is the owner's call. Any other one (refuted, fixed, or blocking nothing) you may \
+         one was settled outside the lane. Any other one (refuted, fixed, or blocking nothing) you may \
          raise again when you can now prove it.\n\n{}",
         fenced("jsonl", &lines)
     )
@@ -776,7 +779,8 @@ fn shown(conn: &Connection, work: i64) -> Result<String, LedgerError> {
         .iter()
         .map(|f| {
             let line = json!({"key": f.finding_key, "severity": f.severity, "title": f.title,
-                "body": f.body, "path": f.path, "status": f.status, "reason": f.reason});
+                "body": f.body, "path": f.path, "status": f.status, "reason": f.reason,
+                "waiver": f.waiver});
             line.to_string() + "\n"
         })
         .collect();
@@ -784,7 +788,7 @@ fn shown(conn: &Connection, work: i64) -> Result<String, LedgerError> {
         "\n## The plan check's findings and the lane's answers\n\n\
          A review of the lane's plan, before its code, raised these. `status` is the lane's \
          answer: `accepted` (it would act on it), `disputed` (it declined, for `reason`), \
-         `answered` (a question), or `waived` by the owner. An `accepted` one the diff does not \
+         `answered` (a question), or `waived` outside the lane (`waiver` is its kind). An `accepted` one the diff does not \
          address: report it, as a `blocker`. A `disputed` one: do not raise it again unless \
          your finding says why its reason is wrong.\n\n{}",
         fenced("jsonl", &lines)

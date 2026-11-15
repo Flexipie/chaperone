@@ -236,6 +236,8 @@ pub struct LaneFinding {
     pub status: String,
     /// The reason of its newest move, when that move gave one.
     pub reason: Option<String>,
+    /// The kind of its waiver, when its newest move waived it with one.
+    pub waiver: Option<String>,
     /// Counted by the `no_blocking_findings` gate.
     pub blocks: bool,
 }
@@ -1236,6 +1238,8 @@ pub(crate) fn findings_where(
                     (SELECT json_extract(payload_json, '$.check') FROM events
                       WHERE id = f.check_event_id),
                     (SELECT json_extract(payload_json, '$.reason') FROM events
+                      WHERE id = f.event_id AND kind = 'finding.updated'),
+                    (SELECT json_extract(payload_json, '$.waiver.kind') FROM events
                       WHERE id = f.event_id AND kind = 'finding.updated')
                FROM findings f WHERE lane_id = ?1 AND ({raised}) ORDER BY id",
         blocking()
@@ -1254,6 +1258,7 @@ pub(crate) fn findings_where(
             blocks: r.get(9)?,
             check: r.get(10)?,
             reason: r.get(11)?,
+            waiver: r.get(12)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
