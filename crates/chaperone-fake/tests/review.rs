@@ -1274,7 +1274,7 @@ fn mv(ledger: &Ledger, who: &Actor, f: &BlockingFinding, to: &str) {
         reason: Some("said so".into()),
         head_sha: None,
         waiver_kind: (to == "waived").then(|| "disproved".into()),
-        waiver_ref: Some("t.rs:1".into()),
+        waiver_ref: (to == "waived").then(|| "t.rs:1".into()),
     };
     ledger.finding_update(who, &input, false).unwrap().unwrap();
 }

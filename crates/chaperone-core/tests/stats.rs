@@ -420,7 +420,7 @@ fn a_v20_lane_reads_the_harness_review() {
 }
 
 /// Waivers counted by kind, per lane and for the cohort; an `accepted`
-/// one with no ref is listed for the owner.
+/// one with no ref is listed for the owner, one with a ref is not.
 #[test]
 fn waivers_by_kind() {
     let (_dir, path, ledger) = common::ledger();
@@ -429,7 +429,7 @@ fn waivers_by_kind() {
         json!({"id": id, "severity": "risk", "title": id, "body": "b", "path": "a.rs",
                "line": 1, "verified": true, "lenses": [], "body_truncated": false})
     };
-    let findings = ["f1", "f2", "f3"].map(finding);
+    let findings = ["f1", "f2", "f3", "f4"].map(finding);
     let view = json!({
         "job_id": 1, "source": "local", "status": "reviewed", "phase": "done", "done": true,
         "repo": "o/r", "branch": "b", "head_sha": HEAD, "score": 1, "verdict": "safe",
@@ -445,6 +445,7 @@ fn waivers_by_kind() {
         ("f1", "disproved", Some("a.rs:1")),
         ("f2", "scope", Some("#243")),
         ("f3", "accepted", None),
+        ("f4", "accepted", Some("#250")),
     ] {
         let input = FindingMove {
             check_event_id: event,
@@ -467,7 +468,7 @@ fn waivers_by_kind() {
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute(sql, []).unwrap();
     let got = stats(&ledger, Cohort::Work(vec![work]));
-    let counts = json!({"accepted": 1, "none": 1, "scope": 1});
+    let counts = json!({"accepted": 2, "none": 1, "scope": 1});
     let listed = format!("{event}/f3");
     assert_eq!(got["lanes"][0]["waivers"], counts);
     assert_eq!(got["lanes"][0]["accepted_without_ref"], json!([listed]));

@@ -97,7 +97,7 @@ fn mv(
         reason: some(reason),
         head_sha: some(sha),
         waiver_kind: (to == "waived").then(|| "disproved".into()),
-        waiver_ref: Some("t.rs:1".into()),
+        waiver_ref: (to == "waived").then(|| "t.rs:1".into()),
     };
     l.finding_update(&actor(who), &input, false).unwrap()
 }
@@ -423,13 +423,13 @@ fn a_waiver_has_a_kind_a_ref_or_a_fresh_countersign() {
         assert!(got.contains(said), "{who} {kind:?}: {got}");
         assert_eq!(events(), before);
     }
-    // A waiver rides only on a waive.
+    // A waiver, even a ref alone, rides only on a waive.
     let carried = FindingMove {
         check_event_id: check,
         finding_key: "a".into(),
         status: "disputed".into(),
         reason: Some("r".into()),
-        waiver_kind: Some("scope".into()),
+        waiver_ref: Some("#243".into()),
         ..FindingMove::default()
     };
     let got = ledger.finding_update(&actor("1"), &carried, false).unwrap();

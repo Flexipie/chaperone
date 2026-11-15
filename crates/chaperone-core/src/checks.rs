@@ -1144,8 +1144,8 @@ impl Ledger {
         if let Some(reason) = &input.reason {
             payload.rest.insert("reason".into(), json!(reason));
         }
-        if let Some(kind) = &input.waiver_kind {
-            let waiver = json!({"kind": kind, "ref": input.waiver_ref});
+        if input.waiver_kind.is_some() || input.waiver_ref.is_some() {
+            let waiver = json!({"kind": input.waiver_kind, "ref": input.waiver_ref});
             payload.rest.insert("waiver".into(), waiver);
         }
         if let Some(producer) = producer {
