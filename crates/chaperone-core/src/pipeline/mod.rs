@@ -308,6 +308,12 @@ pub fn by_stamp(id: &str, hash: &str) -> Option<&'static Pipeline> {
     KNOWN.iter().find(|p| p.id == id && p.hash == hash)
 }
 
+/// The schema of this binary's document with pipeline id `id`, whatever
+/// its hash: an id names one document, and its hash moves with its prompts.
+pub fn schema_of(id: &str) -> Option<i64> {
+    KNOWN.iter().find(|p| p.id == id).map(|p| p.schema)
+}
+
 impl Route {
     /// The route a lane takes, chosen once at its first claim (events.md,
     /// lane facts in M1): an investigation, else no PR on a `none` flow,
@@ -344,7 +350,7 @@ mod tests {
     const V19: &str = include_str!("../../../../pipelines/v19.toml");
     const V19_HASH: &str = "d45442e63a1b77001987bb5d82e987d730c26ddf4ba7c2941b6c09622287f5ea";
     const V20: &str = include_str!("../../../../pipelines/v20.toml");
-    const V20_HASH: &str = "78c1805a3bbe012f3145f4ce3f0454c328c893ff0f5f50cb7e0565b9e19a49b6";
+    const V20_HASH: &str = "5ec96b5729194f082505b33cb097239bbd3f0df8135bc2d6d596490bbab4577d";
 
     const MINI: &str = r#"
 schema = 1

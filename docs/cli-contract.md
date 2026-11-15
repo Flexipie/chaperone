@@ -285,7 +285,7 @@ Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_mer
 - `verdict_on_head` is true when, for every merged PR, the latest `merge_verdict` that ran on its merged head (the gate's rule: the shorter sha, at least 7 hex, is a prefix of the longer) said yes; null until every PR the lane held has merged (a stack lane with a layer still open is null, not true).
 - The review numbers read `check.finished` `local_review` and `pr_review` that ran (R11's `review.finished` and `finding.recorded`, events.md "Replaced names"). `head_reviewed`: every merged head has a local review on it (null until every PR has merged, as `verdict_on_head`). `flat_rounds`: adjacent local scores, recorded after the lane's first PR and ordered by daisy's job id, where the later is not higher. `reraised_findings`: verified findings grouped by trimmed lowercased title, the distinct jobs in each group minus one, summed. `verified_findings`: findings (by `finding_key`, once each) whose latest record in job order is verified. `verified_findings_after_handoff`: those whose latest record is on a review recorded after the first real handoff (one whose `next_action` does not start with `reviewing`, else the earliest; all of them when there is no handoff). The time is when Chaperone recorded the review, since daisy's finish time is not stored, so a review recorded late counts as after.
 - The harness's `review` counts as a review too: only a complete one from the harness producer, as `findings.open_blocking` reads them, and a carried one only when the review it names counts (its findings stay that one's). Its finding is verified while its latest `finding.updated` move, by anyone, in log order, is `verified` (a `refuted` clears it; `disputed`, `fixed` and `waived` keep it). It counts for `head_reviewed` as a local review does, and for `reraised_findings` each harness review is its own job. Its `flat_rounds`: a complete, not carried harness review on another commit than the one before it that finds again every verified `finding_key` of that one (which had at least one).
-- On a lane stamped with a schema 2 pipeline (v20), the handoff of `verified_findings_after_handoff` is the ready point instead, since its first handoff is at planning: the first harness `merge_verdict` that said yes, else the first `pr.opened`.
+- On a lane stamped with a schema 2 pipeline (v20, by the stamped id whatever its hash: a prompt edit moves the hash), the handoff of `verified_findings_after_handoff` is the ready point instead, since its first handoff is at planning: the first harness `merge_verdict` that said yes, else the first `pr.opened`.
 - `commits_after_handoff` is always null: it is a git count (events.md, PR), not a ledger read.
 - `sources` names where the numbers came from: `reviews`, the checks its reviews came from (`local_review`, `pr_review`, `review`), and `ready_point`, which point the after-handoff count used (`handoff`, `verdict`, `pr_opened`, or null with none). `tokens` is keyed by its source already.
 
@@ -480,9 +480,16 @@ answers `{rulings: [{key, verdict, why}]}`, `verified` or `refuted` with a why t
 blank, or `unproven` on a `blocker` or `risk` with no proof (a run or a cited line), which the
 review writes as a non-blocking `question` with `raised_as` and the why, and no `finding.updated`: one session for all, as the findings share the facts and the checkout, bounded like a
 lens by its runner's timeout and, for a Claude runner, its budget (Codex takes no budget, so
-the timeout is its only bound). It is also shown the lane's earlier open or verified blocking
-findings from complete harness reviews, keyed `<review event id>/<finding_key>`, and may rule
-those only `fixed` (a verifier starts when there are any, even if no lens found anything).
+the timeout is its only bound). It is also shown every earlier finding of the lane's complete
+harness reviews, keyed `<review event id>/<finding_key>`, with its status and the reason of its
+newest move (every lens is shown them too, without bodies), and may rule `fixed` only on one
+still open or verified with a blocking severity (a verifier starts when there is such a finding,
+even if no lens found anything). It may rule a finding of this review `same`, with
+`same_as` an earlier key that still blocks, as `findings.open_blocking` counts it (the
+verifier is shown which do), or one of a blocking severity the owner `waived`: the review writes it as a non-blocking `question` with
+`raised_as` and `same_as`, and no `finding.updated`, as the earlier finding keeps the point's
+standing. Never against a refuted, fixed or non-blocking earlier one, so a lens that now proves
+that point has it judged afresh.
 One that fails, or rules on a key it was not shown, with a verdict that key does not take or
 twice, or gives a blank why, rules on nothing, and every finding stays open (still blocking). Each
 session's prompt and whole answer are stored first, as two evidence files.

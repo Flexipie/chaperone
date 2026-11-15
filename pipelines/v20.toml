@@ -52,6 +52,9 @@
 # unrun edge cases. A problem the base already has goes to a follow-up unless the change
 # copies or newly reaches it.
 #
+# A review remembers (#237): lenses see earlier findings and their status; the verifier rules a
+# repeat `same` as one waived or still blocking, written as a `question` with `same_as`.
+#
 # Arguments are as in v19: `field` and `left`/`right` are fact paths; a compared value is
 # exactly one of `value`, `value_from` or `limit`; `all`/`any` take `of` (gate ids), `not`
 # takes `of` (one gate id). Under schema 2 a gate may read only a fact the projection sets

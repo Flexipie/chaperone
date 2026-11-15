@@ -453,6 +453,18 @@ fn an_accepted_plan_finding_the_diff_ignores_blocks() {
     assert!(shown("# Review: the change against its goal"));
     assert!(shown("# Review: correctness"));
     assert!(!shown("# Verify the review's findings"));
+    assert!(!log.contains("The lane's earlier review findings"));
+    // A new commit's lenses are shown the first review's finding.
+    git(&lane.wt, &["commit", "-qam", "more"], &[("lib.rs", b"b\n")]);
+    lane.run("lane", &["check", "run", "review", "--work", "1"]);
+    let log = std::fs::read_to_string(lane.dir.path().join("bin/claude.log")).unwrap();
+    let lens = log
+        .lines()
+        .rfind(|l| l.contains(r##""prompt":"# Review: correctness"##));
+    assert!(
+        lens.unwrap()
+            .contains("## The lane's earlier review findings")
+    );
 }
 
 /// A changed plan answer on an unchanged commit reviews again: the stored

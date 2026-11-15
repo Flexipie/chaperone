@@ -632,7 +632,9 @@ fn a_crash_before_the_rulings_is_finished_by_a_rerun() {
 
 /// The next tree's verifier is shown the earlier review's findings that
 /// still block, by that review, and its `fixed` ruling settles one; the
-/// one it leaves still blocks.
+/// one it leaves still blocks. Once the owner waives that one, no earlier
+/// finding is left to rule fixed, so a review that finds nothing starts no
+/// verifier.
 #[test]
 fn the_verifier_rules_an_earlier_finding_fixed() {
     let (claude, codex) = scripts(rules);
@@ -670,6 +672,147 @@ fn the_verifier_rules_an_earlier_finding_fixed() {
     let rulings = &schema["properties"]["rulings"]["items"]["properties"];
     assert_eq!(rulings["key"]["enum"], json!(shown));
     assert_eq!(blocking(&ledger), [("c".to_string(), "open".to_string())]);
+    let c = ledger.blocking_findings(1).unwrap().remove(0);
+    mv(&ledger, &owner(), &c, "waived");
+    let before = calls(&env);
+    let p = reviewed(&env, &ledger, &"6".repeat(40), &"7".repeat(40)).unwrap();
+    assert_eq!(p.payload.rest["verifier"], Value::Null);
+    assert_eq!(calls(&env), before + 4);
+}
+
+/// Every lens is shown the earlier review's findings with their status
+/// and reason, and the verifier rules a reworded repeat of one the owner
+/// waived `same`: it is written as a question with `same_as` and does not
+/// block. A refuted earlier one is no `same_as` it may name.
+#[test]
+fn a_repeat_of_a_waived_finding_is_marked_same_and_does_not_block() {
+    let (claude, codex) = scripts(rules);
+    let mut env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let first = record(&env, &ledger).unwrap().event_id;
+    let a = ledger.blocking_findings(1).unwrap().remove(0);
+    mv(&ledger, &owner(), &a, "waived");
+    let earlier = |key: &str| format!("{first}/{key}");
+    let again = json!({"findings": [found("risk", "a, reworded")]});
+    let key = review::findings("correctness", again.clone()).unwrap()[0]
+        .finding_key
+        .clone();
+    let same = json!({"rulings": [{"key": key, "verdict": "same",
+        "same_as": earlier(&a.finding_key), "why": "the same read past the end of src/a.rs"}]});
+    let none = json!({"findings": []});
+    let ran = |l: &str, said: &Value| json!({"when": format!("LENS {l}"), "stdout": session(l, said.clone())});
+    let runs = [
+        ran("correctness", &again),
+        ran("design_tests", &none),
+        ran("intent", &none),
+        ran("verifier", &same),
+    ];
+    rescript(&env, "claude", json!(runs));
+    let codex = json!([{"when": "LENS codex", "write": {"-o": none.to_string()}}]);
+    rescript(&env, "codex", codex);
+    env.facts.plan = review::earlier_section(&review::earlier(&ledger, 1).unwrap());
+    let p = reviewed(&env, &ledger, &"4".repeat(40), &"5".repeat(40))
+        .unwrap()
+        .payload;
+
+    let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
+    let last = |lens: &str| -> Value {
+        let mut calls = log
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap());
+        calls
+            .rfind(|c| c["prompt"].as_str().unwrap().starts_with(lens))
+            .unwrap()
+    };
+    let prompt = last("LENS correctness")["prompt"].clone();
+    let prompt = prompt.as_str().unwrap();
+    assert!(prompt.contains("earlier review findings"), "{prompt}");
+    assert!(prompt.contains(r#""reason":"said so","severity":"risk","status":"waived""#));
+    let Some(Findings::List(found)) = &p.findings else {
+        panic!("{p:?}")
+    };
+    let (f, to) = (&found[0], earlier(&a.finding_key));
+    let got = json!([f.severity, f.rest["raised_as"], f.rest["same_as"]]);
+    assert_eq!(got, json!(["question", "risk", to]));
+    // Only c, open from the first review, still blocks.
+    assert_eq!(blocking(&ledger), [("c".to_string(), "open".to_string())]);
+    let call = last("LENS verifier");
+    let schema: Value = serde_json::from_str(call["args"][4].as_str().unwrap()).unwrap();
+    let ruling = &schema["properties"]["rulings"]["items"]["properties"];
+    let c = &ledger.blocking_findings(1).unwrap()[0].finding_key;
+    let mut settled = [earlier(&a.finding_key), earlier(c)];
+    settled.sort();
+    assert_eq!(ruling["same_as"]["enum"], json!(settled));
+
+    // Refused, so ruling nothing: `same` as a refuted one, as one that does
+    // not block, `same_as` on another verdict, and `same` as one the same
+    // answer rules fixed. Allowed: `same` as a disputed one, which blocks.
+    let b = keys_of(&ledger, "b");
+    let found = review::findings("correctness", again).unwrap();
+    let mut earlier_now = review::earlier(&ledger, 1).unwrap();
+    let like_c = |key: &str, status: &str, blocks: bool| {
+        let mut f = earlier_now.iter().find(|f| f.title == "c").unwrap().clone();
+        f.finding_key = key.into();
+        f.rest.extend([
+            ("status".into(), json!(status)),
+            ("blocks".into(), json!(blocks)),
+        ]);
+        f
+    };
+    let mut waived_nit = like_c("9/waived-nit", "waived", false);
+    waived_nit.severity = "nit".into();
+    let more = [
+        like_c("9/nit", "open", false),
+        like_c("9/disputed", "disputed", true),
+        waived_nit,
+    ];
+    earlier_now.extend(more);
+    let pipeline = pipeline();
+    let plan = review::plan(&pipeline).unwrap();
+    let r = |verdict: &str, to: &str| json!({"key": key, "verdict": verdict, "same_as": to, "why": "w"});
+    let fixed = |k: &str| json!({"key": k, "verdict": "fixed", "why": "w"});
+    for (rulings, ok) in [
+        (json!([r("same", "9/disputed")]), true),
+        (json!([r("same", "9/nit")]), false),
+        (json!([r("same", "9/waived-nit")]), false),
+        (json!([fixed("9/disputed")]), false),
+        (json!([r("same", &b)]), false),
+        (
+            json!([{"key": earlier(c), "verdict": "same",
+                "same_as": earlier(&a.finding_key), "why": "w"}]),
+            false,
+        ),
+        (json!([r("verified", &earlier(&a.finding_key))]), false),
+        (json!([r("same", &earlier(c)), fixed(&earlier(c))]), false),
+    ] {
+        let said = session("verifier", json!({"rulings": rulings}));
+        rescript(
+            &env,
+            "claude",
+            json!([{"when": "LENS verifier", "stdout": said}]),
+        );
+        let (dir, agents) = (env.checkout(), env.agents());
+        let v = review::verify(
+            &plan.verifier,
+            &agents,
+            &dir,
+            &env.facts,
+            &found,
+            &earlier_now,
+            &env.store,
+        );
+        assert_eq!(v.unwrap().outcome.is_ok(), ok, "{rulings}");
+    }
+}
+
+/// The `<review>/<key>` of lane 1's earlier finding titled `title`.
+fn keys_of(ledger: &Ledger, title: &str) -> String {
+    let found = review::earlier(ledger, 1).unwrap();
+    found
+        .into_iter()
+        .find(|f| f.title == title)
+        .unwrap()
+        .finding_key
 }
 
 /// The fake `cli`'s script, replaced.

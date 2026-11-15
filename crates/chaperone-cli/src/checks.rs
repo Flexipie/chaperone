@@ -1131,7 +1131,8 @@ fn change(
         diff,
         goal: review::goal(ledger, item)?,
         smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
-        plan: review::plan_findings(ledger, item.id)?,
+        plan: review::plan_findings(ledger, item.id)?
+            + &review::earlier_section(&review::earlier(ledger, item.id)?),
         code_lines,
     };
     Ok((checkout, facts))

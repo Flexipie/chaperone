@@ -290,10 +290,10 @@ fn the_cohort_filter() {
 /// A v20 lane read from the harness's events: complete reviews count, an
 /// incomplete one does not, a finding refuted by the owner is not
 /// verified, and "after handoff" is after the harness's YES verdict, not
-/// the planning handoff.
+/// the planning handoff, also on a lane stamped with an older v20 hash.
 #[test]
 fn a_v20_lane_reads_the_harness_review() {
-    let (_dir, _path, ledger) = common::ledger();
+    let (_dir, path, ledger) = common::ledger();
     let lane = actor("1");
     let input = CreateInput {
         title: "t".into(),
@@ -313,6 +313,14 @@ fn a_v20_lane_reads_the_harness_review() {
     ledger
         .work_claim(&lane, id, &claim, None, false)
         .unwrap()
+        .unwrap();
+    // Claimed before a prompt edit moved v20's hash.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE lanes SET pipeline_hash = 'older' WHERE id = ?1",
+            [id],
+        )
         .unwrap();
     let handoff = HandoffInput {
         summary: "planning".into(),
