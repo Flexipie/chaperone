@@ -30,6 +30,21 @@ Release builds use thin LTO, `codegen-units = 1`, and stripped symbols. Debug
 builds are for the test job. Startup and binary-size budgets apply to release
 builds only.
 
+## Rules and what enforces them
+
+Each rule names what checks it. A lens is a review session (`pipelines/prompts/`);
+"judgment" means only a person reviewing the PR catches it.
+
+| Rule | Enforced by |
+| --- | --- |
+| **Comments.** Only these stay: a license header; behavior forced by something outside our control (platform, vendor, protocol); public API docs; an issue link for a constraint the code cannot express. A surprise in our own code gets a rename or a reshape, not a comment. No comment restates the code. | The `design_tests` lens. |
+| **Tests.** Each test fails when the behavior breaks and keeps passing when only internals change. A new refusal or branch has a test that fails without it. | The `design_tests` lens. The `coverage` CI job for the files it gates (CI plan, below). |
+| **Size.** The smallest complete change: the least code that fully meets the goal, with no speculative options, fallbacks or layers and no unrelated cleanup. At most 400 code lines per PR (`code_lines` in the pipeline). | `chaperone pr open` refuses past 400 lines and the `code_lines_at_most` gate blocks ready; the `design_tests` lens for the rest. |
+
+When an agent repeats a mistake whose rule exists here but nothing enforces it,
+move the rule up a level: design, then types, then lint, then a test. A rule
+that stays only in this file is the last resort.
+
 ## Tests a change has to bring
 
 | You touched | The PR includes |
