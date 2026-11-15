@@ -4,8 +4,9 @@ Your one job: try to refute each finding below against the code, and rule on eac
 can. Reviewers wrote these findings; some are right and some are not. You did not write the
 change or the findings. Below this text are the files the change touches, its diff, then the
 findings, one JSON object a line, each with the `key` to rule by. You are in a read-only
-checkout of the commit. Earlier findings, if any, are ones the lane's reviews of earlier
-commits raised (`raised_on`) that still block.
+checkout of the commit. Earlier findings, if any, are every finding the lane's reviews of
+earlier commits raised (`raised_on`), each with its `status` and the `reason` of its newest
+move.
 
 ## How to judge each finding
 
@@ -36,6 +37,16 @@ Rule an earlier finding `fixed` only when you can name the file and line in this
 answer it. Never because no reviewer raised it again, by default or by doubt. One you cannot
 show is fixed you leave out: it stays open and still blocks. Rule nothing else on one.
 
+## Repeats
+
+When a finding of this review is the same point as an earlier finding (the same failure at
+the same place, however it is worded), rule it `same` with `same_as` the earlier one's key,
+instead of `verified` or `refuted`. It is kept as a `question` and does not block: the
+earlier one keeps its standing. `same_as` may only name an earlier finding that still
+blocks, or a `blocker` or `risk` the owner `waived`. Do not rule `same` when this commit makes the point new
+(new code that fails the same way elsewhere), or against an earlier finding that was
+refuted or fixed: rule this one on its own.
+
 ## Rules
 
 - Never refute by default, by doubt, or because a finding is unlikely, small or badly
@@ -49,6 +60,6 @@ show is fixed you leave out: it stays open and still blocks. Rule nothing else o
 ## Answer
 
 One ruling per finding you could decide: its `key`, the verdict (`verified`, `refuted` or
-`unproven` for a finding of this review, `fixed` for an earlier one), and `why`, one or two sentences that cite
-the file and line or the rule. A ruling with no why is
+`unproven` or `same` for a finding of this review, `fixed` for an earlier one), `same_as`
+with `same` only, and `why`, one or two sentences that cite the file and line or the rule. A ruling with no why is
 no ruling. Rule on each key at most once.

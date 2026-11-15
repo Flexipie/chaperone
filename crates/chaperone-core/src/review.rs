@@ -20,8 +20,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::checks::{
-    BODY_CHARS, COMPLETE_REVIEWS, FindingMove, NON_BLOCKING_SEVERITIES, NOTE_CHARS, PLAN_FINDINGS,
-    Recorded, RunInput, blocking, findings_where,
+    BODY_CHARS, FindingMove, NON_BLOCKING_SEVERITIES, NOTE_CHARS, PLAN_FINDINGS, Recorded,
+    RunInput, findings_where,
 };
 use crate::git::ChangedFile;
 use crate::ledger::{
@@ -71,8 +71,9 @@ pub struct Facts {
     /// The newest smoke on the commit (`verdict::smoke`): the intent
     /// lens's too.
     pub smoke: Value,
-    /// The plan check's findings with the lane's answers ([`plan_findings`]):
-    /// every lens's, not the verifier's.
+    /// The plan check's findings with the lane's answers ([`plan_findings`])
+    /// and the lane's earlier review findings ([`earlier_section`]): every
+    /// lens's, not the verifier's, which is shown [`earlier`] whole.
     pub plan: String,
     /// The code lines of the harness `diff` on `head`; none without one, or
     /// when it has uncounted files.
@@ -538,9 +539,13 @@ pub struct Ruling {
     /// `verified` or `refuted`, or `fixed` for an earlier finding (keyed
     /// `<review>/<key>`): the finding's status it moves to. Or `unproven`, on
     /// a blocking finding of this review with no proof: [`finish`] writes it
-    /// as a `question`, and it moves no status.
+    /// as a `question`, and it moves no status. Or `same`, on a finding of
+    /// this review that repeats the earlier one `same_as` names: written as
+    /// a `question` too, as the earlier one keeps the point's standing.
     pub verdict: String,
     pub why: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_as: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -555,8 +560,11 @@ struct Rulings {
 /// and its runner's timeout (and for Claude its budget) bounds it like a
 /// lens; one that stops, or answers a ruling with no why, rules on
 /// nothing. A finding it does not rule on stays open. On `earlier`
-/// findings it may only rule `fixed`, and `unproven` only on a finding
-/// whose severity blocks.
+/// findings it may only rule `fixed`, and only on a blocking one still
+/// open or verified; `unproven` only on a finding whose severity blocks;
+/// `same` only with `same_as` an earlier finding whose standing settles the
+/// point ([`settles`]), and never one the same answer rules `fixed`, which
+/// would leave the point blocking nothing.
 pub fn verify(
     p: &Planned<'_>,
     agents: &Agents<'_>,
@@ -589,15 +597,33 @@ pub fn verify(
     }
     let prompt = prompt(p, "", &Value::Null, &(change(facts).0 + &findings));
     let keys: BTreeSet<_> = found.iter().map(|f| f.finding_key.as_str()).collect();
-    let fixable: BTreeSet<_> = earlier.iter().map(|f| f.finding_key.as_str()).collect();
+    let fixable: BTreeSet<_> = earlier
+        .iter()
+        .filter(|f| fixable(f))
+        .map(|f| f.finding_key.as_str())
+        .collect();
+    let settled: BTreeSet<_> = earlier
+        .iter()
+        .filter(|f| settles(f))
+        .map(|f| f.finding_key.as_str())
+        .collect();
     let blocks = found
         .iter()
         .filter(|f| !NON_BLOCKING_SEVERITIES.contains(&f.severity.as_str()));
     let provable: BTreeSet<_> = blocks.map(|f| f.finding_key.as_str()).collect();
     let mut verdicts = vec!["verified", "refuted", "unproven"];
-    if !earlier.is_empty() {
+    if !fixable.is_empty() {
         verdicts.push("fixed");
     }
+    let mut ruling = json!({
+        "key": {"type": "string", "enum": keys.union(&fixable).collect::<Vec<_>>()},
+        "why": {"type": "string"},
+    });
+    if !settled.is_empty() {
+        verdicts.push("same");
+        ruling["same_as"] = json!({"type": "string", "enum": settled});
+    }
+    ruling["verdict"] = json!({"type": "string", "enum": verdicts});
     let schema = json!({
         "type": "object",
         "additionalProperties": false,
@@ -606,11 +632,7 @@ pub fn verify(
             "type": "object",
             "additionalProperties": false,
             "required": ["key", "verdict", "why"],
-            "properties": {
-                "key": {"type": "string", "enum": keys.union(&fixable).collect::<Vec<_>>()},
-                "verdict": {"type": "string", "enum": verdicts},
-                "why": {"type": "string"},
-            },
+            "properties": ruling,
         }}},
     });
     one(p, agents, dir, prompt, &schema, store, |out| {
@@ -622,9 +644,14 @@ pub fn verify(
                 "verified" | "refuted" => keys.contains(r.key.as_str()),
                 "unproven" => provable.contains(r.key.as_str()),
                 "fixed" => fixable.contains(r.key.as_str()),
+                "same" => {
+                    let to = r.same_as.as_deref();
+                    keys.contains(r.key.as_str()) && to.is_some_and(|to| settled.contains(to))
+                }
                 _ => return Err(format!("unknown verdict {:?}", r.verdict)),
             };
-            if !fits || !ruled.insert(&r.key) {
+            let stray = r.verdict != "same" && r.same_as.is_some();
+            if !fits || stray || !ruled.insert(&r.key) {
                 return Err(format!(
                     "a ruling on {:?}, no finding it may rule {} or one ruled on twice",
                     r.key, r.verdict
@@ -634,32 +661,92 @@ pub fn verify(
                 return Err(format!("not a verifier answer: no why for {:?}", r.key));
             }
         }
+        if let Some(r) = said
+            .rulings
+            .iter()
+            .find(|r| r.same_as.as_ref().is_some_and(|to| ruled.contains(to)))
+        {
+            return Err(format!(
+                "{:?} is the same as {:?}, ruled fixed",
+                r.key, r.same_as
+            ));
+        }
         Ok(said.rulings)
     })
 }
 
-/// The lane's blocking findings from complete harness reviews that a fix
-/// can settle (open or verified; no move goes from disputed to fixed),
-/// keyed `<review>/<key>`, as two reviews may raise the same key.
+fn status(f: &Finding) -> &str {
+    f.rest
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+/// Whether an earlier finding still blocks, as the gate counts it.
+fn blocks(f: &Finding) -> bool {
+    f.rest.get("blocks") == Some(&Value::Bool(true))
+}
+
+/// One a fix can settle: it blocks, not disputed (no move goes to fixed).
+fn fixable(f: &Finding) -> bool {
+    blocks(f) && status(f) != "disputed"
+}
+
+/// Whether `same` may name an earlier finding: it still `blocks`, or the
+/// owner waived it at a blocking severity; a repeat of a refuted, fixed or
+/// non-blocking one is new.
+pub fn settles(f: &Finding) -> bool {
+    let severe = !NON_BLOCKING_SEVERITIES.contains(&f.severity.as_str());
+    blocks(f) || status(f) == "waived" && severe
+}
+
+/// Every finding of the lane's complete harness reviews, oldest first,
+/// keyed `<review>/<key>` as two reviews may raise the same key, with
+/// `raised_on` (the commit), `status`, the `reason` of its newest move, `blocks`.
 pub fn earlier(ledger: &Ledger, work: i64) -> Result<Vec<Finding>, LedgerError> {
-    let mut stmt = ledger.conn().prepare(&format!(
-        "SELECT check_event_id, finding_key, severity, title, body, path, head_sha FROM findings
-         WHERE lane_id = ?1 AND {} AND status != 'disputed' AND {COMPLETE_REVIEWS}
-         ORDER BY id",
-        blocking()
-    ))?;
-    let rows = stmt.query_map([work], |r| {
-        let raised_on: Option<String> = r.get(6)?;
-        Ok(Finding {
-            finding_key: format!("{}/{}", r.get::<_, i64>(0)?, r.get::<_, String>(1)?),
-            severity: r.get(2)?,
-            title: r.get(3)?,
-            body: r.get(4)?,
-            path: r.get(5)?,
-            rest: Map::from_iter([("raised_on".into(), json!(raised_on))]),
+    let found = ledger.lane_findings(work)?.into_iter();
+    let found = found.filter(|f| f.check == "review").map(|f| Finding {
+        finding_key: format!("{}/{}", f.check_event_id, f.finding_key),
+        severity: f.severity,
+        title: f.title,
+        body: f.body,
+        path: f.path,
+        rest: Map::from_iter([
+            ("raised_on".into(), json!(f.head_sha)),
+            ("status".into(), json!(f.status)),
+            ("reason".into(), json!(f.reason)),
+            ("blocks".into(), json!(f.blocks)),
+        ]),
+    });
+    Ok(found.collect())
+}
+
+/// Every lens's section on the lane's `earlier` findings, and what a lens
+/// does with them. Empty when there are none.
+pub fn earlier_section(earlier: &[Finding]) -> String {
+    if earlier.is_empty() {
+        return String::new();
+    }
+    let lines: String = earlier
+        .iter()
+        .map(|f| {
+            let line = json!({"key": f.finding_key, "severity": f.severity, "title": f.title,
+                "path": f.path, "status": f.rest["status"], "reason": f.rest["reason"],
+                "blocks": f.rest["blocks"]});
+            line.to_string() + "\n"
         })
-    })?;
-    Ok(rows.collect::<Result<_, _>>()?)
+        .collect();
+    format!(
+        "\n## The lane's earlier review findings\n\n\
+         Reviews of the lane's earlier commits raised these. `status` is where each stands: \
+         `open`, `verified` or `refuted` by the verifier, `disputed` by the lane (for `reason`), \
+         `fixed`, or `waived` by the owner (for `reason`); `blocks` says whether it still blocks. \
+         Do not raise a `waived` one or one that still blocks again unless this commit makes it \
+         new, or your finding says why its `reason` is wrong: it already stands, and a `waived` \
+         one is the owner's call. Any other one (refuted, fixed, or blocking nothing) you may \
+         raise again when you can now prove it.\n\n{}",
+        fenced("jsonl", &lines)
+    )
 }
 
 /// The lenses' section on lane `work`'s newest plan check: each finding
@@ -811,7 +898,8 @@ pub fn replay(
 /// `check run review` once the CLI has read the lane, under its run lock,
 /// and [`replay`] answered none: `input` as it keyed it, `dir` a checkout
 /// of the commit, `facts` what it changes. The sessions and [`finish`],
-/// then one `finding.updated` per ruling.
+/// then one `finding.updated` per ruling. The verifier starts only with a
+/// finding of this review to rule on or an earlier one a fix can settle.
 #[allow(clippy::too_many_arguments)]
 pub fn record(
     ledger: &Ledger,
@@ -827,7 +915,7 @@ pub fn record(
     let found: Vec<Finding> = review.found().cloned().collect();
     let earlier = earlier(ledger, input.work)?;
     // Nothing to rule on starts no session.
-    let verifier = match found.is_empty() && earlier.is_empty() {
+    let verifier = match found.is_empty() && !earlier.iter().any(fixable) {
         true => None,
         false => Some(verify(
             &plan.verifier,
@@ -853,7 +941,7 @@ pub fn record(
 /// `complete` when every lens not skipped ran and the verifier ran or had
 /// nothing to rule on. A finding's body and a ruling's why are cut to daisy's 600
 /// characters, a title and an error to a note's 500; the whole answer is
-/// evidence.
+/// evidence. A finding ruled `same` is kept as a question with `same_as`.
 pub fn finish(
     ledger: &Ledger,
     actor: &Actor,
@@ -874,6 +962,7 @@ pub fn finish(
         && verifier.is_none_or(|v| v.outcome.is_ok());
     let mut verified = Value::Null;
     let mut unproven = Map::new();
+    let mut same = Map::new();
     if let Some(v) = verifier {
         verified = v.row();
         if let Ok(rulings) = &v.outcome {
@@ -884,8 +973,12 @@ pub fn finish(
                     ..r.clone()
                 })
                 .collect();
-            for r in rulings.iter().filter(|r| r.verdict == "unproven") {
-                unproven.insert(r.key.clone(), json!(r.why));
+            for r in &rulings {
+                match r.verdict.as_str() {
+                    "unproven" => unproven.insert(r.key.clone(), json!(r.why)),
+                    "same" => same.insert(r.key.clone(), json!(r.same_as)),
+                    _ => None,
+                };
             }
             verified["rulings"] = json!(rulings);
         }
@@ -918,6 +1011,11 @@ pub fn finish(
             let raised_as = std::mem::replace(&mut f.severity, "question".into());
             f.rest.insert("raised_as".into(), json!(raised_as));
             f.rest.insert("unproven".into(), why.clone());
+        }
+        if let Some(to) = same.get(&f.finding_key) {
+            let raised_as = std::mem::replace(&mut f.severity, "question".into());
+            f.rest.insert("raised_as".into(), json!(raised_as));
+            f.rest.insert("same_as".into(), to.clone());
         }
         f
     });
@@ -954,14 +1052,15 @@ pub(crate) fn cut(text: &str, chars: usize) -> String {
 /// open or verified) is skipped: ruled already (a rerun after a crash), or
 /// moved by its lane or the owner since. Its status is read before the
 /// write, so a dispute that lands in between is ruled on, a move the
-/// verifier may make.
+/// verifier may make. `unproven` and `same` move no status: [`finish`]
+/// wrote those findings as questions.
 fn rule(ledger: &Ledger, actor: &Actor, id: i64, payload: &Payload) -> Checked<()> {
     let verifier = payload.rest.get("verifier");
     let rulings = verifier.and_then(|v| v.get("rulings")).cloned();
     let rulings: Vec<Ruling> =
         serde_json::from_value(rulings.unwrap_or(json!([]))).map_err(io::Error::other)?;
-    // `unproven` moves no status: `finish` wrote that finding as a question.
-    for r in rulings.into_iter().filter(|r| r.verdict != "unproven") {
+    let moves = rulings.into_iter();
+    for r in moves.filter(|r| !matches!(r.verdict.as_str(), "unproven" | "same")) {
         let fixed = r.verdict == "fixed";
         let (review, key) = match fixed {
             true => r

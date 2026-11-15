@@ -524,7 +524,7 @@ impl Ledger {
         let tok = |k: &str| format!("json_extract(payload_json, '$.{k}')");
         let sql = format!(
             "SELECT l.id, l.title, l.kind, l.pipeline_id, e.id, e.kind, e.at, e.day,
-                    e.payload, e.handoff, e.source, e.t0, e.t1, e.t2, e.t3, l.pipeline_hash
+                    e.payload, e.handoff, e.source, e.t0, e.t1, e.t2, e.t3
              FROM lanes l JOIN (
                  SELECT lane_id, id, kind, at,
                         julianday(CASE kind WHEN 'pr.merged'
@@ -549,17 +549,13 @@ impl Ledger {
             let id: i64 = r.get(0)?;
             if lanes.last().is_none_or(|l| l.id != id) {
                 let pipeline_id: Option<String> = r.get(3)?;
-                let hash: Option<String> = r.get(15)?;
-                let stamp = pipeline::by_stamp(
-                    pipeline_id.as_deref().unwrap_or_default(),
-                    hash.as_deref().unwrap_or_default(),
-                );
+                let schema = pipeline::schema_of(pipeline_id.as_deref().unwrap_or_default());
                 lanes.push(Lane {
                     id,
                     title: r.get(1)?,
                     kind: r.get(2)?,
                     pipeline_id,
-                    schema2: stamp.is_some_and(|p| p.schema >= 2),
+                    schema2: schema.is_some_and(|s| s >= 2),
                     ..Lane::default()
                 });
             }
