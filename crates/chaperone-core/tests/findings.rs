@@ -7,6 +7,7 @@ mod common;
 use chaperone_core::checks::{FindingMove, Recorded};
 use chaperone_core::ledger::{Actor, EventKind, Ledger, Mutation, Payload, Refusal};
 use chaperone_core::pipeline::Fact;
+use chaperone_core::review;
 use chaperone_core::work::{ClaimInput, CreateInput};
 use common::{actor, count, read_only};
 use serde_json::json;
@@ -423,7 +424,12 @@ fn a_waiver_has_a_kind_a_ref_or_a_fresh_countersign() {
     );
     assert!(waive(&ledger, check, ("2", "b"), ("accepted", "")).is_err());
     waive(&ledger, check, ("5", "b"), ("accepted", "")).unwrap();
+    // The lenses' plan text, and so a review's plan_answers, is as before
+    // until a plan finding is waived with a kind.
+    let shown = || review::plan_findings(&ledger, 1).unwrap();
+    assert!(shown().contains("`waived` by the owner") && !shown().contains("waiver"));
     let moved = waive(&ledger, plan, ("5", "p"), ("scope", "#243")).unwrap();
     assert_eq!(moved.payload.rest["waiver"]["kind"], "scope");
+    assert!(shown().contains(r#""waiver":"scope""#), "{}", shown());
     common::assert_consistent(&path);
 }

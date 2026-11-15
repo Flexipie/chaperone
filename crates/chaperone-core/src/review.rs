@@ -777,18 +777,24 @@ fn shown(conn: &Connection, work: i64) -> Result<String, LedgerError> {
     let lines: String = found
         .iter()
         .map(|f| {
-            let line = json!({"key": f.finding_key, "severity": f.severity, "title": f.title,
-                "body": f.body, "path": f.path, "status": f.status, "reason": f.reason,
-                "waiver": f.waiver});
+            let mut line = json!({"key": f.finding_key, "severity": f.severity, "title": f.title,
+                "body": f.body, "path": f.path, "status": f.status, "reason": f.reason});
+            if let Some(kind) = &f.waiver {
+                line["waiver"] = json!(kind);
+            }
             line.to_string() + "\n"
         })
         .collect();
+    let by = match found.iter().any(|f| f.waiver.is_some()) {
+        true => "outside the lane (`waiver`, its kind)",
+        false => "by the owner",
+    };
     Ok(format!(
         "\n## The plan check's findings and the lane's answers\n\n\
          A review of the lane's plan, before its code, raised these. `status` is the lane's \
          answer: `accepted` (it would act on it), `disputed` (it declined, for `reason`), \
-         `answered` (a question), or `waived` outside the lane (`waiver`, its kind). An \
-         `accepted` one the diff does not address: report it, as a `blocker`. A `disputed` one: do not raise it again unless \
+         `answered` (a question), or `waived` {by}. An `accepted` one the diff does not \
+         address: report it, as a `blocker`. A `disputed` one: do not raise it again unless \
          your finding says why its reason is wrong.\n\n{}",
         fenced("jsonl", &lines)
     ))
