@@ -192,7 +192,9 @@ fn a_run_measures_the_lane_commit() {
 }
 
 /// Code files a base profile's `[size] tests` glob names count as test
-/// lines, not code lines; they are still code.
+/// lines, not code lines; they are still code. A `[size]` that does not
+/// load is refused and writes nothing, as is a size waiver for a lane
+/// with no worktree to read its commit in.
 #[test]
 fn test_files_are_test_lines() {
     let dir = tempfile::tempdir().unwrap();
@@ -221,6 +223,40 @@ fn test_files_are_test_lines() {
     let p = &run(&db, &["check", "run", "diff", "--work", &id]).1["payload"];
     let got = ["code_lines", "test_lines", "changes_code"].map(|k| &p[k]);
     assert_eq!(got, [&json!(1), &json!(401), &json!(true)]);
+
+    git(&wt, &["checkout", "-q", "main"], &[]);
+    let bad: &[(&str, &[u8])] = &[(".chaperone/profile.toml", b"[size]\ntest = [\"t/**\"]\n")];
+    git(&wt, &["add", "."], bad);
+    git(&wt, &["commit", "-qm", "bad"], &[]);
+    git(
+        &wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(&wt, &["checkout", "-q", "feat"], &[]);
+    let before = events(&db);
+    let (code, err) = run(&db, &["check", "run", "diff", "--work", &id]);
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown field `test`"),
+        "{err}"
+    );
+    assert_eq!(events(&db), before);
+
+    let bare = lane(&db, &[]);
+    let waive = [
+        "check", "waive", "size", "--work", &bare, "--lines", "5", "--reason", "r",
+    ];
+    let (code, err) = run(&db, &waive);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err["message"].as_str().unwrap().contains("has no worktree"),
+        "{err}"
+    );
+    assert_eq!(events(&db), before + 2, "the lane's create and claim only");
 }
 
 /// A commit that changes a file a base profile's companion rule names

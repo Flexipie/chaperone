@@ -507,7 +507,8 @@ fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
 
 /// The cap counts code lines, so test lines past it pass. The owner's size
 /// waiver, refused from the lane's session and without lines above 0,
-/// raises this lane's cap alone, up to its lines.
+/// raises this lane's cap alone, up to its lines; a harness-produced one
+/// counts for nothing.
 #[test]
 fn the_cap_counts_code_and_only_the_owner_raises_it() {
     let v = V20::new("code");
@@ -529,6 +530,10 @@ fn the_cap_counts_code_and_only_the_owner_raises_it() {
         raw(&v.ledger, 1, "size_waiver", "session", json!({})),
         "above 0",
     );
+    // Only a session's waiver counts: the harness never writes one.
+    let harness = json!({"lines": 999});
+    raw_as(&v.ledger, &v.lane, 1, "size_waiver", "harness", harness).unwrap();
+    assert_eq!(v.ready(OTHER), over);
     waive(&v.owner, 500).unwrap().unwrap();
     assert_eq!(v.ready(OTHER), tests);
     v.diff(THIRD, 501, true);
