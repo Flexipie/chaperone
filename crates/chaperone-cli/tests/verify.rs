@@ -218,7 +218,7 @@ fn claimed(claude: Value) -> Lane {
         let script = json!({"version": "1 (fake)", "runs": runs}).to_string();
         std::fs::write(bin.join(format!("{cli}.json")), script).unwrap();
     }
-    let profile: &[u8] = b"[tests]\ncommands = [[\"true\"]]\n";
+    let profile: &[u8] = b"[tests]\ncommands = [[\"true\"]]\n[size]\ntests = [\"tests/**\"]\n";
     let files: &[(&str, &[u8])] = &[("lib.rs", b"a\n"), (".chaperone/profile.toml", profile)];
     git(&wt, &["init", "-q", "-b", "main"], files);
     git(&wt, &["add", "."], &[]);
@@ -302,15 +302,15 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
     assert_eq!(lane.handoff().0, 0);
 }
 
-/// A diff of 200 code lines (the lane's one and 199 more), v20's minimum,
-/// runs the Codex lens too.
+/// A diff of 200 lines (the lane's one code line and 199 test lines), v20's
+/// minimum, runs the Codex lens too: the minimum counts test lines.
 #[test]
 fn a_diff_at_the_minimum_runs_the_codex_lens() {
     let lane = lane(claude(json!({"findings": []}), json!([])));
     lane.answer("lane", "accept");
     let lines = "x\n".repeat(199);
-    let files: &[(&str, &[u8])] = &[("big.rs", lines.as_bytes())];
-    git(&lane.wt, &["add", "big.rs"], files);
+    let files: &[(&str, &[u8])] = &[("tests/big.rs", lines.as_bytes())];
+    git(&lane.wt, &["add", "tests/big.rs"], files);
     git(&lane.wt, &["commit", "-qm", "big"], &[]);
     let out = lane.verify();
     assert_eq!(out["stopped"], Value::Null, "{out}");
