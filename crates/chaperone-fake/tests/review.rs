@@ -315,6 +315,10 @@ fn the_verifier_rules_by_key() {
         error.starts_with(r#"a ruling on "correctness-0""#),
         "{error}"
     );
+    // A nit does not block, so there is nothing to rule unproven.
+    let nit = json!({"rulings": [{"key": b, "verdict": "unproven", "why": "no run"}]});
+    let error = verify(answer(nit)).1.outcome.unwrap_err();
+    assert!(error.starts_with(&format!("a ruling on {b:?}")), "{error}");
     let blank = json!({"rulings": [{"key": a, "verdict": "verified", "why": " "}]});
     let error = verify(answer(blank)).1.outcome.unwrap_err();
     assert!(
@@ -471,6 +475,45 @@ fn a_review_is_recorded_then_ruled() {
     let again = record(&env, &ledger).unwrap();
     assert_eq!((again.replayed, again.event_id), (true, first.event_id));
     assert_eq!(calls(&env), before);
+}
+
+/// A risk the verifier rules unproven is written as a question with its
+/// lens's severity and the why, moves no status and does not block; the
+/// proven risk a and the unruled blocker b still do.
+#[test]
+fn an_unproven_risk_does_not_block() {
+    let (claude, codex) = scripts(|a, _| {
+        let c = review::findings("correctness", json!({"findings": [found("risk", "c")]}));
+        let c = &c.unwrap()[0].finding_key;
+        let rulings = json!({"rulings": [
+            {"key": a, "verdict": "verified", "why": "src/a.rs:3 reads past the end"},
+            {"key": c, "verdict": "unproven", "why": "no run and no cited line"},
+        ]});
+        json!({"when": "LENS verifier", "stdout": session("verifier", rulings)})
+    });
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let p = record(&env, &ledger).unwrap().payload;
+    let want = [("a", "verified"), ("b", "open")].map(|(t, s)| (t.to_string(), s.to_string()));
+    assert_eq!(blocking(&ledger), want);
+    let Some(Findings::List(list)) = &p.findings else {
+        panic!("no findings");
+    };
+    let c = list.iter().find(|f| f.title == "c").unwrap();
+    assert_eq!(
+        (
+            c.severity.as_str(),
+            &c.rest["raised_as"],
+            &c.rest["unproven"]
+        ),
+        (
+            "question",
+            &json!("risk"),
+            &json!("no run and no cited line")
+        )
+    );
+    let a = list.iter().find(|f| f.title == "a").unwrap();
+    assert!(a.severity == "risk" && !a.rest.contains_key("raised_as"));
 }
 
 /// A verifier that fails rules on nothing: every finding stays open and
