@@ -14,7 +14,7 @@ use super::DETAIL_ROWS;
 use super::lane_board::OPEN_OWNER_QUESTION;
 use super::lane_detail::LaneDetail;
 use crate::ledger::{Ledger, LedgerError, check_schema};
-use crate::pipeline::{Fact, Phase, Route, by_stamp};
+use crate::pipeline::{Fact, Phase, Route, by_id};
 use crate::stats::Cohort;
 
 /// `repo_median`'s lanes, on the `events_merged` index (migration 0006).
@@ -275,15 +275,15 @@ impl Ledger {
             .handoffs
             .first()
             .and_then(|h| h.handoff.commit.clone());
-        let stamp: Option<(Option<String>, Option<String>, Option<String>)> = tx
+        let stamp: Option<(Option<String>, Option<String>)> = tx
             .query_row(
-                "SELECT pipeline_id, pipeline_hash, route FROM lanes WHERE id = ?1",
+                "SELECT pipeline_id, route FROM lanes WHERE id = ?1",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
         let (mut review_rounds, mut review_head, mut gates) = (0, None, None);
-        if let Some((pid, hash, route)) = stamp {
+        if let Some((pid, route)) = stamp {
             let facts = self.project(id, head.as_deref())?;
             if let Fact::Int(n) = facts.get("review.local_rounds") {
                 review_rounds = *n;
@@ -292,7 +292,7 @@ impl Ledger {
                 review_head = Some(h.clone());
             }
             gates = (|| {
-                let doc = by_stamp(pid.as_deref()?, hash.as_deref()?)?;
+                let doc = by_id(pid.as_deref()?)?;
                 let route: Route = serde_json::from_value(route?.into()).ok()?;
                 let to = match route {
                     Route::CodePr | Route::Direct => Phase::Ready,

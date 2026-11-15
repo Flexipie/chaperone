@@ -42,7 +42,7 @@ pub(crate) fn project(
     // from an older binary.
     let mut harness_only = false;
     if let (Some(id), Some(hash)) = (id, hash) {
-        harness_only = crate::pipeline::by_stamp(&id, &hash).is_some_and(|d| d.schema == 2);
+        harness_only = crate::pipeline::by_id(&id).is_some_and(|d| d.schema == 2);
         f.set("pipeline.id", id.as_str())
             .set("pipeline.hash", hash.as_str());
     }

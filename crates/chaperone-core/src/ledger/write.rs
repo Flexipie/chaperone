@@ -566,7 +566,7 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )?;
         if let (Some(id), Some(hash)) = (&id, &hash)
-            && crate::pipeline::by_stamp(id, hash).is_none()
+            && crate::pipeline::by_id(id).is_none()
         {
             refuse!(Refusal::PipelineUnknown {
                 pipeline_id: id.clone(),
@@ -923,13 +923,12 @@ pub(crate) fn plan_waiver(p: &Payload) -> bool {
 /// The schema of the pipeline lane `lane_id` is stamped with, `None` while
 /// it has no stamp this binary loads.
 fn stamped_schema(tx: &Transaction, lane_id: i64) -> Result<Option<i64>, LedgerError> {
-    let (id, hash): (Option<String>, Option<String>) = tx.query_row(
-        "SELECT pipeline_id, pipeline_hash FROM lanes WHERE id = ?1",
+    let id: Option<String> = tx.query_row(
+        "SELECT pipeline_id FROM lanes WHERE id = ?1",
         [lane_id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| r.get(0),
     )?;
-    let doc = crate::pipeline::by_stamp(&id.unwrap_or_default(), &hash.unwrap_or_default());
-    Ok(doc.map(|d| d.schema))
+    Ok(crate::pipeline::by_id(&id.unwrap_or_default()).map(|d| d.schema))
 }
 
 /// The session has held the lane: it wrote a `lane.claimed` or

@@ -183,8 +183,9 @@ the route from the lane's kind and flow (lane facts below). A first claim may ca
 `v20` today); the write stamps that one, with its hash, and refuses any other id, older or
 unknown (`invalid_input`), and a `pipeline_id` on a claim of a lane already stamped. Any
 other event that carries a stamp field is `invalid_input`. A takeover keeps it. A claim, renewal or takeover on a lane
-stamped with a hash this binary cannot load is refused (`pipeline_unknown`) and writes
-nothing.
+stamped with an id this binary has no document for is refused (`pipeline_unknown`) and
+writes nothing. A lane's document is found by its id alone: the stamped hash is the record
+of the document at claim, and an in-place edit of a prompt does not strand the lane.
 
 `worktree_path` and `branch` are frozen once the lane has a harness check (`producer.kind`
 `harness`): a claim, renewal, takeover or update that changes a set one, or clears it, is

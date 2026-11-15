@@ -99,7 +99,7 @@ pub(crate) fn decide(
     let (Some(id), Some(hash), Some(route)) = (id, hash, route) else {
         return Ok(Ok(Err(Denied::unstamped())));
     };
-    let Some(doc) = pipeline::by_stamp(&id, &hash) else {
+    let Some(doc) = pipeline::by_id(&id) else {
         return Ok(Err(Refusal::PipelineUnknown {
             pipeline_id: id,
             pipeline_hash: hash,

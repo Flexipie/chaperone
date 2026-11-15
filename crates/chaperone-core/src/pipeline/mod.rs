@@ -271,7 +271,7 @@ const PROMPT_FILES: &[(&str, &str)] = &[
 ];
 
 /// The documents this binary can load, oldest first; a lane stamped with
-/// anything else is `pipeline_unknown`.
+/// any other id is `pipeline_unknown`.
 static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
     [
         include_str!("../../../../pipelines/v17.toml"),
@@ -302,16 +302,11 @@ pub fn newer() -> &'static [Pipeline] {
     &KNOWN[DEFAULT + 1..]
 }
 
-/// The loaded document for a lane's stamp, `None` when this binary has no
-/// document with that id and hash.
-pub fn by_stamp(id: &str, hash: &str) -> Option<&'static Pipeline> {
-    KNOWN.iter().find(|p| p.id == id && p.hash == hash)
-}
-
-/// The schema of this binary's document with pipeline id `id`, whatever
-/// its hash: an id names one document, and its hash moves with its prompts.
-pub fn schema_of(id: &str) -> Option<i64> {
-    KNOWN.iter().find(|p| p.id == id).map(|p| p.schema)
+/// This binary's document with pipeline id `id`, whatever hash the lane
+/// was stamped with: an id names one document, and its hash moves with its
+/// prompts, so the stamped hash is the record of what the lane ran.
+pub fn by_id(id: &str) -> Option<&'static Pipeline> {
+    KNOWN.iter().find(|p| p.id == id)
 }
 
 impl Route {
@@ -454,15 +449,15 @@ requires = ["a"]
         assert_eq!(p.checks.len(), PROMPT_FILES.len());
         // Only the gated handoff runs, so v20 has no other row.
         assert!(p.transitions.iter().all(|t| t.id == "handoff"));
-        assert_eq!(by_stamp("v20", V20_HASH).unwrap().id, "v20");
+        assert_eq!(by_id("v20").unwrap().hash, V20_HASH);
     }
 
     #[test]
-    fn by_stamp_needs_id_and_hash() {
-        assert!(by_stamp("v17", V17_HASH).is_some());
-        assert!(by_stamp("v17.1", V17_1_HASH).is_some());
-        assert!(by_stamp("v19", V19_HASH).is_some());
-        assert!(by_stamp("v18", V17_HASH).is_none());
+    fn by_id_finds_each_embedded_id() {
+        assert_eq!(by_id("v17").unwrap().hash, V17_HASH);
+        assert_eq!(by_id("v17.1").unwrap().hash, V17_1_HASH);
+        assert_eq!(by_id("v19").unwrap().hash, V19_HASH);
+        assert!(by_id("v18").is_none());
         assert_eq!(current().id, "v19");
         let newer: Vec<_> = newer().iter().map(|p| p.id.as_str()).collect();
         assert_eq!(newer, ["v20"]);

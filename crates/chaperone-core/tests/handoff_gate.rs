@@ -785,9 +785,9 @@ fn a_later_no_verdict_revokes_ready_on_the_board() {
     lane.finish("merge_verdict", "ran", "fff9999", yes);
     assert_eq!(board(), revoked("verdict_on_head no longer holds"));
     lane.db
-        .execute("UPDATE lanes SET pipeline_hash = 'gone' WHERE id = 1", [])
+        .execute("UPDATE lanes SET pipeline_id = 'v21' WHERE id = 1", [])
         .unwrap();
-    assert_eq!(board(), revoked("this binary does not know pipeline v19"));
+    assert_eq!(board(), revoked("this binary does not know pipeline v21"));
 }
 
 /// A write on the CLI's clock is timed after the newest event, so writes

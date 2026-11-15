@@ -25,8 +25,8 @@ impl Lane {
         lane
     }
 
-    /// A command as the lane's session, which must succeed.
-    fn cli(&self, args: &[&str]) {
+    /// A command as the lane's session, which must succeed; its `data`.
+    fn cli(&self, args: &[&str]) -> Value {
         let out = Command::new(BIN)
             .arg("--db")
             .arg(&self.db)
@@ -35,6 +35,7 @@ impl Lane {
             .output()
             .unwrap();
         assert!(out.status.success(), "{args:?}: {out:?}");
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()["data"].take()
     }
 
     /// Every event's kind and payload, oldest first: `work events` leaves
@@ -113,6 +114,23 @@ fn session_start_names_the_lane_and_what_is_missing() {
     for want in ["work 1", "pipeline v20", "tests_passed", "verify --work 1"] {
         assert!(context.contains(want), "{want}: {context}");
     }
+}
+
+/// An install that edits a v20 prompt moves v20's hash (#244): a lane
+/// stamped before it still loads v20 by id, and keeps the hash it ran.
+#[test]
+fn a_lane_stamped_with_an_older_v20_hash_keeps_working() {
+    let lane = Lane::new();
+    let db = rusqlite::Connection::open(&lane.db).unwrap();
+    db.execute("UPDATE lanes SET pipeline_hash = 'older' WHERE id = 1", [])
+        .unwrap();
+    let out = lane.json("session-start", json!({"source": "startup"}));
+    let context = out["hookSpecificOutput"]["additionalContext"].as_str();
+    assert!(context.unwrap().contains("tests_passed"), "{out}");
+    let limits = lane.cli(&["pipeline", "limits", "--work", "1"]);
+    assert_eq!(limits["limits"]["code_lines"], 400);
+    let renewed = lane.cli(&["work", "claim", "1"]);
+    assert_eq!(renewed["pipeline_hash"], "older");
 }
 
 #[test]
