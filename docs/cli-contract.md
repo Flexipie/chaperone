@@ -544,7 +544,8 @@ refused, against accidents rather than a lane swapping the file in between) of a
 UTF-8 text that is not blank; it may sit outside the worktree, where agents keep their plans.
 All of these write nothing. The plan is named as the evidence store keeps it, redacted, and
 that text is what the session is sent; a plan check that ran on the same tree, pipeline and
-plan replays, and one whose sessions gave no answer `plan_attempts` times there is refused (the
+plan replays while it is the lane's newest, else is carried as a new `ran` naming it
+(`carried_from`, events.md), and one whose sessions gave no answer `plan_attempts` times there is refused (the
 owner can waive the check). Neither stores the plan, which is written to the store only when a
 session runs on it. Else one fresh session in the harness's checkout of the commit (no diff is
 read) is given its prompt, what the lane is for (as the intent lens), the plan, fenced, and the

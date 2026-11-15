@@ -94,7 +94,9 @@ These rules keep every write small, single and fail-closed.
   complete review of the tree by the pipeline, replayed on a commit that has it, else carried.
   `check run plan` is keyed the same way, as
   `run:<lane_id>:plan_check:<tree>:<pipeline hash>:<plan_ref>:<attempt>`: the same plan text on
-  the same tree and pipeline replays, a changed plan runs, and `plan_attempts` sessions with
+  the same tree and pipeline replays while its plan check is the lane's newest, else is carried
+  (`...:carried:<attempt>`, after a newer plan check or the owner's waiver, so its findings
+  are the lane's to answer again), a changed plan runs, and `plan_attempts` sessions with
   no answer on one plan are the most it runs.
   `attention record` scopes its `--idempotency-key` to the lane and type (`attention:<lane_id>:<type>:<key>`);
   without one it uses `attention:` plus the
