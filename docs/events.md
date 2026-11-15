@@ -230,7 +230,7 @@ finding. Only that code path sets the producer; no command takes it as input.
 | `open`, `verified` | `fixed` | independent (the verifier confirms the fix on `head_sha`) |
 | `open`, `disputed` | `verified`, `refuted` | independent |
 | `open`, `verified` | `disputed` | lane |
-| `open`, `verified`, `disputed` | `waived` | independent (the owner) |
+| `open`, `verified`, `disputed` | `waived` | independent (the owner, or for `scope`, `deferred` and `accepted` a session fresh to the lane, `waiver` above) |
 | `open` | `accepted` | lane, and only on a finding of a harness `plan_check` |
 | `accepted` | `waived` | independent, and only with `waiver.kind` `scope` (the work moved to the issue `ref` names) |
 

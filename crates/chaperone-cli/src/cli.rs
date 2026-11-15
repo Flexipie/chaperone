@@ -877,8 +877,8 @@ pub enum FindingCmd {
     /// rules on it
     Dispute(FindingArgs),
     /// Stop an open, verified or disputed finding blocking, or (scope only)
-    /// release an accepted plan finding. The owner's: refused from any
-    /// session that has held the lane. Never waive a finding where a gate
+    /// release an accepted plan finding. Refused from any session that has
+    /// held the lane: the owner's, or a fresh agent's (--kind). Never waive a finding where a gate
     /// fails open on a path a lane can reach: fix it or ask the owner
     Waive(WaiveArgs),
     /// Say the lane will act on an open plan check finding, and how. Only

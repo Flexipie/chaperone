@@ -1,4 +1,4 @@
-Stop an open, verified or disputed finding blocking, or (scope only) release an accepted plan finding. The owner's: refused from any session that has held the lane. Never waive a finding where a gate fails open on a path a lane can reach: fix it or ask the owner
+Stop an open, verified or disputed finding blocking, or (scope only) release an accepted plan finding. Refused from any session that has held the lane: the owner's, or a fresh agent's (--kind). Never waive a finding where a gate fails open on a path a lane can reach: fix it or ask the owner
 
 Usage: chaperone finding waive [OPTIONS] --reason <REASON> --kind <KIND> <EVENT> <KEY>
 
