@@ -71,7 +71,6 @@ const FINDING_MOVES: &[(&str, &str, By)] = &[
     ("open", "disputed", By::Lane),
     ("verified", "disputed", By::Lane),
     ("open", "accepted", By::Lane),
-    // Only as a `scope` waiver: the work moved to another issue.
     ("accepted", "waived", By::Independent),
 ];
 

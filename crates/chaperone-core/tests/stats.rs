@@ -464,8 +464,15 @@ fn waivers_by_kind() {
             .unwrap()
             .unwrap();
     }
+    // A waiver written before waivers had kinds counts as `none`.
+    let sql = "UPDATE events SET payload_json = json_remove(payload_json, '$.waiver')
+               WHERE kind = 'finding.updated' AND json_extract(payload_json, '$.finding_key') = 'f1'";
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(sql, [])
+        .unwrap();
     let got = stats(&ledger, Cohort::Work(vec![work]));
-    let counts = json!({"accepted": 1, "disproved": 1, "scope": 1});
+    let counts = json!({"accepted": 1, "none": 1, "scope": 1});
     let listed = format!("{event}/f3");
     assert_eq!(got["lanes"][0]["waivers"], counts);
     assert_eq!(got["lanes"][0]["accepted_without_ref"], json!([listed]));
