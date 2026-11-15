@@ -376,19 +376,12 @@ fn a_waiver_has_a_kind_a_ref_or_a_fresh_countersign() {
     walk(&ledger, check, "c", &["verified"]);
     let db = read_only(&path);
     let events = || count(&db, "SELECT count(*) FROM events");
+    let (a, p) = ((check, "5", "a"), (plan, "5", "p"));
     let cases = [
-        ((check, "5", "a"), ("", ""), "only with a waiver kind"),
-        ((check, "5", "a"), ("waved", "x"), "only with a waiver kind"),
-        (
-            (check, "5", "a"),
-            ("disproved", ""),
-            "a disproved waiver needs a ref",
-        ),
-        (
-            (check, "5", "a"),
-            ("fixed", ""),
-            "a fixed waiver needs a ref",
-        ),
+        (a, ("", ""), "only with a waiver kind"),
+        (a, ("waved", "x"), "only with a waiver kind"),
+        (a, ("disproved", ""), "a disproved waiver needs a ref"),
+        (a, ("fixed", ""), "a fixed waiver needs a ref"),
         ((check, "2", "a"), ("scope", "#243"), "countersigned"),
         // No session: every write needs one (`Actor::check`).
         (
@@ -396,26 +389,10 @@ fn a_waiver_has_a_kind_a_ref_or_a_fresh_countersign() {
             ("deferred", "#9"),
             "needs an agent and a session",
         ),
-        (
-            (plan, "5", "p"),
-            ("deferred", "#243"),
-            "waived only as scope",
-        ),
-        (
-            (check, "5", "a"),
-            ("disproved", " "),
-            "ref is one non-blank line",
-        ),
-        (
-            (check, "5", "a"),
-            ("disproved", "a\nb"),
-            "ref is one non-blank line",
-        ),
-        (
-            (plan, "5", "p"),
-            ("scope", ""),
-            "waived only as scope, with the issue",
-        ),
+        (p, ("deferred", "#243"), "waived only as scope"),
+        (a, ("disproved", " "), "ref is one non-blank line"),
+        (a, ("disproved", "a\nb"), "ref is one non-blank line"),
+        (p, ("scope", ""), "waived only as scope, with the issue"),
     ];
     for ((check, who, key), kind, said) in cases {
         let before = events();
