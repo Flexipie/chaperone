@@ -439,11 +439,8 @@ fn waivers_by_kind() {
         .review_record(&actor("1"), work, 1, &view)
         .unwrap()
         .unwrap();
-    let db = common::read_only(&path);
-    let event = common::count(
-        &db,
-        "SELECT max(id) FROM events WHERE kind = 'check.finished'",
-    );
+    let sql = "SELECT max(id) FROM events WHERE kind = 'check.finished'";
+    let event = common::count(&common::read_only(&path), sql);
     for (key, kind, reference) in [
         ("f1", "disproved", Some("a.rs:1")),
         ("f2", "scope", Some("#243")),
@@ -467,10 +464,8 @@ fn waivers_by_kind() {
     // A waiver written before waivers had kinds counts as `none`.
     let sql = "UPDATE events SET payload_json = json_remove(payload_json, '$.waiver')
                WHERE kind = 'finding.updated' AND json_extract(payload_json, '$.finding_key') = 'f1'";
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(sql, [])
-        .unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute(sql, []).unwrap();
     let got = stats(&ledger, Cohort::Work(vec![work]));
     let counts = json!({"accepted": 1, "none": 1, "scope": 1});
     let listed = format!("{event}/f3");
