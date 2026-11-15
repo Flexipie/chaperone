@@ -51,18 +51,8 @@ fn the_lane_disputes_and_the_owner_waives() {
         .apply(&daisy, None, at, m)
         .unwrap();
     let dispute = ["finding", "dispute", "3", "f1", "--reason", "not a bug"];
-    let waive = [
-        "finding",
-        "waive",
-        "3",
-        "f1",
-        "--reason",
-        "owner's call",
-        "--kind",
-        "disproved",
-        "--ref",
-        "src/x.rs:10",
-    ];
+    let bare = ["finding", "waive", "3", "f1", "--reason", "owner's call"];
+    let waive = [&bare[..], &["--kind", "disproved", "--ref", "src/x.rs:10"]].concat();
     // The verifier's moves are the harness's (`check run review`): no
     // command makes them and none takes a producer, so the lane's session
     // cannot rule on its own finding.
@@ -78,15 +68,14 @@ fn the_lane_disputes_and_the_owner_waives() {
     assert_eq!(run("lane", &waive)["error"]["code"], "invalid_input");
     // A waiver says its kind; disproved names a ref; scope is written by a
     // session fresh to the lane, and the lane's is not.
-    let bare = &waive[..6];
-    assert_eq!(run("owner", bare)["error"]["code"], "usage");
-    let no_ref = [bare, &["--kind", "disproved"]].concat();
+    assert_eq!(run("owner", &bare)["error"]["code"], "usage");
+    let no_ref = [&bare[..], &["--kind", "disproved"]].concat();
     let said = run("owner", &no_ref)["error"]["message"].clone();
     assert_eq!(
         said,
         "a disproved waiver needs a ref: the commit and test, or the file:line"
     );
-    let scope = [bare, &["--kind", "scope", "--ref", "#243"]].concat();
+    let scope = [&bare[..], &["--kind", "scope", "--ref", "#243"]].concat();
     let said = run("lane", &scope)["error"]["message"].clone();
     assert!(said.as_str().unwrap().contains("has held lane 1"), "{said}");
     // A dry run writes nothing, so the real dispute is not a repeat.
@@ -106,9 +95,7 @@ fn the_lane_disputes_and_the_owner_waives() {
             (&json!(1), &json!(status))
         );
     }
-    let unknown = [
-        "finding", "waive", "3", "f2", "--reason", "r", "--kind", "scope",
-    ];
+    let unknown = [&bare[..3], &["f2", "--reason", "r", "--kind", "scope"]].concat();
     let missing = run("owner", &unknown)["error"].clone();
     assert_eq!(
         (&missing["code"], &missing["details"]["reference"]),
