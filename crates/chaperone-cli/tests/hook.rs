@@ -131,6 +131,23 @@ fn a_lane_stamped_with_an_older_v20_hash_keeps_working() {
     assert_eq!(limits["limits"]["code_lines"], 400);
     let renewed = lane.cli(&["work", "claim", "1"]);
     assert_eq!(renewed["pipeline_hash"], "older");
+    // The engine runs v20's gates: denied past `stamp_ok`, not `pipeline_unknown`.
+    let handoff = lane.dir.path().join("handoff.json");
+    let ready = json!({"summary": "s", "status": "review", "ready": true, "commit": "abc1234"});
+    std::fs::write(&handoff, ready.to_string()).unwrap();
+    let out = Command::new(BIN)
+        .arg("--db")
+        .arg(&lane.db)
+        .args(["work", "handoff", "1"])
+        .arg(&handoff)
+        .envs([("DAISY_AGENT", "lane"), ("DAISY_SESSION", "lane")])
+        .output()
+        .unwrap();
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(
+        err["error"]["details"]["gate"], "no_uncounted_files",
+        "{err}"
+    );
 }
 
 #[test]
