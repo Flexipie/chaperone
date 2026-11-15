@@ -7,6 +7,8 @@ use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// How long an agent has to stop its tools before its group is killed.
@@ -66,7 +68,9 @@ pub fn run_input(
 /// stdout and of stderr, so a command that prints without end costs no
 /// more memory than that; `cut` says either stream lost its start. At the
 /// deadline the child is stopped as [`run_input`] stops it and what it
-/// printed is still returned, with `timed_out`.
+/// printed is still returned, with `timed_out`. A process that left the
+/// group and holds a pipe past the deadline, or past the grace after the
+/// stop, ends the wait the same way: what was read so far, also `cut`.
 pub fn run_tail(cmd: &mut Command, deadline: Instant, tail: usize) -> Result<Done, Failed> {
     start(cmd, None, true, deadline, Keep::Tail(tail))
 }
@@ -137,11 +141,11 @@ fn start(
     if let (Some(mut pipe), Some(input)) = (child.stdin.take(), input.map(<[u8]>::to_vec)) {
         std::thread::spawn(move || sent.send(pipe.write_all(&input)));
     }
-    // Over a channel, so the wait for the end of a pipe has the deadline.
     let drain = |pipe: Option<Box<dyn Read + Send>>, keep: Keep| {
         let (tx, rx) = std::sync::mpsc::channel();
+        let kept = Arc::new(Mutex::new((Vec::new(), false)));
+        let shared = Arc::clone(&kept);
         std::thread::spawn(move || {
-            let (mut buf, mut cut) = (Vec::new(), false);
             if let Some(mut pipe) = pipe {
                 let mut chunk = [0u8; 8192];
                 loop {
@@ -151,24 +155,25 @@ fn start(
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break,
                     };
+                    let (buf, cut) = &mut *lock(&shared);
                     match keep {
                         Keep::Head(cap) => {
                             let kept = n.min(cap - buf.len());
                             buf.extend_from_slice(&chunk[..kept]);
-                            cut |= kept < n;
+                            *cut |= kept < n;
                         }
                         Keep::Tail(tail) => {
                             buf.extend_from_slice(&chunk[..n]);
                             let over = buf.len().saturating_sub(tail);
                             buf.drain(..over);
-                            cut |= over > 0;
+                            *cut |= over > 0;
                         }
                     }
                 }
             }
-            let _ = tx.send((buf, cut));
+            let _ = tx.send(());
         });
-        rx
+        Drain { ended: rx, kept }
     };
     let err_keep = match keep {
         Keep::Head(_) => Keep::Head(usize::MAX),
@@ -191,17 +196,12 @@ fn start(
                 }
                 // With its group killed the pipes close; the grace bounds a
                 // process that left the group and still holds one, whose
-                // stream is then lost and counts as cut (#230 keeps it).
+                // stream then counts as cut.
                 if let (Keep::Tail(_), Ok(status)) = (keep, status) {
-                    let (out, out_cut) = out.recv_timeout(GRACE).unwrap_or((Vec::new(), true));
-                    let (err, err_cut) = err.recv_timeout(GRACE).unwrap_or((Vec::new(), true));
-                    return Ok(Done {
-                        status,
-                        out,
-                        cut: out_cut || err_cut,
-                        err,
-                        timed_out: true,
-                    });
+                    let until = Instant::now() + GRACE;
+                    let left = || until.saturating_duration_since(Instant::now());
+                    let ended = out.ended(left()) & err.ended(left());
+                    return Ok(tail(status, out, err, ended, true));
                 }
                 return Err(Failed::TimedOut);
             }
@@ -225,18 +225,61 @@ fn start(
             Err(_) => return Err(Failed::TimedOut),
         }
     }
-    // A reader only stops early by panicking, which is no result either.
+    // A pipe still held at the deadline, or a reader that panicked: no
+    // result for `run`, and `run_tail` keeps what was read.
     let left = || deadline.saturating_duration_since(Instant::now());
-    let (out, out_cut) = out.recv_timeout(left()).map_err(|_| Failed::TimedOut)?;
-    let (err, err_cut) = err.recv_timeout(left()).map_err(|_| Failed::TimedOut)?;
-    let cut = out_cut || matches!(keep, Keep::Tail(_)) && err_cut;
-    Ok(Done {
+    let ended = out.ended(left()) & err.ended(left());
+    match keep {
+        Keep::Tail(_) => Ok(tail(status, out, err, ended, !ended)),
+        Keep::Head(_) if !ended => Err(Failed::TimedOut),
+        Keep::Head(_) => {
+            let ((out, cut), (err, _)) = (out.take(), err.take());
+            Ok(Done {
+                status,
+                out,
+                cut,
+                err,
+                timed_out: false,
+            })
+        }
+    }
+}
+
+/// [`run_tail`]'s result: what both readers kept, cut when either lost
+/// its start or had not `ended`.
+fn tail(status: ExitStatus, out: Drain, err: Drain, ended: bool, timed_out: bool) -> Done {
+    let ((out, out_cut), (err, err_cut)) = (out.take(), err.take());
+    Done {
         status,
         out,
-        cut,
+        cut: out_cut || err_cut || !ended,
         err,
-        timed_out: false,
-    })
+        timed_out,
+    }
+}
+
+/// A pipe's reader: what it has kept so far, readable before the pipe
+/// ends, and a channel it signals at the end, so the wait for it has the
+/// deadline.
+struct Drain {
+    ended: Receiver<()>,
+    kept: Arc<Mutex<(Vec<u8>, bool)>>,
+}
+
+impl Drain {
+    fn ended(&self, wait: Duration) -> bool {
+        self.ended.recv_timeout(wait).is_ok()
+    }
+
+    /// The bytes kept and whether some were dropped.
+    fn take(self) -> (Vec<u8>, bool) {
+        std::mem::take(&mut *lock(&self.kept))
+    }
+}
+
+/// A reader that panicked under the lock still leaves what it kept.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// SIGTERM to the agent, so it can stop the tools it started, then
