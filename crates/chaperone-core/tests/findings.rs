@@ -132,7 +132,7 @@ fn walk(l: &Ledger, check: i64, key: &str, path: &[&str]) {
     for (i, to) in path.iter().enumerate().filter(|s| *s.1 != "open") {
         // Work that moved after the plan is waived as scope, by a fresh session.
         if i > 0 && path[i - 1] == "accepted" {
-            let moved = waive(l, check, ("3", key), ("scope", ""));
+            let moved = waive(l, check, ("3", key), ("scope", "#243"));
             assert!(moved.is_ok(), "{key} to {to}: {moved:?}");
             continue;
         }
@@ -401,6 +401,21 @@ fn a_waiver_has_a_kind_a_ref_or_a_fresh_countersign() {
             ("deferred", "#243"),
             "waived only as scope",
         ),
+        (
+            (check, "5", "a"),
+            ("disproved", " "),
+            "ref is one non-blank line",
+        ),
+        (
+            (check, "5", "a"),
+            ("disproved", "a\nb"),
+            "ref is one non-blank line",
+        ),
+        (
+            (plan, "5", "p"),
+            ("scope", ""),
+            "waived only as scope, with the issue",
+        ),
     ];
     for ((check, who, key), kind, said) in cases {
         let before = events();
@@ -408,6 +423,20 @@ fn a_waiver_has_a_kind_a_ref_or_a_fresh_countersign() {
         assert!(got.contains(said), "{who} {kind:?}: {got}");
         assert_eq!(events(), before);
     }
+    // A waiver rides only on a waive.
+    let carried = FindingMove {
+        check_event_id: check,
+        finding_key: "a".into(),
+        status: "disputed".into(),
+        reason: Some("r".into()),
+        waiver_kind: Some("scope".into()),
+        ..FindingMove::default()
+    };
+    let got = ledger.finding_update(&actor("1"), &carried, false).unwrap();
+    assert_eq!(
+        got.unwrap_err(),
+        Refusal::InvalidInput("only a waived finding carries a waiver".into())
+    );
     // 2 has now written a disproved waiver: a fixed-or-disproved waiver does
     // not make a session fresh. 5 countersigns two, its own waivers only.
     let got = waive(&ledger, check, ("2", "a"), ("disproved", "src/x.rs:10"));

@@ -927,7 +927,7 @@ fn waiver(
             "ref is one non-blank line of at most {NOTE_CHARS} characters"
         )));
     }
-    if from == "accepted" && kind != "scope" {
+    if from == "accepted" && (kind != "scope" || reference.is_none()) {
         refuse!(invalid(
             "an accepted plan finding is waived only as scope, with the issue the work moved to"
         ));

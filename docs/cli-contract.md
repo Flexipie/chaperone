@@ -209,7 +209,7 @@ fresh agent that never saw the lane, and that agent judges and writes the waiver
 session. The ledger reads sessions as they are declared, as it does for the owner's
 independence, so it cannot tell a real fresh agent from a made-up id; it refuses one that has
 touched the lane. `--kind scope` also releases an `accepted` plan check finding whose work
-moved to another issue (`--ref` names it); no other kind may. Waiving it changes the plan
+moved to another issue, with `--ref` naming it; no other kind may, nor one with no `--ref`. Waiving it changes the plan
 answers the review is shown, so the next `verify` reviews the head again; a blocker an
 earlier review raised on that point is a review finding and is waived on its own. Never waive
 a finding where a gate fails open on a path a lane can reach: fix it or ask the owner. An
