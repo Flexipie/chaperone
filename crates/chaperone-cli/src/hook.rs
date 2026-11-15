@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chaperone_core::checks::AttentionInput;
+use chaperone_core::checks::{AttentionInput, NOTE_CHARS, line_break};
 use chaperone_core::ledger::Ledger;
 use chaperone_core::pipeline::sha_prefix_eq;
 use chaperone_core::usage::Roots;
@@ -187,11 +187,8 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
                 },
                 // A tab in pasted code would fail the one-line note check.
                 note: prompt.lines().next().map(|l| {
-                    let one = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
-                    l.chars()
-                        .map(|c| if one(c) { ' ' } else { c })
-                        .take(500)
-                        .collect()
+                    let c = l.chars().map(|c| if line_break(c) { ' ' } else { c });
+                    c.take(NOTE_CHARS).collect()
                 }),
                 // Each prompt counts, the same text again too; keys are
                 // ledger-wide, so the lane is in it.
