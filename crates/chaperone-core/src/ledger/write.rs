@@ -894,11 +894,6 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
     Ok(Ok(()))
 }
 
-/// A waiver's kind and ref (events.md, `finding.updated`). `fixed` and
-/// `disproved` name their proof; the rest are countersigned by who writes
-/// them: a session with no event on the lane but its own earlier
-/// countersigned waivers, so the one who wants the lane through, having
-/// touched it, is never the only judge.
 fn waiver(
     tx: &Connection,
     lane_id: i64,
