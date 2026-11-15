@@ -168,11 +168,12 @@ fn stop_failure_records_again_only_after_the_lane_moves() {
 /// A prompt typed into the lane is attention `prompted`, by the
 /// orchestrator when it says so, and `stats` counts it; a slash command
 /// and a prompt chaperone's own tools sent are not. The same prompt twice
-/// counts twice.
+/// counts twice, and a long first line is cut to a note.
 #[test]
 fn prompt_records_what_was_typed_into_the_lane() {
     let lane = Lane::new();
     let before = lane.events().len();
+    let long = "x".repeat(600);
     for prompt in [
         "/chaperone:lane o/r#1 --work 1",
         "Owner (chaperone-ui): yes. Carry on.",
@@ -181,6 +182,9 @@ fn prompt_records_what_was_typed_into_the_lane() {
         "Decide this yourself.",
         "Decide this yourself.",
         "Run\tthis.",
+        "Ownership is yours.",
+        "/Users/me/x.rs:12 fails.",
+        &long,
     ] {
         assert_eq!(
             lane.hook(Some("1"), "prompt", json!({"prompt": prompt})),
@@ -198,6 +202,9 @@ fn prompt_records_what_was_typed_into_the_lane() {
         row("owner", "Decide this yourself."),
         row("owner", "Decide this yourself."),
         row("owner", "Run this."),
+        row("owner", "Ownership is yours."),
+        row("owner", "/Users/me/x.rs:12 fails."),
+        row("owner", &long[..500]),
     ];
     assert_eq!(got, want);
     let out = Command::new(BIN)
@@ -209,7 +216,7 @@ fn prompt_records_what_was_typed_into_the_lane() {
     let stats: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         stats["data"]["lanes"][0]["attention"],
-        json!({"prompted": 4})
+        json!({"prompted": 7})
     );
 }
 

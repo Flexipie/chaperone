@@ -664,8 +664,9 @@ record` without a key does. `prompt` (Claude Code's `UserPromptSubmit`) records 
 into the lane, by herdr or by hand, as `attention.recorded` type `prompted`, its note the
 prompt's first line, control characters (a pasted tab) as spaces, cut to 500 characters, by `orchestrator` when the prompt starts with
 `Orchestrator` (the orchestrate skill's prefix; a best guess), else `owner`. It skips a prompt
-starting with `/` (the spawner's `/chaperone:lane` and any slash command) or with `Owner`
-(chaperone-ui's `Owner check (` send-back and `Owner (` answer, which record their own attention, and `merge`'s `Owner (` notice). It is a raw count of prompts: an orchestrator prompt the orchestrate skill also records
+that is a slash command (a first word starting with `/` and holding no other `/`: the spawner's
+`/chaperone:lane`, not a pasted path) or starts with `Owner (` or `Owner check (` (chaperone-ui's
+answer and send-back, which record their own attention, and `merge`'s notice). It is a raw count of prompts: an orchestrator prompt the orchestrate skill also records
 (`nudged`, `sent_back`, `answered`, `revived`) is counted under both types, by design. Each prompt is its own record (keyed by the lane and the time it was written), so the same text typed twice counts twice.
 Both are writes, so `DAISY_CLI_READONLY=1` refuses them as any other.
 

@@ -171,27 +171,20 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
         }
         HookEvent::Prompt => {
             let prompt = input["prompt"].as_str()?.trim_start();
-            // A slash command (the spawner's `/chaperone:lane`), or a prompt
-            // chaperone's own tools sent (`Owner (`, `Owner check (`), which
-            // record their own attention or are none (`merge`'s notice).
-            if prompt.starts_with('/') || prompt.starts_with("Owner") {
+            if slash_command(prompt) || TOOL_PROMPTS.iter().any(|t| prompt.starts_with(t)) {
                 return None;
             }
             let record = AttentionInput {
                 work,
                 kind: "prompted".into(),
-                // The orchestrate skill starts its prompts so; a best guess.
                 by: match prompt.starts_with("Orchestrator") {
                     true => "orchestrator".into(),
                     false => "owner".into(),
                 },
-                // A tab in pasted code would fail the one-line note check.
                 note: prompt.lines().next().map(|l| {
                     let c = l.chars().map(|c| if line_break(c) { ' ' } else { c });
                     c.take(NOTE_CHARS).collect()
                 }),
-                // Each prompt counts, the same text again too; keys are
-                // ledger-wide, so the lane is in it.
                 idempotency_key: Some(format!("prompt-{work}-{}", ledger.now().ok()?)),
                 ..AttentionInput::default()
             };
@@ -199,4 +192,14 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
             None
         }
     }
+}
+
+/// How the prompts chaperone's own tools send start: chaperone-ui's
+/// answer and send-back record their own attention, `merge`'s notice is none.
+const TOOL_PROMPTS: &[&str] = &["Owner (", "Owner check ("];
+
+/// `/chaperone:lane ...`, not a pasted `/Users/me/x.rs`.
+fn slash_command(prompt: &str) -> bool {
+    let word = prompt.split_whitespace().next().unwrap_or_default();
+    word.starts_with('/') && !word[1..].contains('/')
 }
