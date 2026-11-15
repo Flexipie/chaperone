@@ -9,6 +9,7 @@ Arguments:
           - pre-bash:      Deny `gh pr create`, `gh pr merge` and `chaperone work ready --yes`
           - stop:          Block a stop once the branch moved past the lane's ready handoff
           - stop-failure:  Record the API error the turn stopped on, once per error kind
+          - prompt:        Record a prompt typed into the lane as attention `prompted`
 
 Options:
       --db <DB>

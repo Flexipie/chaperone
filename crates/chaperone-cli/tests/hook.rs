@@ -1,9 +1,9 @@
 //! `hook` through the binary, on lane 1 claimed on v20, and the plugin's
 //! shim. The stop hook's test is verify.rs's, on a lane verify made ready.
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use serde_json::{Value, json};
 
@@ -25,8 +25,8 @@ impl Lane {
         lane
     }
 
-    /// A command as the lane's session, which must succeed.
-    fn cli(&self, args: &[&str]) {
+    /// A command as the lane's session, which must succeed; its `data`.
+    fn cli(&self, args: &[&str]) -> Value {
         let out = Command::new(BIN)
             .arg("--db")
             .arg(&self.db)
@@ -35,6 +35,7 @@ impl Lane {
             .output()
             .unwrap();
         assert!(out.status.success(), "{args:?}: {out:?}");
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()["data"].take()
     }
 
     /// Every event's kind and payload, oldest first: `work events` leaves
@@ -65,9 +66,7 @@ impl Lane {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(input.to_string().as_bytes()).unwrap();
-        drop(stdin);
+        feed(&mut child, input.to_string().as_bytes());
         let out = child.wait_with_output().unwrap();
         assert!(out.status.success(), "{event}: {out:?}");
         String::from_utf8(out.stdout).unwrap()
@@ -75,6 +74,15 @@ impl Lane {
 
     fn json(&self, event: &str, input: Value) -> Value {
         serde_json::from_str(&self.hook(Some("1"), event, input)).unwrap()
+    }
+}
+
+/// Writes `input` to the child's stdin and closes it. A child with nothing
+/// to do may exit unread, closing the pipe first: BrokenPipe is fine.
+fn feed(child: &mut Child, input: &[u8]) {
+    match child.stdin.take().unwrap().write_all(input) {
+        Err(e) if e.kind() == ErrorKind::BrokenPipe => {}
+        r => r.unwrap(),
     }
 }
 
@@ -113,6 +121,40 @@ fn session_start_names_the_lane_and_what_is_missing() {
     for want in ["work 1", "pipeline v20", "tests_passed", "verify --work 1"] {
         assert!(context.contains(want), "{want}: {context}");
     }
+}
+
+/// An install that edits a v20 prompt moves v20's hash (#244): a lane
+/// stamped before it still loads v20 by id, and keeps the hash it ran.
+#[test]
+fn a_lane_stamped_with_an_older_v20_hash_keeps_working() {
+    let lane = Lane::new();
+    let db = rusqlite::Connection::open(&lane.db).unwrap();
+    db.execute("UPDATE lanes SET pipeline_hash = 'older' WHERE id = 1", [])
+        .unwrap();
+    let out = lane.json("session-start", json!({"source": "startup"}));
+    let context = out["hookSpecificOutput"]["additionalContext"].as_str();
+    assert!(context.unwrap().contains("tests_passed"), "{out}");
+    let limits = lane.cli(&["pipeline", "limits", "--work", "1"]);
+    assert_eq!(limits["limits"]["code_lines"], 400);
+    let renewed = lane.cli(&["work", "claim", "1"]);
+    assert_eq!(renewed["pipeline_hash"], "older");
+    // The engine runs v20's gates: denied past `stamp_ok`, not `pipeline_unknown`.
+    let handoff = lane.dir.path().join("handoff.json");
+    let ready = json!({"summary": "s", "status": "review", "ready": true, "commit": "abc1234"});
+    std::fs::write(&handoff, ready.to_string()).unwrap();
+    let out = Command::new(BIN)
+        .arg("--db")
+        .arg(&lane.db)
+        .args(["work", "handoff", "1"])
+        .arg(&handoff)
+        .envs([("DAISY_AGENT", "lane"), ("DAISY_SESSION", "lane")])
+        .output()
+        .unwrap();
+    let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(
+        err["error"]["details"]["gate"], "no_uncounted_files",
+        "{err}"
+    );
 }
 
 #[test]
@@ -165,6 +207,61 @@ fn stop_failure_records_again_only_after_the_lane_moves() {
     assert_eq!(got, (&json!("stopped"), &json!("rate_limit")));
 }
 
+/// A prompt typed into the lane is attention `prompted`, by the
+/// orchestrator when it says so, and `stats` counts it; a slash command
+/// and a prompt chaperone's own tools sent are not. The same prompt twice
+/// counts twice, and a long first line is cut to a note.
+#[test]
+fn prompt_records_what_was_typed_into_the_lane() {
+    let lane = Lane::new();
+    let before = lane.events().len();
+    let long = "x".repeat(600);
+    for prompt in [
+        "/chaperone:lane o/r#1 --work 1",
+        "Owner (chaperone-ui): yes. Carry on.",
+        "Owner check (chaperone-ui), round 1, on abc: fix it.",
+        "Orchestrator: take option A.\nThen go on.",
+        "Decide this yourself.",
+        "Decide this yourself.",
+        "Run\tthis.",
+        "Ownership is yours.",
+        "/Users/me/x.rs:12 fails.",
+        &long,
+    ] {
+        assert_eq!(
+            lane.hook(Some("1"), "prompt", json!({"prompt": prompt})),
+            ""
+        );
+    }
+    let events = lane.events();
+    let got: Vec<_> = events[before..]
+        .iter()
+        .map(|(k, p)| json!([k, p["type"], p["by"], p["note"]]))
+        .collect();
+    let row = |by, note| json!(["attention.recorded", "prompted", by, note]);
+    let want = [
+        row("orchestrator", "Orchestrator: take option A."),
+        row("owner", "Decide this yourself."),
+        row("owner", "Decide this yourself."),
+        row("owner", "Run this."),
+        row("owner", "Ownership is yours."),
+        row("owner", "/Users/me/x.rs:12 fails."),
+        row("owner", &long[..500]),
+    ];
+    assert_eq!(got, want);
+    let out = Command::new(BIN)
+        .arg("--db")
+        .arg(&lane.db)
+        .args(["stats", "--work", "1"])
+        .output()
+        .unwrap();
+    let stats: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        stats["data"]["lanes"][0]["attention"],
+        json!({"prompted": 7})
+    );
+}
+
 /// Silent unless the lane is set and `chaperone` answers with exit 0; its
 /// stdin passes through and its stderr never shows.
 #[test]
@@ -194,7 +291,7 @@ fn the_shim_is_silent_unless_chaperone_answers() {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.take().unwrap().write_all(b"in").unwrap();
+        feed(&mut child, b"in");
         let out = child.wait_with_output().unwrap();
         let got = (out.status.code(), &*String::from_utf8_lossy(&out.stdout));
         assert_eq!(

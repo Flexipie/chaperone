@@ -290,7 +290,9 @@ fn the_cohort_filter() {
 /// A v20 lane read from the harness's events: complete reviews count, an
 /// incomplete one does not, a finding refuted by the owner is not
 /// verified, and "after handoff" is after the harness's YES verdict, not
-/// the planning handoff, also on a lane stamped with an older v20 hash.
+/// the planning handoff, also on a lane stamped with an older v20 hash. A
+/// finding the verifier ruled the same as an earlier one is a re-raise,
+/// and an owner's waivers (a finding's, the plan check's) are attention.
 #[test]
 fn a_v20_lane_reads_the_harness_review() {
     let (_dir, path, ledger) = common::ledger();
@@ -347,10 +349,16 @@ fn a_v20_lane_reads_the_harness_review() {
         .id
     };
     let review = |head: &str, complete: bool, keys: &[&str]| {
-        let findings: Vec<Value> = keys
+        let mut findings: Vec<Value> = keys
             .iter()
             .map(|k| json!({"finding_key": k, "severity": "risk", "title": format!("T {k}"), "body": "b"}))
             .collect();
+        if head == HEAD {
+            findings.push(
+                json!({"finding_key": "k3", "severity": "question", "title": "T k3",
+                "body": "b", "raised_as": "risk", "same_as": "1/k2"}),
+            );
+        }
         apply(
             "h",
             EventKind::CheckFinished,
@@ -364,6 +372,9 @@ fn a_v20_lane_reads_the_harness_review() {
         if who == "h" {
             p["producer"] = harness.clone();
         }
+        if to == "waived" {
+            p["waiver"] = json!({"kind": "disproved", "ref": "t.rs:1"});
+        }
         apply(who, EventKind::FindingUpdated, p);
     };
     let first = review("1111111", true, &["k1", "k2"]);
@@ -375,6 +386,11 @@ fn a_v20_lane_reads_the_harness_review() {
     mv("h", incomplete, "k1", "verified");
     let last = review(HEAD, true, &["k1"]);
     mv("h", last, "k1", "verified");
+    mv("owner", last, "k1", "waived");
+    ledger
+        .plan_waive(&actor("owner"), id, HEAD, "coded first")
+        .unwrap()
+        .unwrap();
     apply(
         "h",
         EventKind::CheckFinished,
@@ -403,9 +419,11 @@ fn a_v20_lane_reads_the_harness_review() {
     let l = &out["lanes"][0];
     assert_eq!(l["plan_check"]["findings"][0]["finding_key"], "p1");
     // k1 is the one verified finding (k2 was refuted), raised on two
-    // complete reviews on two commits: one re-raise, one flat round.
+    // complete reviews on two commits: one re-raise, one flat round. k3,
+    // ruled the same as k2, is another re-raise.
     assert_eq!(l["verified_findings"], 1);
-    assert_eq!(l["reraised_findings"], 1);
+    assert_eq!(l["reraised_findings"], 2);
+    assert_eq!(l["attention"], json!({"waived": 2}));
     assert_eq!(l["flat_rounds"], 1);
     // Its latest record is before the YES verdict, the ready point.
     assert_eq!(l["verified_findings_after_handoff"], 0);

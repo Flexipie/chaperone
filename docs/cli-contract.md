@@ -59,7 +59,7 @@ Daisy's ten codes, plus two from the engine and `doctor`'s `drift`.
 | `runtime_unavailable` | 5 | `job_id`, `poll` | `retryable: true`. |
 | `read_only` | 1 | `command`, `mutability` | |
 | `gate_denied` | 1 | `transition`, `gate`, `fact_paths` | One `gate.denied` was appended. The failing gate id is also on stderr's message. |
-| `pipeline_unknown` | 1 | `pipeline_id`, `pipeline_hash` | Claim or transition on a hash this binary cannot load. Writes nothing. |
+| `pipeline_unknown` | 1 | `pipeline_id`, `pipeline_hash` | Claim or transition on a pipeline id this binary has no document for. Writes nothing. |
 | `drift` | 1 | `findings` | `doctor` only: each mismatch as `{file, line, kind, message}`. |
 
 ## Lists
@@ -135,7 +135,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `jobs get` | `<job id>` | read |
 | `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
 | `usage get` | `<id>` | read |
-| `attention record` | `--work <id> --type asked\|answered\|nudged\|sent_back\|revived\|stopped --by orchestrator\|owner [--reason <R12 id>] [--round <k>] [--answers <event id>] [--note <one line>] [--idempotency-key]` | write |
+| `attention record` | `--work <id> --type asked\|answered\|nudged\|sent_back\|revived\|stopped\|prompted --by orchestrator\|owner [--reason <R12 id>] [--round <k>] [--answers <event id>] [--note <one line>] [--idempotency-key]` | write |
 | `finding list` | `--work <id>` | read |
 | `finding dispute` | `<event> <key> --reason <r>` | write |
 | `finding waive` | `<event> <key> --reason <r> --kind <kind> [--ref <ref>]` | write |
@@ -147,7 +147,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 | `install` | | no ledger, writes the marketplace dir, calls claude |
 | `uninstall` | | no ledger, removes the marketplace dir, calls claude |
-| `hook` | `session-start\|pre-bash\|stop\|stop-failure` (stdin: the hook's JSON) | read; `stop-failure` writes |
+| `hook` | `session-start\|pre-bash\|stop\|stop-failure\|prompt` (stdin: the hook's JSON) | read; `stop-failure` and `prompt` write |
 
 `work create --kind` and `--pr-flow` are Chaperone's two additions to daisy's argv (#7). Both are optional and stored on `lane.created`. `--kind` defaults to `code` and `--pr-flow` to `pr`, so a skill that passes neither gets the strictest route. #14 reads them at the first claim, when the route is stamped.
 
@@ -295,12 +295,12 @@ Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_mer
 
 - `claimed_at` is the first `lane.claimed` (a reopened lane keeps it, so its wait counts), `merged_at` the latest `pr.merged.merged_at`, and `claim_to_merge_h` the hours between them, only when every PR the lane held (`pr.opened` or a `changed.pr_ref.to`) has merged (`merged`).
 - `tokens` is keyed by `source` (`parent`, `subagent`, `harness`) with the sums of `input_total`, `cache_read`, `cache_write` and `output_total`, skipping nulls as `usage get` does; null when the lane has no usage event. `peak_context` is the largest parent `input_total`.
-- `attention` counts `attention.recorded` by `type`; `send_back_rounds` is the highest `sent_back` round.
+- `attention` counts `attention.recorded` by `type`, plus `waived`: each `finding.updated` to `waived` and each `check waive` (a `check.finished` with `reason: waived`), the owner's decisions; `send_back_rounds` is the highest `sent_back` round.
 - `waivers` counts the lane's `finding.updated` to `waived` by `waiver.kind` (`none` for one written before waivers had kinds), so a waived finding that later escapes shows which kind failed; `accepted_without_ref` lists each `accepted` waiver with no `ref` as `<event>/<key>`, for the owner.
 - `plan_check` and `quality_gate` are the latest `check.finished` of that check: `{outcome, head_sha, findings}` when it ran, `{outcome, head_sha, reason}` when skipped, null when absent.
 - `merge_verdict` is the latest `merge_verdict` that ran, `{decision, head_sha}`, null when none ran, so a missing verdict reads apart from a NO or a YES on an older head.
 - `verdict_on_head` is true when, for every merged PR, the latest `merge_verdict` that ran on its merged head (the gate's rule: the shorter sha, at least 7 hex, is a prefix of the longer) said yes; null until every PR the lane held has merged (a stack lane with a layer still open is null, not true).
-- The review numbers read `check.finished` `local_review` and `pr_review` that ran (R11's `review.finished` and `finding.recorded`, events.md "Replaced names"). `head_reviewed`: every merged head has a local review on it (null until every PR has merged, as `verdict_on_head`). `flat_rounds`: adjacent local scores, recorded after the lane's first PR and ordered by daisy's job id, where the later is not higher. `reraised_findings`: verified findings grouped by trimmed lowercased title, the distinct jobs in each group minus one, summed. `verified_findings`: findings (by `finding_key`, once each) whose latest record in job order is verified. `verified_findings_after_handoff`: those whose latest record is on a review recorded after the first real handoff (one whose `next_action` does not start with `reviewing`, else the earliest; all of them when there is no handoff). The time is when Chaperone recorded the review, since daisy's finish time is not stored, so a review recorded late counts as after.
+- The review numbers read `check.finished` `local_review` and `pr_review` that ran (R11's `review.finished` and `finding.recorded`, events.md "Replaced names"). `head_reviewed`: every merged head has a local review on it (null until every PR has merged, as `verdict_on_head`). `flat_rounds`: adjacent local scores, recorded after the lane's first PR and ordered by daisy's job id, where the later is not higher. `reraised_findings`: verified findings grouped by trimmed lowercased title, the distinct jobs in each group minus one, summed, plus each finding a counted harness review wrote with `same_as` (the verifier ruled it a repeat of an earlier one). `verified_findings`: findings (by `finding_key`, once each) whose latest record in job order is verified. `verified_findings_after_handoff`: those whose latest record is on a review recorded after the first real handoff (one whose `next_action` does not start with `reviewing`, else the earliest; all of them when there is no handoff). The time is when Chaperone recorded the review, since daisy's finish time is not stored, so a review recorded late counts as after.
 - The harness's `review` counts as a review too: only a complete one from the harness producer, as `findings.open_blocking` reads them, and a carried one only when the review it names counts (its findings stay that one's). Its finding is verified while its latest `finding.updated` move, by anyone, in log order, is `verified` (a `refuted` clears it; `disputed`, `fixed` and `waived` keep it). It counts for `head_reviewed` as a local review does, and for `reraised_findings` each harness review is its own job. Its `flat_rounds`: a complete, not carried harness review on another commit than the one before it that finds again every verified `finding_key` of that one (which had at least one).
 - On a lane stamped with a schema 2 pipeline (v20, by the stamped id whatever its hash: a prompt edit moves the hash), the handoff of `verified_findings_after_handoff` is the ready point instead, since its first handoff is at planning: the first harness `merge_verdict` that said yes, else the first `pr.opened`.
 - `commits_after_handoff` is always null: it is a git count (events.md, PR), not a ledger read.
@@ -668,7 +668,7 @@ Claude Code's settings. They print `{dir, plugin, version, ran}` (`uninstall` wi
 when the binary fails, so it is what keeps a hook silent). The lane is `$CHAPERONE_WORK`; when it
 is not a number, or the lane is unknown, done, cancelled or on a pipeline before schema 2 (v20),
 it prints nothing and exits 0, as on most errors. It prints the hook's own JSON, not an envelope,
-and opens the ledger read-only for every event but `stop-failure` (and `stop`'s usage write, below). `session-start` prints `additionalContext`: the lane's id, title,
+and opens the ledger read-only for every event but `stop-failure` and `prompt` (and `stop`'s usage write, below). `session-start` prints `additionalContext`: the lane's id, title,
 status, pipeline, branch, head, PR, the ready gates not passing yet (as the lane page reads them)
 and the lane's commands. `pre-bash` splits a Bash `tool_input.command` at `&&`, `||`, `;`, `|`, newlines,
 `$(`, parentheses and backticks, drops each part's leading `VAR=value` words, and denies a part
@@ -677,8 +677,15 @@ naming the command to run instead. `stop` blocks once (never with `stop_hook_act
 the branch tip, read as a ready handoff reads it, is not its commit. After printing its answer, `stop` records the lane session's tokens, every turn, so the lane never has to: `usage report --work <lane>`'s write, on its own writable open, reading only the folder of the hook's `transcript_path` (that session's project folder, its sessions matched by first `cwd` as always, and their subagents), since reading every transcript under `~/.claude` can pass the hook's 10 s timeout. It waits at most 5 s for it (a busy ledger is left, with whole events written, and the next turn adds the rest). Without a `transcript_path` it records nothing, any error is ignored, and with `DAISY_CLI_READONLY=1` it skips this write and stays a read. `stop-failure` records
 `attention.recorded` type `stopped`, by `orchestrator`, its note the hook's `error`, as
 `$DAISY_AGENT` and `$DAISY_SESSION`; a repeat with nothing new on the lane replays, as `attention
-record` without a key does. It is a write, so
-`DAISY_CLI_READONLY=1` refuses it as any other.
+record` without a key does. `prompt` (Claude Code's `UserPromptSubmit`) records a prompt typed
+into the lane, by herdr or by hand, as `attention.recorded` type `prompted`, its note the
+prompt's first line, control characters (a pasted tab) as spaces, cut to 500 characters, by `orchestrator` when the prompt starts with
+`Orchestrator` (the orchestrate skill's prefix; a best guess), else `owner`. It skips a prompt
+that is a slash command (a first word starting with `/` and holding no other `/`: the spawner's
+`/chaperone:lane`, not a pasted path) or starts with `Owner (` or `Owner check (` (chaperone-ui's
+answer and send-back, which record their own attention, and `merge`'s notice). It is a raw count of prompts: an orchestrator prompt the orchestrate skill also records
+(`nudged`, `sent_back`, `answered`, `revived`) is counted under both types, by design. Each prompt is its own record (keyed by the lane and the time it was written), so the same text typed twice counts twice.
+Both are writes, so `DAISY_CLI_READONLY=1` refuses them as any other.
 
 `reviews record` reads `daisy-cli reviews get <job>`. That is the CLI's only call into
 daisy (chaperone-ui's Backlog also reads daisy's GitHub mirror, ADR 0003). A job that is not done (`data.done` false, status `queued` or `running`) appends

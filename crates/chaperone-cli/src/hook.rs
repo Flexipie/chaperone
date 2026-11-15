@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chaperone_core::checks::AttentionInput;
+use chaperone_core::checks::{AttentionInput, NOTE_CHARS, line_break};
 use chaperone_core::ledger::Ledger;
 use chaperone_core::pipeline::sha_prefix_eq;
 use chaperone_core::usage::Roots;
@@ -65,7 +65,7 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
     std::io::stdin().read_to_string(&mut input).ok()?;
     let input: Value = serde_json::from_str(&input).ok()?;
     let ledger = match event {
-        HookEvent::StopFailure => Ledger::open(db),
+        HookEvent::StopFailure | HookEvent::Prompt => Ledger::open(db),
         _ => Ledger::open_read_only(db),
     }
     .ok()?;
@@ -169,5 +169,37 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
             let _ = ledger.attention_record(&ActorArgs::default().resolve(), &record);
             None
         }
+        HookEvent::Prompt => {
+            let prompt = input["prompt"].as_str()?.trim_start();
+            if slash_command(prompt) || TOOL_PROMPTS.iter().any(|t| prompt.starts_with(t)) {
+                return None;
+            }
+            let record = AttentionInput {
+                work,
+                kind: "prompted".into(),
+                by: match prompt.starts_with("Orchestrator") {
+                    true => "orchestrator".into(),
+                    false => "owner".into(),
+                },
+                note: prompt.lines().next().map(|l| {
+                    let c = l.chars().map(|c| if line_break(c) { ' ' } else { c });
+                    c.take(NOTE_CHARS).collect()
+                }),
+                idempotency_key: Some(format!("prompt-{work}-{}", ledger.now().ok()?)),
+                ..AttentionInput::default()
+            };
+            let _ = ledger.attention_record(&ActorArgs::default().resolve(), &record);
+            None
+        }
     }
+}
+
+/// How the prompts chaperone's own tools send start: chaperone-ui's
+/// answer and send-back record their own attention, `merge`'s notice is none.
+const TOOL_PROMPTS: &[&str] = &["Owner (", "Owner check ("];
+
+/// `/chaperone:lane ...`, not a pasted `/Users/me/x.rs`.
+fn slash_command(prompt: &str) -> bool {
+    let word = prompt.split_whitespace().next().unwrap_or_default();
+    word.starts_with('/') && !word[1..].contains('/')
 }

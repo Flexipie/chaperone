@@ -25,7 +25,7 @@
 #   gate, kept tests and review rounds (the lane's own records; the harness review replaces
 #   them), daisy's review state (optional, and not the harness's), and `stamp_hash`: it reads
 #   `loaded.hash`, which is no projection fact, and the engine finds a lane's document by its
-#   id and hash before any gate runs, so the hash always matched.
+#   id alone (#244), so the hash records what the lane was claimed on and gates nothing.
 # - [runners] and [checks] name the sessions the harness starts, by the names the code asks
 #   for (`review_<lens>`, `review_verifier`, `verdict`, `plan`), and the prompt files in
 #   pipelines/prompts/, whose digests are in the hash.
@@ -60,8 +60,8 @@
 # takes `of` (one gate id). Under schema 2 a gate may read only a fact the projection sets
 # (`FACTS`), so a gate that could never pass does not load.
 #
-# Published ids are immutable. A fix is a new file (v20.1), not an edit of this one. The
-# semantic hash covers the schema, [limits], [runners], [checks] with each prompt's sha256,
+# v20 is edited in place (#244): a lane stamped with an older v20 hash still loads this
+# document by id, and runs it as it is now. The semantic hash covers the schema, [limits], [runners], [checks] with each prompt's sha256,
 # the gates and the transitions. Comments, key order, `published` and [cohort] do not change it.
 
 schema = 2
@@ -153,7 +153,7 @@ prompt = "plan.md"
 
 # --- gates -------------------------------------------------------------------
 
-# The engine found this document by the lane's id and hash, so the id is the stamp.
+# The engine found this document by the lane's id, so the id is the stamp.
 [[gate]]
 id = "stamp_ok"
 fn = "eq"

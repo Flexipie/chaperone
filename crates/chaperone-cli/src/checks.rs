@@ -1048,8 +1048,7 @@ fn text_file(path: &Path, max: usize) -> Result<String, String> {
 
 /// The pipeline the lane is stamped with, as this binary loads it.
 pub(crate) fn lane_pipeline(item: &WorkItem) -> Result<&'static Pipeline, CliError> {
-    let (id, hash) = (item.pipeline_id.as_deref(), item.pipeline_hash.as_deref());
-    pipeline::by_stamp(id.unwrap_or_default(), hash.unwrap_or_default()).ok_or_else(|| {
+    pipeline::by_id(item.pipeline_id.as_deref().unwrap_or_default()).ok_or_else(|| {
         refuse(format!(
             "work item {} has no pipeline this binary loads",
             item.id

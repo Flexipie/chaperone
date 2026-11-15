@@ -126,6 +126,7 @@ pub const ATTENTION_TYPES: &[&str] = &[
     "sent_back",
     "revived",
     "stopped",
+    "prompted",
 ];
 pub const ATTENTION_BY: &[&str] = &["orchestrator", "owner"];
 pub const QUESTION_REASONS: &[&str] = &[
@@ -1312,11 +1313,12 @@ pub(crate) fn recorded(applied: Applied, work_id: Option<i64>) -> Result<Recorde
 /// A note a person reads in a list: one non-blank line of at most
 /// `NOTE_CHARS` characters (`attention record --note`, a finding's reason).
 pub(crate) fn one_line(note: &str) -> bool {
-    !note.trim().is_empty()
-        && !note
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
-        && note.chars().count() <= NOTE_CHARS
+    !note.trim().is_empty() && !note.chars().any(line_break) && note.chars().count() <= NOTE_CHARS
+}
+
+/// A character a one-line note refuses (`attention record --note`).
+pub fn line_break(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
 pub(crate) fn sha_ok(sha: &str) -> bool {

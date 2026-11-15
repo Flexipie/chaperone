@@ -200,6 +200,8 @@ pub enum HookEvent {
     Stop,
     /// Record the API error the turn stopped on, once per error kind
     StopFailure,
+    /// Record a prompt typed into the lane as attention `prompted`
+    Prompt,
 }
 
 /// The lane's pull request
