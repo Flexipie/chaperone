@@ -744,12 +744,16 @@ pub enum CheckCmd {
         actor: ActorArgs,
     },
     /// Waive a check the harness runs for a lane that cannot pass it now:
-    /// the plan check of a lane that coded before its plan was attacked.
+    /// the plan check of a lane that coded before its plan was attacked,
+    /// or the size cap of a lane whose change only makes sense whole.
     /// The owner's: refused from any session that has held the lane
     Waive {
         kind: WaiveKind,
         #[arg(long)]
         work: i64,
+        /// For size only, and required there: the lane's raised `code_lines` limit
+        #[arg(long)]
+        lines: Option<i64>,
         /// Why; one line, kept on the event and redacted at write
         #[arg(long)]
         reason: String,
@@ -768,6 +772,8 @@ pub enum CheckCmd {
 pub enum WaiveKind {
     /// The plan check, on the commit the lane is on (none before v20)
     Plan,
+    /// The `code_lines` cap, raised to --lines for this lane alone (v20's gate reads it)
+    Size,
 }
 
 /// The checks `check run` does itself

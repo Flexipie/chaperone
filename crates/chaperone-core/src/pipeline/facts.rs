@@ -10,6 +10,8 @@ pub const FACTS: &[&str] = &[
     "commit.changes_code",
     "commit.code_lines",
     "commit.sha",
+    "commit.size_waived",
+    "commit.test_lines",
     "commit.uncounted_files",
     "daisy_review.state",
     "findings.open_blocking",

@@ -166,10 +166,24 @@ id = "no_uncounted_files"
 fn = "eq"
 args = { field = "commit.uncounted_files", value = 0 }
 
+# The cap counts code lines only: files the base profile's `[size] tests` names are
+# `test_lines`, never gated (#245). The owner may raise one lane's cap with `check waive
+# size` (refused from any session that held the lane): `commit.size_waived` holds when the
+# lane's newest waiver allows at least `commit.code_lines`.
 [[gate]]
-id = "code_lines_at_most"
+id = "code_lines_under_cap"
 fn = "lte"
 args = { field = "commit.code_lines", limit = "code_lines" }
+
+[[gate]]
+id = "code_lines_waived"
+fn = "eq"
+args = { field = "commit.size_waived", value = true }
+
+[[gate]]
+id = "code_lines_at_most"
+fn = "any"
+args = { of = ["code_lines_under_cap", "code_lines_waived"] }
 
 [[gate]]
 id = "no_code_change"

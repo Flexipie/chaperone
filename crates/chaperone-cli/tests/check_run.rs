@@ -103,7 +103,7 @@ fn a_run_measures_the_lane_commit() {
     let evidence = p.as_object_mut().unwrap().remove("evidence_ref").unwrap();
     let want = json!({"check": "diff", "outcome": "ran", "head_sha": tip, "tree": tree,
         "base": "origin/main", "files": 3, "added": 3, "removed": 1, "code_lines": 3,
-        "changes_code": true, "uncounted_files": 1, "files_truncated": false});
+        "test_lines": 0, "changes_code": true, "uncounted_files": 1, "files_truncated": false});
     assert_eq!(p, want);
     assert_eq!(producer["kind"], "harness");
     assert!(producer["bin"].as_str().unwrap().ends_with("/chaperone"));
@@ -189,6 +189,38 @@ fn a_run_measures_the_lane_commit() {
     let at = json!({"ref": "origin/main", "commit": git(&wt, &["rev-parse", "HEAD"], &[])});
     git(&wt, &["checkout", "-q", "prompt"], &[]);
     assert_eq!(measured(), [json!(1), json!(true), at]);
+}
+
+/// Code files a base profile's `[size] tests` glob names count as test
+/// lines, not code lines; they are still code.
+#[test]
+fn test_files_are_test_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
+    setup(dir.path());
+    let profile: &[(&str, &[u8])] = &[(
+        ".chaperone/profile.toml",
+        b"[size]\ntests = [\"tests/**\"]\n",
+    )];
+    git(&wt, &["add", "."], profile);
+    git(&wt, &["commit", "-qm", "profile"], &[]);
+    git(
+        &wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    let tests = "t\n".repeat(401);
+    let files: &[(&str, &[u8])] = &[("lib.rs", b"a\nb\nc\n"), ("tests/t.rs", tests.as_bytes())];
+    git(&wt, &["checkout", "-qb", "feat"], files);
+    git(&wt, &["add", "."], &[]);
+    git(&wt, &["commit", "-qm", "feat"], &[]);
+    let id = lane(
+        &db,
+        &["--worktree", wt.to_str().unwrap(), "--branch", "feat"],
+    );
+    let p = &run(&db, &["check", "run", "diff", "--work", &id]).1["payload"];
+    let got = ["code_lines", "test_lines", "changes_code"].map(|k| &p[k]);
+    assert_eq!(got, [&json!(1), &json!(401), &json!(true)]);
 }
 
 /// A commit that changes a file a base profile's companion rule names

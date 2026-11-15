@@ -443,7 +443,10 @@ fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
     let uncounted = denied("no_uncounted_files", &["commit.uncounted_files"]);
     assert_eq!(lane.ready(THIRD), uncounted);
     lane.diff(OTHER, 401, true);
-    let lines = denied("code_lines_at_most", &["commit.code_lines"]);
+    let lines = denied(
+        "code_lines_at_most",
+        &["commit.code_lines", "commit.size_waived"],
+    );
     assert_eq!(lane.ready(OTHER), lines);
     lane.diff(HEAD, 400, true);
     let tests = denied("tests_passed", &["tests.passed"]);
@@ -500,6 +503,41 @@ fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
     lane.verdict(THIRD, "no");
     let lost = "the lane said ready, but verdict_is_yes no longer holds";
     assert_eq!(lane.board(), (false, lost.into()));
+}
+
+/// The cap counts code lines, so test lines past it pass. The owner's size
+/// waiver, refused from the lane's session and without lines above 0,
+/// raises this lane's cap alone, up to its lines.
+#[test]
+fn the_cap_counts_code_and_only_the_owner_raises_it() {
+    let v = V20::new("code");
+    let tests = denied("tests_passed", &["tests.passed"]);
+    let fields = json!({"code_lines": 400, "test_lines": 401, "changes_code": true,
+        "uncounted_files": 0});
+    v.run("diff", HEAD, fields);
+    assert_eq!(v.ready(HEAD), tests);
+    v.diff(OTHER, 450, true);
+    let over = denied(
+        "code_lines_at_most",
+        &["commit.code_lines", "commit.size_waived"],
+    );
+    assert_eq!(v.ready(OTHER), over);
+    let waive = |who: &Actor, lines| v.ledger.size_waive(who, 1, OTHER, lines, "one piece");
+    refused(waive(&v.lane, 500).unwrap(), "has held lane 1");
+    refused(waive(&v.owner, 0).unwrap(), "lines, an integer above 0");
+    refused(
+        raw(&v.ledger, 1, "size_waiver", "session", json!({})),
+        "above 0",
+    );
+    waive(&v.owner, 500).unwrap().unwrap();
+    assert_eq!(v.ready(OTHER), tests);
+    v.diff(THIRD, 501, true);
+    assert_eq!(v.ready(THIRD), over);
+    lane(&v.ledger, 2, Some("v20")).unwrap();
+    let diff = json!({"code_lines": 450, "uncounted_files": 0});
+    raw(&v.ledger, 2, "diff", "harness", diff).unwrap();
+    let facts = v.ledger.project(2, Some(HEAD)).unwrap();
+    assert_eq!(facts.get("commit.size_waived"), &Fact::Bool(false));
 }
 
 /// An amend with the same tree: the review and the verdict carried to it

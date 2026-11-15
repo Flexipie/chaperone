@@ -170,7 +170,7 @@ fn pr_open_creates_the_pr_from_ledger_facts() {
     let edit = "pr edit 7 --repo o/r --body-file -\n";
     assert_eq!(lane.file("gh.log"), [list, create, list, edit].concat());
     let body = format!(
-        "t\n\n- Size: 1 code lines in 1 files\n- Tests: passed on {head}: `test ! -e FAIL`\n\
+        "t\n\n- Size: 1 code lines and 0 test lines in 1 files\n- Tests: passed on {head}: `test ! -e FAIL`\n\
          - Plan check: skipped (waived)\n- Smoke: none\n\nMade by `chaperone pr open` from the ledger.\n"
     );
     assert_eq!(lane.file("body.md"), body);
@@ -186,7 +186,7 @@ fn pr_open_creates_the_pr_from_ledger_facts() {
 
 /// A dirty worktree, failing tests, a diff over v20's 400 code lines and
 /// one with a file git counts no lines of are each refused before any push
-/// or gh call.
+/// or gh call; the owner's size waiver lifts only the line limit.
 #[test]
 fn pr_open_refuses_what_cannot_pass() {
     let lane = lane(&[]);
@@ -207,6 +207,30 @@ fn pr_open_refuses_what_cannot_pass() {
     git(&lane.wt, &["add", "big.rs"], &[("big.rs", big.as_bytes())]);
     git(&lane.wt, &["commit", "-qm", "big"], &[]);
     refused("pipeline allows 400");
+    let waive = [
+        "check", "waive", "size", "--work", "1", "--lines", "500", "--reason", "r",
+    ];
+    let (code, err) = lane.run("lane", &waive);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err["message"].as_str().unwrap().contains("has held lane 1"),
+        "{err}"
+    );
+    let no_lines = ["check", "waive", "size", "--work", "1", "--reason", "r"];
+    let plan_lines = [
+        "check", "waive", "plan", "--work", "1", "--lines", "5", "--reason", "r",
+    ];
+    let two_lines = [&waive[..8], &["a\nb"]].concat();
+    for (args, says) in [
+        (&no_lines[..], "needs --lines"),
+        (&plan_lines[..], "--lines goes with size only"),
+        (&two_lines[..], "one non-blank line"),
+    ] {
+        let message = lane.run("owner", args).1["message"].to_string();
+        assert!(message.contains(says), "{message}");
+    }
+    assert_eq!(lane.run("owner", &waive).0, 0);
+    refused("the tests failed");
     git(&lane.wt, &["rm", "-q", "big.rs"], &[]);
     git(&lane.wt, &["add", "blob"], &[("blob", b"\0\x01")]);
     git(&lane.wt, &["commit", "-qm", "blob"], &[]);

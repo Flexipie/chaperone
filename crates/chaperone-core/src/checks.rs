@@ -364,6 +364,34 @@ impl Ledger {
         self.session_check(actor, work, payload, false)
     }
 
+    /// The owner's size waiver (`check waive size`): lane `work`'s
+    /// `code_lines` limit raised to `lines`, on the commit it is on. The
+    /// write refuses it from a session that has held the lane.
+    pub fn size_waive(
+        &self,
+        actor: &Actor,
+        work: i64,
+        head: &str,
+        lines: i64,
+        note: &str,
+    ) -> Checked<Recorded> {
+        if !one_line(note) {
+            return invalid(format!(
+                "--reason is one non-blank line of at most {NOTE_CHARS} characters"
+            ));
+        }
+        let mut payload = Payload {
+            check: Some("size_waiver".into()),
+            outcome: Some("ran".into()),
+            head_sha: Some(head.into()),
+            ..Payload::default()
+        };
+        payload
+            .rest
+            .extend([("lines".into(), json!(lines)), ("note".into(), json!(note))]);
+        self.session_check(actor, work, payload, false)
+    }
+
     /// `payload` as a session's `check.finished` on lane `work`: its
     /// producer, then a key over the payload and the lane's newest different
     /// result for the check, so a retry replays but a result that flips
