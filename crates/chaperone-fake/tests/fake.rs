@@ -165,3 +165,30 @@ fn run_tail_keeps_the_end_of_both_streams() {
         (&b"100000\n"[..], &b"100000\n"[..], true)
     );
 }
+
+/// `run_tail` keeps what it read when a process that left the group (perl's
+/// setsid: macOS has no setsid binary) holds the pipes past the deadline,
+/// whether the child itself runs on or has exited.
+#[test]
+fn run_tail_keeps_what_it_read_from_a_pipe_held_past_the_deadline() {
+    let escape = r#"echo before; echo oops >&2; perl -MPOSIX -e 'setsid; open my $f, ">", $ARGV[0]; print $f $$; close $f; sleep 30' "$0" &
+        until [ -s "$0" ]; do sleep 0.01; done"#;
+    for end in ["; exec sleep 30", ""] {
+        let (dir, mut cmd) = sh(&format!("{escape}{end}"));
+        let start = Instant::now();
+        let done = child::run_tail(&mut cmd, start + Duration::from_secs(1), 1024);
+        let done = done.ok().unwrap();
+        assert_eq!(
+            (&*done.out, &*done.err, done.timed_out, done.cut),
+            (&b"before\n"[..], &b"oops\n"[..], true, true),
+            "{end}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(8),
+            "waited for the pipe"
+        );
+        let _ = Command::new("/bin/kill")
+            .arg(pid(&dir).to_string())
+            .status();
+    }
+}
