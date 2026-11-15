@@ -39,6 +39,18 @@ Use the ledger's words. They decide what blocks the lane.
   Does not block.
 - `convention`, `nit`, `improvement`: do not block; this lens rarely needs them.
 
+
+## Proof
+
+A `blocker` or `risk` carries its proof in the body, one of:
+- a run: a failing test, or a command and the output it gives, that shows the failure;
+- a cited line: the file and line of the code that fails, with the input that reaches it, or
+  a written rule of the repo (quote it and give its file), or a doc line the change made wrong.
+
+A finding with neither is a `question`. Leave out style, and risks that matter only after
+some future change. A problem the base already has is not a `blocker` or `risk` unless the
+change copies it or newly reaches it: report it as an `improvement` titled as a follow-up.
+
 ## Answer
 
 A list of findings, each with its severity, a one-line title, a body that says how it fails

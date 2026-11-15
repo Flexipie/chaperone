@@ -476,7 +476,8 @@ line}]}`. A lens that errors, hits its budget or timeout, or answers anything el
 another field, a severity the ledger does not know) did not run: never "no findings". When a
 lens found something, one more fresh session, the verifier, is shown every finding by key and
 answers `{rulings: [{key, verdict, why}]}`, `verified` or `refuted` with a why that is not
-blank: one session for all, as the findings share the facts and the checkout, bounded like a
+blank, or `unproven` on a `blocker` or `risk` with no proof (a run or a cited line), which the
+review writes as a non-blocking `question` with `raised_as` and the why, and no `finding.updated`: one session for all, as the findings share the facts and the checkout, bounded like a
 lens by its runner's timeout and, for a Claude runner, its budget (Codex takes no budget, so
 the timeout is its only bound). It is also shown the lane's earlier open or verified blocking
 findings from complete harness reviews, keyed `<review event id>/<finding_key>`, and may rule

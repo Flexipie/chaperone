@@ -19,6 +19,17 @@ commits raised (`raised_on`) that still block.
    or quote the rule that answers the finding. Rule `verified` when you tried and the finding
    holds: the failure can happen or the rule is broken as it says.
 
+## Unproven
+
+A `blocker` or `risk` blocks only with proof: a run (a failing test, or a command and its
+output) or a cited line (the code that fails with the input that reaches it, a written rule
+of the repo, or a doc line the change made wrong). First try to prove it yourself: when you
+can name the file and line that fails, or quote the rule it breaks, rule it `verified`, even
+if its body gave no proof. Rule it `unproven` only when neither the finding nor your own
+reading gives that proof, or when the problem is one the base already has and the change
+neither copies it nor newly reaches it. Say which in `why`. An `unproven` finding is kept as
+a `question` and does not block. Rule `unproven` only on a `blocker` or `risk` of this review.
+
 ## Earlier findings
 
 Rule an earlier finding `fixed` only when you can name the file and line in this commit that
@@ -28,7 +39,7 @@ show is fixed you leave out: it stays open and still blocks. Rule nothing else o
 ## Rules
 
 - Never refute by default, by doubt, or because a finding is unlikely, small or badly
-  worded. A finding you cannot disprove is not refuted.
+  worded. A finding you cannot disprove is not refuted; one with no proof is `unproven`.
 - Never refute because fixing it would be work, or because the change is otherwise good.
 - Do not judge the severity; rule only whether the finding holds.
 - When you cannot reach a ruling either way (the code needed is not in the checkout, or it
@@ -37,7 +48,7 @@ show is fixed you leave out: it stays open and still blocks. Rule nothing else o
 
 ## Answer
 
-One ruling per finding you could decide: its `key`, the verdict (`verified` or `refuted` for a
-finding of this review, `fixed` for an earlier one), and `why`, one or two sentences that cite
+One ruling per finding you could decide: its `key`, the verdict (`verified`, `refuted` or
+`unproven` for a finding of this review, `fixed` for an earlier one), and `why`, one or two sentences that cite
 the file and line or the rule. A ruling with no why is
 no ruling. Rule on each key at most once.
