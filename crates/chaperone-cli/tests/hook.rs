@@ -1,9 +1,9 @@
 //! `hook` through the binary, on lane 1 claimed on v20, and the plugin's
 //! shim. The stop hook's test is verify.rs's, on a lane verify made ready.
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use serde_json::{Value, json};
 
@@ -65,9 +65,7 @@ impl Lane {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(input.to_string().as_bytes()).unwrap();
-        drop(stdin);
+        feed(&mut child, input.to_string().as_bytes());
         let out = child.wait_with_output().unwrap();
         assert!(out.status.success(), "{event}: {out:?}");
         String::from_utf8(out.stdout).unwrap()
@@ -75,6 +73,15 @@ impl Lane {
 
     fn json(&self, event: &str, input: Value) -> Value {
         serde_json::from_str(&self.hook(Some("1"), event, input)).unwrap()
+    }
+}
+
+/// Writes `input` to the child's stdin and closes it. A child with nothing
+/// to do may exit unread, closing the pipe first: BrokenPipe is fine.
+fn feed(child: &mut Child, input: &[u8]) {
+    match child.stdin.take().unwrap().write_all(input) {
+        Err(e) if e.kind() == ErrorKind::BrokenPipe => {}
+        r => r.unwrap(),
     }
 }
 
@@ -194,7 +201,7 @@ fn the_shim_is_silent_unless_chaperone_answers() {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.take().unwrap().write_all(b"in").unwrap();
+        feed(&mut child, b"in");
         let out = child.wait_with_output().unwrap();
         let got = (out.status.code(), &*String::from_utf8_lossy(&out.stdout));
         assert_eq!(
