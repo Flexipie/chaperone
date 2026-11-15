@@ -81,6 +81,25 @@ impl Lane {
         assert_eq!(self.run(who, &args).0, 0);
     }
 
+    /// `check run plan` on `text`: the result.
+    fn plan(&self, text: &str) -> Value {
+        let plan = self.dir.path().join("plan.md");
+        std::fs::write(&plan, text).unwrap();
+        let args = ["check", "run", "plan", "--work", "1", "--file"];
+        let (code, out) = self.run("lane", &[&args[..], &[plan.to_str().unwrap()]].concat());
+        assert_eq!(code, 0, "{out}");
+        out
+    }
+
+    /// The lane's one code commit.
+    fn commit(&self) {
+        git(
+            &self.wt,
+            &["commit", "-qam", "feat"],
+            &[("lib.rs", b"a\nb\n")],
+        );
+    }
+
     fn head(&self) -> String {
         git(&self.wt, &["rev-parse", "HEAD"], &[])
     }
@@ -169,10 +188,18 @@ fn lenses(correctness: Value, intent: Value, rulings: Value) -> Value {
 }
 
 /// Lane 1, claimed on v20 by session `lane` on branch `feat`, its plan
-/// checked before its one code commit; the base profile's tests
-/// pass and it declares no smoke. The fake plays `claude` for Claude and
-/// finds nothing as Codex.
+/// checked before its one code commit.
 fn lane(claude: Value) -> Lane {
+    let lane = claimed(claude);
+    lane.plan("1. do it\n");
+    lane.commit();
+    lane
+}
+
+/// Lane 1, claimed on v20 by session `lane` on branch `feat`, with no
+/// commit of its own; the base profile's tests pass and it declares no
+/// smoke. The fake plays `claude` for Claude and finds nothing as Codex.
+fn claimed(claude: Value) -> Lane {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, bin) = (
         dir.path().join("ledger.db"),
@@ -216,23 +243,6 @@ fn lane(claude: Value) -> Lane {
     let claim: Vec<_> = claim.split(' ').collect();
     assert_eq!(lane.run("lane", &["work", "create", "--title", "t"]).0, 0);
     assert_eq!(lane.run("lane", &claim).0, 0);
-    let plan = lane.dir.path().join("plan.md");
-    std::fs::write(&plan, "1. do it\n").unwrap();
-    let plan = [
-        "check",
-        "run",
-        "plan",
-        "--work",
-        "1",
-        "--file",
-        plan.to_str().unwrap(),
-    ];
-    assert_eq!(lane.run("lane", &plan).0, 0);
-    git(
-        &lane.wt,
-        &["commit", "-qam", "feat"],
-        &[("lib.rs", b"a\nb\n")],
-    );
     lane
 }
 
@@ -464,4 +474,59 @@ fn a_changed_plan_answer_reviews_the_same_commit_again() {
     let (second, replayed) = review();
     assert!(second != first && !replayed, "{second} {first}");
     assert_eq!(lane.sessions(), sessions + 4);
+}
+
+/// Plan A (a risk), plan B (none), then A again: the replay starts no
+/// session and makes A the current plan check again, so its risk, never
+/// answered, refuses verify until the lane answers it.
+#[test]
+fn a_replayed_older_plan_is_the_current_one() {
+    let mut runs = claude(json!({"findings": []}), json!([]));
+    let none = says("PLAN-B", json!({"findings": []}));
+    runs.as_array_mut().unwrap().insert(0, none);
+    let lane = claimed(runs);
+    let a = lane.plan("PLAN-A\n");
+    assert!(lane.plan("PLAN-B\n")["event_id"] != a["event_id"]);
+    let sessions = lane.sessions();
+    let again = lane.plan("PLAN-A\n");
+    assert_eq!(
+        (&again["payload"]["carried_from"], lane.sessions()),
+        (&a["event_id"], sessions)
+    );
+    lane.commit();
+    let out = lane.verify();
+    let why = out["stopped"]["why"].as_str().unwrap();
+    let named = format!("1 plan finding(s) have no answer: {}/plan-", a["event_id"]);
+    assert!(why.starts_with(&named), "{why}");
+    let plan = &lane.findings()[0];
+    assert_eq!(
+        (&plan["check_event_id"], &plan["status"]),
+        (&a["event_id"], &json!("open"))
+    );
+    lane.answer("lane", "accept");
+    lane.smoke();
+    assert_eq!(lane.verify()["stopped"], Value::Null);
+}
+
+/// A plan answer changed after verify passed leaves the commit with no
+/// review under the answers that stand: the ready handoff and the verdict
+/// are refused until a review reads them.
+#[test]
+fn a_plan_answer_changed_after_verify_needs_a_new_review() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "dispute");
+    lane.smoke();
+    assert_eq!(lane.verify()["stopped"], Value::Null);
+    lane.answer("owner", "waive");
+    let (code, err) = lane.handoff();
+    assert_eq!((code, &err["code"]), (1, &json!("gate_denied")), "{err}");
+    assert!(err.to_string().contains("review_complete"), "{err}");
+    let (code, err) = lane.run("lane", &["check", "run", "verdict", "--work", "1"]);
+    let why = err["message"].as_str().unwrap();
+    assert!(
+        code == 1 && why.contains("no harness complete review"),
+        "{err}"
+    );
+    assert_eq!(lane.verify()["stopped"], Value::Null);
+    assert_eq!(lane.handoff().0, 0);
 }

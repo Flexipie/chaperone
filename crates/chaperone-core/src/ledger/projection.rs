@@ -76,6 +76,11 @@ pub(crate) fn project(
     // and the complete review that covers the commit.
     let mut on_head: BTreeMap<String, Payload> = BTreeMap::new();
     let (mut claim, mut complete, mut covering) = (None, BTreeSet::new(), None);
+    // A review covers the commit only under the plan answers that stand.
+    let answers = match head {
+        Some(_) => crate::review::current_plan_answers(conn, lane_id)?,
+        None => None,
+    };
     while let Some(row) = rows.next()? {
         let e: Event = event_from_row(row)?;
         let p = &e.payload;
@@ -93,7 +98,8 @@ pub(crate) fn project(
                     // A carried review's findings are its original's.
                     let from = p.rest.get("carried_from").and_then(Value::as_i64);
                     let original = from.unwrap_or(e.id);
-                    if complete.contains(&original) {
+                    let shown = p.rest.get("plan_answers").and_then(Value::as_str);
+                    if complete.contains(&original) && shown == answers.as_deref() {
                         covering = Some(original);
                     }
                 } else if harness {

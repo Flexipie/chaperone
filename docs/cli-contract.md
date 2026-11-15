@@ -205,7 +205,8 @@ session that has held the lane, and is refused on any other check's finding. `--
 required as for `dispute` (how the lane will act on it) and the review lenses are shown it. It
 prints as `dispute` does. `finding answer` makes the `open` to `answered` move on a
 `question`, from any session, with the answer as `--reason`: how the lane answers a plan
-check's question. While a finding of the lane's newest plan check is `open`, `check run
+check's question. While a finding of the lane's newest plan check (a replayed older plan is
+carried, so it is the newest again) is `open`, `check run
 diff` and `check run review` (so `verify`) are refused (events.md, plan findings).
 
 `finding list` is new (#212). It prints, oldest first, every finding of the lane's complete
@@ -544,7 +545,8 @@ refused, against accidents rather than a lane swapping the file in between) of a
 UTF-8 text that is not blank; it may sit outside the worktree, where agents keep their plans.
 All of these write nothing. The plan is named as the evidence store keeps it, redacted, and
 that text is what the session is sent; a plan check that ran on the same tree, pipeline and
-plan replays, and one whose sessions gave no answer `plan_attempts` times there is refused (the
+plan replays while it is the lane's newest, else is carried as a new `ran` naming it
+(`carried_from`, events.md), and one whose sessions gave no answer `plan_attempts` times there is refused (the
 owner can waive the check). Neither stores the plan, which is written to the store only when a
 session runs on it. Else one fresh session in the harness's checkout of the commit (no diff is
 read) is given its prompt, what the lane is for (as the intent lens), the plan, fenced, and the

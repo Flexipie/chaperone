@@ -240,11 +240,13 @@ pub(crate) const COMPLETE_REVIEWS: &str = "check_event_id IN (
 
 /// The SQL condition on a `findings` row raised by lane `?1`'s newest plan
 /// check, whatever its outcome (an owner's waiver or a later run with no
-/// answer raises none, so it releases older ones): the findings the lane
-/// answers before its diff check, and the ones the review lenses are shown.
+/// answer raises none, so it releases older ones), or by the one it
+/// carries: the findings the lane answers before its diff check, and the
+/// ones the review lenses are shown.
 pub(crate) const PLAN_FINDINGS: &str = "check_event_id = (
-    SELECT max(id) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
-      AND json_extract(payload_json, '$.check') = 'plan_check')";
+    SELECT coalesce(json_extract(payload_json, '$.carried_from'), id) FROM events
+     WHERE lane_id = ?1 AND kind = 'check.finished'
+      AND json_extract(payload_json, '$.check') = 'plan_check' ORDER BY id DESC LIMIT 1)";
 
 /// The SQL condition on a `findings` row raised by any of lane `?1`'s
 /// plan checks.
@@ -1189,18 +1191,29 @@ impl Ledger {
     /// its newest move and whether it still blocks by the gate's rule (a
     /// plan check's never does).
     pub fn lane_findings(&self, id: i64) -> Result<Vec<LaneFinding>, LedgerError> {
-        self.findings_where(id, &format!("{COMPLETE_REVIEWS} OR {PLAN_FINDINGS}"))
+        findings_where(
+            self.conn(),
+            id,
+            &format!("{COMPLETE_REVIEWS} OR {PLAN_FINDINGS}"),
+        )
     }
 
     /// Lane `id`'s findings of its newest plan check, oldest first: those
     /// still `open` have no answer from the lane.
     pub fn plan_findings(&self, id: i64) -> Result<Vec<LaneFinding>, LedgerError> {
-        self.findings_where(id, PLAN_FINDINGS)
+        findings_where(self.conn(), id, PLAN_FINDINGS)
     }
+}
 
-    fn findings_where(&self, id: i64, raised: &str) -> Result<Vec<LaneFinding>, LedgerError> {
-        let mut stmt = self.conn().prepare(&format!(
-            "SELECT check_event_id, finding_key, severity, title, body, path,
+/// Lane `id`'s findings `raised` names (an SQL condition on `?1`), oldest
+/// first.
+pub(crate) fn findings_where(
+    conn: &Connection,
+    id: i64,
+    raised: &str,
+) -> Result<Vec<LaneFinding>, LedgerError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT check_event_id, finding_key, severity, title, body, path,
                     (SELECT json_extract(j.value, '$.line')
                        FROM events e, json_each(e.payload_json, '$.findings') j
                       WHERE e.id = f.check_event_id
@@ -1211,26 +1224,25 @@ impl Ledger {
                     (SELECT json_extract(payload_json, '$.reason') FROM events
                       WHERE id = f.event_id AND kind = 'finding.updated')
                FROM findings f WHERE lane_id = ?1 AND ({raised}) ORDER BY id",
-            blocking()
-        ))?;
-        let rows = stmt.query_map([id], |r| {
-            Ok(LaneFinding {
-                check_event_id: r.get(0)?,
-                finding_key: r.get(1)?,
-                severity: r.get(2)?,
-                title: r.get(3)?,
-                body: r.get(4)?,
-                path: r.get(5)?,
-                line: r.get(6)?,
-                head_sha: r.get(7)?,
-                status: r.get(8)?,
-                blocks: r.get(9)?,
-                check: r.get(10)?,
-                reason: r.get(11)?,
-            })
-        })?;
-        Ok(rows.collect::<Result<_, _>>()?)
-    }
+        blocking()
+    ))?;
+    let rows = stmt.query_map([id], |r| {
+        Ok(LaneFinding {
+            check_event_id: r.get(0)?,
+            finding_key: r.get(1)?,
+            severity: r.get(2)?,
+            title: r.get(3)?,
+            body: r.get(4)?,
+            path: r.get(5)?,
+            line: r.get(6)?,
+            head_sha: r.get(7)?,
+            status: r.get(8)?,
+            blocks: r.get(9)?,
+            check: r.get(10)?,
+            reason: r.get(11)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// The SQL condition on a `findings` row that still blocks: unsettled and

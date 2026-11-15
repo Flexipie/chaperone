@@ -953,7 +953,7 @@ fn attack(env: &Env, ledger: &Ledger, text: &str) -> Recorded {
     let kept = Kept::of(text);
     let mut input = input(&pipeline);
     let key = (&*pipeline.hash, attempts);
-    let stored = plan::replay(ledger, &mut input, key, &kept.stored.hash);
+    let stored = plan::replay(ledger, &lane_session(), &mut input, key, &kept.stored.hash);
     if let Some(stored) = stored.unwrap().unwrap() {
         return stored;
     }
@@ -1040,7 +1040,9 @@ fn the_plan_check_attacks_the_plan() {
     let pipeline = pipeline();
     let plan_ref = Kept::of("PLAN step two").stored.hash;
     let mut input = input(&pipeline);
-    let refused = plan::replay(&ledger, &mut input, (&pipeline.hash, 2), &plan_ref).unwrap();
+    let me = lane_session();
+    let refused = plan::replay(&ledger, &me, &mut input, (&pipeline.hash, 2), &plan_ref);
+    let refused = refused.unwrap();
     let Err(Refusal::InvalidInput(why)) = refused else {
         panic!("past plan_attempts is refused: {refused:?}");
     };

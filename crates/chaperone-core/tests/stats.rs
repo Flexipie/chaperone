@@ -373,9 +373,27 @@ fn a_v20_lane_reads_the_harness_review() {
         json!({"check": "merge_verdict", "outcome": "ran",
         "head_sha": HEAD, "producer": harness, "decision": "yes"}),
     );
+    // Plan A (one finding), B (none), then A carried: the lane's plan
+    // check reads A's findings, not the carry's none.
+    let plan = |found: Value, from: Option<i64>| {
+        let mut p = json!({"check": "plan_check", "outcome": "ran", "head_sha": HEAD,
+            "producer": harness, "findings": found});
+        if let Some(from) = from {
+            p.as_object_mut().unwrap().remove("findings");
+            p["carried_from"] = json!(from);
+        }
+        apply("h", EventKind::CheckFinished, p)
+    };
+    let a = plan(
+        json!([{"finding_key": "p1", "severity": "risk", "title": "t", "body": "b"}]),
+        None,
+    );
+    plan(json!([]), None);
+    plan(Value::Null, Some(a));
 
     let out = stats(&ledger, Cohort::Work(vec![id]));
     let l = &out["lanes"][0];
+    assert_eq!(l["plan_check"]["findings"][0]["finding_key"], "p1");
     // k1 is the one verified finding (k2 was refuted), raised on two
     // complete reviews on two commits: one re-raise, one flat round.
     assert_eq!(l["verified_findings"], 1);

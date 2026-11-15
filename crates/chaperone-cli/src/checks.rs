@@ -899,7 +899,7 @@ fn run_plan(
     // runs on it (`plan::record`).
     let kept = Kept::of(&plan_text(file)?);
     let key = (&*pipeline.hash, attempts);
-    if let Some(stored) = plan::replay(ledger, &mut input, key, &kept.stored.hash)?? {
+    if let Some(stored) = plan::replay(ledger, actor, &mut input, key, &kept.stored.hash)?? {
         return one(stored);
     }
     let cli = planned.runner.cli;
