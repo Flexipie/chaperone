@@ -124,7 +124,7 @@ pub fn harness(
         json!({"key": key, "severity": severity, "status": status, "title": title})
     });
     let mut shown = json!({
-        "diff": pick(&diff.1, &["files", "added", "removed", "code_lines", "changes_code", "uncounted_files"]),
+        "diff": pick(&diff.1, &["files", "added", "removed", "code_lines", "test_lines", "changes_code", "uncounted_files"]),
         "tests": ran(&tests.1),
         // From the lens rows: a review carried to an amend has no
         // findings of its own.
@@ -535,7 +535,7 @@ mod tests {
             .unwrap();
         let want = json!({
             "diff": {"files": 1, "added": null, "removed": null, "code_lines": 4,
-                     "changes_code": null, "uncounted_files": null},
+                     "test_lines": null, "changes_code": null, "uncounted_files": null},
             "tests": {"result": "pass", "timed_out": null, "commands": [{"argv": ["t"], "exit": 0}]},
             "review": {"complete": true, "findings": 1},
             "blocking_findings": [{"key": "k", "severity": "blocker", "status": "open", "title": "T"}],

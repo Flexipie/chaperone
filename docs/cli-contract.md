@@ -125,7 +125,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]... [--run <script>]` | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan\|smoke --work <id> [--file <plan>]` | write |
-| `check waive` | `plan --work <id> --reason <r>` | write |
+| `check waive` | `plan --work <id> --reason <r>`, `size --work <id> --lines <n> --reason <r>` | write |
 | `check prune` | | read, removes directories |
 | `verify` | `--work <id>` | write |
 | `pr open` | `--work <id> [--title <t>] [--draft]` | write, pushes, calls gh |
@@ -292,7 +292,7 @@ ledger.
 
 `stats` is new (#89). It prints [R11](research/r11-observability-cost-metrics.md)'s numbers for a cohort of lanes, read from the log in one statement (the cohort's events in lane order, each lane folded once); nothing is stored, so every total is a sum over events. The cohort is the lanes with a `pr.merged` whose `merged_at` is at or after `--merged-since` (`YYYY-MM-DD`, read as 00:00 UTC, or RFC 3339 UTC with milliseconds; anything else is `invalid_input`), or the `--work` ids (repeat the flag; a repeated id counts once, an unknown one is `not_found`). An empty cohort is `lanes: 0` with null medians. `data` is `{cohort, lanes}`.
 
-Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_merge_h, with_pr, merged, tokens, peak_context, attention, waivers, accepted_without_ref, send_back_rounds, plan_check, quality_gate, merge_verdict, verdict_on_head, head_reviewed, flat_rounds, reraised_findings, verified_findings, verified_findings_after_handoff, commits_after_handoff, sources}`:
+Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_merge_h, with_pr, merged, tokens, peak_context, attention, waivers, accepted_without_ref, send_back_rounds, plan_check, quality_gate, size_waiver (the newest owner size waiver's `lines` and `head_sha`, null without one), merge_verdict, verdict_on_head, head_reviewed, flat_rounds, reraised_findings, verified_findings, verified_findings_after_handoff, commits_after_handoff, sources}`:
 
 - `claimed_at` is the first `lane.claimed` (a reopened lane keeps it, so its wait counts), `merged_at` the latest `pr.merged.merged_at`, and `claim_to_merge_h` the hours between them, only when every PR the lane held (`pr.opened` or a `changed.pr_ref.to`) has merged (`merged`).
 - `tokens` is keyed by `source` (`parent`, `subagent`, `harness`) with the sums of `input_total`, `cache_read`, `cache_write` and `output_total`, skipping nulls as `usage get` does; null when the lane has no usage event. `peak_context` is the largest parent `input_total`.
@@ -307,7 +307,7 @@ Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_mer
 - `commits_after_handoff` is always null: it is a git count (events.md, PR), not a ledger read.
 - `sources` names where the numbers came from: `reviews`, the checks its reviews came from (`local_review`, `pr_review`, `review`), and `ready_point`, which point the after-handoff count used (`handoff`, `verdict`, `pr_opened`, or null with none). `tokens` is keyed by its source already.
 
-`cohort` has `lanes`, `with_pr`, `merged`, `too_few_lanes` (under 25: flagged, not scored), `claim_to_merge_h_median`, `tokens` (summed per source; a message recorded on two lanes of the cohort, which usage's worktree match allows, counts on each), `attention` (summed per type), `waivers` (summed per kind), `accepted_without_ref` (every lane's, as `{work_id, finding}`), R11's first five (`lanes_with_usage` (lanes with a parent `input_total`), `peak_context_median`, `context_tokens_per_merged_pr_median` (parent `input_total` over the PR count, merged lanes with usage), `lanes_peak_over_500k`; `lanes_reviewed` (lanes with a recorded review: the coverage of row 2's sums), `flat_rounds`, `reraised_findings`; `lanes_head_reviewed`; `lanes_with_commits_after_handoff`, `verified_findings`, `verified_findings_after_handoff`; `lanes_plan_checked`, `plan_check_skipped` and `quality_gate_skipped` (counts by reason), `lanes_quality_gated`, `lanes_verdict_on_head`, the last two over lanes with a PR as R11 defines), and `missing`. A median is over the non-null lane values, rounded to two decimals, and null when there are none. `missing` maps each cohort number printed as null because nothing records its input (by its cohort name; the lane fields of the same rows are null for the same reason) to what it needs: `lanes_with_commits_after_handoff` always, the three token numbers of row 1 when no lane in the cohort has a parent `input_total` (`lanes_peak_over_500k` is then null, not 0), and every review number when no lane in the cohort has a recorded review (with one, a lane without a review counts as unreviewed, not unknown). `sources` counts the lanes per review check (`reviews`) and per ready point (`ready_point`).
+`cohort` has `lanes`, `with_pr`, `merged`, `too_few_lanes` (under 25: flagged, not scored), `claim_to_merge_h_median`, `tokens` (summed per source; a message recorded on two lanes of the cohort, which usage's worktree match allows, counts on each), `attention` (summed per type), `waivers` (summed per kind), `accepted_without_ref` (every lane's, as `{work_id, finding}`), R11's first five (`lanes_with_usage` (lanes with a parent `input_total`), `peak_context_median`, `context_tokens_per_merged_pr_median` (parent `input_total` over the PR count, merged lanes with usage), `lanes_peak_over_500k`; `lanes_reviewed` (lanes with a recorded review: the coverage of row 2's sums), `flat_rounds`, `reraised_findings`; `lanes_head_reviewed`; `lanes_with_commits_after_handoff`, `verified_findings`, `verified_findings_after_handoff`; `lanes_plan_checked`, `plan_check_skipped` and `quality_gate_skipped` (counts by reason), `lanes_quality_gated`, `lanes_verdict_on_head`, the last two over lanes with a PR as R11 defines, `lanes_size_waived` (lanes the owner raised the size cap for, to compare their rounds and escapes)), and `missing`. A median is over the non-null lane values, rounded to two decimals, and null when there are none. `missing` maps each cohort number printed as null because nothing records its input (by its cohort name; the lane fields of the same rows are null for the same reason) to what it needs: `lanes_with_commits_after_handoff` always, the three token numbers of row 1 when no lane in the cohort has a parent `input_total` (`lanes_peak_over_500k` is then null, not 0), and every review number when no lane in the cohort has a recorded review (with one, a lane without a review counts as unreviewed, not unknown). `sources` counts the lanes per review check (`reviews`) and per ready point (`ready_point`).
 
 `impact` (#43) lists the files that depend on the given files, nearest first, so an agent or a reviewer sees what a change might reach beyond its diff. It never opens the ledger. It runs in the current directory's git worktree: one `git rev-parse`, one `git config --get remote.origin.url`, and two `git ls-files` (the tracked files with their blob ids; the changed, deleted and untracked ones, which stats every tracked file), all four at once, then `git hash-object` (per 1,000 paths) for clean files the cache lacks, all under the same git rules as `overlap` and one 5 s deadline; output past 64 MiB from any of them fails `internal` rather than answer from a cut list. Targets are paths from the repo root, or from the current directory, or absolute. It reads Rust files and `Cargo.toml` manifests: a clean tracked file by its blob id (when its bytes still hash to it; else by their sha256), a changed or untracked one from the worktree, so the answer is for the worktree as it is now. Facts per file (its `mod` declarations, paths, `use` names, `impl` self types, each with its line) are parsed with tree-sitter and cached by content in one SQLite file per origin, shared by every worktree and clone ([ADR 0043](decisions/0043-code-graph-cache.md)); `--cache` names another file. Module nodes and import edges are rebuilt in memory on each call ([R43](research/r43-change-graph.md)). `data` is `{bound, cache, depths, files_omitted, stale, targets, unsure, unsure_omitted}`. `targets` is `{path, known, lang, module}` per target: `known` false for a path that is not a Rust file or `Cargo.toml` in the tree, `lang` `rust` or null (no edges are read for other files yet). `depths` is `{depth, bound, files: [{path, module}], files_omitted}`: depth 1 names a target directly, depth 2 names a depth 1 file, to the full closure; at most 500 files are listed over all depths, the rest counted per depth and in `files_omitted`. `bound` is `exact`, or `lower_bound` when some Rust file's references are not all known, or a target is not a Rust file in the tree (a `Cargo.toml`, a deleted file: its dependents are not read), so any depth, and an empty answer, may miss files: `unsure` lists those files with `why` (`unparsed`, `parse_error`, `path_attr`, `include`, `super_past_root`, `too_deep` for nesting past 256 levels, `orphan` for a file no crate root reaches), the first 20, the rest in `unsure_omitted`. `stale` is true when some Rust file of the tree could not be read (over 256 KiB, or unreadable). `cache` is `{parsed, reused, skipped?}`: `skipped` says why the cache was not used (the answer is then parsed in full); a SQLite file SQLite calls corrupt is renamed to `.bad` with its `-wal` and `-shm`, never deleted; any other file, an empty file passed as `--cache`, or a SQLite file with a `user_version` or tables of its own (the ledger) is never written to, its WAL included (the check runs under the write lock, so a ledger mid-`migrate` is waited for, and a refusal rolls back and closes without a checkpoint unless its WAL has no frames, which the close then removes as any last reader's does); a symlink is followed to its file, and a `--cache` file with more than one hard link is refused (`skipped: cache file has more than one hard link`; SQLite would name its WAL after the link); an empty file at the default path is a cache a first run left before writing, and is used. Not in a git worktree: `invalid_input` with git's line.
 
@@ -379,7 +379,7 @@ read as remote-tracking refs, so a local branch named `origin/main` is never tak
 its tree, those two within one 10 s deadline. A lane with no worktree, a relative or missing
 one, a git call that fails or times out (not marked retryable yet), a numstat past 16 MiB and
 a base profile that is a link or no file, is not TOML (with or without `[diff]`) or whose
-`[diff]` or `[[companions]]` does not load are `invalid_input` and write nothing. So is a
+`[diff]`, `[size]` or `[[companions]]` does not load are `invalid_input` and write nothing. So is a
 commit that breaks a companion rule of the base profile: each `[[companions]]` has a `name`
 (no space or `:`), `when` and `needs` (non-empty glob lists), and a commit that changes a file
 `when` names must change one `needs` names. The refusal names each broken rule, the file that
@@ -474,7 +474,7 @@ such files in `uncounted_files`. A CLI that cannot start, a checkout that cannot
 a diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings.
 
 A lens whose `[limits]` holds `<lens>_min_code_lines` (v20: `codex_min_code_lines`, 200)
-is skipped when the harness `diff` on the commit counts fewer code lines: no session, its row
+is skipped when the harness `diff` on the commit counts fewer code plus test lines (`code_lines` and `test_lines`, as #223 measured them): no session, its row
 in `lenses` says `skipped` and why, and the review can still be complete. With no harness
 `diff` on the commit, or one with `uncounted_files`, the lens runs. Its CLI is still asked `--version` first.
 
@@ -590,6 +590,13 @@ lane, as `work ready` and `finding waive` are. The same waiver again replays (ke
 record`, on the payload as stored). It waives the plan check only, and gates nothing by itself:
 a gate reads it as `plan_check.reason` `waived`. It prints what `check record` prints.
 
+`check waive size --lines <n>` is the owner's escape from the size cap for a lane whose change
+only makes sense whole. It reads the lane's commit the same way and appends one `size_waiver`
+`ran` with `lines` `<n>` (above 0) and `note` the `--reason`, producer `session`, refused from any
+session that has held the lane; the same waiver again replays. `--lines` is required with `size`
+and refused with `plan` (`invalid_input`). It raises that lane's limit alone, for every commit:
+`code_lines_at_most` and `pr open` read it as `commit.size_waived`. Uncounted files still refuse.
+
 `verify --work <id>` is what a lane runs in the background: `check run diff`, `tests`, `review`
 and `verdict` on the lane's commit, in that order, each exactly as that command runs it (the
 same events and keys, so a step on the same tree replays and starts no session). It takes the
@@ -613,7 +620,7 @@ refusal's message, why the step did not pass, or `the lane moved from <sha> to <
 lane's branch, with any change or untracked file, or not at that branch's tip; a lane with no PR
 whose `work update` the ledger would refuse (a dry run); a lane that moves while it runs; a
 `check run diff` past the pipeline's `[limits] code_lines` (the number `code_lines_at_most`
-reads), with an uncounted file or missing a count (no limit, no refusal); a base that is no
+reads) unless the owner's size waiver covers it (`commit.size_waived`), with an uncounted file or missing a count (no limit, no refusal); a base that is no
 `origin/` branch; and `check run tests` that did not pass. Diff and tests run as `check run`
 runs them, so a pass on the same tree replays. A lane with no PR first asks `gh pr list --head
 <branch>` for an open one a run opened and never recorded. Then `git push origin
@@ -783,7 +790,7 @@ gates, in the order a denial names the first that fails:
 | --- | --- | --- |
 | `stamp_ok` | the lane is stamped `v20` | `pipeline.id` |
 | `no_uncounted_files` | a harness `diff` on the commit has no file git counts no lines of | `commit.uncounted_files` |
-| `code_lines_at_most` | that diff counts at most 400 code lines | `commit.code_lines` |
+| `code_lines_at_most` | that diff counts at most 400 code lines (test lines, `[size] tests`, not counted), or at most the owner's `check waive size --lines` for the lane | `commit.code_lines`, `commit.size_waived` |
 | `tests_passed` | the newest harness `tests` on the commit passed | `tests.passed` |
 | `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree counts) | `review.complete` |
 | `no_blocking_findings` | no complete harness review on the lane, of any tree, has a finding open, verified or disputed of severity `blocker`, `risk` or another blocking one; refuted, waived, fixed and answered findings, incomplete and session reviews' and the plan check's never count | `findings.open_blocking` |

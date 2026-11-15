@@ -37,6 +37,7 @@ pub const SESSION_CHECKS: &[&str] = &[
     "smoke",
     "kept_tests",
     "review_round",
+    "size_waiver",
 ];
 
 /// The checks the harness runs under a schema 2 pipeline (`check run`),
@@ -743,6 +744,10 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             }
             if p.check.is_none() || p.head_sha.is_none() {
                 refuse!(invalid("check.finished needs check and head_sha"));
+            }
+            let lines = p.rest.get("lines").and_then(Value::as_i64);
+            if check == "size_waiver" && lines.is_none_or(|n| n <= 0) {
+                refuse!(invalid("a size_waiver needs lines, an integer above 0"));
             }
             if !matches!(p.outcome.as_deref(), Some("ran" | "skipped")) {
                 refuse!(invalid("check.finished outcome is ran or skipped"));

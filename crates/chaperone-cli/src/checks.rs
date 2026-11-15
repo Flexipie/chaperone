@@ -145,8 +145,35 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             }
         }
         CheckCmd::Waive {
+            kind: WaiveKind::Size,
+            work,
+            lines: Some(lines),
+            reason,
+            actor,
+        } => {
+            let item = ledger.work_get(work, &ledger.now()?)??;
+            let head = observed_head(item.worktree_path.as_deref(), item.branch.as_deref())?;
+            let head = head.ok_or_else(|| {
+                refuse(format!(
+                    "work item {work} has no worktree to read its commit in"
+                ))
+            })?;
+            one(ledger.size_waive(&actor.resolve(), work, &head, lines, &reason)??)
+        }
+        CheckCmd::Waive {
+            kind: WaiveKind::Size,
+            lines: None,
+            ..
+        } => Err(refuse("check waive size needs --lines".into())),
+        CheckCmd::Waive {
+            kind: WaiveKind::Plan,
+            lines: Some(_),
+            ..
+        } => Err(refuse("--lines goes with size only".into())),
+        CheckCmd::Waive {
             kind: WaiveKind::Plan,
             work,
+            lines: None,
             reason,
             actor,
         } => {
@@ -278,11 +305,15 @@ pub fn pr_open(
     };
     let diff = step("diff", run_diff(ledger, db, work, actor))?;
     let (lines, uncounted) = (&diff["code_lines"], &diff["uncounted_files"]);
-    let over = |limit: &&i64| lines.as_i64().is_none_or(|n| n > **limit) || uncounted != 0;
+    // The owner's size waiver lifts the line limit only.
+    let waived = ledger.project(work, Some(&head))?.get("commit.size_waived") == &Fact::Bool(true);
+    let over =
+        |limit: &&i64| (lines.as_i64().is_none_or(|n| n > **limit) && !waived) || uncounted != 0;
     if let Some(limit) = lane_pipeline(&item)?.limits.get("code_lines").filter(over) {
         return Err(refuse(format!(
             "the diff has {lines} code lines and {uncounted} uncounted (binary) files; the \
-             pipeline allows {limit} and none: split the lane"
+             pipeline allows {limit} and none: split the lane, or ask the owner for \
+             `check waive size`"
         )));
     }
     let base = git::base_rev(diff["base"].as_str().unwrap_or_default());
@@ -450,9 +481,10 @@ fn pr_body(
         smokes.push(format!("session claim {outcome}, {files} evidence files"));
     }
     body += &format!(
-        "- Size: {} code lines in {} files\n- Tests: passed on {head}: {}\n\
+        "- Size: {} code lines and {} test lines in {} files\n- Tests: passed on {head}: {}\n\
          - Plan check: {plan}\n- Smoke: {}\n\nMade by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],
+        diff["test_lines"],
         diff["files"],
         commands.join(", "),
         if smokes.is_empty() {
@@ -550,7 +582,8 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     let globs = found.as_ref().map_or(&[][..], |f| &f.code);
     let rules = found.as_ref().map_or(&[][..], |f| &f.companions);
     companions(&wt, &base, &input.head, &files, rules)?;
-    let (code, code_lines) = code(&files, globs);
+    let tests = found.as_ref().map_or(&[][..], |f| &f.tests);
+    let (code, code_lines, test_lines) = code(&files, globs, tests);
     let added: u64 = files.iter().filter_map(|f| f.added).sum();
     let removed: u64 = files.iter().filter_map(|f| f.removed).sum();
     input.fields = Map::from_iter([
@@ -559,6 +592,7 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         ("added".into(), json!(added)),
         ("removed".into(), json!(removed)),
         ("code_lines".into(), json!(code_lines)),
+        ("test_lines".into(), json!(test_lines)),
         ("changes_code".into(), json!(!code.is_empty())),
         // Binary, or text an attributes rule (`-diff`) hides: no lines
         // counted, so a size gate can refuse rather than trust the totals.
@@ -650,14 +684,24 @@ fn companions(
 }
 
 /// Of `files`, the code ones (named by `globs`, else not [`NOT_CODE`]),
-/// and their lines added plus removed.
-fn code<'a>(files: &'a [ChangedFile], globs: &[String]) -> (Vec<&'a str>, u64) {
+/// and their lines added plus removed: those of the ones `tests` names,
+/// then the rest's.
+fn code<'a>(
+    files: &'a [ChangedFile],
+    globs: &[String],
+    tests: &[String],
+) -> (Vec<&'a str>, u64, u64) {
     let code = files.iter().filter(|f| {
         globs.iter().any(|g| glob(g, &f.path)) || !NOT_CODE.iter().any(|g| glob(g, &f.path))
     });
-    code.fold((Vec::new(), 0), |(mut paths, lines), f| {
+    code.fold((Vec::new(), 0, 0), |(mut paths, lines, test), f| {
         paths.push(f.path.as_str());
-        (paths, lines + f.added.unwrap_or(0) + f.removed.unwrap_or(0))
+        let n = f.added.unwrap_or(0) + f.removed.unwrap_or(0);
+        if tests.iter().any(|g| glob(g, &f.path)) {
+            (paths, lines, test + n)
+        } else {
+            (paths, lines + n, test)
+        }
     })
 }
 
@@ -931,7 +975,7 @@ fn run_plan(
 /// Refuses a commit `head` whose `files` change code, naming up to three
 /// of them and the owner's waiver: the plan check runs before any code.
 fn no_code(files: &[ChangedFile], globs: &[String], head: &str, work: i64) -> Result<(), CliError> {
-    let (code, lines) = code(files, globs);
+    let (code, lines, _) = code(files, globs, &[]);
     if code.is_empty() {
         return Ok(());
     }
@@ -1116,11 +1160,16 @@ fn change(
     };
     // A count that leaves files out is no size to skip a lens on.
     let measured = ledger.project(item.id, Some(head))?;
+    // Code and test lines both, as the lens minimums were measured (#223).
+    let tests = match measured.get("commit.test_lines") {
+        Fact::Int(n) => *n,
+        _ => 0,
+    };
     let code_lines = match (
         measured.get("commit.code_lines"),
         measured.get("commit.uncounted_files"),
     ) {
-        (Fact::Int(n), Fact::Int(0)) => Some(*n),
+        (Fact::Int(n), Fact::Int(0)) => Some(*n + tests),
         _ => None,
     };
     let facts = Facts {

@@ -385,6 +385,14 @@ struct Diff {
     code: Vec<String>,
 }
 
+/// `[size]`, its own table so a binary that predates it still loads the
+/// profile: the globs of test files, whose lines the size cap leaves out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Size {
+    tests: Vec<String>,
+}
+
 /// A `[[companions]]` rule (its own table, so a binary that predates it
 /// still loads `[diff]`): a diff that changes a file `when` names
 /// must change one `needs` names too.
@@ -402,6 +410,8 @@ pub struct Companion {
 #[derive(Debug)]
 pub struct BaseCode {
     pub code: Vec<String>,
+    /// `[size] tests`: code files counted as test lines.
+    pub tests: Vec<String>,
     pub companions: Vec<Companion>,
     pub hash: String,
     pub base: &'static str,
@@ -410,7 +420,7 @@ pub struct BaseCode {
 
 /// The [`BaseCode`] of the base branch's [`REPO_PROFILE`] for the repo
 /// `dir` is in; None when there is none. No `[diff]` names no globs. A
-/// profile that is a link or no file, is not TOML, or whose `[diff]` or
+/// profile that is a link or no file, is not TOML, or whose `[diff]`, `[size]` or
 /// `[[companions]]` does not load refuses, as does a rule with an empty list or a
 /// name that is empty or holds a space or `:` (a trailer names it).
 pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<BaseCode>, Error> {
@@ -425,6 +435,11 @@ pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<Ba
         .transpose()
         .map_err(bad)?
         .map_or_else(Vec::new, |d| d.code);
+    let size = profile.remove("size").map(toml::Value::try_into::<Size>);
+    let tests = size
+        .transpose()
+        .map_err(bad)?
+        .map_or_else(Vec::new, |s| s.tests);
     let rules = profile
         .remove("companions")
         .map(toml::Value::try_into::<Vec<Companion>>);
@@ -443,6 +458,7 @@ pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<Ba
     }
     Ok(Some(BaseCode {
         code,
+        tests,
         companions,
         hash: format!("{:x}", Sha256::digest(&found.text)),
         base: found.base,

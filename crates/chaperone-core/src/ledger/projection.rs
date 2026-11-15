@@ -76,6 +76,8 @@ pub(crate) fn project(
     // and the complete review that covers the commit.
     let mut on_head: BTreeMap<String, Payload> = BTreeMap::new();
     let (mut claim, mut complete, mut covering) = (None, BTreeSet::new(), None);
+    // The newest size waiver's raised limit, on any commit of the lane.
+    let mut waived_to = None;
     // A review covers the commit only under the plan answers that stand.
     let answers = match head {
         Some(_) => crate::review::current_plan_answers(conn, lane_id)?,
@@ -138,6 +140,9 @@ pub(crate) fn project(
                         set(&mut f, "verdict.decision", text("decision"));
                         set(&mut f, "verdict.sha", p.head_sha.as_deref());
                     }
+                    "size_waiver" if producer == Some(&json!("session")) => {
+                        waived_to = p.rest.get("lines").and_then(Value::as_i64);
+                    }
                     "smoke" => smoke = true,
                     "kept_tests" => kept = true,
                     // A review round daisy did not run (a review agent's): it
@@ -195,13 +200,19 @@ pub(crate) fn project(
     }
     if head.is_some() {
         let field = |check: &str, key: &str| on_head.get(check).and_then(|p| p.rest.get(key));
-        for key in ["code_lines", "uncounted_files"] {
+        for key in ["code_lines", "test_lines", "uncounted_files"] {
             let int = field("diff", key).and_then(Value::as_i64);
             f.set(
                 &format!("commit.{key}"),
                 int.map_or(Fact::Absent, Fact::Int),
             );
         }
+        let lines = field("diff", "code_lines").and_then(Value::as_i64);
+        let waived = lines.map(|n| waived_to.is_some_and(|to| n <= to));
+        f.set(
+            "commit.size_waived",
+            waived.map_or(Fact::Absent, Fact::Bool),
+        );
         let code = field("diff", "changes_code").and_then(Value::as_bool);
         f.set("commit.changes_code", code.map_or(Fact::Absent, Fact::Bool));
         for check in ["tests", "smoke"] {
