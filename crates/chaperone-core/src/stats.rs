@@ -84,8 +84,6 @@ struct Lane {
     tokens: BTreeMap<String, [Option<i64>; 4]>,
     peak: Option<i64>,
     attention: BTreeMap<String, i64>,
-    /// Waivers by kind (`none` for one written before kinds), and each
-    /// `accepted` one with no ref as `<event>/<key>`, for the owner.
     waivers: BTreeMap<String, i64>,
     accepted_without_ref: Vec<String>,
     rounds: Option<i64>,
