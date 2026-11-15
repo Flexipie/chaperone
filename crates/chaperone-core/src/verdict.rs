@@ -75,21 +75,22 @@ pub fn harness(
     head: &str,
     smoke_declared: bool,
 ) -> Result<Result<Harness, &'static str>, LedgerError> {
-    let Some(diff) = newest(ledger, work, "diff", head, false)? else {
+    let Some(diff) = newest(ledger, work, "diff", head, None)? else {
         return Ok(Err("diff"));
     };
     let passed = |p: &Payload| p.rest.get("result") == Some(&json!("pass"));
-    let Some(tests) = newest(ledger, work, "tests", head, false)? else {
+    let Some(tests) = newest(ledger, work, "tests", head, None)? else {
         return Ok(Err("tests"));
     };
     if !passed(&tests.1) {
         return Ok(Err("tests that pass (the newest failed)"));
     }
-    let Some(review) = newest(ledger, work, "review", head, true)? else {
+    let answers = review::current_plan_answers(ledger.conn(), work)?;
+    let Some(review) = newest(ledger, work, "review", head, Some(answers.as_deref()))? else {
         return Ok(Err("complete review"));
     };
     if smoke_declared {
-        match newest(ledger, work, "smoke", head, false)? {
+        match newest(ledger, work, "smoke", head, None)? {
             None => return Ok(Err("smoke (the base profile declares [smoke])")),
             Some((_, p)) if !passed(&p) => {
                 return Ok(Err("smoke that passes (the newest failed)"));
@@ -144,14 +145,14 @@ pub fn harness(
     }))
 }
 
-/// The newest harness `check` on lane `work`'s commit `head`, a complete
-/// one when `complete`.
+/// The newest harness `check` on lane `work`'s commit `head`; with
+/// `review`, a complete one shown those plan answers (`plan_answers`).
 fn newest(
     ledger: &Ledger,
     work: i64,
     check: &str,
     head: &str,
-    complete: bool,
+    review: Option<Option<&str>>,
 ) -> Result<Option<(i64, Payload)>, LedgerError> {
     let row: Option<(i64, String)> = ledger
         .conn()
@@ -160,9 +161,10 @@ fn newest(
                AND json_extract(payload_json, '$.check') = ?2
                AND json_extract(payload_json, '$.head_sha') = ?3
                AND json_extract(payload_json, '$.producer.kind') = 'harness'
-               AND (NOT ?4 OR json_extract(payload_json, '$.complete') IS 1)
+               AND (NOT ?4 OR json_extract(payload_json, '$.complete') IS 1
+                 AND json_extract(payload_json, '$.plan_answers') IS ?5)
              ORDER BY id DESC LIMIT 1",
-            params![work, check, head, complete],
+            params![work, check, head, review.is_some(), review.flatten()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
@@ -200,7 +202,7 @@ pub fn smoke(
     work: i64,
     head: &str,
 ) -> Result<Value, LedgerError> {
-    let harness = newest(ledger, work, "smoke", head, false)?.map(|(_, p)| ran(&p));
+    let harness = newest(ledger, work, "smoke", head, None)?.map(|(_, p)| ran(&p));
     let claim: Option<String> = ledger
         .conn()
         .query_row(

@@ -24,9 +24,10 @@ const ALLOWED: &[(&str, &str)] = &[
     ("disputed", "waived"),
     ("open", "disputed"),
     ("verified", "disputed"),
+    ("open", "accepted"),
 ];
-const STATUSES: [&str; 7] = [
-    "open", "fixed", "answered", "verified", "refuted", "disputed", "waived",
+const STATUSES: [&str; 8] = [
+    "open", "fixed", "answered", "verified", "refuted", "disputed", "waived", "accepted",
 ];
 
 /// Lane 1 claimed by session s1, with one review raising `keys`
@@ -61,6 +62,24 @@ fn review(ledger: &Ledger, keys: &[&str]) -> (i64, i64) {
     (lane, common::committed(applied).id)
 }
 
+/// A harness plan check on lane 1 with `p`'s fields, its event id.
+fn plan_check(ledger: &Ledger, mut p: serde_json::Value) -> i64 {
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    p.as_object_mut().unwrap().extend([
+        ("check".into(), json!("plan_check")),
+        ("head_sha".into(), json!("abc1234")),
+        ("producer".into(), harness),
+    ]);
+    let m = Mutation::Event {
+        kind: EventKind::CheckFinished,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: serde_json::from_value(p).unwrap(),
+    };
+    let at = "2099-01-01T00:00:00.000Z";
+    common::committed(ledger.apply(&actor("9"), None, at, m).unwrap()).id
+}
+
 /// One move by session `s<who>`; an empty reason or sha is none.
 fn mv(
     l: &Ledger,
@@ -81,10 +100,15 @@ fn mv(
 }
 
 /// Walks `key` from open along `path`, each move by the session it allows:
-/// the lane's (s1) disputes, one that never held it (s2) does the rest.
+/// the lane's (s1) disputes and accepts, one that never held it (s2) does
+/// the rest.
 fn walk(l: &Ledger, check: i64, key: &str, path: &[&str]) {
     for to in path.iter().filter(|s| **s != "open") {
-        let who = if *to == "disputed" { "1" } else { "2" };
+        let who = if ["disputed", "accepted"].contains(to) {
+            "1"
+        } else {
+            "2"
+        };
         let moved = mv(l, check, (who, key, to), "r", "abc1234");
         assert!(moved.is_ok(), "{key} to {to}: {moved:?}");
     }
@@ -93,14 +117,13 @@ fn walk(l: &Ledger, check: i64, key: &str, path: &[&str]) {
 #[test]
 fn moves_follow_the_table() {
     let (_dir, path, ledger) = common::ledger();
-    // Questions, so every move is open to them; b0 is a blocker.
-    let keys: Vec<_> = (0..40).map(|i| format!("question:f{i}")).collect();
-    let keys: Vec<_> = keys
-        .iter()
-        .map(String::as_str)
-        .chain(["blocker:b0"])
+    // Questions, so every move is open to them; b0 is a blocker. The table
+    // walks a plan check's, so `accepted` is a move they can make.
+    let (_, check) = review(&ledger, &["question:f30", "question:f31", "blocker:b0"]);
+    let found: Vec<_> = (0..30)
+        .map(|i| json!({"finding_key": format!("f{i}"), "severity": "question", "title": "t", "body": "b"}))
         .collect();
-    let (_, check) = review(&ledger, &keys);
+    let plan = plan_check(&ledger, json!({"outcome": "ran", "findings": found}));
     let db = read_only(&path);
     let events = || count(&db, "SELECT count(*) FROM events");
     let status = |key: &str| -> String {
@@ -109,21 +132,21 @@ fn moves_follow_the_table() {
     };
     for (i, (from, to)) in ALLOWED.iter().enumerate() {
         let key = format!("f{i}");
-        walk(&ledger, check, &key, &[from, to]);
+        walk(&ledger, plan, &key, &[from, to]);
         assert_eq!(status(&key), *to);
     }
     // Every pair the table lacks, with all a move could need.
     for (i, from) in STATUSES.iter().enumerate() {
         let key = format!("f{}", 20 + i);
-        walk(&ledger, check, &key, &[from]);
+        walk(&ledger, plan, &key, &[from]);
         for to in STATUSES[1..]
             .iter()
             .filter(|to| !ALLOWED.contains(&(from, to)))
         {
             let before = events();
-            let got = mv(&ledger, check, ("2", &key, to), "r", "abc1234");
+            let got = mv(&ledger, plan, ("2", &key, to), "r", "abc1234");
             let want = match from == to {
-                true => format!("finding {check}/{key} is already {to}"),
+                true => format!("finding {plan}/{key} is already {to}"),
                 false => format!("a finding cannot move from {from} to {to}"),
             };
             assert_eq!(got.unwrap_err(), Refusal::InvalidInput(want));
@@ -288,27 +311,7 @@ fn the_harness_rules_from_the_lanes_session() {
 fn the_newest_plan_checks_findings_are_answered_and_never_block() {
     let (_dir, path, ledger) = common::ledger();
     review(&ledger, &[]);
-    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
-    let plan = |mut p: serde_json::Value| {
-        p.as_object_mut().unwrap().extend([
-            ("check".into(), json!("plan_check")),
-            ("head_sha".into(), json!("abc1234")),
-            ("producer".into(), harness.clone()),
-        ]);
-        let payload = serde_json::from_value(p).unwrap();
-        let m = Mutation::Event {
-            kind: EventKind::CheckFinished,
-            lane_id: Some(1),
-            spec_id: None,
-            payload,
-        };
-        common::committed(
-            ledger
-                .apply(&actor("9"), None, "2099-01-01T00:00:00.000Z", m)
-                .unwrap(),
-        )
-        .id
-    };
+    let plan = |p| plan_check(&ledger, p);
     let found = ["p1", "p2"]
         .map(|k| json!({"finding_key": k, "severity": "blocker", "title": "t", "body": "b"}));
     let check = plan(json!({"outcome": "ran", "findings": found}));

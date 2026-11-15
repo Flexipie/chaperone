@@ -205,7 +205,8 @@ session that has held the lane, and is refused on any other check's finding. `--
 required as for `dispute` (how the lane will act on it) and the review lenses are shown it. It
 prints as `dispute` does. `finding answer` makes the `open` to `answered` move on a
 `question`, from any session, with the answer as `--reason`: how the lane answers a plan
-check's question. While a finding of the lane's newest plan check is `open`, `check run
+check's question. While a finding of the lane's newest plan check (a replayed older plan is
+carried, so it is the newest again) is `open`, `check run
 diff` and `check run review` (so `verify`) are refused (events.md, plan findings).
 
 `finding list` is new (#212). It prints, oldest first, every finding of the lane's complete

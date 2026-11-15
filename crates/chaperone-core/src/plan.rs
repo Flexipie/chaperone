@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use rusqlite::params;
 use serde_json::{Map, json};
 
 use crate::checks::{BODY_CHARS, NOTE_CHARS, Recorded, RunInput};
@@ -55,10 +56,14 @@ pub fn prompt(p: &Planned<'_>, goal: &str, plan: &str, head: &str, base: &str) -
 /// The start of `check run plan`: `input` keyed for a plan check by the
 /// pipeline `hash`, then the plan check that ran on the same tree and
 /// pipeline with the same plan (`plan_ref`, its evidence hash) when there
-/// is one, which replays and starts no session. Else a plan whose sessions
-/// gave no answer `attempts` times there is refused: the owner decides.
+/// is one, which starts no session: it replays while it is the lane's
+/// newest plan check, else it is carried (`carried_from`, no findings of
+/// its own), so it is the newest again for every reader. Else a plan whose
+/// sessions gave no answer `attempts` times there is refused: the owner
+/// decides.
 pub fn replay(
     ledger: &Ledger,
+    actor: &Actor,
     input: &mut RunInput,
     (hash, attempts): (&str, i64),
     plan_ref: &str,
@@ -67,7 +72,16 @@ pub fn replay(
     input.profile = Some(hash.into());
     let plan = Some(("plan_ref", rusqlite::types::Value::Text(plan_ref.into())));
     if let Some(stored) = ledger.tree_run(input, &plan, None)? {
-        return Ok(Ok(Some(stored)));
+        let newest: i64 = ledger.conn().query_row(
+            "SELECT max(id) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = ?2",
+            params![input.work, EVENT_CHECK],
+            |r| r.get(0),
+        )?;
+        if stored.event_id == newest {
+            return Ok(Ok(Some(stored)));
+        }
+        return Ok(ledger.carry(actor, input, stored)?.map(Some));
     }
     let failed = ledger.no_answers(input, &plan)?;
     if failed >= attempts {

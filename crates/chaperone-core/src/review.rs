@@ -14,13 +14,14 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::checks::{
-    BODY_CHARS, COMPLETE_REVIEWS, FindingMove, NOTE_CHARS, Recorded, RunInput, blocking,
+    BODY_CHARS, COMPLETE_REVIEWS, FindingMove, NOTE_CHARS, PLAN_FINDINGS, Recorded, RunInput,
+    blocking, findings_where,
 };
 use crate::git::ChangedFile;
 use crate::ledger::{
@@ -657,7 +658,22 @@ pub fn earlier(ledger: &Ledger, work: i64) -> Result<Vec<Finding>, LedgerError> 
 /// with the lane's answer, and what a lens does with it. Empty when it
 /// raised none.
 pub fn plan_findings(ledger: &Ledger, work: i64) -> Result<String, LedgerError> {
-    let found = ledger.plan_findings(work)?;
+    shown(ledger.conn(), work)
+}
+
+/// The sha256 of what [`plan_findings`] shows, none when it shows nothing:
+/// a review's `plan_answers`. A review replays, and covers its commit,
+/// only under the current one.
+pub(crate) fn current_plan_answers(
+    conn: &Connection,
+    work: i64,
+) -> Result<Option<String>, LedgerError> {
+    let shown = shown(conn, work)?;
+    Ok((!shown.is_empty()).then(|| format!("{:x}", Sha256::digest(&shown))))
+}
+
+fn shown(conn: &Connection, work: i64) -> Result<String, LedgerError> {
+    let found = findings_where(conn, work, PLAN_FINDINGS)?;
     if found.is_empty() {
         return Ok(String::new());
     }
@@ -741,9 +757,7 @@ pub fn replay(
     }
     input.check = "review".into();
     input.profile = Some(plan.hash.into());
-    let shown = plan_findings(ledger, input.work)?;
-    if !shown.is_empty() {
-        let digest = format!("{:x}", Sha256::digest(&shown));
+    if let Some(digest) = current_plan_answers(ledger.conn(), input.work)? {
         input.fields.insert("plan_answers".into(), json!(digest));
     }
     if let Some(stored) = ledger.run_replay(&ledger.run_key(input)?)? {

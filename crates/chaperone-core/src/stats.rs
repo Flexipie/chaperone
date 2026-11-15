@@ -86,6 +86,9 @@ struct Lane {
     attention: BTreeMap<String, i64>,
     rounds: Option<i64>,
     plan_check: Value,
+    /// Each plan check that ran, by event id, to its `findings`: a carried
+    /// one reads its original's.
+    plan_findings: BTreeMap<i64, Value>,
     quality_gate: Value,
     /// Verdicts that ran, in log order: head and whether it said yes.
     verdicts: Vec<(String, bool)>,
@@ -400,7 +403,12 @@ impl Lane {
             Some(check @ ("plan_check" | "quality_gate")) => {
                 let mut v = json!({ "outcome": text("outcome"), "head_sha": text("head_sha") });
                 if ran {
-                    v["findings"] = json!(p.get("findings"));
+                    let from = p.get("carried_from").and_then(Value::as_i64);
+                    let carried = from.and_then(|id| self.plan_findings.get(&id));
+                    v["findings"] = carried.cloned().unwrap_or(json!(p.get("findings")));
+                    if check == "plan_check" {
+                        self.plan_findings.insert(e.id, v["findings"].clone());
+                    }
                 } else {
                     v["reason"] = json!(text("reason"));
                 }
