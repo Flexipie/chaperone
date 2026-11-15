@@ -35,6 +35,12 @@ Amended for schema 2 (2026-11-10): a schema 2 document also hashes `"schema": 2`
 then a new stamp, so cohorts stay comparable. Schema 1 hashes are unchanged, and a
 schema 1 document that carries `[runners]` or `[checks]` does not load.
 
+Amended for lookup by id (2026-11-15, #244): a lane's document is found by its pipeline id
+alone, not by id and hash. The stamp is the document's hash at claim. A prompt edited in
+place moves the hash for new claims, while a lane in flight keeps its older stamp and runs
+the edited prompts, so a cohort by hash can mix the two. The owner chose this over a new id
+per prompt edit (v20.1, v20.2), which would keep replay exact.
+
 ## Alternatives considered
 
 - **An RFC 8785 crate.** Its only gain over the writer above is the float and Unicode

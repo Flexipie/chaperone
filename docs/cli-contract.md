@@ -59,7 +59,7 @@ Daisy's ten codes, plus two from the engine and `doctor`'s `drift`.
 | `runtime_unavailable` | 5 | `job_id`, `poll` | `retryable: true`. |
 | `read_only` | 1 | `command`, `mutability` | |
 | `gate_denied` | 1 | `transition`, `gate`, `fact_paths` | One `gate.denied` was appended. The failing gate id is also on stderr's message. |
-| `pipeline_unknown` | 1 | `pipeline_id`, `pipeline_hash` | Claim or transition on a hash this binary cannot load. Writes nothing. |
+| `pipeline_unknown` | 1 | `pipeline_id`, `pipeline_hash` | Claim or transition on a pipeline id this binary has no document for. Writes nothing. |
 | `drift` | 1 | `findings` | `doctor` only: each mismatch as `{file, line, kind, message}`. |
 
 ## Lists

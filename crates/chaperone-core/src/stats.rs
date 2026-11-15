@@ -549,7 +549,8 @@ impl Ledger {
             let id: i64 = r.get(0)?;
             if lanes.last().is_none_or(|l| l.id != id) {
                 let pipeline_id: Option<String> = r.get(3)?;
-                let schema = pipeline::schema_of(pipeline_id.as_deref().unwrap_or_default());
+                let schema =
+                    pipeline::by_id(pipeline_id.as_deref().unwrap_or_default()).map(|p| p.schema);
                 lanes.push(Lane {
                     id,
                     title: r.get(1)?,
