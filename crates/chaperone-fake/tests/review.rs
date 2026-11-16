@@ -1304,6 +1304,7 @@ fn an_amend_carries_the_review_and_the_verdict() {
         (Some(&*h2), &json!(first.event_id))
     );
     assert!(p.findings.is_none() && !carried.replayed);
+    assert!(p.rest.get("carried_by").is_none(), "a same-tree carry");
     let amended = judge(&env, &ledger, &h2, &t1);
     assert_eq!(
         (
