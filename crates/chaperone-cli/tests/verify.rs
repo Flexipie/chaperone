@@ -698,21 +698,79 @@ fn a_required_lens_leaves_other_paths_alone() {
     assert_eq!(review["profile"], hash);
 }
 
-/// A required lens with no `when` does not load: the review is refused and
-/// nothing is written.
+/// A required lens that does not load (no `when`, a name with a space or
+/// `:`, a blank prompt, a field it does not know) or whose name is a
+/// pipeline lens's, the verifier's or given twice: the review is refused,
+/// naming it, and nothing is written.
 #[test]
-fn a_required_lens_without_paths_is_refused() {
-    // The plan check reads the profile too, so the lane commits unplanned.
-    let lane = claimed_on(json!([]), &format!("{LOSS}[]\n"));
-    lane.commit();
-    let before = lane.events("1 = 1");
-    let (code, err) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+fn a_bad_required_lens_is_refused() {
+    let rule = |name: &str, prompt: &str, when: &str| {
+        format!("[[review.required]]\nname = \"{name}\"\nprompt = \"{prompt}\"\nwhen = {when}\n")
+    };
+    let any = "[\"*.rs\"]";
+    let bad = [
+        rule("loss", "p", "[]"),
+        rule("a b", "p", any),
+        rule("a:b", "p", any),
+        rule("loss", " ", any),
+        rule("loss", "p", any) + "runner = \"x\"\n",
+        rule("correctness", "p", any),
+        rule("verifier", "p", any),
+        rule("loss", "p", any) + &rule("loss", "q", any),
+    ];
+    for rules in bad {
+        // The plan check reads the profile too, so the lane commits unplanned.
+        let lane = claimed_on(json!([]), &rules);
+        lane.commit();
+        let before = lane.events("1 = 1");
+        let (code, err) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+        assert_eq!(
+            (code, &err["code"]),
+            (1, &json!("invalid_input")),
+            "{rules}: {err}"
+        );
+        let why = err["message"].as_str().unwrap();
+        assert!(
+            why.contains("[[review.required]]") || why.contains("unknown field `runner`"),
+            "{err}"
+        );
+        assert_eq!(lane.events("1 = 1"), before);
+    }
+}
+
+/// A rule that lands on the base after the lane's commit had a complete
+/// review: the next review is keyed anew, so the old one neither replays
+/// nor carries, and while the required lens has not run that newer,
+/// incomplete review uncovers the old one: verify stops at the review and
+/// the verdict refuses to run.
+#[test]
+fn a_rule_landing_after_a_complete_review_reviews_again() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    assert_eq!(lane.verify()["stopped"], Value::Null);
+    let old = lane.review();
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    let profile = std::fs::read_to_string(lane.wt.join(".chaperone/profile.toml")).unwrap();
+    let profile = profile + LOSS + "[\"*.rs\"]\n";
+    let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", profile.as_bytes())];
+    git(&lane.wt, &["commit", "-qam", "rule"], files);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+
+    let out = lane.verify();
+    let stopped = json!({"check": "review", "why": "review not complete"});
+    assert_eq!(out["stopped"], stopped, "{out}");
+    let review = lane.review();
+    assert_ne!(review["profile"], old["profile"]);
+    assert_eq!(review["carried_from"], Value::Null);
+    let (code, err) = lane.run("lane", &["check", "run", "verdict", "--work", "1"]);
     assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
     assert!(
-        err["message"]
-            .as_str()
-            .unwrap()
-            .contains("[[review.required]] \"loss\"")
+        err["message"].as_str().unwrap().contains("complete review"),
+        "{err}"
     );
-    assert_eq!(lane.events("1 = 1"), before);
 }
