@@ -61,7 +61,7 @@ These rules keep every write small, single and fail-closed.
   (the PR lowercased), and a PR already merged on another lane is `invalid_input`.
   `check run` uses `run:<lane_id>:<check>:<head_sha>:<profile>:<attempt>`: `<head_sha>` is the
   measured commit, `<profile>` the sha256 of the profile the check ran by (`-` for `diff`, which
-  reads none; the pipeline's hash for `review`; for `smoke` the profile's, as `tests`), and `<attempt>` is the id of the lane's newest `check.finished` for that check
+  reads none; the pipeline's hash for `review`, folded with the base profile's required lenses when any apply; for `smoke` the profile's, as `tests`), and `<attempt>` is the id of the lane's newest `check.finished` for that check
   that is not a pass on this commit and profile (0 for none; a `diff` has no `result`, so it
   counts as a pass; a `review` that is not `complete` counts as no pass). So a run on the same
   commit replays, a `tests` run that failed or a `review` a lens or the verifier missed runs

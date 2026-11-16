@@ -465,7 +465,7 @@ review's `<profile>` below is the sha256 of the pipeline's hash and each lens's 
 prompt digest, so a review from before the rule replays or carries nothing; with none it is the
 pipeline's hash. Then it writes the rulings a crash left unwritten on the
 lane's newest review, and a complete review already stored under its key (events.md;
-`<profile>` is the pipeline's hash) is printed with `replayed` true and nothing runs. A
+`<profile>` is the hash above) is printed with `replayed` true and nothing runs. A
 complete review by this pipeline on another commit of the same tree (an amend that kept the
 tree), or whose diff against its merge base has the same `patch_id` (a clean merge or rebase
 onto a newer base; events.md), is carried to this commit, `carried_from` (and `carried_by`
@@ -544,7 +544,8 @@ model); v17 to v19 do not, so a lane on them is refused (`invalid_input`, nothin
 keeps recording verdicts with `check record`. `[limits]` must hold `verdict_attempts`, 1
 or more. The verdict runs only on a clean commit, so a NO can be neither bought nor caused by
 running it early: the commit must have a harness `diff`, a newest harness `tests` that passed, a
-harness `review` that is `complete` (carried counts) and, when the base profile declares
+newest harness `review` that is `complete` (carried counts; a newer incomplete one uncovers an
+older complete one) and, when the base profile declares
 `[smoke]` (read as `tests` reads `[tests]`), a newest harness `smoke` that passed. Otherwise it
 is refused, naming what is missing or failed, and nothing is written. Blocking findings do not
 stop it: they are shown, and the verdict may say no. A verdict that ran, yes or no, stands for
