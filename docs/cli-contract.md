@@ -457,9 +457,15 @@ a lane on them is refused (`invalid_input`, nothing written) and keeps recording
 `check record` and `reviews record`. Then it writes the rulings a crash left unwritten on the
 lane's newest review, and a complete review already stored under its key (events.md;
 `<profile>` is the pipeline's hash) is printed with `replayed` true and nothing runs. A
-complete review of the same tree by this pipeline on another commit (an amend that kept the
-tree) is carried to this commit, `carried_from` and no findings of its own (events.md), and no
-session starts: the lenses would only word their findings anew. A commit that already has it
+complete review by this pipeline on another commit of the same tree (an amend that kept the
+tree), or whose diff against its merge base has the same `patch_id` (a clean merge or rebase
+onto a newer base; events.md), is carried to this commit, `carried_from` (and `carried_by`
+`patch_id` for the second) and no findings of its own (events.md), and no session starts:
+the lenses would only word their findings anew. The `patch_id` is read in the lane's
+worktree before anything runs (a diff or patch-id git cannot give is refused, `invalid_input`,
+nothing written), three lines of context and submodule pointer changes shown whatever its diff
+config or `GIT_DIFF_OPTS`, and any change to the lane's diff, whitespace or a file mode
+included, gives a new one. A commit that already has it
 replays it, so flipping between commits of a tree appends nothing after the first carry. Else a tree that already has
 `review_attempts` reviews by this pipeline, complete or not, is refused (`invalid_input`,
 naming the limit): a lens that fails every time would otherwise make each rerun pay for the
@@ -519,8 +525,8 @@ It then writes, in this order: one `usage.reported` per session that left a sess
 run (finding statuses). It is the second command that appends more than one event, after
 `usage report`, each event in its own transaction. A crash leaves whole events: usage rows
 without a review are what those sessions cost, and stay; a review whose rulings are missing
-is finished by the next `check run review` on the lane before anything else, with no session
-started. A review that is not `complete` runs again on the same tree, up to
+is finished by the next `check run review` on the lane before any review is replayed, carried
+or run (only the merge base and `patch_id` are read first), with no session started. A review that is not `complete` runs again on the same tree, up to
 `review_attempts`. It prints the `check.finished` as `check record` does.
 
 `check run verdict` takes the same lock and reads the commit the same way. The lane's stamped
@@ -792,7 +798,7 @@ gates, in the order a denial names the first that fails:
 | `no_uncounted_files` | a harness `diff` on the commit has no file git counts no lines of | `commit.uncounted_files` |
 | `code_lines_at_most` | that diff counts at most 400 code lines (test lines, `[size] tests`, not counted), or at most the owner's `check waive size --lines` for the lane | `commit.code_lines`, `commit.size_waived` |
 | `tests_passed` | the newest harness `tests` on the commit passed | `tests.passed` |
-| `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree counts) | `review.complete` |
+| `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree or `patch_id` counts) | `review.complete` |
 | `no_blocking_findings` | no complete harness review on the lane, of any tree, has a finding open, verified or disputed of severity `blocker`, `risk` or another blocking one; refuted, waived, fixed and answered findings, incomplete and session reviews' and the plan check's never count | `findings.open_blocking` |
 | `plan_or_no_code` | the diff changes no code, or the plan check ran (`check run plan`, before code) or the owner waived it (`check waive plan`) | `commit.changes_code`, `plan_check.outcome`, `plan_check.reason` |
 | `smoke_or_no_code` | the diff changes no code, or the newest harness smoke on the commit passed, or the harness ran none there and a session's smoke claim on it ran with evidence (and, when it carries a `run`, exited 0) | `commit.changes_code`, `smoke.passed`, `smoke.claimed` |

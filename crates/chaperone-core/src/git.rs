@@ -8,6 +8,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::child;
 
@@ -82,19 +83,8 @@ pub fn git(
     deadline: Instant,
     cap: usize,
 ) -> Result<(Vec<u8>, bool), Failure> {
-    let mut cmd = Command::new(bin);
-    for (v, _) in std::env::vars_os().filter(|(v, _)| repo_var(v)) {
-        cmd.env_remove(v);
-    }
-    cmd.arg("-C")
-        .arg(wt)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        // A replace ref would make a commit read as another's tree.
-        .env("GIT_NO_REPLACE_OBJECTS", "1")
-        // Messages in English, so a missing revision is recognised.
-        .env("LC_ALL", "C");
+    let mut cmd = command(bin, wt);
+    cmd.args(args);
     let done = child::run(&mut cmd, deadline, cap).map_err(|e| match e {
         child::Failed::TimedOut => Failure::TimedOut,
         child::Failed::Spawn(e) | child::Failed::Wait(e) => Failure::Other(format!("git: {e}")),
@@ -123,6 +113,84 @@ pub fn git(
         return Err(Failure::Other(format!("git {}: {line}", args[0])));
     }
     Ok((done.out, done.cut))
+}
+
+/// `git -C wt`, with no variable that points it elsewhere.
+fn command(bin: &Path, wt: &Path) -> Command {
+    let mut cmd = Command::new(bin);
+    for (v, _) in std::env::vars_os().filter(|(v, _)| repo_var(v)) {
+        cmd.env_remove(v);
+    }
+    cmd.arg("-C")
+        .arg(wt)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // A replace ref would make a commit read as another's tree.
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        // Messages in English, so a missing revision is recognised.
+        .env("LC_ALL", "C")
+        // It beats `-U`: no caller's context width hides a moved line.
+        .env_remove("GIT_DIFF_OPTS");
+    cmd
+}
+
+/// What `head` changes against `base`, whatever either's place in history:
+/// the sha256 of `git patch-id --verbatim` (whitespace counts; line
+/// numbers do not) on the diff with binary content, and of the diff's file
+/// header lines, as a git before 2.41 leaves modes out of a patch-id. Three
+/// lines of context whatever the config, as patch-id ignores where a hunk
+/// is. None for an empty diff or one past `cap` bytes.
+pub fn patch_id(
+    bin: &Path,
+    wt: &Path,
+    base: &str,
+    head: &str,
+    deadline: Instant,
+    cap: usize,
+) -> Result<Option<String>, Failure> {
+    let args = [
+        "diff",
+        "--binary",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+    ];
+    // Config's `diff.ignoreSubmodules` or `diff.submodule` would hide a
+    // pointer change from patch-id.
+    let subs = ["--ignore-submodules=none", "--submodule=short"];
+    let rest = [&subs[..], &["-U3", "--no-renames", base, head, "--"]].concat();
+    let args = [&args[..], &rest].concat();
+    let (diff, cut) = git(bin, wt, &args, deadline, cap)?;
+    if cut || diff.is_empty() {
+        return Ok(None);
+    }
+    let mut cmd = command(bin, wt);
+    cmd.args(["patch-id", "--verbatim"]);
+    let id = match child::run_input(&mut cmd, Some(&diff), deadline, 4096) {
+        Ok(done) if done.status.success() => done.out,
+        Ok(_) => return Err(Failure::Other("git patch-id failed".into())),
+        Err(child::Failed::TimedOut) => return Err(Failure::TimedOut),
+        Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => {
+            return Err(Failure::Other(format!("git patch-id: {e}")));
+        }
+    };
+    let mut hash = Sha256::new();
+    hash.update(&id);
+    let headers = diff.split(|&b| b == b'\n').filter(|l| {
+        let heads = [
+            "diff --git ",
+            "old mode ",
+            "new mode ",
+            "new file mode ",
+            "deleted file mode ",
+        ];
+        heads.iter().any(|h| l.starts_with(h.as_bytes()))
+    });
+    for line in headers {
+        hash.update(line);
+        hash.update(b"\n");
+    }
+    Ok(Some(format!("{:x}", hash.finalize())))
 }
 
 /// A file a lane's worktree changes against its base.

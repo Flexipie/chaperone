@@ -507,7 +507,8 @@ impl Ledger {
         Ok(format!("run:{work}:{check}:{head}:{profile}:{attempt}"))
     }
 
-    /// The lane's newest harness `input.check` that ran on `input.tree` by
+    /// The lane's newest harness `input.check` that ran on `input.tree`, or
+    /// on a diff with `input`'s `patch_id` (only a review has one), by
     /// `input.profile`, with `filter`'s field equal to its value when there
     /// is one (`complete`, or the digest of a plan), replayed: a check that
     /// holds for a tree whatever the commit (`check run review`, `verdict`,
@@ -531,7 +532,8 @@ impl Ledger {
                    AND json_extract(payload_json, '$.check') = ?2
                    AND json_extract(payload_json, '$.outcome') = 'ran'
                    AND json_extract(payload_json, '$.producer.kind') = 'harness'
-                   AND json_extract(payload_json, '$.tree') = ?3
+                   AND (json_extract(payload_json, '$.tree') = ?3
+                     OR json_extract(payload_json, '$.patch_id') = ?10)
                    AND json_extract(payload_json, '$.profile') IS ?4
                    AND (?5 IS NULL OR json_extract(payload_json, ?5) = ?6)
                    AND (?7 IS NULL OR json_extract(payload_json, '$.head_sha') = ?7
@@ -547,7 +549,8 @@ impl Ledger {
                     value,
                     here.map(|h| h.0),
                     here.map(|h| h.1),
-                    plan_answers(input)
+                    plan_answers(input),
+                    input.fields.get("patch_id").and_then(Value::as_str)
                 ],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )

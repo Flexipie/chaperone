@@ -46,6 +46,8 @@ impl Lane {
             .args(args)
             .args(["--agent", who, "--session", who])
             .env("PATH", format!("{}:{path}", fake.display()))
+            // A caller's diff options, which no harness diff may take.
+            .env("GIT_DIFF_OPTS", "--unified=0")
             .output()
             .unwrap();
         let ok = out.status.success();
@@ -544,4 +546,77 @@ fn a_plan_answer_changed_after_verify_needs_a_new_review() {
     );
     assert_eq!(lane.verify()["stopped"], Value::Null);
     assert_eq!(lane.handoff().0, 0);
+}
+
+/// A clean merge from main keeps the lane's diff, so its patch-id: the
+/// review is carried to the merge, `carried_by` `patch_id`, and no session
+/// starts. Moving the lane's line, or a whitespace-only edit to it, changes
+/// the diff and runs a fresh review, whatever the caller's diff options.
+#[test]
+fn a_clean_merge_from_main_carries_the_review() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    let review = || {
+        let (code, out) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+        assert_eq!(code, 0, "{out}");
+        out
+    };
+    let first = review();
+    let mut sessions = lane.sessions();
+    assert!(first["payload"]["patch_id"].is_string(), "{first}");
+
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    git(&lane.wt, &["add", "other.rs"], &[("other.rs", b"x\n")]);
+    git(&lane.wt, &["commit", "-qm", "main moves"], &[]);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+    git(
+        &lane.wt,
+        &["merge", "-q", "--no-edit", "refs/remotes/origin/main"],
+        &[],
+    );
+    let carried = review();
+    let p = &carried["payload"];
+    assert_eq!(
+        (&p["head_sha"], &p["carried_from"], &p["carried_by"]),
+        (&json!(lane.head()), &first["event_id"], &json!("patch_id"))
+    );
+    assert_eq!(lane.sessions(), sessions);
+    let again = review();
+    assert_eq!(
+        (&again["event_id"], &again["replayed"]),
+        (&carried["event_id"], &json!(true))
+    );
+
+    for (step, text) in [("moved", &b"b\na\n"[..]), ("space", b"b \na\n")] {
+        git(&lane.wt, &["commit", "-qam", step], &[("lib.rs", text)]);
+        let fresh = review();
+        assert!(fresh["payload"].get("carried_from").is_none(), "{fresh}");
+        assert!(lane.sessions() > sessions);
+        sessions = lane.sessions();
+    }
+}
+
+/// A lane diff git cannot give is refused before any review, and writes
+/// nothing.
+#[test]
+fn a_review_whose_patch_id_diff_fails_is_refused() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    // The fake's directory is first on PATH; the shim drops it to find git.
+    let shim = "#!/bin/sh\ncase \" $* \" in *' --binary '*) exit 1;; esac\n\
+                PATH=${PATH#*:} exec git \"$@\"\n";
+    let bin = lane.dir.path().join("bin/git");
+    std::fs::write(&bin, shim).unwrap();
+    let chmod = Command::new("chmod").arg("+x").arg(&bin).status();
+    assert!(chmod.unwrap().success());
+    let before = lane.events("1 = 1");
+    let (code, err) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+    let why = err["message"].as_str().unwrap();
+    assert!(code != 0 && why.starts_with("could not diff"), "{err}");
+    assert_eq!((lane.events("1 = 1"), lane.sessions()), (before, 1));
 }
