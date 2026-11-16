@@ -29,22 +29,31 @@ fn commit(wt: &Path, files: &[(&str, &str)]) -> String {
 }
 
 fn id(bin: &Path, wt: &Path, base: &str, head: &str) -> Option<String> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    git::patch_id(bin, wt, base, head, deadline, 1 << 20)
-        .ok()
-        .unwrap()
+    capped(bin, wt, base, head, 1 << 20).ok().unwrap()
 }
 
-/// A repository whose config hides submodules from a plain `git diff`, its
-/// base, and the lane's commit on it.
+fn capped(
+    bin: &Path,
+    wt: &Path,
+    base: &str,
+    head: &str,
+    cap: usize,
+) -> Result<Option<String>, git::Failure> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    git::patch_id(bin, wt, base, head, deadline, cap)
+}
+
+/// A repository whose config hides submodules and context from a plain
+/// `git diff`, its base, and the lane's commit on it.
 fn repo() -> (tempfile::TempDir, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let wt = dir.path();
     git(wt, &["init", "-q", "-b", "main"]);
     git(wt, &["config", "diff.ignoreSubmodules", "all"]);
     git(wt, &["config", "diff.submodule", "log"]);
+    git(wt, &["config", "diff.context", "0"]);
     let base = commit(wt, &[("f", "1\n2\n3\n4\n5\n6\n7\n8\n9\n")]);
-    let lane = commit(wt, &[("f", "1\n2\n3\n4\n5\n6\n7\n8\nnine\n")]);
+    let lane = commit(wt, &[("f", "1\n2\n3\n4\n5\n6\n7\n8\n9\nten\n")]);
     (dir, base, lane)
 }
 
@@ -61,7 +70,7 @@ fn a_moved_base_keeps_the_id_and_any_lane_change_gets_a_new_one() {
     let merged = git(wt, &["rev-parse", "HEAD"]);
     assert_eq!(id(bin, wt, &moved, &merged), Some(reviewed.clone()));
 
-    let space = commit(wt, &[("f", "0\n1\n2\n3\n4\n5\n6\n7\n8\nnine \n")]);
+    let space = commit(wt, &[("f", "0\n1\n2\n3\n4\n5\n6\n7\n8\n9\nten \n")]);
     git(wt, &["reset", "-q", "--hard", &merged]);
     git(wt, &["update-index", "--chmod=+x", "f"]);
     git(wt, &["commit", "-qm", "mode"]);
@@ -73,7 +82,9 @@ fn a_moved_base_keeps_the_id_and_any_lane_change_gets_a_new_one() {
     git(wt, &["update-index", "--add", "--cacheinfo", &gitlink]);
     git(wt, &["commit", "-qm", "sub"]);
     let sub = git(wt, &["rev-parse", "HEAD"]);
-    for head in [space, mode, empty, sub] {
+    git(wt, &["reset", "-q", "--hard", &merged]);
+    let line_moved = commit(wt, &[("f", "0\n1\n2\nten\n3\n4\n5\n6\n7\n8\n9\n")]);
+    for head in [space, mode, empty, sub, line_moved] {
         assert_ne!(id(bin, wt, &moved, &head), Some(reviewed.clone()), "{head}");
     }
 }
@@ -97,4 +108,22 @@ fn modes_count_where_patch_id_leaves_them_out() {
     let mode = id(&shim, wt, &base, &mode);
     assert_ne!(mode, Some(reviewed));
     assert_ne!(id(&shim, wt, &base, &empty), mode);
+}
+
+/// No id for a diff past the cap, which would hash only its start; a
+/// patch-id that fails is an error, never an id.
+#[test]
+fn a_cut_diff_has_no_id_and_a_failed_patch_id_is_an_error() {
+    let (dir, base, lane) = repo();
+    let wt = dir.path();
+    assert!(matches!(
+        capped(Path::new("git"), wt, &base, &lane, 8),
+        Ok(None)
+    ));
+    let shim = wt.join(".git/failing-git");
+    let script = "#!/bin/sh\ncase \" $* \" in *' patch-id '*) exit 1;; *) exec git \"$@\";; esac\n";
+    std::fs::write(&shim, script).unwrap();
+    let chmod = Command::new("chmod").arg("+x").arg(&shim).status();
+    assert!(chmod.unwrap().success());
+    assert!(capped(&shim, wt, &base, &lane, 1 << 20).is_err());
 }

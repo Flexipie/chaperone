@@ -128,15 +128,18 @@ fn command(bin: &Path, wt: &Path) -> Command {
         // A replace ref would make a commit read as another's tree.
         .env("GIT_NO_REPLACE_OBJECTS", "1")
         // Messages in English, so a missing revision is recognised.
-        .env("LC_ALL", "C");
+        .env("LC_ALL", "C")
+        // It beats `-U`: no caller's context width hides a moved line.
+        .env_remove("GIT_DIFF_OPTS");
     cmd
 }
 
 /// What `head` changes against `base`, whatever either's place in history:
 /// the sha256 of `git patch-id --verbatim` (whitespace counts; line
 /// numbers do not) on the diff with binary content, and of the diff's file
-/// header lines, as a git before 2.41 leaves modes out of a patch-id. None
-/// for an empty diff, one past `cap` bytes, or a patch-id that fails.
+/// header lines, as a git before 2.41 leaves modes out of a patch-id. Three
+/// lines of context whatever the config, as patch-id ignores where a hunk
+/// is. None for an empty diff or one past `cap` bytes.
 pub fn patch_id(
     bin: &Path,
     wt: &Path,
@@ -155,7 +158,7 @@ pub fn patch_id(
     // Config's `diff.ignoreSubmodules` or `diff.submodule` would hide a
     // pointer change from patch-id.
     let subs = ["--ignore-submodules=none", "--submodule=short"];
-    let rest = [&subs[..], &["--no-renames", base, head, "--"]].concat();
+    let rest = [&subs[..], &["-U3", "--no-renames", base, head, "--"]].concat();
     let args = [&args[..], &rest].concat();
     let (diff, cut) = git(bin, wt, &args, deadline, cap)?;
     if cut || diff.is_empty() {
@@ -164,9 +167,12 @@ pub fn patch_id(
     let mut cmd = command(bin, wt);
     cmd.args(["patch-id", "--verbatim"]);
     let id = match child::run_input(&mut cmd, Some(&diff), deadline, 4096) {
-        Ok(done) if done.status.success() && !done.out.is_empty() => done.out,
-        Ok(_) | Err(child::Failed::Spawn(_) | child::Failed::Wait(_)) => return Ok(None),
+        Ok(done) if done.status.success() => done.out,
+        Ok(_) => return Err(Failure::Other("git patch-id failed".into())),
         Err(child::Failed::TimedOut) => return Err(Failure::TimedOut),
+        Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => {
+            return Err(Failure::Other(format!("git patch-id: {e}")));
+        }
     };
     let mut hash = Sha256::new();
     hash.update(&id);
