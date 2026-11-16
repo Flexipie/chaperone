@@ -27,7 +27,7 @@ use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
 use chaperone_core::work::{UpdateInput, WorkItem, is_terminal};
-use chaperone_graph::{Companion, code_globs, commands_in, declares, glob};
+use chaperone_graph::{Companion, Required, code_globs, commands_in, declares, glob};
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
@@ -835,19 +835,7 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         ))
     })?;
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
-    // The base profile's required lenses whose `when` names a changed file.
-    let found = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
-    let wanted: Vec<_> = found
-        .map_or_else(Vec::new, |f| f.required)
-        .into_iter()
-        .filter(|r| {
-            files
-                .iter()
-                .any(|f| r.when.iter().any(|g| glob(g, &f.path)))
-        })
-        .map(|r| (r.name, r.prompt))
-        .collect();
-    let required = review::required(pipeline, &wanted).map_err(refuse)?;
+    let required = review::required(pipeline, &required_lenses(&wt, &files)?).map_err(refuse)?;
     plan.require(&required);
     let base = merge_base(&wt, &base, &input.head)?;
     let deadline = Instant::now() + RUN_TIMEOUT;
@@ -886,6 +874,18 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     )??)
 }
 
+/// The base profile's `[[review.required]]` lenses whose `when` names one
+/// of `files`, each `(name, prompt)`.
+fn required_lenses(wt: &Path, files: &[ChangedFile]) -> Result<Vec<(String, String)>, CliError> {
+    let found = code_globs(Path::new("git"), wt, Instant::now() + RUN_TIMEOUT)?;
+    let hit = |r: &Required| {
+        let named = |f: &ChangedFile| r.when.iter().any(|g| glob(g, &f.path));
+        files.iter().any(named)
+    };
+    let rules = found.map_or_else(Vec::new, |f| f.required).into_iter();
+    Ok(rules.filter(hit).map(|r| (r.name, r.prompt)).collect())
+}
+
 /// `check run verdict`: one fresh session on the lane's pipeline's
 /// `verdict` check (`verdict::record`) in the harness's checkout, given the
 /// change as the review is, the lane's goal and the harness's own results
@@ -907,8 +907,15 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         ))
     })?;
     let (head, store) = (input.head.clone(), Evidence::beside(db));
+    // The review key the base profile requires now, as `check run review`
+    // derives it.
+    let (_, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
+    let required = review::required(pipeline, &required_lenses(&wt, &files)?).map_err(refuse)?;
+    let mut lenses = review::plan(pipeline).map_err(refuse)?;
+    lenses.require(&required);
     let smoke = declares(Path::new("git"), &wt, "smoke", Instant::now() + RUN_TIMEOUT)?;
-    let harness = verdict::harness(ledger, &store, work, &head, smoke)?.map_err(|lacks| {
+    let harness = verdict::harness(ledger, &store, work, &head, &lenses.hash, smoke)?;
+    let harness = harness.map_err(|lacks| {
         refuse(format!(
             "commit {head} has no harness {lacks}; a verdict runs only on a clean commit: a \
              `check run diff`, `tests` that pass, a complete `review` and, when the base \

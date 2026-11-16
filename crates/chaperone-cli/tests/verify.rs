@@ -774,3 +774,42 @@ fn a_rule_landing_after_a_complete_review_reviews_again() {
         "{err}"
     );
 }
+
+/// A lane that forges its clone's base ref back to a profile without the
+/// rule, reviews there (no required lens) and restores the ref gets no
+/// verdict: the review's key is not the one the base profile requires now.
+#[test]
+fn a_review_under_a_forged_base_ref_gets_no_verdict() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    let old = git(&lane.wt, &["rev-parse", "main"], &[]);
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    let profile = std::fs::read_to_string(lane.wt.join(".chaperone/profile.toml")).unwrap();
+    let profile = profile + LOSS + "[\"*.rs\"]\n";
+    let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", profile.as_bytes())];
+    git(&lane.wt, &["commit", "-qam", "rule"], files);
+    let rule = git(&lane.wt, &["rev-parse", "HEAD"], &[]);
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", &old],
+        &[],
+    );
+    for check in ["diff", "tests", "review"] {
+        let (code, out) = lane.run("lane", &["check", "run", check, "--work", "1"]);
+        assert_eq!(code, 0, "{out}");
+    }
+    assert_eq!(lane.review()["complete"], true);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", &rule],
+        &[],
+    );
+    let before = lane.events("1 = 1");
+    let (code, err) = lane.run("lane", &["check", "run", "verdict", "--work", "1"]);
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    let why = "no harness complete review by the lenses the base profile requires now";
+    assert!(err["message"].as_str().unwrap().contains(why), "{err}");
+    assert_eq!(lane.events("1 = 1"), before);
+}

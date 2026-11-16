@@ -545,7 +545,9 @@ keeps recording verdicts with `check record`. `[limits]` must hold `verdict_atte
 or more. The verdict runs only on a clean commit, so a NO can be neither bought nor caused by
 running it early: the commit must have a harness `diff`, a newest harness `tests` that passed, a
 newest harness `review` that is `complete` (carried counts; a newer incomplete one uncovers an
-older complete one) and, when the base profile declares
+older complete one) under the key `check run review` derives from the base profile now (the
+pipeline's hash folded with the required lenses the change touches), so a review run while the
+clone's base ref named another profile is not one, and, when the base profile declares
 `[smoke]` (read as `tests` reads `[tests]`), a newest harness `smoke` that passed. Otherwise it
 is refused, naming what is missing or failed, and nothing is written. Blocking findings do not
 stop it: they are shown, and the verdict may say no. A verdict that ran, yes or no, stands for
