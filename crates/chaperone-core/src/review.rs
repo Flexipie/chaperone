@@ -833,7 +833,8 @@ pub fn goal(ledger: &Ledger, item: &WorkItem) -> Result<String, LedgerError> {
 /// crash left unwritten on the lane's newest review, then `input` keyed
 /// for a review by `plan`, and the complete review of this commit by this
 /// pipeline when one is stored, which a run replays. A complete review of
-/// the same tree on another commit is carried to this one (`carried_from`,
+/// the same tree, or of a diff with the same `patch_id` (`carried_by`), on
+/// another commit is carried to this one (`carried_from`,
 /// the original's verifier row without its rulings, and no findings of its
 /// own: they stay the original's, so none is counted twice), once: a later
 /// run on this commit replays it. Else a tree that has had the pipeline's [`ATTEMPTS`] reviews
@@ -867,8 +868,9 @@ pub fn replay(
     if let Some(stored) = ledger.run_replay(&ledger.run_key(input)?)? {
         return Ok(Ok(Some(stored)));
     }
-    // An amend that kept the tree gets the tree's complete review, not a
-    // new one: the lenses would only word their findings anew.
+    // An amend that kept the tree, or a clean merge that kept the lane's
+    // diff, gets that complete review, not a new one: the lenses would only
+    // word their findings anew.
     let complete = Some(("complete", rusqlite::types::Value::Integer(1)));
     if let Some((newest, here)) = ledger.tree_stand(input, &complete)? {
         if let Some(here) = here {
@@ -883,6 +885,9 @@ pub fn replay(
         }
         let verifier = verifier.unwrap_or_default();
         input.fields.insert("verifier".into(), verifier);
+        if newest.payload.rest.get("tree") != Some(&json!(input.tree)) {
+            input.fields.insert("carried_by".into(), json!("patch_id"));
+        }
         return Ok(ledger.carry(actor, input, newest)?.map(Some));
     }
     let done: i64 = ledger.conn().query_row(

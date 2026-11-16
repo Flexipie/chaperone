@@ -817,8 +817,9 @@ fn run_tests(
 /// the files `diff` counts and the diff from their merge base, with the
 /// lane's goal from the ledger. First the rulings a crash left unwritten
 /// (`review::replay`); then a complete review of the commit replays
-/// before anything runs. A lane whose pipeline has no review checks (v17
-/// to v19) writes nothing; a CLI that cannot start, a checkout that
+/// before anything runs, and one of its tree or of its diff's patch-id
+/// (read in the worktree) is carried. A lane whose pipeline has no review
+/// checks (v17 to v19) writes nothing; a CLI that cannot start, a checkout that
 /// cannot be made and a diff past 16 MiB write nothing more.
 fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let Run {
@@ -832,6 +833,21 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
             "{e}; a lane on it records reviews with `check record` and `reviews record`"
         ))
     })?;
+    let (base, _) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
+    let base = merge_base(&wt, &base, &input.head)?;
+    let deadline = Instant::now() + RUN_TIMEOUT;
+    let patch_id = git::patch_id(
+        Path::new("git"),
+        &wt,
+        &base,
+        &input.head,
+        deadline,
+        DIFF_BYTES,
+    );
+    let patch_id = patch_id.map_err(|_| refuse(format!("could not diff {base} {}", input.head)))?;
+    if let Some(id) = patch_id {
+        input.fields.insert("patch_id".into(), json!(id));
+    }
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
         return one(stored);
     }

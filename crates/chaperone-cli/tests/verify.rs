@@ -545,3 +545,57 @@ fn a_plan_answer_changed_after_verify_needs_a_new_review() {
     assert_eq!(lane.verify()["stopped"], Value::Null);
     assert_eq!(lane.handoff().0, 0);
 }
+
+/// A clean merge from main keeps the lane's diff, so its patch-id: the
+/// review is carried to the merge, `carried_by` `patch_id`, and no session
+/// starts. A whitespace-only edit to the lane's own line changes the diff
+/// and runs a fresh review.
+#[test]
+fn a_clean_merge_from_main_carries_the_review() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    let review = || {
+        let (code, out) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+        assert_eq!(code, 0, "{out}");
+        out
+    };
+    let first = review();
+    let sessions = lane.sessions();
+    assert!(first["payload"]["patch_id"].is_string(), "{first}");
+
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    git(&lane.wt, &["add", "other.rs"], &[("other.rs", b"x\n")]);
+    git(&lane.wt, &["commit", "-qm", "main moves"], &[]);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+    git(
+        &lane.wt,
+        &["merge", "-q", "--no-edit", "refs/remotes/origin/main"],
+        &[],
+    );
+    let carried = review();
+    let p = &carried["payload"];
+    assert_eq!(
+        (&p["head_sha"], &p["carried_from"], &p["carried_by"]),
+        (&json!(lane.head()), &first["event_id"], &json!("patch_id"))
+    );
+    assert_eq!(lane.sessions(), sessions);
+    let again = review();
+    assert_eq!(
+        (&again["event_id"], &again["replayed"]),
+        (&carried["event_id"], &json!(true))
+    );
+
+    git(
+        &lane.wt,
+        &["commit", "-qam", "space"],
+        &[("lib.rs", b"a\nb \n")],
+    );
+    let fresh = review();
+    assert!(fresh["payload"].get("carried_from").is_none(), "{fresh}");
+    assert!(lane.sessions() > sessions);
+}
