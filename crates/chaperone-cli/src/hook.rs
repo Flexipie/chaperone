@@ -196,7 +196,8 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
 
 /// How the prompts chaperone's own tools send start: chaperone-ui's
 /// answer and send-back record their own attention, `merge`'s notice is none.
-const TOOL_PROMPTS: &[&str] = &["Owner (", "Owner check ("];
+/// Claude Code injects `<task-notification>` when a background task ends.
+const TOOL_PROMPTS: &[&str] = &["Owner (", "Owner check (", "<task-notification>"];
 
 /// `/chaperone:lane ...`, not a pasted `/Users/me/x.rs`.
 fn slash_command(prompt: &str) -> bool {
