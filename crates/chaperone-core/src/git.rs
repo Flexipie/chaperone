@@ -152,8 +152,10 @@ pub fn patch_id(
         "--no-ext-diff",
         "--no-textconv",
     ];
-    // A worktree's `diff.ignoreSubmodules` would hide a pointer change.
-    let rest = ["--no-renames", "--ignore-submodules=none", base, head, "--"];
+    // Config's `diff.ignoreSubmodules` or `diff.submodule` would hide a
+    // pointer change from patch-id.
+    let subs = ["--ignore-submodules=none", "--submodule=short"];
+    let rest = [&subs[..], &["--no-renames", base, head, "--"]].concat();
     let args = [&args[..], &rest].concat();
     let (diff, cut) = git(bin, wt, &args, deadline, cap)?;
     if cut || diff.is_empty() {

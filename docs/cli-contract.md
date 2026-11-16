@@ -462,7 +462,7 @@ tree), or whose diff against its merge base has the same `patch_id` (a clean mer
 onto a newer base; events.md), is carried to this commit, `carried_from` (and `carried_by`
 `patch_id` for the second) and no findings of its own (events.md), and no session starts:
 the lenses would only word their findings anew. The `patch_id` is read in the lane's
-worktree before anything runs, submodule changes shown whatever its config, and any change to the lane's diff, whitespace or a file mode
+worktree before anything runs, submodule pointer changes shown whatever its diff config, and any change to the lane's diff, whitespace or a file mode
 included, gives a new one. A commit that already has it
 replays it, so flipping between commits of a tree appends nothing after the first carry. Else a tree that already has
 `review_attempts` reviews by this pipeline, complete or not, is refused (`invalid_input`,
