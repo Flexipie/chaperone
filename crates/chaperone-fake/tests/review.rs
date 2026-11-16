@@ -806,6 +806,73 @@ fn a_repeat_of_a_waived_finding_is_marked_same_and_does_not_block() {
     }
 }
 
+/// Lane 57's order: a risk ruled `unproven` (a question that blocks
+/// nothing) beside a verified blocker, then the same point raised again.
+/// `same` is offered, as the blocker settles, but the unproven one settles
+/// nothing and is no `same_as`: the repeat is ruled on its own and,
+/// verified, blocks.
+#[test]
+fn a_repeat_of_an_unproven_finding_is_ruled_on_its_own() {
+    let none = json!({"findings": []});
+    let ran = |l: &str, said: &Value| json!({"when": format!("LENS {l}"), "stdout": session(l, said.clone())});
+    let review = |said: Value, verdicts: &[&str]| {
+        let keys = review::findings("correctness", said.clone()).unwrap();
+        let rulings: Vec<_> = keys
+            .iter()
+            .zip(verdicts)
+            .map(|(f, v)| json!({"key": f.finding_key, "verdict": v, "why": "w"}))
+            .collect();
+        let claude = json!([
+            ran("correctness", &said),
+            ran("design_tests", &none),
+            ran("intent", &none),
+            ran("verifier", &json!({"rulings": rulings})),
+        ]);
+        let codex = json!([{"when": "LENS codex", "write": {"-o": none.to_string()}}]);
+        (claude, codex)
+    };
+    let first = json!({"findings": [found("blocker", "b"), found("risk", "c")]});
+    let (claude, codex) = review(first, &["verified", "unproven"]);
+    let mut env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    record(&env, &ledger).unwrap();
+    let b = keys_of(&ledger, "b");
+
+    let again = json!({"findings": [found("risk", "c, again")]});
+    let (claude, codex) = review(again, &["verified"]);
+    rescript(&env, "claude", claude);
+    rescript(&env, "codex", codex);
+    env.facts.plan = review::earlier_section(&review::earlier(&ledger, 1).unwrap());
+    let p = reviewed(&env, &ledger, &"4".repeat(40), &"5".repeat(40))
+        .unwrap()
+        .payload;
+    let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
+    let call: Value = log
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .rfind(|c: &Value| c["prompt"].as_str().unwrap().starts_with("LENS verifier"))
+        .unwrap();
+    let schema: Value = serde_json::from_str(call["args"][4].as_str().unwrap()).unwrap();
+    let ruling = &schema["properties"]["rulings"]["items"]["properties"];
+    assert!(
+        ruling["verdict"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("same"))
+    );
+    assert_eq!(ruling["same_as"]["enum"], json!([b]));
+    let Some(Findings::List(found)) = &p.findings else {
+        panic!("{p:?}")
+    };
+    let f = &found[0];
+    assert_eq!((&*f.severity, f.rest.get("same_as")), ("risk", None));
+    let want = [("b", "verified"), ("c, again", "verified")];
+    assert_eq!(
+        blocking(&ledger),
+        want.map(|(t, s)| (t.to_string(), s.to_string()))
+    );
+}
+
 /// The `<review>/<key>` of lane 1's earlier finding titled `title`.
 fn keys_of(ledger: &Ledger, title: &str) -> String {
     let found = review::earlier(ledger, 1).unwrap();
