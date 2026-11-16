@@ -88,9 +88,6 @@ pub fn harness(
         return Ok(Err("tests that pass (the newest failed)"));
     }
     let answers = review::current_plan_answers(ledger.conn(), work)?;
-    // The newest decides: one that did not complete uncovers an older one,
-    // and one under another key (a base ref moved and back) did not run the
-    // lenses the base profile requires now.
     let review = newest(ledger, work, "review", head)?.filter(|(_, p)| {
         p.rest.get("complete") == Some(&json!(true))
             && p.rest.get("plan_answers").and_then(Value::as_str) == answers.as_deref()

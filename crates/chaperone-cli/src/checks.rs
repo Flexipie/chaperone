@@ -836,7 +836,7 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     })?;
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
     let required = review::required(pipeline, &required_lenses(&wt, &files)?).map_err(refuse)?;
-    plan.require(&required);
+    plan.require(pipeline, &required);
     let base = merge_base(&wt, &base, &input.head)?;
     let deadline = Instant::now() + RUN_TIMEOUT;
     let patch_id = git::patch_id(
@@ -907,12 +907,10 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         ))
     })?;
     let (head, store) = (input.head.clone(), Evidence::beside(db));
-    // The review key the base profile requires now, as `check run review`
-    // derives it.
     let (_, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
     let required = review::required(pipeline, &required_lenses(&wt, &files)?).map_err(refuse)?;
     let mut lenses = review::plan(pipeline).map_err(refuse)?;
-    lenses.require(&required);
+    lenses.require(pipeline, &required);
     let smoke = declares(Path::new("git"), &wt, "smoke", Instant::now() + RUN_TIMEOUT)?;
     let harness = verdict::harness(ledger, &store, work, &head, &lenses.hash, smoke)?;
     let harness = harness.map_err(|lacks| {

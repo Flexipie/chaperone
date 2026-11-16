@@ -200,12 +200,10 @@ impl<'a> Plan<'a> {
     /// Adds the [`required`] lenses, never skipped for size, and folds
     /// their names and prompts into the hash, so a review run before the
     /// requirement applied is not this one's. None leaves the plan as is.
-    pub fn require(&mut self, checks: &'a [(String, Check)]) {
+    pub fn require(&mut self, pipeline: &'a Pipeline, checks: &'a [(String, Check)]) {
         if checks.is_empty() {
             return;
         }
-        // [`LENSES`] puts correctness first, whose runner [`required`] names.
-        let runner = self.lenses[0].runner;
         let mut hash = Sha256::new();
         hash.update(&self.hash);
         for (name, check) in checks {
@@ -213,7 +211,7 @@ impl<'a> Plan<'a> {
             self.lenses.push(Planned {
                 lens: name,
                 check,
-                runner,
+                runner: &pipeline.runners[&check.runner],
                 min_code_lines: None,
             });
         }

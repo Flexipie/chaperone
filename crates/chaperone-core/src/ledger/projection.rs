@@ -97,9 +97,7 @@ pub(crate) fn project(
                 && p.head_sha.as_deref().is_some_and(|s| same_commit(head, s))
             {
                 if harness && check == "review" {
-                    // A carried review's findings are its original's. The
-                    // newest decides: one that did not complete (a lens the
-                    // profile now requires failed) uncovers an older one.
+                    // A carried review's findings are its original's.
                     let from = p.rest.get("carried_from").and_then(Value::as_i64);
                     let original = from.unwrap_or(e.id);
                     let shown = p.rest.get("plan_answers").and_then(Value::as_str);
