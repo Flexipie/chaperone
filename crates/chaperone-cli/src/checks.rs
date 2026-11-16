@@ -828,12 +828,27 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         mut input,
     } = start_run(ledger, work, "review")?;
     plan_answered(ledger, work)?;
-    let plan = review::plan(lane_pipeline(&item)?).map_err(|e| {
+    let pipeline = lane_pipeline(&item)?;
+    let mut plan = review::plan(pipeline).map_err(|e| {
         refuse(format!(
             "{e}; a lane on it records reviews with `check record` and `reviews record`"
         ))
     })?;
-    let (base, _) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
+    let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
+    // The base profile's required lenses whose `when` names a changed file.
+    let found = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    let wanted: Vec<_> = found
+        .map_or_else(Vec::new, |f| f.required)
+        .into_iter()
+        .filter(|r| {
+            files
+                .iter()
+                .any(|f| r.when.iter().any(|g| glob(g, &f.path)))
+        })
+        .map(|r| (r.name, r.prompt))
+        .collect();
+    let required = review::required(pipeline, &wanted).map_err(refuse)?;
+    plan.require(&required);
     let base = merge_base(&wt, &base, &input.head)?;
     let deadline = Instant::now() + RUN_TIMEOUT;
     let patch_id = git::patch_id(

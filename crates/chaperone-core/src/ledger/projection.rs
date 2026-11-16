@@ -97,13 +97,14 @@ pub(crate) fn project(
                 && p.head_sha.as_deref().is_some_and(|s| same_commit(head, s))
             {
                 if harness && check == "review" {
-                    // A carried review's findings are its original's.
+                    // A carried review's findings are its original's. The
+                    // newest decides: one that did not complete (a lens the
+                    // profile now requires failed) uncovers an older one.
                     let from = p.rest.get("carried_from").and_then(Value::as_i64);
                     let original = from.unwrap_or(e.id);
                     let shown = p.rest.get("plan_answers").and_then(Value::as_str);
-                    if complete.contains(&original) && shown == answers.as_deref() {
-                        covering = Some(original);
-                    }
+                    covering = (complete.contains(&original) && shown == answers.as_deref())
+                        .then_some(original);
                 } else if harness {
                     on_head.insert(check, p.clone());
                 } else if check == "smoke" && producer == Some(&json!("session")) {
@@ -724,8 +725,8 @@ requires = ["quality_gate_before_pr"]
         assert_eq!(at(HEAD).get("smoke.passed"), &Fact::Bool(false));
     }
 
-    /// The review that covers the commit is its newest complete harness
-    /// review, a carried one read as its original; the unsettled blocking
+    /// The review that covers the commit is its newest harness review when
+    /// complete, a carried one read as its original; the unsettled blocking
     /// findings of every complete harness review count.
     #[test]
     fn the_covering_review_and_its_blocking_findings() {
@@ -763,6 +764,10 @@ requires = ["quality_gate_before_pr"]
         let from = json!({"carried_from": incomplete.id});
         lane.on("review", fresh, "harness", from);
         assert_eq!(at(fresh).get("review.complete"), &Fact::Bool(false));
+        // A newer review on a commit that did not complete uncovers it.
+        assert_eq!(at(HEAD).get("review.complete"), &Fact::Bool(true));
+        lane.on("review", HEAD, "harness", json!({"complete": false}));
+        assert_eq!(at(HEAD).get("review.complete"), &Fact::Bool(false));
     }
 
     /// Older jobs that finish after a newer one close their requests and

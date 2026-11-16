@@ -404,6 +404,16 @@ pub struct Companion {
     pub needs: Vec<String>,
 }
 
+/// A `[[review.required]]` lens: a review of a change to a file `when`
+/// names is not complete until a lens has asked `prompt` of it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Required {
+    pub name: String,
+    pub when: Vec<String>,
+    pub prompt: String,
+}
+
 /// The `[diff] code` globs of a base branch's profile (a file matching one
 /// is code even under docs or in Markdown) and its companion rules, with
 /// the profile's hash, base and commit as [`BaseTests`] has them.
@@ -413,6 +423,8 @@ pub struct BaseCode {
     /// `[size] tests`: code files counted as test lines.
     pub tests: Vec<String>,
     pub companions: Vec<Companion>,
+    /// `[[review.required]]`: the lenses a review of the files they name needs.
+    pub required: Vec<Required>,
     pub hash: String,
     pub base: &'static str,
     pub commit: String,
@@ -420,9 +432,10 @@ pub struct BaseCode {
 
 /// The [`BaseCode`] of the base branch's [`REPO_PROFILE`] for the repo
 /// `dir` is in; None when there is none. No `[diff]` names no globs. A
-/// profile that is a link or no file, is not TOML, or whose `[diff]`, `[size]` or
-/// `[[companions]]` does not load refuses, as does a rule with an empty list or a
-/// name that is empty or holds a space or `:` (a trailer names it).
+/// profile that is a link or no file, is not TOML, or whose `[diff]`, `[size]`,
+/// `[[companions]]` or `[[review.required]]` does not load refuses, as does a rule
+/// with an empty list or a name that is empty or holds a space or `:` (a trailer
+/// names a companion rule, a lens row a required lens), or a blank prompt.
 pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<BaseCode>, Error> {
     let Some(found) = base_profile(bin, dir, deadline)? else {
         return Ok(None);
@@ -456,10 +469,28 @@ pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<Ba
             c.name
         )));
     }
+    let required = profile
+        .get("review")
+        .and_then(|r| r.get("required"))
+        .cloned();
+    let required = required.map(toml::Value::try_into::<Vec<Required>>);
+    let required = required.transpose().map_err(bad)?.unwrap_or_default();
+    if let Some(r) = required
+        .iter()
+        .find(|r| !named(&r.name) || r.when.is_empty() || r.prompt.trim().is_empty())
+    {
+        return Err(Error::Invalid(format!(
+            "profile {}: [[review.required]] {:?} needs a name without spaces or `:`, a \
+             non-empty `when` and a prompt",
+            found.at(),
+            r.name
+        )));
+    }
     Ok(Some(BaseCode {
         code,
         tests,
         companions,
+        required,
         hash: format!("{:x}", Sha256::digest(&found.text)),
         base: found.base,
         commit: found.commit,

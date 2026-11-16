@@ -194,7 +194,7 @@ fn every_lens_reviews_the_same_facts() {
         .into_iter()
         .enumerate()
     {
-        let lens = review.lenses[i].lens;
+        let lens = &review.lenses[i].lens;
         let call = call(env.dir.path(), cli, lens);
         let prompt = call["prompt"].as_str().unwrap();
         assert_eq!(Path::new(call["cwd"].as_str().unwrap()), checkout);
