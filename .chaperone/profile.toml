@@ -46,14 +46,16 @@ kind = "chaperone"
 
 # What `chaperone check run tests` runs, in order, in a checkout of the
 # lane's commit: each an argv, never a shell string. `target_dir` names the
-# variable the harness points at the lane's own build directory. CI also
-# runs the llvm-cov coverage gate, which is not here: a harness pass is not
-# CI green.
+# variable the harness points at the lane's own build directory. The doc
+# job is here as CI runs it. CI also runs coverage, budgets, deny and
+# doc-numbers (which needs the PR's merge commit), which are not: a harness
+# pass is not CI green.
 [tests]
 commands = [
   ["cargo", "fmt", "--check"],
   ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"],
   ["cargo", "nextest", "run", "--workspace", "--locked"],
+  ["env", "RUSTDOCFLAGS=-D warnings", "cargo", "doc", "-p", "chaperone-core", "--no-deps", "--locked"],
 ]
 target_dir = "CARGO_TARGET_DIR"
 
