@@ -462,7 +462,7 @@ tree), or whose diff against its merge base has the same `patch_id` (a clean mer
 onto a newer base; events.md), is carried to this commit, `carried_from` (and `carried_by`
 `patch_id` for the second) and no findings of its own (events.md), and no session starts:
 the lenses would only word their findings anew. The `patch_id` is read in the lane's
-worktree before anything runs, and any change to the lane's diff, whitespace or a file mode
+worktree before anything runs, submodule changes shown whatever its config, and any change to the lane's diff, whitespace or a file mode
 included, gives a new one. A commit that already has it
 replays it, so flipping between commits of a tree appends nothing after the first carry. Else a tree that already has
 `review_attempts` reviews by this pipeline, complete or not, is refused (`invalid_input`,
@@ -523,8 +523,8 @@ It then writes, in this order: one `usage.reported` per session that left a sess
 run (finding statuses). It is the second command that appends more than one event, after
 `usage report`, each event in its own transaction. A crash leaves whole events: usage rows
 without a review are what those sessions cost, and stay; a review whose rulings are missing
-is finished by the next `check run review` on the lane before anything else, with no session
-started. A review that is not `complete` runs again on the same tree, up to
+is finished by the next `check run review` on the lane before any review is replayed, carried
+or run (only the merge base and `patch_id` are read first), with no session started. A review that is not `complete` runs again on the same tree, up to
 `review_attempts`. It prints the `check.finished` as `check record` does.
 
 `check run verdict` takes the same lock and reads the commit the same way. The lane's stamped
