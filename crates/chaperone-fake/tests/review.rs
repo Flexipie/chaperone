@@ -194,7 +194,7 @@ fn every_lens_reviews_the_same_facts() {
         .into_iter()
         .enumerate()
     {
-        let lens = review.lenses[i].lens;
+        let lens = &review.lenses[i].lens;
         let call = call(env.dir.path(), cli, lens);
         let prompt = call["prompt"].as_str().unwrap();
         assert_eq!(Path::new(call["cwd"].as_str().unwrap()), checkout);
@@ -934,7 +934,7 @@ fn judge_with(env: &Env, ledger: &Ledger, head: &str, tree: &str, smoke: bool) -
     let pipeline = pipeline();
     let (p, attempts) = verdict::plan(&pipeline).unwrap();
     let me = lane_session();
-    let harness = verdict::harness(ledger, &env.store, 1, head, smoke);
+    let harness = verdict::harness(ledger, &env.store, 1, head, &pipeline.hash, smoke);
     let harness = harness.unwrap().unwrap();
     let mut input = RunInput {
         head: head.into(),
@@ -1112,7 +1112,7 @@ fn no_answer_is_no_decision() {
     let ledger = ledger(&env);
     let (head, tree) = ("2".repeat(40), "3".repeat(40));
     let lacks = || {
-        verdict::harness(&ledger, &env.store, 1, &head, false)
+        verdict::harness(&ledger, &env.store, 1, &head, &pipeline().hash, false)
             .unwrap()
             .err()
     };
@@ -1120,14 +1120,20 @@ fn no_answer_is_no_decision() {
     measured(&ledger, &head, &tree, &["diff"]);
     assert_eq!(lacks(), Some("tests"));
     measured(&ledger, &head, &tree, &["tests"]);
-    assert_eq!(lacks(), Some("complete review"));
+    assert_eq!(
+        lacks(),
+        Some("complete review by the lenses the base profile requires now")
+    );
     let mut partial = input(&pipeline());
     partial.fields = json!({"complete": false}).as_object().unwrap().clone();
     ledger
         .check_run(&lane_session(), &partial)
         .unwrap()
         .unwrap();
-    assert_eq!(lacks(), Some("complete review"));
+    assert_eq!(
+        lacks(),
+        Some("complete review by the lenses the base profile requires now")
+    );
     measured(&ledger, &head, &tree, &["review"]);
     let said = |s: Value| json!([{"when": "LENS verdict", "stdout": session("v", s)}]);
     let answer = |decision: &str, why: &str| json!({"decision": decision, "why": why, "proven": [], "not_proven": []});

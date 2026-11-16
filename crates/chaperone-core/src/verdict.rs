@@ -63,7 +63,8 @@ pub struct Harness {
 /// What the harness holds on lane `work`'s commit `head`, or what it still
 /// lacks there: a verdict runs only on a clean commit, with a `diff`, a
 /// newest `tests` that passed and a `complete` review (a carried one
-/// counts), and when the base profile declares a smoke (`smoke_declared`)
+/// counts) keyed `review_key`, the key [`review::Plan::require`] gives the
+/// lenses the base profile requires now, and when the base profile declares a smoke (`smoke_declared`)
 /// a newest harness smoke that passed; when it does not, no harness smoke
 /// is read. So a NO cannot be caused by running the verdict early.
 /// Blocking findings do not stop it: they are shown. The smoke is shown as [`smoke`] reads it; the lane's claim is
@@ -73,24 +74,32 @@ pub fn harness(
     store: &Evidence,
     work: i64,
     head: &str,
+    review_key: &str,
     smoke_declared: bool,
 ) -> Result<Result<Harness, &'static str>, LedgerError> {
-    let Some(diff) = newest(ledger, work, "diff", head, None)? else {
+    let Some(diff) = newest(ledger, work, "diff", head)? else {
         return Ok(Err("diff"));
     };
     let passed = |p: &Payload| p.rest.get("result") == Some(&json!("pass"));
-    let Some(tests) = newest(ledger, work, "tests", head, None)? else {
+    let Some(tests) = newest(ledger, work, "tests", head)? else {
         return Ok(Err("tests"));
     };
     if !passed(&tests.1) {
         return Ok(Err("tests that pass (the newest failed)"));
     }
     let answers = review::current_plan_answers(ledger.conn(), work)?;
-    let Some(review) = newest(ledger, work, "review", head, Some(answers.as_deref()))? else {
-        return Ok(Err("complete review"));
+    let review = newest(ledger, work, "review", head)?.filter(|(_, p)| {
+        p.rest.get("complete") == Some(&json!(true))
+            && p.rest.get("plan_answers").and_then(Value::as_str) == answers.as_deref()
+            && p.rest.get("profile").and_then(Value::as_str) == Some(review_key)
+    });
+    let Some(review) = review else {
+        return Ok(Err(
+            "complete review by the lenses the base profile requires now",
+        ));
     };
     if smoke_declared {
-        match newest(ledger, work, "smoke", head, None)? {
+        match newest(ledger, work, "smoke", head)? {
             None => return Ok(Err("smoke (the base profile declares [smoke])")),
             Some((_, p)) if !passed(&p) => {
                 return Ok(Err("smoke that passes (the newest failed)"));
@@ -145,14 +154,12 @@ pub fn harness(
     }))
 }
 
-/// The newest harness `check` on lane `work`'s commit `head`; with
-/// `review`, a complete one shown those plan answers (`plan_answers`).
+/// The newest harness `check` on lane `work`'s commit `head`.
 fn newest(
     ledger: &Ledger,
     work: i64,
     check: &str,
     head: &str,
-    review: Option<Option<&str>>,
 ) -> Result<Option<(i64, Payload)>, LedgerError> {
     let row: Option<(i64, String)> = ledger
         .conn()
@@ -161,10 +168,8 @@ fn newest(
                AND json_extract(payload_json, '$.check') = ?2
                AND json_extract(payload_json, '$.head_sha') = ?3
                AND json_extract(payload_json, '$.producer.kind') = 'harness'
-               AND (NOT ?4 OR json_extract(payload_json, '$.complete') IS 1
-                 AND json_extract(payload_json, '$.plan_answers') IS ?5)
              ORDER BY id DESC LIMIT 1",
-            params![work, check, head, review.is_some(), review.flatten()],
+            params![work, check, head],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
@@ -202,7 +207,7 @@ pub fn smoke(
     work: i64,
     head: &str,
 ) -> Result<Value, LedgerError> {
-    let harness = newest(ledger, work, "smoke", head, None)?.map(|(_, p)| ran(&p));
+    let harness = newest(ledger, work, "smoke", head)?.map(|(_, p)| ran(&p));
     let claim: Option<String> = ledger
         .conn()
         .query_row(
@@ -373,7 +378,7 @@ pub fn record(
     let (change, diff_cut) = review::change(facts);
     let prompt = prompt(p, &facts.goal, &change, &harness.shown);
     let session = review::one(p, agents, dir, prompt, &schema(), store, said)?;
-    let ran = (session.lens, session.cli, &session.model, &session.run);
+    let ran = (&*session.lens, session.cli, &session.model, &session.run);
     if let Err(r) = review::usage(ledger, actor, input.work, "verdict", ran)? {
         return Ok(Err(r));
     }
@@ -510,7 +515,7 @@ mod tests {
     fn the_facts_need_diff_tests_and_a_complete_review() {
         let (dir, ledger) = lane();
         let store = Evidence::beside(&dir.path().join("ledger.db"));
-        let lacks = |head: &str| harness(&ledger, &store, 1, head, false).unwrap().err();
+        let lacks = |head: &str| harness(&ledger, &store, 1, head, "p", false).unwrap().err();
         assert_eq!(lacks("abc1234"), Some("diff"));
         measured(
             &ledger,
@@ -526,11 +531,17 @@ mod tests {
         );
         let pass = json!({"result": "pass", "commands": [{"argv": ["t"], "exit": 0, "ms": 3}]});
         measured(&ledger, "tests", "abc1234", pass);
-        assert_eq!(lacks("abc1234"), Some("complete review"));
+        assert_eq!(
+            lacks("abc1234"),
+            Some("complete review by the lenses the base profile requires now")
+        );
         measured(&ledger, "review", "abc1234", json!({"complete": false}));
-        assert_eq!(lacks("abc1234"), Some("complete review"));
+        assert_eq!(
+            lacks("abc1234"),
+            Some("complete review by the lenses the base profile requires now")
+        );
         all(&ledger, "abc1234");
-        let first = harness(&ledger, &store, 1, "abc1234", false)
+        let first = harness(&ledger, &store, 1, "abc1234", "p", false)
             .unwrap()
             .unwrap();
         let want = json!({
@@ -544,7 +555,7 @@ mod tests {
         assert_eq!(first.shown, want);
         assert_eq!(first.read, json!({"diff": 3, "tests": 5, "review": 7}));
         all(&ledger, "fed4321");
-        let amend = harness(&ledger, &store, 1, "fed4321", false)
+        let amend = harness(&ledger, &store, 1, "fed4321", "p", false)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -563,7 +574,7 @@ mod tests {
             .finding_update(&me(), &dispute, false)
             .unwrap()
             .unwrap();
-        let disputed = harness(&ledger, &store, 1, "fed4321", false)
+        let disputed = harness(&ledger, &store, 1, "fed4321", "p", false)
             .unwrap()
             .unwrap();
         assert_eq!(disputed.sha256, first.sha256);
@@ -580,7 +591,7 @@ mod tests {
         let (dir, ledger) = lane();
         let store = Evidence::beside(&dir.path().join("ledger.db"));
         all(&ledger, "abc1234");
-        let facts = harness(&ledger, &store, 1, "abc1234", false)
+        let facts = harness(&ledger, &store, 1, "abc1234", "p", false)
             .unwrap()
             .unwrap();
         let fields = |f: Value| f.as_object().cloned().unwrap_or_default();
@@ -667,7 +678,7 @@ mod tests {
         let (dir, ledger) = lane();
         let store = Evidence::beside(&dir.path().join("ledger.db"));
         all(&ledger, "abc1234");
-        let before = harness(&ledger, &store, 1, "abc1234", false)
+        let before = harness(&ledger, &store, 1, "abc1234", "p", false)
             .unwrap()
             .unwrap();
         let log = format!("{}SAW", "x".repeat(5000));
@@ -694,7 +705,7 @@ mod tests {
             .check_record_with(&fresh, &claim, &[file], false)
             .unwrap()
             .unwrap();
-        let claimed = harness(&ledger, &store, 1, "abc1234", false)
+        let claimed = harness(&ledger, &store, 1, "abc1234", "p", false)
             .unwrap()
             .unwrap();
         let shown = &claimed.shown["smoke"]["lane_claim"];
@@ -704,7 +715,7 @@ mod tests {
         assert_eq!(claimed.sha256, before.sha256);
         // A profile that declares a smoke needs a passing harness one; one
         // that does not leaves it out of the facts.
-        let declared = |on: bool| harness(&ledger, &store, 1, "abc1234", on).unwrap();
+        let declared = |on: bool| harness(&ledger, &store, 1, "abc1234", "p", on).unwrap();
         let missing = "smoke (the base profile declares [smoke])";
         assert_eq!(declared(true).err(), Some(missing));
         measured(&ledger, "smoke", "abc1234", json!({"result": "fail"}));

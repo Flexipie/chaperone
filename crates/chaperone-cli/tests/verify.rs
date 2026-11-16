@@ -146,13 +146,18 @@ impl Lane {
         conn.query_row(&sql, [], |r| r.get(0)).unwrap()
     }
 
-    /// The newest review's codex row and whether the review is complete.
-    fn codex(&self) -> (Value, Value) {
+    /// The newest review's payload.
+    fn review(&self) -> Value {
         let conn = rusqlite::Connection::open(&self.db).unwrap();
         let sql = "SELECT payload_json FROM events WHERE payload_json->>'check' = 'review'
                      ORDER BY id DESC LIMIT 1";
         let p: String = conn.query_row(sql, [], |r| r.get(0)).unwrap();
-        let p: Value = serde_json::from_str(&p).unwrap();
+        serde_json::from_str(&p).unwrap()
+    }
+
+    /// The newest review's codex row and whether the review is complete.
+    fn codex(&self) -> (Value, Value) {
+        let p = self.review();
         let rows = p["lenses"].as_array().unwrap();
         let codex = rows.iter().find(|r| r["lens"] == "codex").unwrap();
         (codex.clone(), p["complete"].clone())
@@ -195,7 +200,12 @@ fn lenses(correctness: Value, intent: Value, rulings: Value) -> Value {
 /// Lane 1, claimed on v20 by session `lane` on branch `feat`, its plan
 /// checked before its one code commit.
 fn lane(claude: Value) -> Lane {
-    let lane = claimed(claude);
+    lane_on(claude, "")
+}
+
+/// [`lane`] with `rules` added to the base profile.
+fn lane_on(claude: Value, rules: &str) -> Lane {
+    let lane = claimed_on(claude, rules);
     lane.plan("1. do it\n");
     lane.commit();
     lane
@@ -205,6 +215,11 @@ fn lane(claude: Value) -> Lane {
 /// commit of its own; the base profile's tests pass and it declares no
 /// smoke. The fake plays `claude` for Claude and finds nothing as Codex.
 fn claimed(claude: Value) -> Lane {
+    claimed_on(claude, "")
+}
+
+/// [`claimed`] with `rules` added to the base profile.
+fn claimed_on(claude: Value, rules: &str) -> Lane {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, bin) = (
         dir.path().join("ledger.db"),
@@ -223,8 +238,12 @@ fn claimed(claude: Value) -> Lane {
         let script = json!({"version": "1 (fake)", "runs": runs}).to_string();
         std::fs::write(bin.join(format!("{cli}.json")), script).unwrap();
     }
-    let profile: &[u8] = b"[tests]\ncommands = [[\"true\"]]\n[size]\ntests = [\"tests/**\"]\n";
-    let files: &[(&str, &[u8])] = &[("lib.rs", b"a\n"), (".chaperone/profile.toml", profile)];
+    let profile =
+        format!("[tests]\ncommands = [[\"true\"]]\n[size]\ntests = [\"tests/**\"]\n{rules}");
+    let files: &[(&str, &[u8])] = &[
+        ("lib.rs", b"a\n"),
+        (".chaperone/profile.toml", profile.as_bytes()),
+    ];
     git(&wt, &["init", "-q", "-b", "main"], files);
     git(&wt, &["add", "."], &[]);
     git(&wt, &["commit", "-qm", "base"], &[]);
@@ -619,4 +638,178 @@ fn a_review_whose_patch_id_diff_fails_is_refused() {
     let why = err["message"].as_str().unwrap();
     assert!(code != 0 && why.starts_with("could not diff"), "{err}");
     assert_eq!((lane.events("1 = 1"), lane.sessions()), (before, 1));
+}
+
+/// A base profile's required lens, `when` to follow.
+const LOSS: &str = "[review]\ndaisy = false\n[[review.required]]\nname = \"loss\"\nprompt = \"Can a line be lost?\"\nwhen = ";
+
+/// A change to a file a `[[review.required]]` lens names gets that lens:
+/// while it has not run (the fake has no answer for it) the review is not
+/// complete, verify stops there and the lane cannot hand off ready; once
+/// it answers, verify passes and the handoff is ready.
+#[test]
+fn a_required_lens_gates_ready_on_the_paths_it_names() {
+    let none = || claude(json!({"findings": []}), json!([]));
+    let lane = lane_on(none(), &format!("{LOSS}[\"*.rs\"]\n"));
+    lane.answer("lane", "accept");
+    lane.smoke();
+    let out = lane.verify();
+    let stopped = json!({"check": "review", "why": "review not complete"});
+    assert_eq!(out["stopped"], stopped, "{out}");
+    let review = lane.review();
+    let rows = review["lenses"].as_array().unwrap();
+    let loss = rows.iter().find(|r| r["lens"] == "loss").unwrap();
+    assert_eq!(
+        (&loss["ran"], &review["complete"]),
+        (&json!(false), &json!(false))
+    );
+    let (code, err) = lane.handoff();
+    assert_eq!((code, &err["code"]), (1, &json!("gate_denied")), "{err}");
+
+    let mut runs = none();
+    let loss = says("# Review: loss", json!({"findings": []}));
+    runs.as_array_mut().unwrap().push(loss);
+    let script = json!({"version": "1 (fake)", "runs": runs}).to_string();
+    std::fs::write(lane.dir.path().join("bin/claude.json"), script).unwrap();
+    let out = lane.verify();
+    assert_eq!(out["stopped"], Value::Null, "{out}");
+    assert_eq!(lane.review()["complete"], true);
+    assert_eq!(lane.handoff().0, 0);
+}
+
+/// A lane that changes no file a required lens names reviews as before:
+/// the pipeline's lenses only, keyed by the pipeline's hash.
+#[test]
+fn a_required_lens_leaves_other_paths_alone() {
+    let lane = lane_on(
+        claude(json!({"findings": []}), json!([])),
+        &format!("{LOSS}[\"store.rs\"]\n"),
+    );
+    lane.answer("lane", "accept");
+    assert_eq!(lane.verify()["stopped"], Value::Null);
+    assert_eq!(lane.sessions(), 5);
+    let review = lane.review();
+    let rows = review["lenses"].as_array().unwrap().iter();
+    let names: Vec<_> = rows.map(|r| r["lens"].as_str().unwrap()).collect();
+    assert_eq!(names, review::LENSES);
+    let conn = rusqlite::Connection::open(&lane.db).unwrap();
+    let sql = "SELECT pipeline_hash FROM lanes WHERE id = 1";
+    let hash: String = conn.query_row(sql, [], |r| r.get(0)).unwrap();
+    assert_eq!(review["profile"], hash);
+}
+
+/// A required lens that does not load (no `when`, a name with a space or
+/// `:`, a blank prompt, a field it does not know) or whose name is a
+/// pipeline lens's, the verifier's or given twice: the review is refused,
+/// naming it, and nothing is written.
+#[test]
+fn a_bad_required_lens_is_refused() {
+    let rule = |name: &str, prompt: &str, when: &str| {
+        format!("[[review.required]]\nname = \"{name}\"\nprompt = \"{prompt}\"\nwhen = {when}\n")
+    };
+    let any = "[\"*.rs\"]";
+    let bad = [
+        rule("loss", "p", "[]"),
+        rule("a b", "p", any),
+        rule("a:b", "p", any),
+        rule("loss", " ", any),
+        rule("loss", "p", any) + "runner = \"x\"\n",
+        rule("correctness", "p", any),
+        rule("verifier", "p", any),
+        rule("loss", "p", any) + &rule("loss", "q", any),
+    ];
+    for rules in bad {
+        // The plan check reads the profile too, so the lane commits unplanned.
+        let lane = claimed_on(json!([]), &rules);
+        lane.commit();
+        let before = lane.events("1 = 1");
+        let (code, err) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+        assert_eq!(
+            (code, &err["code"]),
+            (1, &json!("invalid_input")),
+            "{rules}: {err}"
+        );
+        let why = err["message"].as_str().unwrap();
+        assert!(
+            why.contains("[[review.required]]") || why.contains("unknown field `runner`"),
+            "{err}"
+        );
+        assert_eq!(lane.events("1 = 1"), before);
+    }
+}
+
+/// A rule that lands on the base after the lane's commit had a complete
+/// review: the next review is keyed anew, so the old one neither replays
+/// nor carries, and while the required lens has not run that newer,
+/// incomplete review uncovers the old one: verify stops at the review and
+/// the verdict refuses to run.
+#[test]
+fn a_rule_landing_after_a_complete_review_reviews_again() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    assert_eq!(lane.verify()["stopped"], Value::Null);
+    let old = lane.review();
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    let profile = std::fs::read_to_string(lane.wt.join(".chaperone/profile.toml")).unwrap();
+    let profile = profile + LOSS + "[\"*.rs\"]\n";
+    let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", profile.as_bytes())];
+    git(&lane.wt, &["commit", "-qam", "rule"], files);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+
+    let out = lane.verify();
+    let stopped = json!({"check": "review", "why": "review not complete"});
+    assert_eq!(out["stopped"], stopped, "{out}");
+    let review = lane.review();
+    assert_ne!(review["profile"], old["profile"]);
+    assert_eq!(review["carried_from"], Value::Null);
+    let (code, err) = lane.run("lane", &["check", "run", "verdict", "--work", "1"]);
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    assert!(
+        err["message"].as_str().unwrap().contains("complete review"),
+        "{err}"
+    );
+}
+
+/// A lane that forges its clone's base ref back to a profile without the
+/// rule, reviews there (no required lens) and restores the ref gets no
+/// verdict: the review's key is not the one the base profile requires now.
+#[test]
+fn a_review_under_a_forged_base_ref_gets_no_verdict() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    let old = git(&lane.wt, &["rev-parse", "main"], &[]);
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    let profile = std::fs::read_to_string(lane.wt.join(".chaperone/profile.toml")).unwrap();
+    let profile = profile + LOSS + "[\"*.rs\"]\n";
+    let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", profile.as_bytes())];
+    git(&lane.wt, &["commit", "-qam", "rule"], files);
+    let rule = git(&lane.wt, &["rev-parse", "HEAD"], &[]);
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", &old],
+        &[],
+    );
+    for check in ["diff", "tests", "review"] {
+        let (code, out) = lane.run("lane", &["check", "run", check, "--work", "1"]);
+        assert_eq!(code, 0, "{out}");
+    }
+    assert_eq!(lane.review()["complete"], true);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", &rule],
+        &[],
+    );
+    let before = lane.events("1 = 1");
+    let (code, err) = lane.run("lane", &["check", "run", "verdict", "--work", "1"]);
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    let why = "no harness complete review by the lenses the base profile requires now";
+    assert!(err["message"].as_str().unwrap().contains(why), "{err}");
+    assert_eq!(lane.events("1 = 1"), before);
 }

@@ -379,7 +379,9 @@ read as remote-tracking refs, so a local branch named `origin/main` is never tak
 its tree, those two within one 10 s deadline. A lane with no worktree, a relative or missing
 one, a git call that fails or times out (not marked retryable yet), a numstat past 16 MiB and
 a base profile that is a link or no file, is not TOML (with or without `[diff]`) or whose
-`[diff]`, `[size]` or `[[companions]]` does not load are `invalid_input` and write nothing. So is a
+`[diff]`, `[size]`, `[[companions]]` or `[[review.required]]` does not load (a required lens
+needs a `name` with no space or `:`, a non-empty `when` and a prompt) are `invalid_input` and
+write nothing. So is a
 commit that breaks a companion rule of the base profile: each `[[companions]]` has a `name`
 (no space or `:`), `when` and `needs` (non-empty glob lists), and a commit that changes a file
 `when` names must change one `needs` names. The refusal names each broken rule, the file that
@@ -454,9 +456,16 @@ tools, budget and timeout) and a prompt file: `review_correctness`, `review_desi
 `review_intent` and `review_codex` (the lenses) and `review_verifier`; a Claude runner must
 name a model; and `[limits]` must hold `review_attempts`, 1 or more. v17 to v19 name none, so
 a lane on them is refused (`invalid_input`, nothing written) and keeps recording reviews with
-`check record` and `reviews record`. Then it writes the rulings a crash left unwritten on the
+`check record` and `reviews record`. Each `[[review.required]]` lens of the base profile
+(`name`, `when` globs, `prompt`, the repo's own question) whose `when` names a changed file is
+one more lens on the `review_correctness` runner, never skipped for size, its row in `lenses`
+under its name, so the review is not complete until it has run; a name that is a pipeline
+lens's or `verifier`, or is given twice, is `invalid_input`, nothing written. With any, the
+review's `<profile>` below is the sha256 of the pipeline's hash and each lens's name and
+prompt digest, so a review from before the rule replays or carries nothing; with none it is the
+pipeline's hash. Then it writes the rulings a crash left unwritten on the
 lane's newest review, and a complete review already stored under its key (events.md;
-`<profile>` is the pipeline's hash) is printed with `replayed` true and nothing runs. A
+`<profile>` is the hash above) is printed with `replayed` true and nothing runs. A
 complete review by this pipeline on another commit of the same tree (an amend that kept the
 tree), or whose diff against its merge base has the same `patch_id` (a clean merge or rebase
 onto a newer base; events.md), is carried to this commit, `carried_from` (and `carried_by`
@@ -535,7 +544,11 @@ model); v17 to v19 do not, so a lane on them is refused (`invalid_input`, nothin
 keeps recording verdicts with `check record`. `[limits]` must hold `verdict_attempts`, 1
 or more. The verdict runs only on a clean commit, so a NO can be neither bought nor caused by
 running it early: the commit must have a harness `diff`, a newest harness `tests` that passed, a
-harness `review` that is `complete` (carried counts) and, when the base profile declares
+newest harness `review` that is `complete` (carried counts; a newer incomplete one uncovers an
+older complete one) under the key `check run review` derives from the base profile now (the
+pipeline's hash folded with the required lenses the change touches), so a review run while the
+clone's base ref named another profile, the ref since restored, is not one (a ref left forged
+through the verdict is #262), and, when the base profile declares
 `[smoke]` (read as `tests` reads `[tests]`), a newest harness `smoke` that passed. Otherwise it
 is refused, naming what is missing or failed, and nothing is written. Blocking findings do not
 stop it: they are shown, and the verdict may say no. A verdict that ran, yes or no, stands for

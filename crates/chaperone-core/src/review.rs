@@ -83,7 +83,7 @@ pub struct Facts {
 /// A lens as the pipeline defines it.
 #[derive(Debug)]
 pub struct Planned<'a> {
-    pub lens: &'static str,
+    pub lens: &'a str,
     pub check: &'a Check,
     pub runner: &'a Runner,
     /// The limit `<lens>_min_code_lines`: a smaller diff skips the lens.
@@ -113,11 +113,12 @@ pub fn verifier(pipeline: &Pipeline) -> Result<Planned<'_>, String> {
 }
 
 /// The sessions a pipeline runs for a review, its hash (a changed
-/// pipeline, a prompt or a model, is another run) and its [`ATTEMPTS`].
+/// pipeline, a prompt or a model, is another run; [`Plan::require`] folds
+/// in the repo's required lenses) and its [`ATTEMPTS`].
 pub struct Plan<'a> {
     pub lenses: Vec<Planned<'a>>,
     pub verifier: Planned<'a>,
-    pub hash: &'a str,
+    pub hash: String,
     pub attempts: i64,
 }
 
@@ -128,7 +129,7 @@ pub fn plan(pipeline: &Pipeline) -> Result<Plan<'_>, String> {
     Ok(Plan {
         lenses,
         verifier,
-        hash: &pipeline.hash,
+        hash: pipeline.hash.clone(),
         attempts: limit(pipeline, ATTEMPTS)?,
     })
 }
@@ -142,6 +143,79 @@ pub(crate) fn limit(pipeline: &Pipeline, name: &str) -> Result<i64, String> {
             "pipeline {} has no limit {name} of 1 or more",
             pipeline.id
         )),
+    }
+}
+
+/// The checks of the lenses a repo's profile requires of this change
+/// (`[[review.required]]` whose `when` names a changed file), each
+/// `(name, prompt)`: on the correctness lens's runner, its text the
+/// harness's head and then the repo's prompt. Refuses a name that is a
+/// pipeline lens's or the verifier's, or is given twice.
+pub fn required(
+    pipeline: &Pipeline,
+    wanted: &[(String, String)],
+) -> Result<Vec<(String, Check)>, String> {
+    let runner = planned(pipeline, "correctness", "review_correctness")?
+        .check
+        .runner
+        .clone();
+    let mut names = BTreeSet::new();
+    wanted
+        .iter()
+        .map(|(name, prompt)| {
+            if LENSES.contains(&name.as_str()) || name == "verifier" || !names.insert(name) {
+                return Err(format!(
+                    "[[review.required]] {name:?} is a pipeline lens's name or given twice"
+                ));
+            }
+            let text = format!(
+                "# Review: {name}\n\n{REQUIRED_HEAD}\n## The repo's question\n\n{prompt}\n"
+            );
+            let check = Check {
+                runner: runner.clone(),
+                prompt: format!("[[review.required]] {name}"),
+                prompt_sha256: format!("{:x}", Sha256::digest(&text)),
+                text,
+            };
+            Ok((name.clone(), check))
+        })
+        .collect()
+}
+
+/// What a required lens is told before the repo's question.
+const REQUIRED_HEAD: &str = "This repo's profile requires this review of any change to the \
+files it names. You did not write the change and owe its author nothing. Below the question are \
+the files it changes and its diff; you are in a read-only checkout of the commit: read as much \
+of the code as you need to answer the question about this change.
+
+Severity, in the ledger's words: `blocker` or `risk` when the change does what the question \
+guards against, or lets it happen; each carries its proof in the body, a run that shows it or the \
+file and line that fails with the input that reaches it. `question` when the code cannot tell \
+you. `nit` or `improvement` for anything smaller. Answer with a list of findings, each with a \
+one-line title, a body that says how it fails and what would fix it, the path and the line (null \
+when no single line). An empty list is a fine answer when you found nothing real.
+";
+
+impl<'a> Plan<'a> {
+    /// Adds the [`required`] lenses, never skipped for size, and folds
+    /// their names and prompts into the hash, so a review run before the
+    /// requirement applied is not this one's. None leaves the plan as is.
+    pub fn require(&mut self, pipeline: &'a Pipeline, checks: &'a [(String, Check)]) {
+        if checks.is_empty() {
+            return;
+        }
+        let mut hash = Sha256::new();
+        hash.update(&self.hash);
+        for (name, check) in checks {
+            hash.update(format!("\n{name} {}", check.prompt_sha256));
+            self.lenses.push(Planned {
+                lens: name,
+                check,
+                runner: &pipeline.runners[&check.runner],
+                min_code_lines: None,
+            });
+        }
+        self.hash = format!("{:x}", hash.finalize());
     }
 }
 
@@ -330,7 +404,7 @@ pub struct Agents<'a> {
 /// verifier, whose outcome is its rulings.
 #[derive(Debug)]
 pub struct Lens<T = Vec<Finding>> {
-    pub lens: &'static str,
+    pub lens: String,
     pub cli: Cli,
     /// The agent's resolved path and its `--version` line.
     pub bin: String,
@@ -354,7 +428,7 @@ pub struct Lens<T = Vec<Finding>> {
 pub struct Review {
     pub lenses: Vec<Lens>,
     /// Each lens the diff is too small for, and why: no session started.
-    pub skipped: Vec<(&'static str, String)>,
+    pub skipped: Vec<(String, String)>,
     pub diff_bytes: usize,
     pub diff_cut: bool,
 }
@@ -390,7 +464,7 @@ pub fn run(
             && n < min
         {
             let why = format!("{n} code lines, under {}_min_code_lines {min}", p.lens);
-            skipped.push((p.lens, why));
+            skipped.push((p.lens.to_string(), why));
         }
     }
     let runs = planned
@@ -481,7 +555,7 @@ pub(crate) fn one<T>(
     let raw = run.as_ref().map_or("", |r| r.raw.as_str());
     let (asked, answered) = (store.put(&prompt)?, store.put(raw)?);
     Ok(Lens {
-        lens: p.lens,
+        lens: p.lens.to_string(),
         cli: r.cli,
         bin,
         version,
@@ -861,7 +935,7 @@ pub fn replay(
         }
     }
     input.check = "review".into();
-    input.profile = Some(plan.hash.into());
+    input.profile = Some(plan.hash.clone());
     if let Some(digest) = current_plan_answers(ledger.conn(), input.work)? {
         input.fields.insert("plan_answers".into(), json!(digest));
     }
@@ -895,7 +969,7 @@ pub fn replay(
            AND json_extract(payload_json, '$.check') = 'review'
            AND json_extract(payload_json, '$.tree') = ?2
            AND json_extract(payload_json, '$.profile') = ?3",
-        params![input.work, input.tree, plan.hash],
+        params![input.work, input.tree, &plan.hash],
         |r| r.get(0),
     )?;
     if done >= plan.attempts {
@@ -965,8 +1039,8 @@ pub fn finish(
     verifier: Option<&Lens<Vec<Ruling>>>,
 ) -> Checked<Recorded> {
     let lenses = review.lenses.iter();
-    let sessions = lenses.map(|l| (l.lens, l.cli, &l.model, &l.run));
-    let sessions = sessions.chain(verifier.map(|v| (v.lens, v.cli, &v.model, &v.run)));
+    let sessions = lenses.map(|l| (&*l.lens, l.cli, &l.model, &l.run));
+    let sessions = sessions.chain(verifier.map(|v| (&*v.lens, v.cli, &v.model, &v.run)));
     for (lens, cli, model, run) in sessions {
         if let Err(r) = usage(ledger, actor, input.work, "review", (lens, cli, model, run))? {
             return Ok(Err(r));
