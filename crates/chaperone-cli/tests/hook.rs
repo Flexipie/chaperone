@@ -209,7 +209,7 @@ fn stop_failure_records_again_only_after_the_lane_moves() {
 
 /// A prompt typed into the lane is attention `prompted`, by the
 /// orchestrator when it says so, and `stats` counts it; a slash command
-/// and a prompt chaperone's own tools sent are not. The same prompt twice
+/// and a prompt chaperone's own tools or Claude Code sent are not. The same prompt twice
 /// counts twice, and a long first line is cut to a note.
 #[test]
 fn prompt_records_what_was_typed_into_the_lane() {
@@ -220,6 +220,7 @@ fn prompt_records_what_was_typed_into_the_lane() {
         "/chaperone:lane o/r#1 --work 1",
         "Owner (chaperone-ui): yes. Carry on.",
         "Owner check (chaperone-ui), round 1, on abc: fix it.",
+        "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>",
         "Orchestrator: take option A.\nThen go on.",
         "Decide this yourself.",
         "Decide this yourself.",
