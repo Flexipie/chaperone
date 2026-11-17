@@ -58,12 +58,15 @@ pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<
     let mut set: Set = toml::from_str(&text)
         .map_err(|e| refuse(format!("{} is not a review eval set: {e}", set.display())))?;
     // A name is part of a directory the checkout removes first.
-    let plain =
-        |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
-    if let Some(e) = set.entry.iter().find(|e| !plain(&e.name)) {
+    let plain = |n: &str| n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if let Some(bad) = set
+        .entry
+        .iter()
+        .map(|e| &e.name)
+        .find(|n| n.is_empty() || !plain(n))
+    {
         return Err(refuse(format!(
-            "entry name {:?} is not letters, digits and -",
-            e.name
+            "entry name {bad:?}: only letters, digits, -"
         )));
     }
     if let Some(only) = &only {
@@ -104,12 +107,11 @@ pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<
         entries.push(row);
     }
     let scored: i64 = OUTCOMES[..4].iter().map(|o| totals[o]).sum();
-    let right = totals["hit"] + totals["clean"];
     Ok(Outcome::One(json!({
         "pipeline": {"id": pipeline.id, "hash": pipeline.hash},
         "entries": entries,
         "totals": totals,
-        "score": format!("{right}/{scored}"),
+        "score": format!("{}/{scored}", totals["hit"] + totals["clean"]),
     })))
 }
 
