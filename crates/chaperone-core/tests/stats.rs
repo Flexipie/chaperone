@@ -521,7 +521,7 @@ fn finding_outcomes_by_lens() {
         )
         .id
     };
-    let review = |work: i64, findings: Value| {
+    let harness_review = |work: i64, findings: Value| {
         apply(
             "h",
             work,
@@ -544,7 +544,7 @@ fn finding_outcomes_by_lens() {
     let mut answered = f("unp2", "correctness", "question");
     answered["unproven"] = json!("no proof");
     let work = lane(&ledger);
-    let first = review(
+    let first = harness_review(
         work,
         json!([
             f("fix", "correctness", "risk"),
@@ -554,6 +554,8 @@ fn finding_outcomes_by_lens() {
             f("nit", "codex", "nit"),
             f("open", "codex", "blocker"),
             f("ask", "codex", "question"),
+            f("wfix", "intent", "risk"),
+            f("wdis", "intent", "risk"),
             unproven,
             answered,
         ]),
@@ -582,13 +584,31 @@ fn finding_outcomes_by_lens() {
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute(sql, []).unwrap();
     mv("1", work, first, "ask", "answered", None);
+    mv(
+        "owner",
+        work,
+        first,
+        "wfix",
+        "waived",
+        Some(json!({"kind": "fixed", "ref": "r"})),
+    );
+    mv(
+        "owner",
+        work,
+        first,
+        "wdis",
+        "waived",
+        Some(json!({"kind": "disproved", "ref": "r"})),
+    );
+    // A daisy review's finding has no lens and is not counted.
+    review(&ledger, work, 1, 1, HEAD, "daisy");
     mv("1", work, first, "unp2", "answered", None);
     let mut same = f("same", "codex", "question");
     same["same_as"] = json!(format!("{first}/fix"));
-    review(work, json!([same]));
+    harness_review(work, json!([same]));
     merged(&ledger, work, "2026-11-10T00:00:00.000Z");
     let open = lane(&ledger);
-    review(open, json!([f("x", "codex", "nit")]));
+    harness_review(open, json!([f("x", "codex", "nit")]));
 
     let got = stats(&ledger, Cohort::Work(vec![work, open]));
     assert_eq!(
@@ -596,6 +616,7 @@ fn finding_outcomes_by_lens() {
         json!({
             "codex": {"fixed": 0, "wrong": 0, "intentional": 1, "did_not_matter": 0, "unlabelled": 4},
             "correctness": {"fixed": 1, "wrong": 1, "intentional": 0, "did_not_matter": 1, "unlabelled": 1},
+            "intent": {"fixed": 1, "wrong": 1, "intentional": 0, "did_not_matter": 0, "unlabelled": 0},
         })
     );
 }

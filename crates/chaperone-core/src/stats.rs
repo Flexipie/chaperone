@@ -287,14 +287,12 @@ impl Lane {
     }
 
     /// Per lens, its harness review findings by outcome (an index into
-    /// [`OUTCOMES`]), each once: a carried review's stay its original's,
-    /// and a `same_as` repeat is left out (`reraised_findings` counts it).
+    /// [`OUTCOMES`]), each once: a carried review has no `findings[]` of
+    /// its own, and a `same_as` repeat is left out (`reraised_findings`
+    /// counts it).
     fn outcomes(&self) -> BTreeMap<String, [i64; 5]> {
         let mut out: BTreeMap<String, [i64; 5]> = BTreeMap::new();
-        let harness = self
-            .reviews
-            .iter()
-            .filter(|r| r.check == "review" && !r.carried);
+        let harness = self.reviews.iter().filter(|r| r.check == "review");
         for r in harness {
             for f in r.findings.iter().filter(|f| f.same_as.is_none()) {
                 let settled = self.settled.get(&(r.event, f.key.clone()));
