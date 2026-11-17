@@ -763,10 +763,10 @@ with the entry's goal for the intent lens, no smoke, plan or earlier findings, a
 skipped for size as a lane's are; then the verifier on what they found. A finding stands
 when its severity blocks and the verifier did not rule it `refuted` or `unproven`. The
 entry is `hit` (a standing finding on one of `paths` whose title or body has one of
-`words`, any case), `miss` (shown with `what`), `false_alarm` (a clean entry with a
+`words`, any case), `miss`, `false_alarm` (a clean entry with a
 standing finding), `clean`, `skipped` (no clone, or a commit the clone lacks) or `error`
 (a session did not run). `data` is `{pipeline: {id, hash}, entries: [{name, outcome,
-why?, findings, bug?}], totals, score}`, `score` being hit plus clean over the
+why?, findings, bug}]` (`bug` the entry's `what`, null for a clean one`), totals, score}`, `score` being hit plus clean over the
 entries scored (`skipped` and `error` are not). It never opens the ledger; prompts and
 answers go to the evidence store beside it. `--only` with no such entry is refused
 (`invalid_input`), as is a set that does not parse or a CLI the pipeline uses that cannot

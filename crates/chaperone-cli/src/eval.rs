@@ -40,7 +40,7 @@ struct Entry {
 }
 
 /// Found when a standing finding is on one of `paths` and its title or
-/// body has one of `words`, in any case; `what` is shown on a miss.
+/// body has one of `words`, in any case; `what` is shown with the outcome.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Bug {
@@ -192,9 +192,9 @@ fn review_one(
     let shown = standing.iter().map(|f| {
         json!({"lens": f.rest["lens"], "severity": f.severity, "title": f.title, "path": f.path})
     });
-    let mut row = json!({"findings": shown.collect::<Vec<_>>()});
-    if let (Some(b), "miss") = (&e.bug, outcome) {
-        row["bug"] = json!(b.what);
-    }
-    Ok((outcome, row))
+    let bug = e.bug.as_ref().map(|b| &b.what);
+    Ok((
+        outcome,
+        json!({"findings": shown.collect::<Vec<_>>(), "bug": bug}),
+    ))
 }
