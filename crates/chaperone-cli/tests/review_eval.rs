@@ -58,6 +58,7 @@ fn each_outcome_is_scored() {
         ("miss", "GOAL-MISS", Some("miss.rs")),
         ("alarm", "GOAL-ALARM", None),
         ("refuted", "GOAL-REFUTED", None),
+        ("unproven", "GOAL-UNPROVEN", None),
         ("broken", "GOAL-BROKEN", None),
         ("req", "GOAL-REQ", Some("req.rs")),
     ];
@@ -84,19 +85,25 @@ fn each_outcome_is_scored() {
     };
     set += &(entry("gone", "o/absent") + &entry("nocommit", "o/demo"));
     std::fs::write(dir.path().join("set.toml"), set).unwrap();
-    let refuted = risk("refuted.rs", "refuted-title");
-    let key = review::findings("intent", refuted.clone()).unwrap()[0]
-        .finding_key
-        .clone();
+    // A finding the verifier rules `verdict` on, by its title.
+    let ruled = |name: &str, verdict: &str| {
+        let finding = risk(&format!("{name}.rs"), &format!("{name}-title"));
+        let key = review::findings("intent", finding.clone()).unwrap()[0]
+            .finding_key
+            .clone();
+        let ruling = json!({"rulings": [{"key": key, "verdict": verdict, "why": "w"}]});
+        (finding, says(&format!("{name}-title"), ruling))
+    };
+    let (refuted, refuted_ruling) = ruled("refuted", "refuted");
+    let (unproven, unproven_ruling) = ruled("unproven", "unproven");
     let claude = json!([
-        says(
-            "refuted-title",
-            json!({"rulings": [{"key": key, "verdict": "refuted", "why": "w"}]})
-        ),
+        refuted_ruling,
+        unproven_ruling,
         says("# Verify the review's findings", json!({"rulings": []})),
         says("GOAL-HIT", risk("hit.rs", "Overflow in add")),
         says("GOAL-ALARM", risk("alarm.rs", "alarm-title")),
         says("GOAL-REFUTED", refuted),
+        says("GOAL-UNPROVEN", unproven),
         says("GOAL-BROKEN", json!({"bogus": 1})),
         says("# Review: loss", risk("req.rs", "Overflow loses a line")),
         says("# Review:", json!({"findings": []})),
@@ -142,18 +149,19 @@ fn each_outcome_is_scored() {
             ("miss", "miss"),
             ("alarm", "false_alarm"),
             ("refuted", "clean"),
+            ("unproven", "clean"),
             ("broken", "error"),
             ("req", "hit"),
             ("gone", "skipped"),
             ("nocommit", "skipped"),
         ]
     );
-    let totals = json!({"hit": 2, "miss": 1, "false_alarm": 1, "clean": 1, "skipped": 2,
+    let totals = json!({"hit": 2, "miss": 1, "false_alarm": 1, "clean": 2, "skipped": 2,
         "error": 1});
-    assert_eq!((&out["totals"], &out["score"]), (&totals, &json!("3/5")));
+    assert_eq!((&out["totals"], &out["score"]), (&totals, &json!("4/6")));
     assert_eq!(out["entries"][1]["bug"], "w");
     assert!(
-        out["entries"][7]["why"]
+        out["entries"][8]["why"]
             .as_str()
             .unwrap()
             .contains("has no commit a")
