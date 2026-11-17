@@ -60,9 +60,7 @@ pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<
     // A name is part of a directory the checkout removes first.
     for name in set.entry.iter().map(|e| &e.name) {
         if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-            return Err(refuse(format!(
-                "entry name {name:?}: only letters, digits, -"
-            )));
+            return Err(refuse(format!("entry name {name:?} is not a-z0-9-")));
         }
     }
     if let Some(only) = &only {
