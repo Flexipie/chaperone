@@ -138,8 +138,11 @@ fn review_one(
     // profile; none with a file git counts no lines of.
     let found = code_globs(Path::new("git"), clone, Instant::now() + CHECKOUT_TIMEOUT)?;
     let (_, lines, _) = code(&files, found.as_ref().map_or(&[][..], |f| &f.code), &[]);
-    let counted = files.iter().all(|f| f.added.is_some());
     let facts = Facts {
+        code_lines: files
+            .iter()
+            .all(|f| f.added.is_some())
+            .then_some(lines as i64),
         diff: diff(dir, &base, &e.head)?,
         base,
         head: e.head.clone(),
@@ -147,7 +150,6 @@ fn review_one(
         goal: e.goal.clone(),
         smoke: Value::Null,
         plan: String::new(),
-        code_lines: counted.then_some(lines as i64),
     };
     let io = |e: std::io::Error| CliError::Internal(e.to_string());
     let review = review::run(&plan.lenses, agents, dir, &facts, store).map_err(io)?;
