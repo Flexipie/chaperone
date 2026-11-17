@@ -302,7 +302,7 @@ impl Lane {
                     Some(("fixed", _) | ("waived", Some("fixed"))) => 0,
                     Some(("refuted", _) | ("waived", Some("disproved"))) => 1,
                     Some(("waived", Some("accepted" | "scope" | "deferred"))) => 2,
-                    Some(("waived", _)) => 4,
+                    Some(("waived" | "answered", _)) => 4,
                     _ if f.unproven => 3,
                     _ => 4,
                 };

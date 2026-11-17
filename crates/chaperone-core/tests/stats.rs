@@ -541,6 +541,8 @@ fn finding_outcomes_by_lens() {
     };
     let mut unproven = f("unp", "correctness", "question");
     unproven["unproven"] = json!("no run, no cited line");
+    let mut answered = f("unp2", "correctness", "question");
+    answered["unproven"] = json!("no proof");
     let work = lane(&ledger);
     let first = review(
         work,
@@ -553,6 +555,7 @@ fn finding_outcomes_by_lens() {
             f("open", "codex", "blocker"),
             f("ask", "codex", "question"),
             unproven,
+            answered,
         ]),
     );
     mv("owner", work, first, "fix", "fixed", None);
@@ -579,6 +582,7 @@ fn finding_outcomes_by_lens() {
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute(sql, []).unwrap();
     mv("1", work, first, "ask", "answered", None);
+    mv("1", work, first, "unp2", "answered", None);
     let mut same = f("same", "codex", "question");
     same["same_as"] = json!(format!("{first}/fix"));
     review(work, json!([same]));
@@ -591,7 +595,7 @@ fn finding_outcomes_by_lens() {
         got["cohort"]["finding_outcomes"],
         json!({
             "codex": {"fixed": 0, "wrong": 0, "intentional": 1, "did_not_matter": 0, "unlabelled": 4},
-            "correctness": {"fixed": 1, "wrong": 1, "intentional": 0, "did_not_matter": 1, "unlabelled": 0},
+            "correctness": {"fixed": 1, "wrong": 1, "intentional": 0, "did_not_matter": 1, "unlabelled": 1},
         })
     );
 }
