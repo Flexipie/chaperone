@@ -819,7 +819,7 @@ pub enum ReviewCmd {
     /// Never opens the ledger
     Eval {
         /// The set: TOML `[[entry]]` tables of name, repo, base, head, goal
-        /// and, for a change with a bug the review must find, `bug = {path,
+        /// and, for a change with a bug the review must find, `bug = {paths,
         /// words, what}`
         #[arg(long, default_value = "evals/review.toml")]
         set: PathBuf,
