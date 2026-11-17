@@ -500,3 +500,123 @@ fn waivers_by_kind() {
         json!([{"work_id": work, "finding": listed}])
     );
 }
+
+/// Each harness review finding of a merged lane counts once by lens and
+/// outcome: a `same_as` repeat and an unmerged lane's do not count.
+#[test]
+fn finding_outcomes_by_lens() {
+    let (_dir, path, ledger) = common::ledger();
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    let apply = |who: &str, work: i64, kind, payload: Value| {
+        let event = Mutation::Event {
+            kind,
+            lane_id: Some(work),
+            spec_id: None,
+            payload: serde_json::from_value(payload).unwrap(),
+        };
+        committed(
+            ledger
+                .apply(&actor(who), None, &ledger.now().unwrap(), event)
+                .unwrap(),
+        )
+        .id
+    };
+    let harness_review = |work: i64, findings: Value| {
+        apply(
+            "h",
+            work,
+            EventKind::CheckFinished,
+            json!({"check": "review", "outcome": "ran", "head_sha": HEAD,
+                   "producer": harness, "complete": true, "findings": findings}),
+        )
+    };
+    let f = |key: &str, lens: &str, severity: &str| json!({"finding_key": key, "lens": lens, "severity": severity, "title": key, "body": "b"});
+    let mv = |who: &str, work: i64, event: i64, key: &str, status: &str, waiver: Option<Value>| {
+        let mut p = json!({"check_event_id": event, "finding_key": key, "status": status,
+                           "reason": "r", "head_sha": HEAD});
+        if let Some(w) = waiver {
+            p["waiver"] = w;
+        }
+        apply(who, work, EventKind::FindingUpdated, p);
+    };
+    let mut unproven = f("unp", "correctness", "question");
+    unproven["unproven"] = json!("no run, no cited line");
+    let mut answered = f("unp2", "correctness", "question");
+    answered["unproven"] = json!("no proof");
+    let work = lane(&ledger);
+    let first = harness_review(
+        work,
+        json!([
+            f("fix", "correctness", "risk"),
+            f("ref", "correctness", "blocker"),
+            f("acc", "codex", "risk"),
+            f("old", "codex", "risk"),
+            f("nit", "codex", "nit"),
+            f("open", "codex", "blocker"),
+            f("ask", "codex", "question"),
+            f("wfix", "intent", "risk"),
+            f("wdis", "intent", "risk"),
+            unproven,
+            answered,
+        ]),
+    );
+    mv("owner", work, first, "fix", "fixed", None);
+    mv("owner", work, first, "ref", "refuted", None);
+    mv(
+        "fresh",
+        work,
+        first,
+        "acc",
+        "waived",
+        Some(json!({"kind": "accepted", "ref": "r"})),
+    );
+    mv(
+        "owner",
+        work,
+        first,
+        "old",
+        "waived",
+        Some(json!({"kind": "fixed", "ref": "r"})),
+    );
+    // A waiver written before waivers had kinds.
+    let sql = "UPDATE events SET payload_json = json_remove(payload_json, '$.waiver')
+               WHERE json_extract(payload_json, '$.finding_key') = 'old'";
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute(sql, []).unwrap();
+    mv("1", work, first, "ask", "answered", None);
+    mv(
+        "owner",
+        work,
+        first,
+        "wfix",
+        "waived",
+        Some(json!({"kind": "fixed", "ref": "r"})),
+    );
+    mv(
+        "owner",
+        work,
+        first,
+        "wdis",
+        "waived",
+        Some(json!({"kind": "disproved", "ref": "r"})),
+    );
+    // A daisy review's finding has no lens and is not counted.
+    review(&ledger, work, 1, 1, HEAD, "daisy");
+    mv("1", work, first, "unp2", "answered", None);
+    let mut same = f("same", "codex", "question");
+    same["same_as"] = json!(format!("{first}/fix"));
+    harness_review(work, json!([same]));
+    merged(&ledger, work, "2026-11-10T00:00:00.000Z");
+    let open = lane(&ledger);
+    harness_review(open, json!([f("x", "codex", "nit")]));
+
+    let got = stats(&ledger, Cohort::Work(vec![work, open]));
+    assert_eq!(
+        got["cohort"]["finding_outcomes"],
+        json!({
+            "codex": {"fixed": 0, "wrong": 0, "intentional": 1, "did_not_matter": 0, "unlabelled": 4},
+            "correctness": {"fixed": 1, "wrong": 1, "intentional": 0, "did_not_matter": 1, "unlabelled": 1},
+            "intent": {"fixed": 1, "wrong": 1, "intentional": 0, "did_not_matter": 0, "unlabelled": 0},
+        })
+    );
+}

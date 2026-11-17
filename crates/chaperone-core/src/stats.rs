@@ -56,11 +56,30 @@ struct Review {
     at: String,
     score: Option<f64>,
     head: Option<String>,
-    /// Each finding's `finding_key`, title and whether it was verified.
-    findings: Vec<(String, String, bool)>,
+    findings: Vec<Finding>,
     /// Its findings the verifier ruled `same` as an earlier one.
     same: i64,
 }
+
+struct Finding {
+    key: String,
+    title: String,
+    verified: bool,
+    lens: Option<String>,
+    /// The verifier ruled it `unproven`.
+    unproven: bool,
+    /// `<event>/<key>` of the earlier finding the verifier ruled it repeats.
+    same_as: Option<String>,
+}
+
+/// A review finding's outcome on a merged lane, in `finding_outcomes`' order.
+const OUTCOMES: [&str; 5] = [
+    "fixed",
+    "wrong",
+    "intentional",
+    "did_not_matter",
+    "unlabelled",
+];
 
 #[derive(Default)]
 struct Lane {
@@ -102,6 +121,8 @@ struct Lane {
     /// `next_action` does not start with `reviewing`).
     handoffs: Vec<(String, bool)>,
     reviews: Vec<Review>,
+    /// Each finding's newest `finding.updated`: status and waiver kind.
+    settled: BTreeMap<(i64, String), (String, Option<String>)>,
 }
 
 fn same_commit(a: &str, b: &str) -> bool {
@@ -199,8 +220,8 @@ impl Lane {
         let verified_keys = |r: &Review| -> BTreeSet<String> {
             r.findings
                 .iter()
-                .filter(|f| f.2)
-                .map(|f| f.0.clone())
+                .filter(|f| f.verified)
+                .map(|f| f.key.clone())
                 .collect()
         };
         let rounds: Vec<&Review> = self
@@ -223,9 +244,9 @@ impl Lane {
         // harness review's event).
         let mut by_title: BTreeMap<String, BTreeSet<(bool, i64)>> = BTreeMap::new();
         for r in &self.reviews {
-            for (_, title, _) in r.findings.iter().filter(|f| f.2) {
+            for f in r.findings.iter().filter(|f| f.verified) {
                 by_title
-                    .entry(title.trim().to_lowercase())
+                    .entry(f.title.trim().to_lowercase())
                     .or_default()
                     .insert(r.job.map_or((false, r.event), |job| (true, job)));
             }
@@ -242,8 +263,8 @@ impl Lane {
         ordered.sort_by_key(|r| (r.job, r.event));
         let mut latest: BTreeMap<&str, (&Review, bool)> = BTreeMap::new();
         for r in ordered {
-            for (key, _, verified) in &r.findings {
-                latest.insert(key, (r, *verified));
+            for f in &r.findings {
+                latest.insert(&f.key, (r, f.verified));
             }
         }
         let verified = latest.values().filter(|f| f.1).count() as i64;
@@ -263,6 +284,31 @@ impl Lane {
             verified,
             verified_after,
         }
+    }
+
+    /// Per lens, its harness review findings by outcome (an index into
+    /// [`OUTCOMES`]), each once: a carried review has no `findings[]` of
+    /// its own, and a `same_as` repeat is left out (`reraised_findings`
+    /// counts it).
+    fn outcomes(&self) -> BTreeMap<String, [i64; 5]> {
+        let mut out: BTreeMap<String, [i64; 5]> = BTreeMap::new();
+        let harness = self.reviews.iter().filter(|r| r.check == "review");
+        for r in harness {
+            for f in r.findings.iter().filter(|f| f.same_as.is_none()) {
+                let settled = self.settled.get(&(r.event, f.key.clone()));
+                let outcome = match settled.map(|(s, kind)| (s.as_str(), kind.as_deref())) {
+                    Some(("fixed", _) | ("waived", Some("fixed"))) => 0,
+                    Some(("refuted", _) | ("waived", Some("disproved"))) => 1,
+                    Some(("waived", Some("accepted" | "scope" | "deferred"))) => 2,
+                    Some(("waived" | "answered", _)) => 4,
+                    _ if f.unproven => 3,
+                    _ => 4,
+                };
+                let lens = f.lens.clone().unwrap_or_else(|| "none".into());
+                out.entry(lens).or_default()[outcome] += 1;
+            }
+        }
+        out
     }
 
     /// Where "after handoff" is measured from, and what set it.
@@ -388,6 +434,15 @@ impl Lane {
                 self.check(e);
             }
             "finding.updated" => {
+                if let (Some(event), Some(key), Some(status)) = (
+                    p.get("check_event_id").and_then(Value::as_i64),
+                    text("finding_key"),
+                    text("status"),
+                ) {
+                    let kind = p.pointer("/waiver/kind").and_then(Value::as_str);
+                    self.settled
+                        .insert((event, key.into()), (status.into(), kind.map(Into::into)));
+                }
                 if text("status") == Some("waived") {
                     *self.attention.entry("waived".into()).or_default() += 1;
                     let w = |k: &str| p.pointer(&format!("/waiver/{k}")).and_then(Value::as_str);
@@ -412,8 +467,8 @@ impl Lane {
                     .iter_mut()
                     .find(|r| r.check == "review" && Some(r.event) == event);
                 for f in review.into_iter().flat_map(|r| &mut r.findings) {
-                    if Some(f.0.as_str()) == key {
-                        f.2 = verified;
+                    if Some(f.key.as_str()) == key {
+                        f.verified = verified;
                     }
                 }
             }
@@ -479,8 +534,14 @@ impl Lane {
                     .into_iter()
                     .flatten()
                     .filter_map(|f| {
-                        let verified = f.get("verified").and_then(Value::as_bool) == Some(true);
-                        Some((field(f, "finding_key")?, field(f, "title")?, verified))
+                        Some(Finding {
+                            key: field(f, "finding_key")?,
+                            title: field(f, "title")?,
+                            verified: f.get("verified").and_then(Value::as_bool) == Some(true),
+                            lens: field(f, "lens"),
+                            unproven: f.get("unproven").is_some(),
+                            same_as: field(f, "same_as"),
+                        })
                     })
                     .collect();
                 self.reviews.push(Review {
@@ -784,6 +845,26 @@ fn summarize(lanes: &[Lane]) -> Value {
     for kind in ATTENTION_TYPES {
         attention.entry(kind).or_default();
     }
+    let mut outcomes: BTreeMap<String, [i64; 5]> = BTreeMap::new();
+    for (l, _) in lanes.iter().zip(&rows).filter(|(_, r)| r.merged) {
+        for (lens, counts) in l.outcomes() {
+            let sum = outcomes.entry(lens).or_default();
+            for (s, n) in sum.iter_mut().zip(counts) {
+                *s += n;
+            }
+        }
+    }
+    let outcomes: Map<String, Value> = outcomes
+        .into_iter()
+        .map(|(lens, counts)| {
+            let by: Map<String, Value> = OUTCOMES
+                .iter()
+                .zip(counts)
+                .map(|(o, n)| (o.to_string(), n.into()))
+                .collect();
+            (lens, by.into())
+        })
+        .collect();
     let mut review_sources: BTreeMap<&str, i64> = BTreeMap::new();
     let mut ready_points: BTreeMap<&str, i64> = BTreeMap::new();
     for l in lanes {
@@ -848,6 +929,7 @@ fn summarize(lanes: &[Lane]) -> Value {
         "lanes_with_commits_after_handoff": null,
         "verified_findings": known(json!(sum(&|r| r.verified))),
         "verified_findings_after_handoff": known(json!(sum(&|r| r.verified_after))),
+        "finding_outcomes": outcomes,
         "lanes_plan_checked": count(&|l, _| outcome(&l.plan_check).as_deref() == Some("ran")),
         "plan_check_skipped": skipped(&|l| &l.plan_check),
         "lanes_quality_gated": count(&|l, r| r.with_pr && outcome(&l.quality_gate).as_deref() == Some("ran")),
