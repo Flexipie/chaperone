@@ -189,12 +189,9 @@ fn review_one(
         (None, true) => "clean",
         (None, false) => "false_alarm",
     };
-    let shown = standing.iter().map(|f| {
+    let shown: Vec<_> = standing.iter().map(|f| {
         json!({"lens": f.rest["lens"], "severity": f.severity, "title": f.title, "path": f.path})
-    });
+    }).collect();
     let bug = e.bug.as_ref().map(|b| &b.what);
-    Ok((
-        outcome,
-        json!({"findings": shown.collect::<Vec<_>>(), "bug": bug}),
-    ))
+    Ok((outcome, json!({ "findings": shown, "bug": bug })))
 }
