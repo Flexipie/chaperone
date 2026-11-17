@@ -44,7 +44,14 @@ fn each_outcome_is_scored() {
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::create_dir_all(&demo).unwrap();
     git(&demo, &["init", "-q", "-b", "main"]);
-    git(&demo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    // The base profile requires the `loss` lens of a change to req.rs.
+    let profile = "[review]\ndaisy = false\n[[review.required]]\nname = \"loss\"\n\
+                   prompt = \"Can a line be lost?\"\nwhen = [\"req.rs\"]\n";
+    std::fs::create_dir(demo.join(".chaperone")).unwrap();
+    std::fs::write(demo.join(".chaperone/profile.toml"), profile).unwrap();
+    git(&demo, &["add", "."]);
+    git(&demo, &["commit", "-qm", "base"]);
+    git(&demo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
     let mut set = String::new();
     let entries = [
         ("hit", "GOAL-HIT", Some("hit.rs")),
@@ -52,6 +59,7 @@ fn each_outcome_is_scored() {
         ("alarm", "GOAL-ALARM", None),
         ("refuted", "GOAL-REFUTED", None),
         ("broken", "GOAL-BROKEN", None),
+        ("req", "GOAL-REQ", Some("req.rs")),
     ];
     for (name, goal, bug) in entries {
         let base = git(&demo, &["rev-parse", "HEAD"]);
@@ -69,7 +77,12 @@ fn each_outcome_is_scored() {
             );
         }
     }
-    set += "[[entry]]\nname = \"gone\"\nrepo = \"o/absent\"\nbase = \"a\"\nhead = \"b\"\ngoal = \"g\"\n";
+    let entry = |name: &str, repo: &str| {
+        format!(
+            "[[entry]]\nname = \"{name}\"\nrepo = \"{repo}\"\nbase = \"a\"\nhead = \"b\"\ngoal = \"g\"\n"
+        )
+    };
+    set += &(entry("gone", "o/absent") + &entry("nocommit", "o/demo"));
     std::fs::write(dir.path().join("set.toml"), set).unwrap();
     let refuted = risk("refuted.rs", "refuted-title");
     let key = review::findings("intent", refuted.clone()).unwrap()[0]
@@ -85,6 +98,7 @@ fn each_outcome_is_scored() {
         says("GOAL-ALARM", risk("alarm.rs", "alarm-title")),
         says("GOAL-REFUTED", refuted),
         says("GOAL-BROKEN", json!({"bogus": 1})),
+        says("# Review: loss", risk("req.rs", "Overflow loses a line")),
         says("# Review:", json!({"findings": []})),
     ]);
     let codex = json!([{"when": "# Review:", "write": {"-o": r#"{"findings": []}"#}}]);
@@ -96,7 +110,7 @@ fn each_outcome_is_scored() {
         std::fs::write(bin.join(format!("{cli}.json")), script).unwrap();
     }
     let db = dir.path().join("ledger.db");
-    let eval = |only: &[&str]| {
+    let eval = |set: &str, only: &[&str]| {
         let path = std::env::var("PATH").unwrap();
         let out = Command::new(BIN)
             .arg("--db")
@@ -104,19 +118,17 @@ fn each_outcome_is_scored() {
             .args(["review", "eval", "--repos"])
             .arg(dir.path().join("repos"))
             .arg("--set")
-            .arg(dir.path().join("set.toml"))
+            .arg(dir.path().join(set))
             .args(only)
             .env("PATH", format!("{}:{path}", bin.display()))
             .output()
             .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        serde_json::from_slice::<Value>(&out.stdout).unwrap()["data"].clone()
+        let ok = out.status.success();
+        let v: Value = serde_json::from_slice(if ok { &out.stdout } else { &out.stderr }).unwrap();
+        (ok, v[if ok { "data" } else { "error" }].clone())
     };
-    let out = eval(&[]);
+    let (ok, out) = eval("set.toml", &[]);
+    assert!(ok, "{out}");
     let got: Vec<_> = out["entries"]
         .as_array()
         .unwrap()
@@ -131,15 +143,36 @@ fn each_outcome_is_scored() {
             ("alarm", "false_alarm"),
             ("refuted", "clean"),
             ("broken", "error"),
+            ("req", "hit"),
             ("gone", "skipped"),
+            ("nocommit", "skipped"),
         ]
     );
-    let one = json!({"hit": 1, "miss": 1, "false_alarm": 1, "clean": 1, "skipped": 1,
+    let totals = json!({"hit": 2, "miss": 1, "false_alarm": 1, "clean": 1, "skipped": 2,
         "error": 1});
-    assert_eq!((&out["totals"], &out["score"]), (&one, &json!("2/4")));
+    assert_eq!((&out["totals"], &out["score"]), (&totals, &json!("3/5")));
     assert_eq!(out["entries"][1]["bug"], "w");
-    let only = eval(&["--only", "hit"]);
+    assert!(
+        out["entries"][7]["why"]
+            .as_str()
+            .unwrap()
+            .contains("has no commit a")
+    );
+    let (_, only) = eval("set.toml", &["--only", "hit"]);
     assert_eq!(only["entries"].as_array().unwrap().len(), 1);
     assert_eq!(only["score"], "1/1");
+    // Refused, before any session: no such entry, a set that does not
+    // parse, a name that is not a plain directory name.
+    std::fs::write(dir.path().join("bad.toml"), "entry = 1\n").unwrap();
+    std::fs::write(dir.path().join("dots.toml"), entry("../x", "o/demo")).unwrap();
+    for (set, only, why) in [
+        ("set.toml", &["--only", "nope"][..], "no entry \"nope\""),
+        ("bad.toml", &[], "is not a review eval set"),
+        ("dots.toml", &[], "entry name \"../x\""),
+    ] {
+        let (ok, err) = eval(set, only);
+        assert!(!ok && err["code"] == "invalid_input", "{err}");
+        assert!(err["message"].as_str().unwrap().contains(why), "{err}");
+    }
     assert!(!db.exists(), "the eval opened the ledger");
 }

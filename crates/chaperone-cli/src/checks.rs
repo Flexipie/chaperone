@@ -876,7 +876,10 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
 
 /// The base profile's `[[review.required]]` lenses whose `when` names one
 /// of `files`, each `(name, prompt)`.
-fn required_lenses(wt: &Path, files: &[ChangedFile]) -> Result<Vec<(String, String)>, CliError> {
+pub(crate) fn required_lenses(
+    wt: &Path,
+    files: &[ChangedFile],
+) -> Result<Vec<(String, String)>, CliError> {
     let found = code_globs(Path::new("git"), wt, Instant::now() + RUN_TIMEOUT)?;
     let hit = |r: &Required| {
         let named = |f: &ChangedFile| r.when.iter().any(|g| glob(g, &f.path));

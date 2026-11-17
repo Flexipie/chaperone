@@ -757,7 +757,7 @@ same path and override, also within 30 s (ADR 0003).
 `review eval` scores the reviewer on a checked-in set of past changes (`evals/review.toml`,
 or `--set`): each `[[entry]]` names `repo`, `base` (its merge base), `head`, `goal` and,
 when it has a bug the review must find, `bug = {paths, words, what}`. For each entry the
-newest embedded pipeline's lenses run in a fresh checkout of `head` fetched from
+newest embedded pipeline's lenses, and the `[[review.required]]` lenses the clone's base profile requires of the change, run in a fresh checkout of `head` fetched from
 `<--repos>/<repo name>` (`checkouts/eval-<pid>-<name>` beside the ledger, removed after),
 with the entry's goal for the intent lens, no smoke, plan or earlier findings, and lenses
 skipped for size as a lane's are; then the verifier on what they found. A finding stands

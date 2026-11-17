@@ -10,13 +10,15 @@ use std::time::Instant;
 use chaperone_core::checks::NON_BLOCKING_SEVERITIES;
 use chaperone_core::git;
 use chaperone_core::ledger::Evidence;
-use chaperone_core::pipeline::{self, Cli};
+use chaperone_core::pipeline::{self, Cli, Pipeline};
 use chaperone_core::review::{self, Agents, Facts};
 use chaperone_graph::code_globs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::checks::{CHECKOUT_TIMEOUT, Checkout, agent, changed, code, diff, refuse};
+use crate::checks::{
+    CHECKOUT_TIMEOUT, Checkout, agent, changed, code, diff, refuse, required_lenses,
+};
 use crate::output::{CliError, Outcome};
 
 #[derive(Deserialize)]
@@ -92,7 +94,7 @@ pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<
                 let dir = checkouts.join(format!("eval-{}-{}", std::process::id(), e.name));
                 let deadline = Instant::now() + CHECKOUT_TIMEOUT;
                 let checkout = Checkout::fresh(&clone, dir, &e.head, deadline)?;
-                review_one(&plan, &agents, (&clone, &checkout.dir), e, &store)?
+                review_one(pipeline, &agents, (&clone, &checkout.dir), e, &store)?
             }
         };
         *totals.entry(outcome).or_default() += 1;
@@ -127,7 +129,7 @@ fn missing(clone: &Path, e: &Entry) -> Option<String> {
 /// The lenses on `e` in `dir`, the verifier on what they found, and the
 /// score.
 fn review_one(
-    plan: &review::Plan<'_>,
+    pipeline: &'static Pipeline,
     agents: &Agents<'_>,
     (clone, dir): (&Path, &Path),
     e: &Entry,
@@ -139,6 +141,10 @@ fn review_one(
     let found = code_globs(Path::new("git"), clone, Instant::now() + CHECKOUT_TIMEOUT)?;
     let (_, lines, _) = code(&files, found.as_ref().map_or(&[][..], |f| &f.code), &[]);
     let counted = files.iter().all(|f| f.added.is_some());
+    // The repo's required lenses too, as a lane's review runs them.
+    let required = review::required(pipeline, &required_lenses(clone, &files)?).map_err(refuse)?;
+    let mut plan = review::plan(pipeline).map_err(refuse)?;
+    plan.require(pipeline, &required);
     let facts = Facts {
         diff: diff(dir, &base, &e.head)?,
         base,
