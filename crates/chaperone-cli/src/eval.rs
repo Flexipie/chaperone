@@ -58,16 +58,12 @@ pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<
     let mut set: Set = toml::from_str(&text)
         .map_err(|e| refuse(format!("{} is not a review eval set: {e}", set.display())))?;
     // A name is part of a directory the checkout removes first.
-    let plain = |n: &str| n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
-    if let Some(bad) = set
-        .entry
-        .iter()
-        .map(|e| &e.name)
-        .find(|n| n.is_empty() || !plain(n))
-    {
-        return Err(refuse(format!(
-            "entry name {bad:?}: only letters, digits, -"
-        )));
+    for name in set.entry.iter().map(|e| &e.name) {
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return Err(refuse(format!(
+                "entry name {name:?}: only letters, digits, -"
+            )));
+        }
     }
     if let Some(only) = &only {
         set.entry.retain(|e| &e.name == only);
