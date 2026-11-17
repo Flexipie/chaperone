@@ -24,6 +24,13 @@ pub(crate) const REPO_MERGED: &str =
         AND json_extract(e.payload_json, '$.merged_at')
             >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')";
 
+/// The `pr.merged` events of lane `?1`'s current PR: a lane that took
+/// another PR after one merged can still merge it.
+pub(crate) const CURRENT_PR_MERGED: &str = "FROM events
+  WHERE lane_id = ?1 AND kind = 'pr.merged'
+    AND lower(json_extract(payload_json, '$.pr'))
+        = (SELECT lower(pr_ref) FROM lanes WHERE id = ?1)";
+
 #[derive(Debug, Serialize)]
 pub struct LanePage {
     pub detail: LaneDetail,
@@ -240,13 +247,10 @@ impl Ledger {
         )?;
         let merged = tx
             .query_row(
-                // The lane's current PR: a lane that took another PR after
-                // one merged can still merge it.
-                "SELECT json_extract(payload_json, '$.merge_sha') FROM events
-                  WHERE lane_id = ?1 AND kind = 'pr.merged'
-                    AND lower(json_extract(payload_json, '$.pr'))
-                        = (SELECT lower(pr_ref) FROM lanes WHERE id = ?1)
-                  ORDER BY id DESC LIMIT 1",
+                &format!(
+                    "SELECT json_extract(payload_json, '$.merge_sha') {CURRENT_PR_MERGED}
+                      ORDER BY id DESC LIMIT 1"
+                ),
                 [id],
                 |r| r.get(0),
             )

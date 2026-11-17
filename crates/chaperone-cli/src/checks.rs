@@ -1239,7 +1239,8 @@ fn lane_checkout(
 
 /// `check prune`, and the start of every `check run` and `verify`: removes
 /// each directory `targets/lane-<id>` and `checkouts/lane-<id>` beside the
-/// ledger whose lane is done, cancelled or not in the ledger, holding that
+/// ledger whose lane is done, cancelled, merged (its current PR has a
+/// `pr.merged`, whatever its status) or not in the ledger, holding that
 /// lane's run lock. A done lane may still be run, so one whose lock is held
 /// (the caller's own lane included) is skipped. A symlink or file of that
 /// name is never touched; a lookup that fails ends the sweep.
@@ -1261,7 +1262,7 @@ fn sweep(ledger: &Ledger, db: &Path) -> Result<Value, CliError> {
                 continue;
             };
             let finished = match ledger.work_get(id, &now)? {
-                Ok(item) => is_terminal(&item.status),
+                Ok(item) => is_terminal(&item.status) || ledger.work_pr_merged(id)?,
                 Err(Refusal::NotFound { .. }) => true,
                 Err(refusal) => return Err(refusal.into()),
             };

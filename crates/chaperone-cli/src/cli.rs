@@ -763,7 +763,7 @@ pub enum CheckCmd {
         actor: ActorArgs,
     },
     /// Remove the build directories and checkouts beside the ledger of lanes
-    /// that are done, cancelled or not in the ledger, as every `check run`
+    /// that are done, cancelled, merged or not in the ledger, as every `check run`
     /// and `verify` does first; a lane whose run is in progress is skipped.
     /// Writes nothing to the ledger
     Prune,
