@@ -90,6 +90,11 @@ fn help_matches_snapshots() {
             &["reviews", "get"],
             include_str!("snapshots/reviews-get.txt"),
         ),
+        (&["review"], include_str!("snapshots/review.txt")),
+        (
+            &["review", "eval"],
+            include_str!("snapshots/review-eval.txt"),
+        ),
         (&["jobs"], include_str!("snapshots/jobs.txt")),
         (&["jobs", "get"], include_str!("snapshots/jobs-get.txt")),
         (&["attention"], include_str!("snapshots/attention.txt")),

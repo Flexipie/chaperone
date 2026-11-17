@@ -84,6 +84,11 @@ path = "crates/chaperone-cli/src/checks.rs"
 
 [[entry_points]]
 kind = "command"
+name = "review"
+path = "crates/chaperone-cli/src/eval.rs"
+
+[[entry_points]]
+kind = "command"
 name = "jobs"
 path = "crates/chaperone-cli/src/checks.rs"
 
@@ -132,7 +137,7 @@ path = "crates/chaperone-cli/src/evidence.rs"
 cli = ["crates/chaperone-cli/**"]
 lanes = ["crates/chaperone-core/src/*.rs", "crates/chaperone-core/src/spec/**", "crates/chaperone-core/src/usage/**", "crates/chaperone-core/src/work/**"]
 ledger = ["crates/chaperone-core/src/ledger/**", "crates/chaperone-core/migrations/**"]
-engine = ["crates/chaperone-core/src/pipeline/**", "pipelines/**", "plugin/**"]
+engine = ["crates/chaperone-core/src/pipeline/**", "pipelines/**", "plugin/**", "evals/**"]
 graph = ["crates/chaperone-graph/**"]
 ui = ["crates/chaperone-ui/**"]
 tests = ["crates/chaperone-core/tests/**", "crates/chaperone-fake/**"]

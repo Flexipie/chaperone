@@ -132,6 +132,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `merge` | `--work <id> [--head <sha>]` | write, calls gh and herdr |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
+| `review eval` | `--repos <dir> [--set <file>] [--only <name>]` | read, runs review sessions |
 | `jobs get` | `<job id>` | read |
 | `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
 | `usage get` | `<id>` | read |
@@ -750,6 +751,26 @@ Chaperone's meanings.
 `CHAPERONE_DAISY_CLI` is trusted like `--session` (an honor system until adapters): whoever
 runs `reviews record` can point it at any program. chaperone-ui's Backlog reads daisy at the
 same path and override, also within 30 s (ADR 0003).
+
+## `review eval`
+
+`review eval` scores the reviewer on a checked-in set of past changes (`evals/review.toml`,
+or `--set`): each `[[entry]]` names `repo`, `base` (its merge base), `head`, `goal` and,
+when it has a bug the review must find, `bug = {paths, words, what}`. For each entry the
+newest embedded pipeline's lenses, and the `[[review.required]]` lenses the clone's base profile requires of the change, run in a fresh checkout of `head` fetched from
+`<--repos>/<repo name>` (`checkouts/eval-<pid>-<name>` beside the ledger, removed after),
+with the entry's goal for the intent lens, no smoke, plan or earlier findings, and lenses
+skipped for size as a lane's are; then the verifier on what they found. A finding stands
+when its severity blocks and the verifier did not rule it `refuted` or `unproven`. The
+entry is `hit` (a standing finding on one of `paths` whose title or body has one of
+`words`, any case), `miss`, `false_alarm` (a clean entry with a
+standing finding), `clean`, `skipped` (no clone, or a commit the clone lacks) or `error`
+(a session did not run). `data` is `{pipeline: {id, hash}, entries: [{name, outcome,
+why?, findings, bug}], totals, score}` (`bug` the entry's `what`, null for a clean one), `score` being hit plus clean over the
+entries scored (`skipped` and `error` are not). It never opens the ledger; prompts and
+answers go to the evidence store beside it. `--only` with no such entry is refused
+(`invalid_input`), as is a set that does not parse or a CLI the pipeline uses that cannot
+start.
 
 ## Commands and transitions
 

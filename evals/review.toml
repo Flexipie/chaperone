@@ -1,0 +1,108 @@
+[[entry]]
+name = "passage-twin-loss"
+repo = "Flexipie/passage"
+base = "3cb5f2d9568b51051ffc8ed7e3fb480c917607cf"
+head = "0bea0b8e11da3877510b018985b8a3dad246fe23"
+goal = "saving: undo, selection and an open note keep an annotation's old id after a save renames it"
+bug = { paths = ["Sources/PassageCore/AnnotationStore.swift"], words = ["twin", "undo"], what = "caught before (46b38bf): undoing a delete during a late reread lands the annotation on its twin's id, losing one" }
+
+[[entry]]
+name = "chaperone-forged-base-ref"
+repo = "Flexipie/chaperone"
+base = "90ece75eb1355a14bff29dc739519e59f2c5d16e"
+head = "61597d6d2fbcbd44350604a548360c4a44db93f1"
+goal = "verdict: a repo's required extra review (passage's one-way-door loss review) is not a gate"
+bug = { paths = ["crates/chaperone-core/src/verdict.rs", "crates/chaperone-cli/src/checks.rs"], words = ["forged", "key", "required"], what = "caught before (lane 67): verdict::harness takes a complete review under any key, so one run while the base ref was forged skips the required lens" }
+
+[[entry]]
+name = "chaperone-rustdoc-run-key"
+repo = "Flexipie/chaperone"
+base = "d0d827de1298d3ef83030f2cfeab2b8098952c09"
+head = "3ffb24a6ddd3ef37a6a5860ca1049ac99f507b5a"
+goal = "plan findings: the lane answers each one, review reads the answers"
+bug = { paths = ["crates/chaperone-core/src/checks.rs"], words = ["rustdoc", "private", "doc link"], what = "missed before (#252): the public doc of run_key links to private plan_answers; cargo doc -D warnings fails" }
+
+[[entry]]
+name = "chaperone-rustdoc-line-break"
+repo = "Flexipie/chaperone"
+base = "ef05555633254b2df0995a4499d10ec572a2fa6b"
+head = "e3e4ef006b63fc15f85fba0223b00dedca116464"
+goal = "stats: attention from prompts and owner waivers, and reraised_findings from same-as rulings"
+bug = { paths = ["crates/chaperone-core/src/checks.rs"], words = ["rustdoc", "private", "doc link"], what = "missed before (#252): the public doc of line_break links to private one_line; cargo doc -D warnings fails" }
+
+[[entry]]
+name = "chaperone-worktree-absolute"
+repo = "Flexipie/chaperone"
+base = "a867e7f1173a9bb8027492ca0787417f9cdded1b"
+head = "dc2396c77e3b87f260daf72c8b5665f263b65186"
+goal = "work claim: refuse a --worktree that is not an absolute path"
+
+[[entry]]
+name = "chaperone-pr-close-issue"
+repo = "Flexipie/chaperone"
+base = "fcab2fdc431cf3f78172f23a14837906d52e3782"
+head = "edd1565a08791e98d11a81a9e97cf2a6d9c15416"
+goal = "pr open: close the lane's GitHub issue from the PR body"
+
+[[entry]]
+name = "chaperone-child-timeout-output"
+repo = "Flexipie/chaperone"
+base = "57fd751a90a7d604b88232007d6ffc5d3ff7f31b"
+head = "8f02909f6ed0a790a0c58fd7ed661afb4c1a645d"
+goal = "child: keep captured output when a timed-out run's pipe stays open"
+
+[[entry]]
+name = "passage-quicklook-reload"
+repo = "Flexipie/passage"
+base = "297b696cfae50ceb1c3d3d4a246ab0b70863cb06"
+head = "3ce5c9d9b6589232090b1cf44e420199b5bfcd86"
+goal = "Quick Look tab: reload only for a new version, not Quick Look's own attribute changes"
+
+[[entry]]
+name = "passage-notes-utf8"
+repo = "Flexipie/passage"
+base = "e64ea8265b7235e1033f8c65febba94d24a7e76e"
+head = "6dbae52464e6a2721d2a54403b573a1615dbf09a"
+goal = "Notes: a note that reads as UTF-8 is found before one another app saved in another encoding"
+
+[[entry]]
+name = "passage-csv-fills-tab"
+repo = "Flexipie/passage"
+base = "e161b7f2aa3c57d86b88a372e90b3e9fac11e119"
+head = "b42b84ae62ead4860ecfce0c04c60de2ed2c3cee"
+goal = "CSV: table fills its tab (stack shrank to the bar, tab looked empty)"
+
+[[entry]]
+name = "shepherd-palette-return"
+repo = "Flexipie/shepherd"
+base = "5002d85deefdb195fc7b34b497977074b39dd2e6"
+head = "281f9f57d4de0431fad6c2c8e313cede7ad92241"
+goal = "Palette: Return picks the highlighted row, not the first"
+
+[[entry]]
+name = "shepherd-newtask-return"
+repo = "Flexipie/shepherd"
+base = "c6cb8072d3d1ee64e8c006e10b2dd37d82f5e227"
+head = "e98175b7d94010de40ec8cd6417a36fa4758901b"
+goal = "New task: Return in the prompt field starts the task"
+
+[[entry]]
+name = "shepherd-notch-flush"
+repo = "Flexipie/shepherd"
+base = "fcc2d5c5fc06a9b276ee4209d9b6e985b0801918"
+head = "4b075a23463281ba429a036ab7e391eb070d737d"
+goal = "Notch: open bar flush with the top of the screen"
+
+[[entry]]
+name = "strain-single-instance"
+repo = "Flexipie/strain"
+base = "c73c4627e4ae23f146bfb848b5ec229d58bbc418"
+head = "95fa5a9e315fde28647c522dc43c710ef45215f8"
+goal = "app: single-instance guard misses builds with another bundle id"
+
+[[entry]]
+name = "strain-stop-children"
+repo = "Flexipie/strain"
+base = "754398eb76e7a952f684b1efcbdd435118318900"
+head = "782f5332460ebe9a47efc617a09adc1e5c4b5055"
+goal = "actions: stop children first and match the sheet to the rows"

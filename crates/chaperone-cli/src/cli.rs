@@ -51,6 +51,8 @@ pub enum Cmd {
     #[command(subcommand)]
     Reviews(ReviewsCmd),
     #[command(subcommand)]
+    Review(ReviewCmd),
+    #[command(subcommand)]
     Jobs(JobsCmd),
     #[command(subcommand)]
     Usage(UsageCmd),
@@ -314,6 +316,7 @@ impl Cmd {
             | Cmd::Stats { .. }
             | Cmd::Impact { .. }
             | Cmd::Pipeline(_)
+            | Cmd::Review(_)
             | Cmd::Doctor { .. }
             | Cmd::Install
             | Cmd::Uninstall => None,
@@ -804,6 +807,30 @@ pub enum RunKind {
     /// The base branch profile's `[smoke]` commands, run as `tests` runs
     /// its; no `[smoke]` table is refused, never a pass (none before v20)
     Smoke,
+}
+
+/// The harness review itself, outside any lane
+#[derive(Subcommand, Debug)]
+pub enum ReviewCmd {
+    /// Run the newest pipeline's review lenses and verifier on each entry
+    /// of a set of past changes, in a fresh checkout of its head, and print
+    /// per entry hit, miss, false_alarm, clean, skipped (not on this
+    /// machine) or error (a session did not run), totals and the score.
+    /// Never opens the ledger
+    Eval {
+        /// The set: TOML `[[entry]]` tables of name, repo, base, head, goal
+        /// and, for a change with a bug the review must find, `bug = {paths,
+        /// words, what}`
+        #[arg(long, default_value = "evals/review.toml")]
+        set: PathBuf,
+        /// The directory of the local clones: repo `owner/name` is read
+        /// from <repos>/<name>
+        #[arg(long)]
+        repos: PathBuf,
+        /// Only the entry with this name
+        #[arg(long)]
+        only: Option<String>,
+    },
 }
 
 /// Daisy's review jobs, as recorded in the ledger. The worker stays in
