@@ -25,7 +25,7 @@ use crate::cursor::{self, Cursor, Page};
 use crate::engine;
 use crate::ledger::{
     Actor, Applied, Change, Checked, Event, EventKind, Ledger, LedgerError, MAX_LEASE_SECS,
-    MIN_LEASE_SECS, Mutation, Payload, Refusal, SOURCES, STATUSES, has_held, lease_held,
+    MIN_LEASE_SECS, Mutation, Payload, Refusal, SOURCES, STATUSES, exists, has_held, lease_held,
 };
 use crate::pipeline::{Phase, sha_prefix_eq};
 
@@ -973,6 +973,13 @@ impl Ledger {
     /// One item, its lease state read against `now`.
     pub fn work_get(&self, id: i64, now: &str) -> Checked<WorkItem> {
         Ok(get_row(self.conn(), id, now)?.ok_or(Refusal::NotFound { entity: ENTITY, id }))
+    }
+
+    /// Whether the lane's current PR has a `pr.merged`: a lane that took
+    /// another PR since reads false.
+    pub fn work_pr_merged(&self, id: i64) -> Result<bool, LedgerError> {
+        let sql = format!("SELECT 1 {}", lane_page::CURRENT_PR_MERGED);
+        exists(self.conn(), &sql, [id])
     }
 
     /// Newest activity first, keyset `[updated_at, id]`.

@@ -1110,6 +1110,93 @@ fn a_run_sweeps_finished_lanes_dirs() {
     assert_eq!(kept, [true, true, false, false, false, false]);
 }
 
+/// `check prune` removes the build directory of a lane in `review` whose
+/// PR merged (its agent never handed off done), keeps one whose PR has not
+/// merged and one that took another PR since, and skips a merged one whose
+/// run lock is held.
+#[test]
+fn prune_removes_merged_lanes_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("ledger.db");
+    assert_eq!(run(&db, &["migrate"]).0, 0);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let lane = |n: &str, merged: bool, next: Option<&str>| {
+        let (_, item) = run(&db, &["work", "create", "--title", n]);
+        let (id, at) = (item["id"].to_string(), item["updated_at"].as_str().unwrap());
+        let pr = format!("o/r#{n}");
+        let update = [
+            "work",
+            "update",
+            &id,
+            "--pr",
+            &pr,
+            "--expected-updated-at",
+            at,
+        ];
+        assert_eq!(run(&db, &update).0, 0);
+        let sql = "UPDATE lanes SET status = 'review' WHERE id = ?1";
+        assert_eq!(conn.execute(sql, [&id]).unwrap(), 1);
+        if merged {
+            let at = "2026-11-17T00:00:00.000Z";
+            let args = [
+                "--merge-sha",
+                "abcdef1",
+                "--head",
+                "1234567",
+                "--merged-at",
+                at,
+            ];
+            let (code, out) = run(
+                &db,
+                &[&["work", "merged", &id, "--pr", &pr], &args[..]].concat(),
+            );
+            assert_eq!(code, 0, "{out}");
+        }
+        if let Some(next) = next {
+            let sql = "SELECT updated_at FROM lanes WHERE id = ?1";
+            let at: String = conn.query_row(sql, [&id], |r| r.get(0)).unwrap();
+            let update = [
+                "work",
+                "update",
+                &id,
+                "--pr",
+                next,
+                "--expected-updated-at",
+                &at,
+            ];
+            assert_eq!(run(&db, &update).0, 0);
+        }
+        std::fs::create_dir_all(
+            dir.path()
+                .join("targets")
+                .join(format!("lane-{id}"))
+                .join("deps"),
+        )
+        .unwrap();
+        id
+    };
+    let (merged, open) = (lane("1", true, None), lane("2", false, None));
+    let (locked, moved) = (lane("3", true, None), lane("4", true, Some("o/r#5")));
+    let _held = lock_lane(&db, locked.parse().unwrap()).unwrap().unwrap();
+    let out = Command::new(BIN)
+        .arg("--db")
+        .arg(&db)
+        .args(["check", "prune"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let data = serde_json::from_slice::<Value>(&out.stdout).unwrap()["data"].clone();
+    let path = |id: &str| dir.path().join("targets").join(format!("lane-{id}"));
+    let why = format!("lane {locked} has a check run in progress");
+    let shown = |id: &str| path(id).display().to_string();
+    assert_eq!(
+        data,
+        json!({"removed": [shown(&merged)], "skipped": [{"path": shown(&locked), "why": why}]})
+    );
+    let kept = [&merged, &open, &locked, &moved].map(|id| path(id).exists());
+    assert_eq!(kept, [false, true, true, true]);
+}
+
 /// `check prune` removes only directories named `lane-<digits>`, never
 /// through a symlink named like one, and skips a lane whose run lock is
 /// held, saying so.

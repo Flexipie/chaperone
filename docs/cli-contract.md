@@ -421,8 +421,8 @@ checkout, and the lane's repository is only read. Every git call the harness mak
 own (the user's global config is still read). The build directory `targets/lane-<id>` is kept
 between runs for speed: it is a cache an earlier commit's build could have written, a trade-off
 under the same-user trust model. It and a leftover `checkouts/lane-<id>` (exactly `lane-<digits>`, a
-directory, never a symlink) are removed once the lane is done or cancelled, or for an id the ledger
-does not have, under that lane's run lock, skipping a lane whose lock is held: at the start of every
+directory, never a symlink) are removed once the lane is done or cancelled, or its current PR has a `pr.merged` whatever its
+status, or for an id the ledger does not have, under that lane's run lock, skipping a lane whose lock is held: at the start of every
 `check run` and `verify` (whatever is not removed is left for the next), or now with `check prune`,
 which writes nothing to the ledger and prints `{removed: [path], skipped: [{path, why}]}`.
 
