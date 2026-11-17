@@ -766,7 +766,7 @@ entry is `hit` (a standing finding on one of `paths` whose title or body has one
 `words`, any case), `miss` (shown with `what`), `false_alarm` (a clean entry with a
 standing finding), `clean`, `skipped` (no clone, or a commit the clone lacks) or `error`
 (a session did not run). `data` is `{pipeline: {id, hash}, entries: [{name, outcome,
-why?, findings, cost_usd, bug?}], totals, score}`, `score` being hit plus clean over the
+why?, findings, bug?}], totals, score}`, `score` being hit plus clean over the
 entries scored (`skipped` and `error` are not). It never opens the ledger; prompts and
 answers go to the evidence store beside it. `--only` with no such entry is refused
 (`invalid_input`), as is a set that does not parse or a CLI the pipeline uses that cannot

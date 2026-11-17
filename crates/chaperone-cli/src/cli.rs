@@ -812,16 +812,11 @@ pub enum RunKind {
 /// The harness review itself, outside any lane
 #[derive(Subcommand, Debug)]
 pub enum ReviewCmd {
-    /// Run the review lenses and verifier of the newest pipeline this
-    /// binary has on each entry of a
-    /// checked-in set of past changes, in a fresh checkout of its head,
-    /// and print per entry hit, miss, false_alarm or clean (a clean entry
-    /// with no finding standing), skipped (its clone or a commit is not on
-    /// this machine) or error (a session did not run), with totals and
-    /// the score: hit and clean over the entries scored. A finding stands
-    /// when its severity blocks and the verifier did not refute it or rule
-    /// it unproven. Never opens the ledger; prompts and answers go to the
-    /// evidence store beside it
+    /// Run the newest pipeline's review lenses and verifier on each entry
+    /// of a set of past changes, in a fresh checkout of its head, and print
+    /// per entry hit, miss, false_alarm, clean, skipped (not on this
+    /// machine) or error (a session did not run), totals and the score.
+    /// Never opens the ledger
     Eval {
         /// The set: TOML `[[entry]]` tables of name, repo, base, head, goal
         /// and, for a change with a bug the review must find, `bug = {path,

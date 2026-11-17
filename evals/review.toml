@@ -1,7 +1,3 @@
-# `chaperone review eval`'s set: past changes and what the review must say.
-# `base` is the merge base (an ancestor of `head`); `bug` names what must be
-# found (a standing finding on one of its paths with one of its words), none for a clean change. Clones are read from <--repos>/<repo name>.
-
 [[entry]]
 name = "passage-twin-loss"
 repo = "Flexipie/passage"

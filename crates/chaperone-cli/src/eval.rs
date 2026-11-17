@@ -3,7 +3,7 @@
 //! the set expects. Writes nothing to the ledger, which it never opens; the
 //! sessions' prompts and answers go to the evidence store beside it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -156,37 +156,29 @@ fn review_one(
     let io = |e: std::io::Error| CliError::Internal(e.to_string());
     let review = review::run(&plan.lenses, agents, dir, &facts, store).map_err(io)?;
     let found: Vec<_> = review.found().cloned().collect();
-    let verifier = match found.is_empty() {
-        true => None,
-        false => Some(
-            review::verify(&plan.verifier, agents, dir, &facts, &found, &[], store).map_err(io)?,
-        ),
-    };
+    let verify = || review::verify(&plan.verifier, agents, dir, &facts, &found, &[], store);
+    let verifier = (!found.is_empty()).then(verify).transpose().map_err(io)?;
     let lenses = review
         .lenses
         .iter()
-        .map(|l| (&l.lens, l.outcome.as_ref().err(), &l.run));
-    let verified = verifier
-        .iter()
-        .map(|v| (&v.lens, v.outcome.as_ref().err(), &v.run));
-    let sessions: Vec<_> = lenses.chain(verified).collect();
-    let cost: f64 = sessions.iter().filter_map(|s| s.2.as_ref()?.cost_usd).sum();
-    if let Some((lens, Some(why), _)) = sessions.iter().find(|s| s.1.is_some()) {
+        .map(|l| (&l.lens, l.outcome.as_ref().err()));
+    let mut ran = lenses.chain(verifier.iter().map(|v| (&v.lens, v.outcome.as_ref().err())));
+    if let Some((lens, Some(why))) = ran.find(|s| s.1.is_some()) {
         let why = format!("{lens} did not run: {why}");
-        return Ok(("error", json!({"why": why, "cost_usd": cost})));
+        return Ok(("error", json!({ "why": why })));
     }
-    let ruled = |key: &str| {
-        let rulings = verifier.as_ref().and_then(|v| v.outcome.as_ref().ok());
-        rulings
-            .into_iter()
-            .flatten()
-            .find(|r| r.key == key)
-            .map(|r| r.verdict.as_str())
-    };
+    let rulings = verifier
+        .iter()
+        .filter_map(|v| v.outcome.as_ref().ok())
+        .flatten();
+    let out: BTreeSet<_> = rulings
+        .filter(|r| r.verdict == "refuted" || r.verdict == "unproven")
+        .map(|r| &r.key)
+        .collect();
     let standing: Vec<_> = found
         .iter()
         .filter(|f| !NON_BLOCKING_SEVERITIES.contains(&f.severity.as_str()))
-        .filter(|f| !matches!(ruled(&f.finding_key), Some("refuted" | "unproven")))
+        .filter(|f| !out.contains(&f.finding_key))
         .collect();
     let hits = |b: &Bug| {
         standing.iter().any(|f| {
@@ -204,7 +196,7 @@ fn review_one(
     let shown = standing.iter().map(|f| {
         json!({"lens": f.rest["lens"], "severity": f.severity, "title": f.title, "path": f.path})
     });
-    let mut row = json!({"findings": shown.collect::<Vec<_>>(), "cost_usd": cost});
+    let mut row = json!({"findings": shown.collect::<Vec<_>>()});
     if let (Some(b), "miss") = (&e.bug, outcome) {
         row["bug"] = json!(b.what);
     }
