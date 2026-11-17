@@ -1,0 +1,11 @@
+Run the review lenses and verifier of the newest pipeline this binary has on each entry of a checked-in set of past changes, in a fresh checkout of its head, and print per entry hit, miss, false_alarm or clean (a clean entry with no finding standing), skipped (its clone or a commit is not on this machine) or error (a session did not run), with totals and the score: hit and clean over the entries scored. A finding stands when its severity blocks and the verifier did not refute it or rule it unproven. Never opens the ledger; prompts and answers go to the evidence store beside it
+
+Usage: chaperone review eval [OPTIONS] --repos <REPOS>
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --set <SET>        The set: TOML `[[entry]]` tables of name, repo, base, head, goal and, for a change with a bug the review must find, `bug = {path, words, what}` [default: evals/review.toml]
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --repos <REPOS>    The directory of the local clones: repo `owner/name` is read from <repos>/<name>
+      --only <ONLY>      Only the entry with this name
+  -h, --help             Print help

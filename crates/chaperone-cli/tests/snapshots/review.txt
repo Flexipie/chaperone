@@ -1,0 +1,12 @@
+The harness review itself, outside any lane
+
+Usage: chaperone review [OPTIONS] <COMMAND>
+
+Commands:
+  eval  Run the review lenses and verifier of the newest pipeline this binary has on each entry of a checked-in set of past changes, in a fresh checkout of its head, and print per entry hit, miss, false_alarm or clean (a clean entry with no finding standing), skipped (its clone or a commit is not on this machine) or error (a session did not run), with totals and the score: hit and clean over the entries scored. A finding stands when its severity blocks and the verifier did not refute it or rule it unproven. Never opens the ledger; prompts and answers go to the evidence store beside it
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --db <DB>          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --format <FORMAT>  Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+  -h, --help             Print help

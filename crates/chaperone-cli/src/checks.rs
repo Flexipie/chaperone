@@ -51,7 +51,7 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(10);
 const TESTS_TIMEOUT: Duration = Duration::from_secs(1800);
 /// `check run review`'s checkout of the lane's commit, which fetches its
 /// whole history.
-const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
+pub(crate) const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `pr open`'s push and each of its gh calls.
 const FORGE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Of each test command's stdout and stderr, the end kept as evidence.
@@ -561,7 +561,7 @@ fn plan_answered(ledger: &Ledger, work: i64) -> Result<(), CliError> {
     )))
 }
 
-fn refuse(why: String) -> CliError {
+pub(crate) fn refuse(why: String) -> CliError {
     Refusal::InvalidInput(why).into()
 }
 
@@ -686,7 +686,7 @@ fn companions(
 /// Of `files`, the code ones (named by `globs`, else not [`NOT_CODE`]),
 /// and their lines added plus removed: those of the ones `tests` names,
 /// then the rest's.
-fn code<'a>(
+pub(crate) fn code<'a>(
     files: &'a [ChangedFile],
     globs: &[String],
     tests: &[String],
@@ -707,7 +707,7 @@ fn code<'a>(
 
 /// The files the commit `head` changes against the merge base, and the
 /// base: `diff`'s numstat.
-fn changed(
+pub(crate) fn changed(
     wt: &Path,
     base_sha: Option<&str>,
     head: &str,
@@ -1138,7 +1138,7 @@ pub(crate) fn lane_pipeline(item: &WorkItem) -> Result<&'static Pipeline, CliErr
 
 /// The agent CLI `cli`, by its full path as a shell finds it, so the event
 /// names the binary.
-fn agent(cli: Cli) -> Result<Agent, CliError> {
+pub(crate) fn agent(cli: Cli) -> Result<Agent, CliError> {
     let bin = match cli {
         Cli::Claude => "claude",
         Cli::Codex => "codex",
@@ -1176,24 +1176,7 @@ fn change(
     let (base, files) = changed(wt, item.base_sha.as_deref(), head)?;
     let base = merge_base(wt, &base, head)?;
     let checkout = lane_checkout(db, wt, item.id, head, Instant::now() + CHECKOUT_TIMEOUT)?;
-    let args = [
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-renames",
-    ];
-    let args = [&args[..], &[&base, head, "--"]].concat();
-    let deadline = Instant::now() + RUN_TIMEOUT;
-    let diff = match git::git(Path::new("git"), &checkout.dir, &args, deadline, DIFF_BYTES) {
-        Ok((out, false)) => String::from_utf8_lossy(&out).into_owned(),
-        Ok((_, true)) => return Err(refuse(format!("the diff is past {DIFF_BYTES} bytes"))),
-        Err(_) => {
-            return Err(refuse(format!(
-                "could not diff {base} {head} in the checkout"
-            )));
-        }
-    };
+    let diff = diff(&checkout.dir, &base, head)?;
     // A count that leaves files out is no size to skip a lens on.
     let measured = ledger.project(item.id, Some(head))?;
     // Code and test lines both, as the lens minimums were measured (#223).
@@ -1220,6 +1203,26 @@ fn change(
         code_lines,
     };
     Ok((checkout, facts))
+}
+
+/// `git diff <base> <head>` in the harness's checkout `dir`, whole.
+pub(crate) fn diff(dir: &Path, base: &str, head: &str) -> Result<String, CliError> {
+    let args = [
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+    ];
+    let args = [&args[..], &[base, head, "--"]].concat();
+    let deadline = Instant::now() + RUN_TIMEOUT;
+    match git::git(Path::new("git"), dir, &args, deadline, DIFF_BYTES) {
+        Ok((out, false)) => Ok(String::from_utf8_lossy(&out).into_owned()),
+        Ok((_, true)) => Err(refuse(format!("the diff is past {DIFF_BYTES} bytes"))),
+        Err(_) => Err(refuse(format!(
+            "could not diff {base} {head} in the checkout"
+        ))),
+    }
 }
 
 /// The harness's fresh checkout of the lane's commit, `checkouts/lane-<id>`
@@ -1296,12 +1299,12 @@ fn sweep(ledger: &Ledger, db: &Path) -> Result<Value, CliError> {
 /// other ref, so its hooks, config, filters, excludes and replace refs
 /// never reach the checkout, and this repository runs no hook (not even
 /// one a user's `init.templateDir` copied in).
-struct Checkout {
-    dir: PathBuf,
+pub(crate) struct Checkout {
+    pub(crate) dir: PathBuf,
 }
 
 impl Checkout {
-    fn fresh(
+    pub(crate) fn fresh(
         lane: &Path,
         dir: PathBuf,
         head: &str,
