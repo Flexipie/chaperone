@@ -396,6 +396,22 @@ fn codex_down_falls_back_or_is_not_needed() {
     assert!(error.starts_with("could not start codex"), "{error}");
 }
 
+/// A CLI that sessions need with no other engine and that cannot start
+/// refuses the review, and nothing is written: fail closed.
+#[test]
+fn claude_down_refuses_the_review() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    let claude = lane.dir.path().join("bin/claude");
+    std::fs::remove_file(&claude).unwrap();
+    std::fs::write(&claude, "not a program").unwrap();
+    let (code, err) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    let message = err["message"].as_str().unwrap();
+    assert!(message.starts_with("could not start claude"), "{message}");
+    assert_eq!(lane.events("payload_json->>'check' = 'review'"), 0);
+}
+
 /// A small diff with a file git counts no lines of (binary) is no size to
 /// skip on: the Codex lens runs.
 #[test]
