@@ -132,7 +132,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `merge` | `--work <id> [--head <sha>]` | write, calls gh and herdr |
 | `reviews record` | `--work <id> --job <daisy job id>` | write |
 | `reviews get` | `<job id> [--wait] [--timeout-secs <n>]` (accepted for the path swap; a recorded job answers at once) | read |
-| `review eval` | `--repos <dir> [--set <file>] [--only <name>]` | read, runs review sessions |
+| `review eval` | `--repos <dir> [--set <file>] [--only <name>] [--runs <n>]` | read, runs review sessions |
 | `jobs get` | `<job id>` | read |
 | `usage report` | `--work <id> [--claude-dir <dir>] [--codex-dir <dir>]` | write |
 | `usage get` | `<id>` | read |
