@@ -106,11 +106,8 @@ impl Planned<'_> {
 /// when none starts it.
 pub fn needs<'a>(sessions: impl IntoIterator<Item = &'a Planned<'a>>, cli: Cli) -> Option<bool> {
     let engines = sessions.into_iter().flat_map(|p| {
-        let other = p.fallback.filter(|(_, f)| f.cli != p.runner.cli);
-        [
-            Some((p.runner.cli, other.is_none())),
-            p.fallback.map(|(_, f)| (f.cli, true)),
-        ]
+        let fallback = p.fallback.map(|(_, f)| (f.cli, true));
+        [Some((p.runner.cli, p.fallback.is_none())), fallback]
     });
     let on_cli = engines.flatten().filter(|(c, _)| *c == cli);
     on_cli.map(|(_, alone)| alone).reduce(|a, b| a || b)

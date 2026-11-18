@@ -74,7 +74,6 @@ pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<
     // The newest this binary has: the one lanes with a harness review run.
     let pipeline = pipeline::newer().last().unwrap_or(pipeline::current());
     let plan = review::plan(pipeline).map_err(refuse)?;
-    // Each entry's size is not known yet, so every lens may run.
     let started = agents(plan.sessions(None))?;
     let agents = Agents::of(&started);
     let store = Evidence::beside(db);
