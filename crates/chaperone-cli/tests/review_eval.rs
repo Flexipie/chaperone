@@ -157,7 +157,7 @@ fn each_outcome_is_scored() {
         ]
     );
     let totals = json!({"hit": 2, "miss": 1, "false_alarm": 1, "clean": 2, "skipped": 2,
-        "error": 1});
+        "error": 1, "convention": 0});
     assert_eq!((&out["totals"], &out["score"]), (&totals, &json!("4/6")));
     assert_eq!(out["entries"][1]["bug"], "w");
     assert!(
@@ -169,6 +169,16 @@ fn each_outcome_is_scored() {
     let (_, only) = eval("set.toml", &["--only", "hit"]);
     assert_eq!(only["entries"].as_array().unwrap().len(), 1);
     assert_eq!(only["score"], "1/1");
+    // Each entry k of N runs; the fake answers alike, so every run agrees.
+    let (_, twice) = eval("set.toml", &["--runs", "2"]);
+    assert_eq!(twice["entries"].as_array().unwrap().len(), 18);
+    assert_eq!(twice["entries"][1]["run"], 2);
+    assert_eq!(twice["per_entry"]["alarm"], json!({"false_alarm": 2}));
+    assert_eq!(twice["totals"]["hit"], 4);
+    assert_eq!(
+        (&twice["score"], &twice["mean"]),
+        (&json!("8/12"), &json!(4.67))
+    );
     // Refused, before any session: no such entry, a set that does not
     // parse, a name that is not a plain directory name.
     std::fs::write(dir.path().join("bad.toml"), "entry = 1\n").unwrap();

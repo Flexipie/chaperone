@@ -758,18 +758,27 @@ same path and override, also within 30 s (ADR 0003).
 
 `review eval` scores the reviewer on a checked-in set of past changes (`evals/review.toml`,
 or `--set`): each `[[entry]]` names `repo`, `base` (its merge base), `head`, `goal` and,
-when it has a bug the review must find, `bug = {paths, words, what}`. For each entry the
+when it has a bug the review must find, `bug = {paths, words, what}`, and optionally `known`, a
+list of the same shape for real leftovers a review may find (an older binary refuses a set that
+has it). For each entry the
 newest embedded pipeline's lenses, and the `[[review.required]]` lenses the clone's base profile requires of the change, run in a fresh checkout of `head` fetched from
 `<--repos>/<repo name>` (`checkouts/eval-<pid>-<name>` beside the ledger, removed after),
 with the entry's goal for the intent lens, no smoke, plan or earlier findings, and lenses
 skipped for size as a lane's are; then the verifier on what they found. A finding stands
-when its severity blocks and the verifier did not rule it `refuted` or `unproven`. The
-entry is `hit` (a standing finding on one of `paths` whose title or body has one of
-`words`, any case), `miss`, `false_alarm` (a clean entry with a
-standing finding), `clean`, `skipped` (no clone, or a commit the clone lacks) or `error`
-(a session did not run). `data` is `{pipeline: {id, hash}, entries: [{name, outcome,
-why?, findings, bug}], totals, score}` (`bug` the entry's `what`, null for a clean one), `score` being hit plus clean over the
-entries scored (`skipped` and `error` are not). It never opens the ledger; prompts and
+when its severity blocks and the verifier did not rule it `refuted` or `unproven`. A
+standing finding one of the entry's `known` matches (as `bug` matches) is listed under
+`known` with that one's `what` and not scored. The rest decide the run: `hit` (a standing
+finding on one of `paths` whose title or body has one of `words`, any case), `miss`,
+`false_alarm` (a clean entry with a standing finding), `convention` (a clean entry whose
+standing findings are all the `design_tests` lens's), `clean`, `skipped` (no clone, or a
+commit the clone lacks) or `error` (a session did not run). Each entry is reviewed `--runs`
+times (default 1) in one checkout. `data` is `{pipeline: {id, hash}, runs, entries: [{name,
+run, outcome, why?, findings, known, bug}], per_entry: {name: {outcome: k}}, totals, score,
+mean}`: a row per entry per run (`run` from 1, `bug` the entry's `what`, null for a clean
+one), `per_entry` each entry's outcomes as k of `runs`, `totals` over every row, `score`
+hit plus clean over the rows scored (`convention`, `skipped` and `error` are not), and
+`mean` the score of one run, (hit + clean) / rows scored x entries not skipped, to two
+decimals. It never opens the ledger; prompts and
 answers go to the evidence store beside it. `--only` with no such entry is refused
 (`invalid_input`), as is a set that does not parse or a CLI the pipeline uses that cannot
 start.

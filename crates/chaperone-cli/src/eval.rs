@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use chaperone_core::checks::NON_BLOCKING_SEVERITIES;
 use chaperone_core::git;
-use chaperone_core::ledger::Evidence;
+use chaperone_core::ledger::{Evidence, Finding};
 use chaperone_core::pipeline::{self, Pipeline};
 use chaperone_core::review::{self, Agents, Facts};
 use chaperone_graph::code_globs;
@@ -29,7 +29,8 @@ struct Set {
 
 /// A past change: `base` its merge base, an ancestor of `head`; `goal`
 /// what it was for, the intent lens's; `bug` what a review must find, none
-/// when the change was clean.
+/// when the change was clean; `known` real leftovers a review may find,
+/// which neither count against it nor for it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {
@@ -39,6 +40,8 @@ struct Entry {
     head: String,
     goal: String,
     bug: Option<Bug>,
+    #[serde(default)]
+    known: Vec<Bug>,
 }
 
 /// Found when a standing finding is on one of `paths` and its title or
@@ -51,10 +54,33 @@ struct Bug {
     what: String,
 }
 
-/// What an entry scores; the first four are scored.
-const OUTCOMES: [&str; 6] = ["hit", "miss", "false_alarm", "clean", "skipped", "error"];
+impl Bug {
+    fn matches(&self, f: &Finding) -> bool {
+        let text = format!("{}\n{}", f.title, f.body).to_lowercase();
+        self.paths.iter().any(|p| f.path.as_deref() == Some(p))
+            && self.words.iter().any(|w| text.contains(&w.to_lowercase()))
+    }
+}
 
-pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<Outcome, CliError> {
+/// What an entry scores; the first four are scored. `convention`: a clean
+/// entry whose only standing findings are the `design_tests` lens's.
+const OUTCOMES: [&str; 7] = [
+    "hit",
+    "miss",
+    "false_alarm",
+    "clean",
+    "convention",
+    "skipped",
+    "error",
+];
+
+pub fn run(
+    db: &Path,
+    set: &Path,
+    repos: &Path,
+    only: Option<String>,
+    runs: usize,
+) -> Result<Outcome, CliError> {
     let text = std::fs::read_to_string(set)
         .map_err(|e| refuse(format!("could not read {}: {e}", set.display())))?;
     let mut set: Set = toml::from_str(&text)
@@ -80,31 +106,57 @@ pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<
     let home = std::path::absolute(db).map_err(|e| CliError::Internal(e.to_string()))?;
     let checkouts = home.parent().unwrap_or(Path::new("/")).join("checkouts");
     let mut totals = BTreeMap::from(OUTCOMES.map(|o| (o, 0)));
-    let mut entries = Vec::new();
+    let (mut entries, mut per_entry, mut ran) = (Vec::new(), BTreeMap::new(), 0);
     for e in &set.entry {
         let clone = repos.join(e.repo.rsplit('/').next().unwrap_or_default());
-        let (outcome, mut row) = match missing(&clone, e) {
-            Some(why) => ("skipped", json!({"why": why})),
+        let why = missing(&clone, e);
+        // Its own, so a run beside it never removes it; the lenses only
+        // read it, so every run shares it.
+        let checkout = match why {
+            Some(_) => None,
             None => {
-                // Its own, so a run beside it never removes it.
                 let dir = checkouts.join(format!("eval-{}-{}", std::process::id(), e.name));
                 let deadline = Instant::now() + CHECKOUT_TIMEOUT;
-                let checkout = Checkout::fresh(&clone, dir, &e.head, deadline)?;
-                review_one(pipeline, &agents, (&clone, &checkout.dir), e, &store)?
+                Some(Checkout::fresh(&clone, dir, &e.head, deadline)?)
             }
         };
-        *totals.entry(outcome).or_default() += 1;
-        row["name"] = json!(e.name);
-        row["outcome"] = json!(outcome);
-        entries.push(row);
+        ran += i64::from(checkout.is_some());
+        let counts: &mut BTreeMap<&str, i64> = per_entry.entry(&e.name).or_default();
+        for n in 1..=runs {
+            let (outcome, mut row) = match &checkout {
+                Some(c) => review_one(pipeline, &agents, (&clone, &c.dir), e, &store)?,
+                None => ("skipped", json!({"why": why})),
+            };
+            *totals.entry(outcome).or_default() += 1;
+            *counts.entry(outcome).or_default() += 1;
+            row["name"] = json!(e.name);
+            row["outcome"] = json!(outcome);
+            row["run"] = json!(n);
+            entries.push(row);
+        }
     }
     let scored: i64 = OUTCOMES[..4].iter().map(|o| totals[o]).sum();
+    let good = totals["hit"] + totals["clean"];
     Ok(Outcome::One(json!({
         "pipeline": {"id": pipeline.id, "hash": pipeline.hash},
+        "runs": runs,
         "entries": entries,
+        "per_entry": per_entry,
         "totals": totals,
-        "score": format!("{}/{scored}", totals["hit"] + totals["clean"]),
+        "score": format!("{good}/{scored}"),
+        "mean": mean(good, scored, ran),
     })))
+}
+
+/// The score of one run over the `entries` not skipped, from `good` (hit
+/// plus clean) of the `scored` rows of every run: a row out of the score
+/// (convention, error) counts on neither side.
+fn mean(good: i64, scored: i64, entries: i64) -> f64 {
+    if scored == 0 {
+        return 0.0;
+    }
+    let mean = (good * entries) as f64 / scored as f64;
+    (mean * 100.0).round() / 100.0
 }
 
 /// Why `e` cannot run on this machine: no clone, or a commit it lacks.
@@ -178,22 +230,85 @@ fn review_one(
         .filter(|f| !NON_BLOCKING_SEVERITIES.contains(&f.severity.as_str()))
         .filter(|f| !out.contains(&f.finding_key))
         .collect();
-    let hits = |b: &Bug| {
-        standing.iter().any(|f| {
-            let text = format!("{}\n{}", f.title, f.body).to_lowercase();
-            b.paths.iter().any(|p| f.path.as_deref() == Some(p))
-                && b.words.iter().any(|w| text.contains(&w.to_lowercase()))
-        })
-    };
-    let outcome = match (&e.bug, standing.is_empty()) {
-        (Some(b), _) if hits(b) => "hit",
-        (Some(_), _) => "miss",
-        (None, true) => "clean",
-        (None, false) => "false_alarm",
-    };
-    let shown: Vec<_> = standing.iter().map(|f| {
-        json!({"lens": f.rest["lens"], "severity": f.severity, "title": f.title, "path": f.path})
-    }).collect();
+    let shown = |f: &Finding| json!({"lens": f.rest["lens"], "severity": f.severity, "title": f.title, "path": f.path});
+    let (mut findings, mut known) = (Vec::new(), Vec::new());
+    for f in &standing {
+        match e.known.iter().find(|k| k.matches(f)) {
+            Some(k) => {
+                let mut row = shown(f);
+                row["known"] = json!(k.what);
+                known.push(row);
+            }
+            None => findings.push(*f),
+        }
+    }
+    let outcome = outcome(e.bug.as_ref(), &findings);
+    let findings: Vec<_> = findings.into_iter().map(shown).collect();
     let bug = e.bug.as_ref().map(|b| &b.what);
-    Ok((outcome, json!({ "findings": shown, "bug": bug })))
+    Ok((
+        outcome,
+        json!({ "findings": findings, "known": known, "bug": bug }),
+    ))
+}
+
+/// An entry's outcome from the standing findings no `known` of it matches.
+fn outcome(bug: Option<&Bug>, left: &[&Finding]) -> &'static str {
+    match bug {
+        Some(b) if left.iter().any(|f| b.matches(f)) => "hit",
+        Some(_) => "miss",
+        None if left.is_empty() => "clean",
+        None if left.iter().all(|f| f.rest["lens"] == "design_tests") => "convention",
+        None => "false_alarm",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn finding(lens: &str, path: &str, title: &str) -> Finding {
+        let said = json!({"findings": [{"severity": "risk", "title": title, "body": "b",
+            "path": path, "line": null}]});
+        review::findings(lens, said).unwrap().remove(0)
+    }
+
+    /// A `known` drops what it matches; a clean entry left with only
+    /// design_tests findings is `convention`, with any other `false_alarm`.
+    #[test]
+    fn known_and_convention_findings() {
+        let toml = r#"
+            name = "e"
+            repo = "o/r"
+            base = "a"
+            head = "b"
+            goal = "g"
+            known = [{ paths = ["a.rs"], words = ["STALE"], what = "w" }]
+        "#;
+        let e: Entry = toml::from_str(toml).unwrap();
+        let stale = finding("correctness", "a.rs", "a stale todo");
+        let (other_path, other_word) = (
+            finding("correctness", "b.rs", "stale"),
+            finding("correctness", "a.rs", "fresh"),
+        );
+        let tests = finding("design_tests", "a.rs", "no test");
+        assert!(e.known[0].matches(&stale));
+        assert!(!e.known[0].matches(&other_path) && !e.known[0].matches(&other_word));
+        assert_eq!(outcome(None, &[]), "clean");
+        assert_eq!(outcome(None, &[&tests]), "convention");
+        assert_eq!(outcome(None, &[&tests, &other_word]), "false_alarm");
+        let bug = &e.known[0];
+        assert_eq!(outcome(Some(bug), &[&tests, &stale]), "hit");
+        assert_eq!(outcome(Some(bug), &[&tests]), "miss");
+    }
+
+    /// Rows out of the score count on neither side of the mean.
+    #[test]
+    fn mean_leaves_out_unscored_rows() {
+        assert_eq!(mean(26, 45, 15), 8.67);
+        // 3 runs of 15, two rows convention: 26 of 43 scored.
+        assert_eq!(mean(26, 43, 15), 9.07);
+        assert_eq!(mean(0, 0, 0), 0.0);
+    }
 }
