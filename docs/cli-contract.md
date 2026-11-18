@@ -781,9 +781,10 @@ any, `totals` over every row with `fallbacks` summed, `score`
 hit plus clean over the rows scored (`convention`, `skipped` and `error` are not), and
 `mean` the score of one run, (hit + clean) / rows scored x entries not skipped, to two
 decimals; `unused_known` lists `{name, what}` for each `known` that matched in no run of an
-entry not skipped, so a matcher worded out of date shows. It never opens the ledger; prompts and
+entry with a run that was reviewed (not `error`), so a matcher worded out of date shows. It never opens the ledger; prompts and
 answers go to the evidence store beside it. `--only` with no such entry is refused
-(`invalid_input`), as is a set that does not parse, a `bug` or `known` with no `paths`, or a CLI the pipeline uses that cannot
+(`invalid_input`), as is a set that does not parse, a `bug` or `known` with no `paths`, two entries with one name or two `known` of an entry
+with one `what`, or a CLI the pipeline uses that cannot
 start.
 
 ## Commands and transitions

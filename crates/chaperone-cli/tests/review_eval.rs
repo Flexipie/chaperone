@@ -187,11 +187,18 @@ fn each_outcome_is_scored() {
     let pathless =
         entry("p", "o/demo") + "known = [{ paths = [], words = [\"w\"], what = \"w\" }]\n";
     std::fs::write(dir.path().join("pathless.toml"), pathless).unwrap();
+    let twice = entry("t", "o/demo") + &entry("t", "o/demo");
+    std::fs::write(dir.path().join("twice.toml"), twice).unwrap();
+    let k = "{ paths = [\"a\"], words = [\"w\"], what = \"same\" }";
+    let whats = entry("w", "o/demo") + &format!("known = [{k}, {k}]\n");
+    std::fs::write(dir.path().join("whats.toml"), whats).unwrap();
     for (set, only, why) in [
         ("set.toml", &["--only", "nope"][..], "no entry \"nope\""),
         ("bad.toml", &[], "is not a review eval set"),
         ("dots.toml", &[], "entry name \"../x\""),
         ("pathless.toml", &[], "with no paths"),
+        ("twice.toml", &[], "repeats a name"),
+        ("whats.toml", &[], "repeats a name or a known's what"),
     ] {
         let (ok, err) = eval(set, only);
         assert!(!ok && err["code"] == "invalid_input", "{err}");

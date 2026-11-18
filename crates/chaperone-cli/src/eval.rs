@@ -91,11 +91,20 @@ pub fn run(
             return Err(refuse(format!("entry name {name:?} is not a-z0-9-")));
         }
     }
-    // A finding is matched by its path, so one with none would match nothing.
+    // A finding is matched by its path, so one with none would match nothing;
+    // the output keys an entry by its name and a `known` by its `what`.
+    let mut names = BTreeSet::new();
     for e in &set.entry {
         if e.bug.iter().chain(&e.known).any(|b| b.paths.is_empty()) {
             return Err(refuse(format!(
                 "entry {:?} has a bug or known with no paths",
+                e.name
+            )));
+        }
+        let whats: BTreeSet<_> = e.known.iter().map(|k| &k.what).collect();
+        if !names.insert(&e.name) || whats.len() < e.known.len() {
+            return Err(refuse(format!(
+                "entry {:?} repeats a name or a known's what",
                 e.name
             )));
         }
@@ -155,7 +164,7 @@ pub fn run(
         }
         // A `known` no run matched may be worded out of date: shown, so it
         // never drifts silently.
-        if checkout.is_some() {
+        if OUTCOMES[..5].iter().any(|o| counts.contains_key(o)) {
             let unused = e.known.iter().filter(|k| !matched.contains(&k.what));
             unused_known.extend(unused.map(|k| json!({"name": e.name, "what": k.what})));
         }
