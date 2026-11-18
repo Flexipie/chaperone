@@ -854,9 +854,8 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
         return one(stored);
     }
-    let code_lines = code_lines(ledger, item.id, &input.head)?;
-    let started = agents(plan.sessions(code_lines))?;
     let (checkout, facts) = change(ledger, db, &wt, &item, &input.head)?;
+    let started = agents(plan.sessions(facts.code_lines))?;
     let agents = Agents::of(&started);
     let store = Evidence::beside(db);
     one(review::record(
@@ -1184,6 +1183,20 @@ fn change(
     let base = merge_base(wt, &base, head)?;
     let checkout = lane_checkout(db, wt, item.id, head, Instant::now() + CHECKOUT_TIMEOUT)?;
     let diff = diff(&checkout.dir, &base, head)?;
+    // A count that leaves files out is no size to skip a lens on.
+    let measured = ledger.project(item.id, Some(head))?;
+    // Code and test lines both, as the lens minimums were measured (#223).
+    let tests = match measured.get("commit.test_lines") {
+        Fact::Int(n) => *n,
+        _ => 0,
+    };
+    let code_lines = match (
+        measured.get("commit.code_lines"),
+        measured.get("commit.uncounted_files"),
+    ) {
+        (Fact::Int(n), Fact::Int(0)) => Some(*n + tests),
+        _ => None,
+    };
     let facts = Facts {
         base,
         head: head.into(),
@@ -1193,29 +1206,9 @@ fn change(
         smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
         plan: review::plan_findings(ledger, item.id)?
             + &review::earlier_section(&review::earlier(ledger, item.id)?),
-        code_lines: code_lines(ledger, item.id, head)?,
+        code_lines,
     };
     Ok((checkout, facts))
-}
-
-/// The size a lens minimum reads: the harness `diff`'s code and test lines
-/// on `head` both, as the minimums were measured (#223); none without one,
-/// as a count that leaves files out is no size to skip a lens on.
-fn code_lines(ledger: &Ledger, work: i64, head: &str) -> Result<Option<i64>, CliError> {
-    let measured = ledger.project(work, Some(head))?;
-    let tests = match measured.get("commit.test_lines") {
-        Fact::Int(n) => *n,
-        _ => 0,
-    };
-    Ok(
-        match (
-            measured.get("commit.code_lines"),
-            measured.get("commit.uncounted_files"),
-        ) {
-            (Fact::Int(n), Fact::Int(0)) => Some(*n + tests),
-            _ => None,
-        },
-    )
 }
 
 /// `git diff <base> <head>` in the harness's checkout `dir`, whole.

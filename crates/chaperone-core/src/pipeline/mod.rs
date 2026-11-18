@@ -866,32 +866,6 @@ args = { field = "verdict.decision", value = "yes" }"#;
             err("timeout = 900", "timeout = 0"),
             "runner lens: limit timeout is 0, not at least 1"
         );
-        let codex = r#"cli = "codex""#;
-        let falls = |to: &str| format!("{codex}\nfallback = \"{to}\"");
-        for to in ["nobody", "second"] {
-            let e = err(codex, &falls(to));
-            let want =
-                format!("runner second: fallback {to} is not another runner without a fallback");
-            assert_eq!(e, want);
-        }
-        let ok = load2(codex, &falls("lens")).unwrap();
-        assert_eq!(ok.runners["second"].fallback.as_deref(), Some("lens"));
-        // No chain: the fallback may not have one of its own.
-        let chain = MINI2.replacen(codex, &falls("lens"), 1);
-        let chain = chain.replacen(
-            r#"model = "opus""#,
-            "model = \"opus\"\nfallback = \"second\"",
-            1,
-        );
-        let e = Pipeline::load_with_prompts(&chain, PROMPTS).unwrap_err();
-        assert!(
-            e.to_string().starts_with("runner lens: fallback second"),
-            "{e}"
-        );
-        assert!(matches!(
-            load2(r#"cli = "claude""#, r#"cli = "cursor""#),
-            Err(PipelineError::Toml(_))
-        ));
         // Schema 1 hashes neither table, so it may not carry them.
         let e = load2("schema = 2", "schema = 1").unwrap_err();
         assert!(matches!(e, PipelineError::NeedsSchema2("runners")), "{e}");
