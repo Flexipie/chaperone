@@ -109,8 +109,8 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
 impl Env {
     fn agents(&self) -> Agents<'_> {
         Agents {
-            claude: Some(&self.claude),
-            codex: Some(&self.codex),
+            claude: Ok(&self.claude),
+            codex: Ok(&self.codex),
         }
     }
 
@@ -593,6 +593,191 @@ fn no_findings_start_no_verifier() {
     );
     // Three Claude lenses and Codex: no fifth session.
     assert_eq!(calls(&env), 4);
+}
+
+/// [`PIPELINE`] with Codex on a timeout of limit `timeout`, falling back
+/// to Claude on `sonnet`.
+fn falls_back(timeout: &str) -> Pipeline {
+    Pipeline::load_with_prompts(&fallback_src(timeout), PROMPTS).unwrap()
+}
+
+/// [`falls_back`]'s document.
+fn fallback_src(timeout: &str) -> String {
+    let second = r#"runners.second = { cli = "codex", model = "gpt-5.5", budget_limit = "budget", timeout_limit = "timeout" }"#;
+    let to = format!(
+        "{}, fallback = \"backup\" }}\nrunners.backup = {{ cli = \"claude\", model = \"sonnet\", \
+         budget_limit = \"budget\", timeout_limit = \"timeout\" }}",
+        second.replace(r#""timeout" }"#, &format!("{timeout:?}"))
+    );
+    let src = PIPELINE.replace(second, &to);
+    src.replace("plan_attempts = 2 }", "plan_attempts = 2, short = 1 }")
+}
+
+/// A fallback is another runner with none of its own, and a Claude one
+/// names a model, or the pipeline does not load or cannot review.
+#[test]
+fn a_fallback_is_checked_when_loaded() {
+    let src = fallback_src("timeout");
+    let load = |from: &str, to: &str| {
+        let edited = src.replacen(from, to, 1);
+        assert_ne!(edited, src, "{from}");
+        Pipeline::load_with_prompts(&edited, PROMPTS)
+    };
+    let to = r#"fallback = "backup""#;
+    for bad in ["nobody", "second"] {
+        let e = load(to, &format!("fallback = {bad:?}"))
+            .unwrap_err()
+            .to_string();
+        let want =
+            format!("runner second: fallback {bad} is not another runner without a fallback");
+        assert_eq!(e, want);
+    }
+    let chain = load(
+        "runners.backup = { ",
+        r#"runners.backup = { fallback = "second", "#,
+    );
+    let e = chain.unwrap_err().to_string();
+    assert_eq!(
+        e,
+        "runner backup: fallback second is not another runner without a fallback"
+    );
+    let no_model = load(r#"model = "sonnet", "#, "").unwrap();
+    let e = review::lenses(&no_model).unwrap_err();
+    assert_eq!(e, "check review_codex: runner backup names no model");
+}
+
+/// A failed Codex turn falls back too, and its run still counts: a usage
+/// row for its thread, and its transcript kept as `fallback_answer_ref`.
+#[test]
+fn a_failed_codex_turn_falls_back_and_still_counts() {
+    let failed = concat!(
+        r#"{"type":"thread.started","thread_id":"t1"}"#,
+        "\n",
+        r#"{"type":"turn.failed","error":{"message":"login expired"}}"#
+    );
+    let codex = json!([{"when": "LENS codex", "stdout": failed, "exit": 1}]);
+    let none = json!({"findings": []});
+    let backup = json!({"when": "LENS codex", "stdout": session("backup", none)});
+    let env = env(quiet(backup), codex, 10);
+    let (p, row) = review_with(&env, &falls_back("timeout"), Ok(&env.codex));
+    assert_eq!(
+        (&p["complete"], &row["runner"]),
+        (&json!(true), &json!("backup"))
+    );
+    let error = "the session failed (turn.failed): login expired";
+    assert_eq!(row["fallback_error"], error);
+    let kept = env.store.get(row["fallback_answer_ref"].as_str().unwrap());
+    assert!(kept.unwrap().contains("login expired"));
+    let ledger = Ledger::open_and_migrate(&env.dir.path().join("ledger.db")).unwrap();
+    let usage = ledger.usage_get(1).unwrap().unwrap();
+    let sources = usage["sources"].as_array().unwrap();
+    let codex = sources.iter().find(|s| s["session_id"] == "t1").unwrap();
+    assert_eq!(codex["cli"], "codex", "{codex}");
+}
+
+/// Lane 1's review by `pipeline` with Codex as `codex`: its payload and the
+/// codex row.
+fn review_with(env: &Env, pipeline: &Pipeline, codex: Result<&Agent, &str>) -> (Value, Value) {
+    let ledger = ledger(env);
+    let plan = review::plan(pipeline).unwrap();
+    let agents = Agents {
+        claude: Ok(&env.claude),
+        codex,
+    };
+    let (me, dir) = (lane_session(), env.checkout());
+    let got = review::record(
+        &ledger,
+        &me,
+        input(pipeline),
+        &plan,
+        &agents,
+        &dir,
+        &env.facts,
+        &env.store,
+    );
+    let p = json!(got.unwrap().unwrap().payload);
+    let row = p["lenses"][3].clone();
+    (p, row)
+}
+
+/// Claude finding nothing as every lens, then `codex`: the run that answers
+/// the Codex lens's prompt.
+fn quiet(codex: Value) -> Value {
+    let none = json!({"findings": []});
+    let ran =
+        |lens: &str| json!({"when": format!("LENS {lens}"), "stdout": session(lens, none.clone())});
+    json!([
+        ran("correctness"),
+        ran("design_tests"),
+        ran("intent"),
+        codex
+    ])
+}
+
+/// Codex that cannot start, or that exits non-zero (an expired login
+/// arrives that way), falls back to its fallback runner: the review is
+/// complete, and the row names the runner that answered and the one that
+/// was down, with its error.
+#[test]
+fn a_codex_lens_that_cannot_start_falls_back() {
+    let none = json!({"findings": []});
+    let backup = json!({"when": "LENS codex", "stdout": session("backup", none)});
+    let crash = json!([{"when": "LENS codex", "stderr": "not logged in", "exit": 1}]);
+    let pipeline = falls_back("timeout");
+    for (codex, down) in [
+        (
+            Err("could not start codex: gone"),
+            "could not start codex: gone",
+        ),
+        (Ok(()), "exit Some(1): not logged in"),
+    ] {
+        let env = env(quiet(backup.clone()), crash.clone(), 10);
+        let codex = codex.map(|()| &env.codex);
+        let (p, row) = review_with(&env, &pipeline, codex);
+        assert_eq!(p["complete"], true);
+        let fell = json!([
+            row["ran"],
+            row["runner"],
+            row["model"],
+            row["fallback_from"],
+            row["fallback_error"]
+        ]);
+        assert_eq!(fell, json!([true, "backup", "sonnet", "second", down]));
+        let call = call(env.dir.path(), "claude", "codex");
+        assert!(call["args"].to_string().contains(r#""--model","sonnet""#));
+        // The other lenses name no fallback.
+        assert!(p["lenses"][0].get("fallback_from").is_none());
+    }
+}
+
+/// Codex down and its fallback failing too: the review is not complete.
+#[test]
+fn both_engines_down_is_an_incomplete_review() {
+    let fails = json!({"when": "LENS codex", "stderr": "boom", "exit": 3});
+    let env = env(quiet(fails), json!([]), 10);
+    let (p, row) = review_with(
+        &env,
+        &falls_back("timeout"),
+        Err("could not start codex: gone"),
+    );
+    assert_eq!(p["complete"], false);
+    let fell = json!([row["ran"], row["error"], row["fallback_from"]]);
+    assert_eq!(fell, json!([false, "exit Some(3): boom", "second"]));
+}
+
+/// A Codex lens that times out does not fall back: it did not run, and
+/// Claude is never asked its prompt.
+#[test]
+fn a_codex_timeout_does_not_fall_back() {
+    let slow = json!([{"when": "LENS codex", "sleep_ms": 3000, "write": {"-o": "{}"}}]);
+    let env = env(quiet(json!({"when": "never"})), slow, 10);
+    let (p, row) = review_with(&env, &falls_back("short"), Ok(&env.codex));
+    assert_eq!(p["complete"], false);
+    let ran = json!([row["ran"], row["error"], row["runner"]]);
+    assert_eq!(ran, json!([false, "timed out", "second"]));
+    assert!(row.get("fallback_from").is_none(), "{row}");
+    let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
+    assert!(!log.contains("LENS codex"));
 }
 
 /// A crash after the review event and before its rulings: the next run

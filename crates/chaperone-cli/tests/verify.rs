@@ -347,6 +347,71 @@ fn a_diff_at_the_minimum_runs_the_codex_lens() {
     assert_eq!(lane.sessions(), 6);
 }
 
+/// With `codex` down (a file first on `PATH` that cannot start), a small
+/// diff is not refused: its Codex lens is skipped, so Codex is not needed.
+/// At the minimum the lens falls back to Claude on Sonnet, said on its row,
+/// and the review is complete.
+#[test]
+fn codex_down_falls_back_or_is_not_needed() {
+    let mut runs = claude(json!({"findings": []}), json!([]));
+    let second = says("# Review: a second reader", json!({"findings": []}));
+    runs.as_array_mut().unwrap().push(second);
+    let lane = lane(runs);
+    let codex = lane.dir.path().join("bin/codex");
+    std::fs::remove_file(&codex).unwrap();
+    std::fs::write(&codex, "not a program").unwrap();
+    lane.answer("lane", "accept");
+    let out = lane.verify();
+    assert_eq!(out["stopped"], Value::Null, "{out}");
+    let (row, complete) = lane.codex();
+    assert_eq!(
+        (&row["ran"], complete),
+        (&json!(false), json!(true)),
+        "{row}"
+    );
+
+    let lines = "x\n".repeat(199);
+    let files: &[(&str, &[u8])] = &[("tests/big.rs", lines.as_bytes())];
+    git(&lane.wt, &["add", "tests/big.rs"], files);
+    git(&lane.wt, &["commit", "-qm", "big"], &[]);
+    let out = lane.verify();
+    assert_eq!(out["stopped"], Value::Null, "{out}");
+    let (row, complete) = lane.codex();
+    let fell = json!([
+        row["ran"],
+        row["runner"],
+        row["model"],
+        row["fallback_from"],
+        complete
+    ]);
+    let want = json!([
+        true,
+        "codex_fallback",
+        "claude-sonnet-5-5",
+        "codex_lens",
+        true
+    ]);
+    assert_eq!(fell, want, "{row}");
+    let error = row["fallback_error"].as_str().unwrap();
+    assert!(error.starts_with("could not start codex"), "{error}");
+}
+
+/// A CLI that sessions need with no other engine and that cannot start
+/// refuses the review, and nothing is written: fail closed.
+#[test]
+fn claude_down_refuses_the_review() {
+    let lane = lane(claude(json!({"findings": []}), json!([])));
+    lane.answer("lane", "accept");
+    let claude = lane.dir.path().join("bin/claude");
+    std::fs::remove_file(&claude).unwrap();
+    std::fs::write(&claude, "not a program").unwrap();
+    let (code, err) = lane.run("lane", &["check", "run", "review", "--work", "1"]);
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    let message = err["message"].as_str().unwrap();
+    assert!(message.starts_with("could not start claude"), "{message}");
+    assert_eq!(lane.events("payload_json->>'check' = 'review'"), 0);
+}
+
 /// A small diff with a file git counts no lines of (binary) is no size to
 /// skip on: the Codex lens runs.
 #[test]

@@ -453,7 +453,7 @@ would meet v19's `smoke_recorded` from the lane's own session. The lane's own ac
 
 `check run review` takes the same lock and reads the commit the same way. The lane's stamped
 pipeline must name the review's checks, each with a runner (`[runners]`: the CLI, model,
-tools, budget and timeout) and a prompt file: `review_correctness`, `review_design_tests`,
+tools, budget, timeout and an optional `fallback`, another runner with none of its own) and a prompt file: `review_correctness`, `review_design_tests`,
 `review_intent` and `review_codex` (the lenses) and `review_verifier`; a Claude runner must
 name a model; and `[limits]` must hold `review_attempts`, 1 or more. v17 to v19 name none, so
 a lane on them is refused (`invalid_input`, nothing written) and keeps recording reviews with
@@ -480,19 +480,21 @@ replays it, so flipping between commits of a tree appends nothing after the firs
 `review_attempts` reviews by this pipeline, complete or not, is refused (`invalid_input`,
 naming the limit): a lens that fails every time would otherwise make each rerun pay for the
 others again, so the owner waives the findings or the lane pushes a commit that changes the
-tree. Else it asks `--version` of each CLI a runner of the plan uses (`claude`,
-`codex`), the first of that name on `PATH`, run by its full path, reads the commit's files as
+tree. Else it asks `--version` of each CLI a session on this diff uses (`claude`,
+`codex`; a lens skipped for size, below, uses none), the first of that name on `PATH`, run by its full path, reads the commit's files as
 `diff` does and their merge base in the lane's worktree, makes a fresh checkout as `tests`
 does (removed when the command ends), and reads `git diff <merge base> <commit>` there,
 where the lane's git config does not reach. The reviewed commit's own `.gitattributes` still
 applies: a file a rule such as `-diff` hides has no text in the diff, and the event counts
 such files in `uncounted_files`. A CLI that cannot start, a checkout that cannot be made and
-a diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings.
+a diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings, except a
+CLI that only sessions whose runner names a `fallback` on another CLI use (v20: `codex`): those
+sessions are answered by the fallback, and the row says so (events.md, `review`).
 
 A lens whose `[limits]` holds `<lens>_min_code_lines` (v20: `codex_min_code_lines`, 200)
 is skipped when the harness `diff` on the commit counts fewer code plus test lines (`code_lines` and `test_lines`, as #223 measured them): no session, its row
 in `lenses` says `skipped` and why, and the review can still be complete. With no harness
-`diff` on the commit, or one with `uncounted_files`, the lens runs. Its CLI is still asked `--version` first.
+`diff` on the commit, or one with `uncounted_files`, the lens runs.
 
 The lenses run at once, each a fresh headless session in the checkout (no lane
 variables, Claude Code's sandbox; Codex read-only, without the user's config, `.rules` files

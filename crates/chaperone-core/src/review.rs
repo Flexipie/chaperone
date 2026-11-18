@@ -28,7 +28,7 @@ use crate::ledger::{
     Actor, Checked, Evidence, Finding, Findings, Ledger, LedgerError, Payload, Refusal,
 };
 use crate::pipeline::{Check, Cli, Pipeline, Runner};
-use crate::runner::{Agent, Ask, CodexAsk, Run, RunError};
+use crate::runner::{Agent, Answer, Ask, CodexAsk, Run, RunError};
 use crate::work::WorkItem;
 
 /// The lenses, each the pipeline's check `review_<lens>`.
@@ -88,6 +88,29 @@ pub struct Planned<'a> {
     pub runner: &'a Runner,
     /// The limit `<lens>_min_code_lines`: a smaller diff skips the lens.
     pub min_code_lines: Option<i64>,
+    /// The runner's fallback, by name.
+    pub fallback: Option<(&'a str, &'a Runner)>,
+}
+
+impl Planned<'_> {
+    /// Why a diff of `code_lines` is too small for this lens, if it is.
+    fn skip(&self, code_lines: Option<i64>) -> Option<String> {
+        let (min, n) = (self.min_code_lines?, code_lines?);
+        (n < min).then(|| format!("{n} code lines, under {}_min_code_lines {min}", self.lens))
+    }
+}
+
+/// Whether `sessions` need `cli`: `Some(true)` when one has no other
+/// engine (its fallback is on the same CLI, or it is a fallback),
+/// `Some(false)` when each one on it falls back to another CLI, None
+/// when none starts it.
+pub fn needs<'a>(sessions: impl IntoIterator<Item = &'a Planned<'a>>, cli: Cli) -> Option<bool> {
+    let engines = sessions.into_iter().flat_map(|p| {
+        let fallback = p.fallback.map(|(_, f)| (f.cli, true));
+        [Some((p.runner.cli, p.fallback.is_none())), fallback]
+    });
+    let on_cli = engines.flatten().filter(|(c, _)| *c == cli);
+    on_cli.map(|(_, alone)| alone).reduce(|a, b| a || b)
 }
 
 /// Each lens's check, runner and minimum diff size, or why the pipeline
@@ -208,11 +231,13 @@ impl<'a> Plan<'a> {
         hash.update(&self.hash);
         for (name, check) in checks {
             hash.update(format!("\n{name} {}", check.prompt_sha256));
+            let runner = &pipeline.runners[&check.runner];
             self.lenses.push(Planned {
                 lens: name,
                 check,
-                runner: &pipeline.runners[&check.runner],
+                runner,
                 min_code_lines: None,
+                fallback: fallback(pipeline, runner),
             });
         }
         self.hash = format!("{:x}", hash.finalize());
@@ -220,13 +245,20 @@ impl<'a> Plan<'a> {
 }
 
 impl Plan<'_> {
-    /// Whether a lens or the verifier runs on `cli`.
-    pub fn uses(&self, cli: Cli) -> bool {
-        self.lenses
+    /// The lenses a diff of `code_lines` does not skip, and the verifier.
+    pub fn sessions(&self, code_lines: Option<i64>) -> impl Iterator<Item = &Planned<'_>> + Clone {
+        let runs = self
+            .lenses
             .iter()
-            .chain([&self.verifier])
-            .any(|p| p.runner.cli == cli)
+            .filter(move |p| p.skip(code_lines).is_none());
+        runs.chain([&self.verifier])
     }
+}
+
+/// `runner`'s fallback, by name.
+fn fallback<'a>(pipeline: &'a Pipeline, runner: &Runner) -> Option<(&'a str, &'a Runner)> {
+    let (name, r) = pipeline.runners.get_key_value(runner.fallback.as_ref()?)?;
+    Some((name.as_str(), r))
 }
 
 /// Check `name` of `pipeline` as session `lens`, or why it cannot run.
@@ -240,15 +272,21 @@ pub(crate) fn planned<'a>(
     };
     // The loader refuses a check whose runner is not there.
     let runner = &pipeline.runners[&check.runner];
-    if runner.cli == Cli::Claude && runner.model.is_none() {
-        let runner = &check.runner;
-        return Err(format!("check {name}: runner {runner} names no model"));
+    let fallback = fallback(pipeline, runner);
+    for (by, r) in [(check.runner.as_str(), runner)]
+        .into_iter()
+        .chain(fallback)
+    {
+        if r.cli == Cli::Claude && r.model.is_none() {
+            return Err(format!("check {name}: runner {by} names no model"));
+        }
     }
     Ok(Planned {
         lens,
         check,
         runner,
         min_code_lines: None,
+        fallback,
     })
 }
 
@@ -394,10 +432,21 @@ pub fn findings(lens: &str, output: Value) -> Result<Vec<Finding>, String> {
     Ok(out)
 }
 
-/// The CLIs the plan's runners use; one it does not use is not started.
+/// The CLIs the plan's runners use, or why one was not started: a
+/// session on it fails with that error.
 pub struct Agents<'a> {
-    pub claude: Option<&'a Agent>,
-    pub codex: Option<&'a Agent>,
+    pub claude: Result<&'a Agent, &'a str>,
+    pub codex: Result<&'a Agent, &'a str>,
+}
+
+impl<'a> Agents<'a> {
+    /// From each CLI's probe, `[claude, codex]`.
+    pub fn of(started: &'a [Result<Agent, String>; 2]) -> Agents<'a> {
+        let [claude, codex] = started
+            .each_ref()
+            .map(|s| s.as_ref().map_err(String::as_str));
+        Agents { claude, codex }
+    }
 }
 
 /// What one session did: a lens, whose outcome is its findings, or the
@@ -423,6 +472,29 @@ pub struct Lens<T = Vec<Finding>> {
     /// What the session left, which still cost when it failed; none when
     /// it never answered.
     pub run: Option<Run>,
+    /// The runner whose engine was down when this one answered instead.
+    pub fallback: Option<Fallback>,
+}
+
+/// A runner whose CLI could not start, exited non-zero or reported a failed
+/// turn, so its fallback answered.
+#[derive(Debug)]
+pub struct Fallback {
+    pub runner: String,
+    pub cli: Cli,
+    pub model: Option<String>,
+    pub error: String,
+    pub answer_ref: String,
+    pub run: Option<Run>,
+}
+
+/// Why a session gave no answer: the error, whether its engine is down
+/// (another may answer: never on a timeout or an answer it could not
+/// read), and what it left.
+struct Down {
+    why: String,
+    engine: bool,
+    run: Option<Run>,
 }
 
 pub struct Review {
@@ -458,15 +530,8 @@ pub fn run(
     let (change, diff_cut) = change(facts);
     let change = change + &facts.plan;
     let schema = schema();
-    let mut skipped = Vec::new();
-    for p in planned {
-        if let (Some(min), Some(n)) = (p.min_code_lines, facts.code_lines)
-            && n < min
-        {
-            let why = format!("{n} code lines, under {}_min_code_lines {min}", p.lens);
-            skipped.push((p.lens.to_string(), why));
-        }
-    }
+    let skip = |p: &Planned<'_>| Some((p.lens.to_string(), p.skip(facts.code_lines)?));
+    let skipped: Vec<_> = planned.iter().filter_map(skip).collect();
     let runs = planned
         .iter()
         .filter(|p| skipped.iter().all(|s| s.0 != p.lens));
@@ -496,7 +561,8 @@ pub fn run(
 }
 
 /// Session `p` asked `prompt` in `dir`, its answer read by `parse`, its
-/// prompt and answer stored in `store`. Fails only when the store does.
+/// prompt and answer stored in `store`; when its engine is down, its
+/// fallback is asked instead. Fails only when the store does.
 pub(crate) fn one<T>(
     p: &Planned<'_>,
     agents: &Agents<'_>,
@@ -506,51 +572,26 @@ pub(crate) fn one<T>(
     store: &Evidence,
     parse: impl FnOnce(Value) -> Result<T, String>,
 ) -> io::Result<Lens<T>> {
-    let r = p.runner;
-    let deadline = Instant::now() + Duration::from_secs(r.timeout_secs as u64);
-    let model = r.model.as_deref();
-    let agent = match r.cli {
-        Cli::Claude => agents.claude,
-        Cli::Codex => agents.codex,
-    };
-    let (bin, version) = agent.map_or_else(Default::default, |a| {
-        (a.bin.display().to_string(), a.version.clone())
-    });
-    let answer = match (r.cli, agent) {
-        // The caller starts every CLI the plan uses ([`Plan::uses`]).
-        (_, None) => Err(RunError::Spawn(format!("{:?} was not started", r.cli))),
-        (Cli::Claude, Some(agent)) => {
-            let tools: Vec<&str> = r.tools.iter().map(String::as_str).collect();
-            let ask = Ask {
-                prompt: &prompt,
-                schema,
-                // `lenses` refused a Claude runner with none.
-                model: model.unwrap_or_default(),
-                tools: &tools,
-                dir,
-                budget_cents: u32::try_from(r.budget_cents).unwrap_or(u32::MAX),
+    let first = ask(p.runner, agents, dir, &prompt, schema);
+    let (name, r, (bin, version, answer), fallback) = match (p.fallback, first) {
+        (Some((name, f)), (_, _, Err(down))) if down.engine => {
+            let raw = down.run.as_ref().map_or("", |r| r.raw.as_str());
+            let fallback = Fallback {
+                runner: p.check.runner.clone(),
+                cli: p.runner.cli,
+                model: p.runner.model.clone(),
+                error: down.why,
+                answer_ref: store.put(raw)?.hash,
+                run: down.run,
             };
-            agent.claude(&ask, deadline)
+            let asked = ask(f, agents, dir, &prompt, schema);
+            (name, f, asked, Some(fallback))
         }
-        (Cli::Codex, Some(agent)) => {
-            let ask = CodexAsk {
-                prompt: &prompt,
-                schema,
-                model,
-                dir,
-            };
-            agent.codex(&ask, deadline)
-        }
+        (_, first) => (p.check.runner.as_str(), p.runner, first, None),
     };
     let (outcome, run) = match answer {
         Ok(a) => (parse(a.output), Some(a.run)),
-        Err(e) => {
-            let why = Err(e.to_string());
-            match e {
-                RunError::Failed { run, .. } => (why, Some(*run)),
-                _ => (why, None),
-            }
-        }
+        Err(down) => (Err(down.why), down.run),
     };
     let raw = run.as_ref().map_or("", |r| r.raw.as_str());
     let (asked, answered) = (store.put(&prompt)?, store.put(raw)?);
@@ -559,7 +600,7 @@ pub(crate) fn one<T>(
         cli: r.cli,
         bin,
         version,
-        runner: p.check.runner.clone(),
+        runner: name.to_string(),
         model: r.model.clone(),
         prompt_sha256: p.check.prompt_sha256.clone(),
         prompt_ref: asked.hash,
@@ -567,7 +608,72 @@ pub(crate) fn one<T>(
         evidence_truncated: asked.truncated || answered.truncated,
         outcome,
         run,
+        fallback,
     })
+}
+
+/// Runner `r`'s session on `prompt`: the agent's path and version, and its
+/// answer or why none.
+fn ask(
+    r: &Runner,
+    agents: &Agents<'_>,
+    dir: &Path,
+    prompt: &str,
+    schema: &Value,
+) -> (String, String, Result<Answer, Down>) {
+    let deadline = Instant::now() + Duration::from_secs(r.timeout_secs as u64);
+    let model = r.model.as_deref();
+    let agent = match r.cli {
+        Cli::Claude => agents.claude,
+        Cli::Codex => agents.codex,
+    };
+    let (bin, version) = agent.map_or_else(
+        |_| Default::default(),
+        |a| (a.bin.display().to_string(), a.version.clone()),
+    );
+    let agent = match agent {
+        Ok(agent) => agent,
+        Err(why) => {
+            let (why, engine, run) = (why.to_string(), true, None);
+            return (bin, version, Err(Down { why, engine, run }));
+        }
+    };
+    let answer = match r.cli {
+        Cli::Claude => {
+            let tools: Vec<&str> = r.tools.iter().map(String::as_str).collect();
+            let ask = Ask {
+                prompt,
+                schema,
+                // `planned` refused a Claude runner with none.
+                model: model.unwrap_or_default(),
+                tools: &tools,
+                dir,
+                budget_cents: u32::try_from(r.budget_cents).unwrap_or(u32::MAX),
+            };
+            agent.claude(&ask, deadline)
+        }
+        Cli::Codex => {
+            let ask = CodexAsk {
+                prompt,
+                schema,
+                model,
+                dir,
+            };
+            agent.codex(&ask, deadline)
+        }
+    };
+    let answer = answer.map_err(|e| Down {
+        why: e.to_string(),
+        engine: matches!(
+            e,
+            RunError::Spawn(_) | RunError::Exit { .. } | RunError::Failed { .. }
+        ),
+        run: match e {
+            RunError::Failed { run, .. } => Some(*run),
+            _ => None,
+        },
+    });
+    (bin, version, answer)
 }
 
 impl<T> Lens<Vec<T>> {
@@ -597,6 +703,11 @@ impl<T> Lens<T> {
         });
         if let Err(e) = &self.outcome {
             row["error"] = json!(cut(e, NOTE_CHARS));
+        }
+        if let Some(f) = &self.fallback {
+            row["fallback_from"] = json!(f.runner);
+            row["fallback_error"] = json!(cut(&f.error, NOTE_CHARS));
+            row["fallback_answer_ref"] = json!(f.answer_ref);
         }
         if let Some(cost) = self.run.as_ref().and_then(|r| r.cost_usd) {
             row["cost_usd"] = json!(cost);
@@ -1038,13 +1149,15 @@ pub fn finish(
     review: &Review,
     verifier: Option<&Lens<Vec<Ruling>>>,
 ) -> Checked<Recorded> {
-    let lenses = review.lenses.iter();
-    let sessions = lenses.map(|l| (&*l.lens, l.cli, &l.model, &l.run));
-    let sessions = sessions.chain(verifier.map(|v| (&*v.lens, v.cli, &v.model, &v.run)));
-    for (lens, cli, model, run) in sessions {
-        if let Err(r) = usage(ledger, actor, input.work, "review", (lens, cli, model, run))? {
+    for l in &review.lenses {
+        if let Err(r) = usage(ledger, actor, input.work, "review", l)? {
             return Ok(Err(r));
         }
+    }
+    if let Some(v) = verifier
+        && let Err(r) = usage(ledger, actor, input.work, "review", v)?
+    {
+        return Ok(Err(r));
     }
     let complete = review.lenses.iter().all(|l| l.outcome.is_ok())
         && verifier.is_none_or(|v| v.outcome.is_ok());
@@ -1111,23 +1224,30 @@ pub fn finish(
     ledger.check_run(actor, &input)
 }
 
-/// One `usage.reported` for a session that left a session id, labelled
-/// with the `phase` that ran it and the session's lens, CLI and model.
-pub(crate) fn usage(
+/// One `usage.reported` for each run of session `l` that left a session
+/// id (a fallback's failed first engine too), labelled with the `phase`
+/// that ran it and the run's lens, CLI and model.
+pub(crate) fn usage<T>(
     ledger: &Ledger,
     actor: &Actor,
     work: i64,
     phase: &str,
-    (lens, cli, model, run): (&str, Cli, &Option<String>, &Option<Run>),
+    l: &Lens<T>,
 ) -> Checked<()> {
-    let Some(run) = run else { return Ok(Ok(())) };
-    let labels = Map::from_iter([
-        ("phase".into(), json!(phase)),
-        ("lens".into(), json!(lens)),
-        ("cli".into(), json!(cli)),
-        ("model".into(), json!(model)),
-    ]);
-    ledger.usage_run(actor, work, labels, run)
+    let first = l.fallback.as_ref().map(|f| (f.cli, &f.model, &f.run));
+    for (cli, model, run) in first.into_iter().chain([(l.cli, &l.model, &l.run)]) {
+        let Some(run) = run else { continue };
+        let labels = Map::from_iter([
+            ("phase".into(), json!(phase)),
+            ("lens".into(), json!(l.lens)),
+            ("cli".into(), json!(cli)),
+            ("model".into(), json!(model)),
+        ]);
+        if let Err(r) = ledger.usage_run(actor, work, labels, run)? {
+            return Ok(Err(r));
+        }
+    }
+    Ok(Ok(()))
 }
 
 pub(crate) fn cut(text: &str, chars: usize) -> String {
@@ -1252,7 +1372,8 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
         assert_eq!(e, "check review_correctness: runner lens names no model");
         let all = plan(&p).unwrap();
         assert_eq!((all.attempts, all.verifier.lens), (3, "verifier"));
-        assert!(all.uses(Cli::Claude) && all.uses(Cli::Codex));
+        assert!(needs(all.sessions(None), Cli::Claude).is_some());
+        assert!(needs(all.sessions(None), Cli::Codex).is_some());
         for limit in ["", ", review_attempts = 0"] {
             let capped = pipeline(&PIPELINE.replace(", review_attempts = 3", limit));
             let e = plan(&capped).err().unwrap();

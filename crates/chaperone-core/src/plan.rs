@@ -117,8 +117,7 @@ pub fn record(
     let prompt = prompt(p, goal, &plan.text, &input.head, base);
     let parse = |out| review::findings("plan", out);
     let session = review::one(p, agents, dir, prompt, &review::schema(), store, parse)?;
-    let ran = (&*session.lens, session.cli, &session.model, &session.run);
-    if let Err(r) = review::usage(ledger, actor, input.work, "plan", ran)? {
+    if let Err(r) = review::usage(ledger, actor, input.work, "plan", &session)? {
         return Ok(Err(r));
     }
     input.fields = Map::from_iter([
