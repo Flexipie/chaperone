@@ -598,6 +598,11 @@ fn no_findings_start_no_verifier() {
 /// [`PIPELINE`] with Codex on a timeout of limit `timeout`, falling back
 /// to Claude on `sonnet`.
 fn falls_back(timeout: &str) -> Pipeline {
+    Pipeline::load_with_prompts(&fallback_src(timeout), PROMPTS).unwrap()
+}
+
+/// [`falls_back`]'s document.
+fn fallback_src(timeout: &str) -> String {
     let second = r#"runners.second = { cli = "codex", model = "gpt-5.5", budget_limit = "budget", timeout_limit = "timeout" }"#;
     let to = format!(
         "{}, fallback = \"backup\" }}\nrunners.backup = {{ cli = \"claude\", model = \"sonnet\", \
@@ -605,8 +610,69 @@ fn falls_back(timeout: &str) -> Pipeline {
         second.replace(r#""timeout" }"#, &format!("{timeout:?}"))
     );
     let src = PIPELINE.replace(second, &to);
-    let src = src.replace("plan_attempts = 2 }", "plan_attempts = 2, short = 1 }");
-    Pipeline::load_with_prompts(&src, PROMPTS).unwrap()
+    src.replace("plan_attempts = 2 }", "plan_attempts = 2, short = 1 }")
+}
+
+/// A fallback is another runner with none of its own, and a Claude one
+/// names a model, or the pipeline does not load or cannot review.
+#[test]
+fn a_fallback_is_checked_when_loaded() {
+    let src = fallback_src("timeout");
+    let load = |from: &str, to: &str| {
+        let edited = src.replacen(from, to, 1);
+        assert_ne!(edited, src, "{from}");
+        Pipeline::load_with_prompts(&edited, PROMPTS)
+    };
+    let to = r#"fallback = "backup""#;
+    for bad in ["nobody", "second"] {
+        let e = load(to, &format!("fallback = {bad:?}"))
+            .unwrap_err()
+            .to_string();
+        let want =
+            format!("runner second: fallback {bad} is not another runner without a fallback");
+        assert_eq!(e, want);
+    }
+    let chain = load(
+        "runners.backup = { ",
+        r#"runners.backup = { fallback = "second", "#,
+    );
+    let e = chain.unwrap_err().to_string();
+    assert_eq!(
+        e,
+        "runner backup: fallback second is not another runner without a fallback"
+    );
+    let no_model = load(r#"model = "sonnet", "#, "").unwrap();
+    let e = review::lenses(&no_model).unwrap_err();
+    assert_eq!(e, "check review_codex: runner backup names no model");
+}
+
+/// A failed Codex turn falls back too, and its run still counts: a usage
+/// row for its thread, and its transcript kept as `fallback_answer_ref`.
+#[test]
+fn a_failed_codex_turn_falls_back_and_still_counts() {
+    let failed = concat!(
+        r#"{"type":"thread.started","thread_id":"t1"}"#,
+        "\n",
+        r#"{"type":"turn.failed","error":{"message":"login expired"}}"#
+    );
+    let codex = json!([{"when": "LENS codex", "stdout": failed, "exit": 1}]);
+    let none = json!({"findings": []});
+    let backup = json!({"when": "LENS codex", "stdout": session("backup", none)});
+    let env = env(quiet(backup), codex, 10);
+    let (p, row) = review_with(&env, &falls_back("timeout"), Ok(&env.codex));
+    assert_eq!(
+        (&p["complete"], &row["runner"]),
+        (&json!(true), &json!("backup"))
+    );
+    let error = "the session failed (turn.failed): login expired";
+    assert_eq!(row["fallback_error"], error);
+    let kept = env.store.get(row["fallback_answer_ref"].as_str().unwrap());
+    assert!(kept.unwrap().contains("login expired"));
+    let ledger = Ledger::open_and_migrate(&env.dir.path().join("ledger.db")).unwrap();
+    let usage = ledger.usage_get(1).unwrap().unwrap();
+    let sources = usage["sources"].as_array().unwrap();
+    let codex = sources.iter().find(|s| s["session_id"] == "t1").unwrap();
+    assert_eq!(codex["cli"], "codex", "{codex}");
 }
 
 /// Lane 1's review by `pipeline` with Codex as `codex`: its payload and the
