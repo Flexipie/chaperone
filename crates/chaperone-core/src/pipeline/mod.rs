@@ -63,6 +63,10 @@ pub struct Runner {
     pub tools: Vec<String>,
     pub budget_cents: i64,
     pub timeout_secs: i64,
+    /// The runner that answers when this one's CLI cannot start or its
+    /// session fails, never when it times out. Hashed only when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,7 +349,7 @@ mod tests {
     const V19: &str = include_str!("../../../../pipelines/v19.toml");
     const V19_HASH: &str = "d45442e63a1b77001987bb5d82e987d730c26ddf4ba7c2941b6c09622287f5ea";
     const V20: &str = include_str!("../../../../pipelines/v20.toml");
-    const V20_HASH: &str = "9becd747622de16f0665b115703c3f658af7f3bfd75257857c4ca4736922e0a5";
+    const V20_HASH: &str = "6a3f7d2164708a23e8203889cd4d864b77327e50dc0d6a4b8c6741658ac0e5f0";
 
     const MINI: &str = r#"
 schema = 1
@@ -718,6 +722,7 @@ requires = ["a"]
             tools: vec!["Grep".into(), "Read".into()],
             budget_cents: 200,
             timeout_secs: 900,
+            fallback: None,
         };
         assert_eq!(p.runners["lens"], lens);
         assert_eq!(
@@ -860,6 +865,28 @@ args = { field = "verdict.decision", value = "yes" }"#;
         assert_eq!(
             err("timeout = 900", "timeout = 0"),
             "runner lens: limit timeout is 0, not at least 1"
+        );
+        let codex = r#"cli = "codex""#;
+        let falls = |to: &str| format!("{codex}\nfallback = \"{to}\"");
+        for to in ["nobody", "second"] {
+            let e = err(codex, &falls(to));
+            let want =
+                format!("runner second: fallback {to} is not another runner without a fallback");
+            assert_eq!(e, want);
+        }
+        let ok = load2(codex, &falls("lens")).unwrap();
+        assert_eq!(ok.runners["second"].fallback.as_deref(), Some("lens"));
+        // No chain: the fallback may not have one of its own.
+        let chain = MINI2.replacen(codex, &falls("lens"), 1);
+        let chain = chain.replacen(
+            r#"model = "opus""#,
+            "model = \"opus\"\nfallback = \"second\"",
+            1,
+        );
+        let e = Pipeline::load_with_prompts(&chain, PROMPTS).unwrap_err();
+        assert!(
+            e.to_string().starts_with("runner lens: fallback second"),
+            "{e}"
         );
         assert!(matches!(
             load2(r#"cli = "claude""#, r#"cli = "cursor""#),

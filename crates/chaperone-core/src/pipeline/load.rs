@@ -42,6 +42,7 @@ struct RawRunner {
     tools: Vec<String>,
     budget_limit: String,
     timeout_limit: String,
+    fallback: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -148,7 +149,8 @@ pub(super) fn load(src: &str, prompts: &[(&str, &str)]) -> Result<Pipeline, Pipe
     })
 }
 
-/// Each runner with its two limits resolved, both at least 1.
+/// Each runner with its two limits resolved, both at least 1, and its
+/// fallback another runner that has none.
 fn runners(
     raw: BTreeMap<String, RawRunner>,
     limits: &BTreeMap<String, i64>,
@@ -174,8 +176,18 @@ fn runners(
             tools,
             budget_cents: limit(&r.budget_limit)?,
             timeout_secs: limit(&r.timeout_limit)?,
+            fallback: r.fallback,
         };
         runners.insert(name, runner);
+    }
+    for (name, r) in &runners {
+        let Some(to) = &r.fallback else { continue };
+        if to == name || runners.get(to).is_none_or(|f| f.fallback.is_some()) {
+            return Err(PipelineError::BadRunner {
+                runner: name.clone(),
+                message: format!("fallback {to} is not another runner without a fallback"),
+            });
+        }
     }
     Ok(runners)
 }

@@ -22,7 +22,7 @@ use chaperone_core::ledger::{self, Actor, Evidence, Kept, Ledger, LedgerError, R
 use chaperone_core::merge::{self, Done};
 use chaperone_core::pipeline::{self, Cli, Fact, Pipeline};
 use chaperone_core::plan;
-use chaperone_core::review::{self, Agents, Facts};
+use chaperone_core::review::{self, Agents, Facts, Planned};
 use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
@@ -854,13 +854,10 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
         return one(stored);
     }
-    let started = |cli| plan.uses(cli).then(|| agent(cli)).transpose();
-    let (claude, codex) = (started(Cli::Claude)?, started(Cli::Codex)?);
+    let code_lines = code_lines(ledger, item.id, &input.head)?;
+    let started = agents(plan.sessions(code_lines))?;
     let (checkout, facts) = change(ledger, db, &wt, &item, &input.head)?;
-    let agents = Agents {
-        claude: claude.as_ref(),
-        codex: codex.as_ref(),
-    };
+    let agents = Agents::of(&started);
     let store = Evidence::beside(db);
     one(review::record(
         ledger,
@@ -927,13 +924,9 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
     if let Some(stored) = verdict::replay(ledger, actor, &mut input, key, &harness)?? {
         return one(stored);
     }
-    let cli = planned.runner.cli;
-    let started = agent(cli)?;
+    let started = agents([&planned])?;
     let (checkout, facts) = change(ledger, db, &wt, &item, &head)?;
-    let agents = Agents {
-        claude: (cli == Cli::Claude).then_some(&started),
-        codex: (cli == Cli::Codex).then_some(&started),
-    };
+    let agents = Agents::of(&started);
     one(verdict::record(
         ledger,
         actor,
@@ -985,14 +978,10 @@ fn run_plan(
     if let Some(stored) = plan::replay(ledger, actor, &mut input, key, &kept.stored.hash)?? {
         return one(stored);
     }
-    let cli = planned.runner.cli;
-    let started = agent(cli)?;
+    let started = agents([&planned])?;
     let base = merge_base(&wt, &base, &head)?;
     let checkout = lane_checkout(db, &wt, work, &head, Instant::now() + CHECKOUT_TIMEOUT)?;
-    let agents = Agents {
-        claude: (cli == Cli::Claude).then_some(&started),
-        codex: (cli == Cli::Codex).then_some(&started),
-    };
+    let agents = Agents::of(&started);
     let given = plan::Given {
         goal: &review::goal(ledger, &item)?,
         plan: &kept,
@@ -1141,7 +1130,7 @@ pub(crate) fn lane_pipeline(item: &WorkItem) -> Result<&'static Pipeline, CliErr
 
 /// The agent CLI `cli`, by its full path as a shell finds it, so the event
 /// names the binary.
-pub(crate) fn agent(cli: Cli) -> Result<Agent, CliError> {
+fn agent(cli: Cli) -> Result<Agent, String> {
     let bin = match cli {
         Cli::Claude => "claude",
         Cli::Codex => "codex",
@@ -1154,7 +1143,22 @@ pub(crate) fn agent(cli: Cli) -> Result<Agent, CliError> {
     // As for test commands: no variable points its git elsewhere.
     let env = std::env::vars_os().filter(|(k, _)| !git::repo_var(k));
     Agent::probe(found.unwrap_or(bin.into()), env, deadline)
-        .map_err(|e| refuse(format!("could not start {bin}: {e}")))
+        .map_err(|e| format!("could not start {bin}: {e}"))
+}
+
+/// Each agent CLI `sessions` start, `[claude, codex]`, or why one did not:
+/// one a session needs with no other engine ([`review::needs`]) that
+/// cannot start is refused, one whose every session falls back is kept as
+/// its error, and one none starts is not asked.
+pub(crate) fn agents<'a>(
+    sessions: impl IntoIterator<Item = &'a Planned<'a>> + Clone,
+) -> Result<[Result<Agent, String>; 2], CliError> {
+    let start = |cli| match review::needs(sessions.clone(), cli) {
+        None => Ok(Err(format!("{cli:?} is not used"))),
+        Some(true) => agent(cli).map(Ok).map_err(refuse),
+        Some(false) => Ok(agent(cli)),
+    };
+    Ok([start(Cli::Claude)?, start(Cli::Codex)?])
 }
 
 /// The merge base of `head` with `base` (as `changed` names it).
@@ -1180,20 +1184,6 @@ fn change(
     let base = merge_base(wt, &base, head)?;
     let checkout = lane_checkout(db, wt, item.id, head, Instant::now() + CHECKOUT_TIMEOUT)?;
     let diff = diff(&checkout.dir, &base, head)?;
-    // A count that leaves files out is no size to skip a lens on.
-    let measured = ledger.project(item.id, Some(head))?;
-    // Code and test lines both, as the lens minimums were measured (#223).
-    let tests = match measured.get("commit.test_lines") {
-        Fact::Int(n) => *n,
-        _ => 0,
-    };
-    let code_lines = match (
-        measured.get("commit.code_lines"),
-        measured.get("commit.uncounted_files"),
-    ) {
-        (Fact::Int(n), Fact::Int(0)) => Some(*n + tests),
-        _ => None,
-    };
     let facts = Facts {
         base,
         head: head.into(),
@@ -1203,9 +1193,29 @@ fn change(
         smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
         plan: review::plan_findings(ledger, item.id)?
             + &review::earlier_section(&review::earlier(ledger, item.id)?),
-        code_lines,
+        code_lines: code_lines(ledger, item.id, head)?,
     };
     Ok((checkout, facts))
+}
+
+/// The size a lens minimum reads: the harness `diff`'s code and test lines
+/// on `head` both, as the minimums were measured (#223); none without one,
+/// as a count that leaves files out is no size to skip a lens on.
+fn code_lines(ledger: &Ledger, work: i64, head: &str) -> Result<Option<i64>, CliError> {
+    let measured = ledger.project(work, Some(head))?;
+    let tests = match measured.get("commit.test_lines") {
+        Fact::Int(n) => *n,
+        _ => 0,
+    };
+    Ok(
+        match (
+            measured.get("commit.code_lines"),
+            measured.get("commit.uncounted_files"),
+        ) {
+            (Fact::Int(n), Fact::Int(0)) => Some(*n + tests),
+            _ => None,
+        },
+    )
 }
 
 /// `git diff <base> <head>` in the harness's checkout `dir`, whole.

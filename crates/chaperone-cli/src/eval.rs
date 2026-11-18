@@ -10,14 +10,14 @@ use std::time::Instant;
 use chaperone_core::checks::NON_BLOCKING_SEVERITIES;
 use chaperone_core::git;
 use chaperone_core::ledger::Evidence;
-use chaperone_core::pipeline::{self, Cli, Pipeline};
+use chaperone_core::pipeline::{self, Pipeline};
 use chaperone_core::review::{self, Agents, Facts};
 use chaperone_graph::code_globs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::checks::{
-    CHECKOUT_TIMEOUT, Checkout, agent, changed, code, diff, refuse, required_lenses,
+    CHECKOUT_TIMEOUT, Checkout, agents, changed, code, diff, refuse, required_lenses,
 };
 use crate::output::{CliError, Outcome};
 
@@ -74,12 +74,9 @@ pub fn run(db: &Path, set: &Path, repos: &Path, only: Option<String>) -> Result<
     // The newest this binary has: the one lanes with a harness review run.
     let pipeline = pipeline::newer().last().unwrap_or(pipeline::current());
     let plan = review::plan(pipeline).map_err(refuse)?;
-    let started = |cli| plan.uses(cli).then(|| agent(cli)).transpose();
-    let (claude, codex) = (started(Cli::Claude)?, started(Cli::Codex)?);
-    let agents = Agents {
-        claude: claude.as_ref(),
-        codex: codex.as_ref(),
-    };
+    // Each entry's size is not known yet, so every lens may run.
+    let started = agents(plan.sessions(None))?;
+    let agents = Agents::of(&started);
     let store = Evidence::beside(db);
     let home = std::path::absolute(db).map_err(|e| CliError::Internal(e.to_string()))?;
     let checkouts = home.parent().unwrap_or(Path::new("/")).join("checkouts");

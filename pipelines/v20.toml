@@ -40,6 +40,11 @@
 # answering a one-word prompt. Codex takes no spending cap, so the Codex lens's budget is
 # recorded but only its timeout bounds it.
 #
+# The Codex lens falls back (#266): when `codex` cannot start, exits non-zero or reports a failed
+# turn (an expired login arrives that way), never on a timeout, `codex_fallback` answers its
+# prompt, a Claude runner on Sonnet so the review still has a reader on another model than the
+# other lenses. Its row says `fallback_from` and the error; both down leaves the review incomplete.
+#
 # A lens skips a diff smaller than its `<lens>_min_code_lines` (the harness `diff`'s code
 # plus test lines on the commit, as #223 measured them; with no diff measured, or uncounted files, it runs), recorded on the review as skipped.
 # v20 sets it for Codex only, at 200 (#223): in the first 9 v20 reviews (median 53 code lines)
@@ -99,6 +104,14 @@ timeout_limit = "lens_timeout"
 
 [runners.codex_lens]
 cli = "codex"
+budget_limit = "lens_budget"
+timeout_limit = "lens_timeout"
+fallback = "codex_fallback"
+
+[runners.codex_fallback]
+cli = "claude"
+model = "claude-sonnet-5-5"
+tools = ["Read", "Grep", "Glob"]
 budget_limit = "lens_budget"
 timeout_limit = "lens_timeout"
 

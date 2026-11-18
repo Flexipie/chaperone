@@ -378,8 +378,7 @@ pub fn record(
     let (change, diff_cut) = review::change(facts);
     let prompt = prompt(p, &facts.goal, &change, &harness.shown);
     let session = review::one(p, agents, dir, prompt, &schema(), store, said)?;
-    let ran = (&*session.lens, session.cli, &session.model, &session.run);
-    if let Err(r) = review::usage(ledger, actor, input.work, "verdict", ran)? {
+    if let Err(r) = review::usage(ledger, actor, input.work, "verdict", &session)? {
         return Ok(Err(r));
     }
     input.fields = Map::from_iter([
