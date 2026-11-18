@@ -177,7 +177,7 @@ fn each_outcome_is_scored() {
     assert_eq!(twice["totals"]["hit"], 4);
     assert_eq!(
         (&twice["score"], &twice["mean"]),
-        (&json!("8/12"), &json!(4.67))
+        (&json!("8/12"), &json!(4.0))
     );
     // Refused, before any session: no such entry, a set that does not
     // parse, a name that is not a plain directory name.

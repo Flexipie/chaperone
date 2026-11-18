@@ -116,7 +116,7 @@ pub fn run(
     let checkouts = home.parent().unwrap_or(Path::new("/")).join("checkouts");
     let mut totals = BTreeMap::from(OUTCOMES.map(|o| (o, 0)));
     totals.insert("fallbacks", 0);
-    let (mut entries, mut per_entry, mut ran) = (Vec::new(), BTreeMap::new(), 0);
+    let (mut entries, mut per_entry, mut in_score) = (Vec::new(), BTreeMap::new(), 0);
     for e in &set.entry {
         let clone = repos.join(e.repo.rsplit('/').next().unwrap_or_default());
         let why = missing(&clone, e);
@@ -130,7 +130,6 @@ pub fn run(
                 Some(Checkout::fresh(&clone, dir, &e.head, deadline)?)
             }
         };
-        ran += i64::from(checkout.is_some());
         let counts: &mut BTreeMap<&str, i64> = per_entry.entry(&e.name).or_default();
         for n in 1..=runs {
             let (outcome, mut row) = match &checkout {
@@ -149,6 +148,7 @@ pub fn run(
             row["run"] = json!(n);
             entries.push(row);
         }
+        in_score += i64::from(OUTCOMES[..4].iter().any(|o| counts.contains_key(o)));
     }
     let scored: i64 = OUTCOMES[..4].iter().map(|o| totals[o]).sum();
     let good = totals["hit"] + totals["clean"];
@@ -159,11 +159,11 @@ pub fn run(
         "per_entry": per_entry,
         "totals": totals,
         "score": format!("{good}/{scored}"),
-        "mean": mean(good, scored, ran),
+        "mean": mean(good, scored, in_score),
     })))
 }
 
-/// The score of one run over the `entries` not skipped, from `good` (hit
+/// The score of one run over the `entries` scored in any run, from `good` (hit
 /// plus clean) of the `scored` rows of every run: a row out of the score
 /// (convention, error) counts on neither side.
 fn mean(good: i64, scored: i64, entries: i64) -> f64 {
