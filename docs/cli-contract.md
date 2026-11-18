@@ -774,13 +774,14 @@ standing findings are all the `design_tests` lens's), `clean`, `skipped` (no clo
 commit the clone lacks) or `error` (a session did not run). Each entry is reviewed `--runs`
 times (default 1) in one checkout. `data` is `{pipeline: {id, hash}, runs, entries: [{name,
 run, outcome, why?, findings, known, bug, fallbacks}], per_entry: {name: {outcome: k}},
-totals, score, mean}`: a row per entry per run (`run` from 1, `bug` the entry's `what`, null
+totals, score, mean, unused_known}`: a row per entry per run (`run` from 1, `bug` the entry's `what`, null
 for a clean one, `fallbacks` the sessions another engine answered, a lane review's
 `fallback_from`), `per_entry` each entry's outcomes as k of `runs` and its `fallbacks` when
 any, `totals` over every row with `fallbacks` summed, `score`
 hit plus clean over the rows scored (`convention`, `skipped` and `error` are not), and
-`mean` the score of one run, (hit + clean) / rows scored x entries scored in any run, to two
-decimals. It never opens the ledger; prompts and
+`mean` the score of one run, (hit + clean) / rows scored x entries not skipped, to two
+decimals; `unused_known` lists `{name, what}` for each `known` that matched in no run of an
+entry not skipped, so a matcher worded out of date shows. It never opens the ledger; prompts and
 answers go to the evidence store beside it. `--only` with no such entry is refused
 (`invalid_input`), as is a set that does not parse, a `bug` or `known` with no `paths`, or a CLI the pipeline uses that cannot
 start.

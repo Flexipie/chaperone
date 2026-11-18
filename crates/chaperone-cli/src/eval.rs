@@ -116,7 +116,8 @@ pub fn run(
     let checkouts = home.parent().unwrap_or(Path::new("/")).join("checkouts");
     let mut totals = BTreeMap::from(OUTCOMES.map(|o| (o, 0)));
     totals.insert("fallbacks", 0);
-    let (mut entries, mut per_entry, mut in_score) = (Vec::new(), BTreeMap::new(), 0);
+    let (mut entries, mut per_entry, mut reviewed) = (Vec::new(), BTreeMap::new(), 0);
+    let mut unused_known = Vec::new();
     for e in &set.entry {
         let clone = repos.join(e.repo.rsplit('/').next().unwrap_or_default());
         let why = missing(&clone, e);
@@ -130,7 +131,9 @@ pub fn run(
                 Some(Checkout::fresh(&clone, dir, &e.head, deadline)?)
             }
         };
+        reviewed += i64::from(checkout.is_some());
         let counts: &mut BTreeMap<&str, i64> = per_entry.entry(&e.name).or_default();
+        let mut matched = BTreeSet::new();
         for n in 1..=runs {
             let (outcome, mut row) = match &checkout {
                 Some(c) => review_one(pipeline, &agents, (&clone, &c.dir), e, &store)?,
@@ -143,12 +146,19 @@ pub fn run(
                 *totals.entry("fallbacks").or_default() += fallbacks;
                 *counts.entry("fallbacks").or_default() += fallbacks;
             }
+            let known = row["known"].as_array().into_iter().flatten();
+            matched.extend(known.filter_map(|f| f["known"].as_str().map(String::from)));
             row["name"] = json!(e.name);
             row["outcome"] = json!(outcome);
             row["run"] = json!(n);
             entries.push(row);
         }
-        in_score += i64::from(OUTCOMES[..4].iter().any(|o| counts.contains_key(o)));
+        // A `known` no run matched may be worded out of date: shown, so it
+        // never drifts silently.
+        if checkout.is_some() {
+            let unused = e.known.iter().filter(|k| !matched.contains(&k.what));
+            unused_known.extend(unused.map(|k| json!({"name": e.name, "what": k.what})));
+        }
     }
     let scored: i64 = OUTCOMES[..4].iter().map(|o| totals[o]).sum();
     let good = totals["hit"] + totals["clean"];
@@ -159,13 +169,14 @@ pub fn run(
         "per_entry": per_entry,
         "totals": totals,
         "score": format!("{good}/{scored}"),
-        "mean": mean(good, scored, in_score),
+        "mean": mean(good, scored, reviewed),
+        "unused_known": unused_known,
     })))
 }
 
-/// The score of one run over the `entries` scored in any run, from `good` (hit
-/// plus clean) of the `scored` rows of every run: a row out of the score
-/// (convention, error) counts on neither side.
+/// The score of one run over the `entries` reviewed (not skipped): the rate
+/// of `good` (hit plus clean) in the `scored` rows of every run, so a row
+/// out of the score (convention, error) counts on neither side.
 fn mean(good: i64, scored: i64, entries: i64) -> f64 {
     if scored == 0 {
         return 0.0;

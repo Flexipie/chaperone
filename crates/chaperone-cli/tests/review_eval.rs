@@ -178,7 +178,7 @@ fn each_outcome_is_scored() {
     assert_eq!(twice["totals"]["hit"], 4);
     assert_eq!(
         (&twice["score"], &twice["mean"]),
-        (&json!("8/12"), &json!(4.0))
+        (&json!("8/12"), &json!(4.67))
     );
     // Refused, before any session: no such entry, a set that does not
     // parse, a name that is not a plain directory name.
@@ -206,7 +206,7 @@ fn each_outcome_is_scored() {
     let head = git(&demo, &["rev-parse", "HEAD"]);
     let known = format!(
         "[[entry]]\nname = \"known\"\nrepo = \"o/demo\"\nbase = \"{base}\"\nhead = \"{head}\"\n\
-         goal = \"GOAL-KNOWN\"\nknown = [{{ paths = [\"known.rs\"], words = [\"STALE\"], what = \"kw\" }}]\n"
+         goal = \"GOAL-KNOWN\"\nknown = [{{ paths = [\"known.rs\"], words = [\"STALE\"], what = \"kw\" }}, {{ paths = [\"known.rs\"], words = [\"never\"], what = \"nw\" }}]\n"
     );
     std::fs::write(dir.path().join("known.toml"), known).unwrap();
     let (ok, out) = eval("known.toml", &[]);
@@ -219,6 +219,10 @@ fn each_outcome_is_scored() {
     assert_eq!(
         (&row["known"][0]["title"], &row["known"][0]["known"]),
         (&json!("A stale todo"), &json!("kw"))
+    );
+    assert_eq!(
+        out["unused_known"],
+        json!([{"name": "known", "what": "nw"}])
     );
     // Codex cannot start: a change big enough for its lens is reviewed by
     // its fallback, counted per entry and in the totals.
