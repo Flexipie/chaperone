@@ -780,7 +780,7 @@ hit plus clean over the rows scored (`convention`, `skipped` and `error` are not
 `mean` the score of one run, (hit + clean) / rows scored x entries not skipped, to two
 decimals. It never opens the ledger; prompts and
 answers go to the evidence store beside it. `--only` with no such entry is refused
-(`invalid_input`), as is a set that does not parse or a CLI the pipeline uses that cannot
+(`invalid_input`), as is a set that does not parse, a `bug` or `known` with no `paths`, or a CLI the pipeline uses that cannot
 start.
 
 ## Commands and transitions

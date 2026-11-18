@@ -183,10 +183,14 @@ fn each_outcome_is_scored() {
     // parse, a name that is not a plain directory name.
     std::fs::write(dir.path().join("bad.toml"), "entry = 1\n").unwrap();
     std::fs::write(dir.path().join("dots.toml"), entry("../x", "o/demo")).unwrap();
+    let pathless =
+        entry("p", "o/demo") + "known = [{ paths = [], words = [\"w\"], what = \"w\" }]\n";
+    std::fs::write(dir.path().join("pathless.toml"), pathless).unwrap();
     for (set, only, why) in [
         ("set.toml", &["--only", "nope"][..], "no entry \"nope\""),
         ("bad.toml", &[], "is not a review eval set"),
         ("dots.toml", &[], "entry name \"../x\""),
+        ("pathless.toml", &[], "with no paths"),
     ] {
         let (ok, err) = eval(set, only);
         assert!(!ok && err["code"] == "invalid_input", "{err}");

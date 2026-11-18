@@ -1,3 +1,7 @@
+# The review eval set (`chaperone review eval`, docs/cli-contract.md). `bug` is what a review
+# must find; `known` lists real leftovers a review may find, which are not scored. Both match a
+# finding by its path and a word, so each needs `paths`: one with none is refused.
+
 [[entry]]
 name = "passage-twin-loss"
 repo = "Flexipie/passage"

@@ -91,6 +91,15 @@ pub fn run(
             return Err(refuse(format!("entry name {name:?} is not a-z0-9-")));
         }
     }
+    // A finding is matched by its path, so one with none would match nothing.
+    for e in &set.entry {
+        if e.bug.iter().chain(&e.known).any(|b| b.paths.is_empty()) {
+            return Err(refuse(format!(
+                "entry {:?} has a bug or known with no paths",
+                e.name
+            )));
+        }
+    }
     if let Some(only) = &only {
         set.entry.retain(|e| &e.name == only);
         if set.entry.is_empty() {
