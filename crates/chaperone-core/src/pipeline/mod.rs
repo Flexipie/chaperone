@@ -866,6 +866,10 @@ args = { field = "verdict.decision", value = "yes" }"#;
             err("timeout = 900", "timeout = 0"),
             "runner lens: limit timeout is 0, not at least 1"
         );
+        assert!(matches!(
+            load2(r#"cli = "claude""#, r#"cli = "cursor""#),
+            Err(PipelineError::Toml(_))
+        ));
         // Schema 1 hashes neither table, so it may not carry them.
         let e = load2("schema = 2", "schema = 1").unwrap_err();
         assert!(matches!(e, PipelineError::NeedsSchema2("runners")), "{e}");
