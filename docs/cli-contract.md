@@ -773,9 +773,11 @@ finding on one of `paths` whose title or body has one of `words`, any case), `mi
 standing findings are all the `design_tests` lens's), `clean`, `skipped` (no clone, or a
 commit the clone lacks) or `error` (a session did not run). Each entry is reviewed `--runs`
 times (default 1) in one checkout. `data` is `{pipeline: {id, hash}, runs, entries: [{name,
-run, outcome, why?, findings, known, bug}], per_entry: {name: {outcome: k}}, totals, score,
-mean}`: a row per entry per run (`run` from 1, `bug` the entry's `what`, null for a clean
-one), `per_entry` each entry's outcomes as k of `runs`, `totals` over every row, `score`
+run, outcome, why?, findings, known, bug, fallbacks}], per_entry: {name: {outcome: k}},
+totals, score, mean}`: a row per entry per run (`run` from 1, `bug` the entry's `what`, null
+for a clean one, `fallbacks` the sessions another engine answered, a lane review's
+`fallback_from`), `per_entry` each entry's outcomes as k of `runs` and its `fallbacks` when
+any, `totals` over every row with `fallbacks` summed, `score`
 hit plus clean over the rows scored (`convention`, `skipped` and `error` are not), and
 `mean` the score of one run, (hit + clean) / rows scored x entries not skipped, to two
 decimals. It never opens the ledger; prompts and

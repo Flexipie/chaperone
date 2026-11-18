@@ -115,6 +115,7 @@ pub fn run(
     let home = std::path::absolute(db).map_err(|e| CliError::Internal(e.to_string()))?;
     let checkouts = home.parent().unwrap_or(Path::new("/")).join("checkouts");
     let mut totals = BTreeMap::from(OUTCOMES.map(|o| (o, 0)));
+    totals.insert("fallbacks", 0);
     let (mut entries, mut per_entry, mut ran) = (Vec::new(), BTreeMap::new(), 0);
     for e in &set.entry {
         let clone = repos.join(e.repo.rsplit('/').next().unwrap_or_default());
@@ -138,6 +139,11 @@ pub fn run(
             };
             *totals.entry(outcome).or_default() += 1;
             *counts.entry(outcome).or_default() += 1;
+            let fallbacks = row["fallbacks"].as_i64().unwrap_or(0);
+            if fallbacks > 0 {
+                *totals.entry("fallbacks").or_default() += fallbacks;
+                *counts.entry("fallbacks").or_default() += fallbacks;
+            }
             row["name"] = json!(e.name);
             row["outcome"] = json!(outcome);
             row["run"] = json!(n);
@@ -222,9 +228,16 @@ fn review_one(
         .iter()
         .map(|l| (&l.lens, l.outcome.as_ref().err()));
     let mut ran = lenses.chain(verifier.iter().map(|v| (&v.lens, v.outcome.as_ref().err())));
+    // Sessions another engine answered (`fallback_from` in a lane's review).
+    let fallbacks = review
+        .lenses
+        .iter()
+        .filter(|l| l.fallback.is_some())
+        .count()
+        + verifier.iter().filter(|v| v.fallback.is_some()).count();
     if let Some((lens, Some(why))) = ran.find(|s| s.1.is_some()) {
         let why = format!("{lens} did not run: {why}");
-        return Ok(("error", json!({ "why": why })));
+        return Ok(("error", json!({ "why": why, "fallbacks": fallbacks })));
     }
     let rulings = verifier
         .iter()
@@ -256,7 +269,7 @@ fn review_one(
     let bug = e.bug.as_ref().map(|b| &b.what);
     Ok((
         outcome,
-        json!({ "findings": findings, "known": known, "bug": bug }),
+        json!({ "findings": findings, "known": known, "bug": bug, "fallbacks": fallbacks }),
     ))
 }
 

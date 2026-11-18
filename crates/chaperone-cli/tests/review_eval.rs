@@ -157,7 +157,7 @@ fn each_outcome_is_scored() {
         ]
     );
     let totals = json!({"hit": 2, "miss": 1, "false_alarm": 1, "clean": 2, "skipped": 2,
-        "error": 1, "convention": 0});
+        "error": 1, "convention": 0, "fallbacks": 0});
     assert_eq!((&out["totals"], &out["score"]), (&totals, &json!("4/6")));
     assert_eq!(out["entries"][1]["bug"], "w");
     assert!(
@@ -196,5 +196,31 @@ fn each_outcome_is_scored() {
         assert!(!ok && err["code"] == "invalid_input", "{err}");
         assert!(err["message"].as_str().unwrap().contains(why), "{err}");
     }
+    // Codex cannot start: a change big enough for its lens is reviewed by
+    // its fallback, counted per entry and in the totals.
+    let base = git(&demo, &["rev-parse", "HEAD"]);
+    std::fs::write(demo.join("big.rs"), "x\n".repeat(200)).unwrap();
+    git(&demo, &["add", "."]);
+    git(&demo, &["commit", "-qm", "big"]);
+    let head = git(&demo, &["rev-parse", "HEAD"]);
+    let big = format!(
+        "[[entry]]\nname = \"big\"\nrepo = \"o/demo\"\nbase = \"{base}\"\nhead = \"{head}\"\ngoal = \"g\"\n"
+    );
+    std::fs::write(dir.path().join("big.toml"), big).unwrap();
+    std::fs::remove_file(bin.join("codex")).unwrap();
+    std::fs::write(bin.join("codex"), "not a program").unwrap();
+    let (ok, fell) = eval("big.toml", &["--runs", "2"]);
+    assert!(ok, "{fell}");
+    assert_eq!(
+        fell["per_entry"]["big"],
+        json!({"clean": 2, "fallbacks": 2})
+    );
+    assert_eq!(
+        (
+            &fell["entries"][0]["fallbacks"],
+            &fell["totals"]["fallbacks"]
+        ),
+        (&json!(1), &json!(2))
+    );
     assert!(!db.exists(), "the eval opened the ledger");
 }
