@@ -102,6 +102,7 @@ fn each_outcome_is_scored() {
         says("# Verify the review's findings", json!({"rulings": []})),
         says("GOAL-HIT", risk("hit.rs", "Overflow in add")),
         says("GOAL-ALARM", risk("alarm.rs", "alarm-title")),
+        says("GOAL-KNOWN", risk("known.rs", "A stale todo")),
         says("GOAL-REFUTED", refuted),
         says("GOAL-UNPROVEN", unproven),
         says("GOAL-BROKEN", json!({"bogus": 1})),
@@ -196,6 +197,29 @@ fn each_outcome_is_scored() {
         assert!(!ok && err["code"] == "invalid_input", "{err}");
         assert!(err["message"].as_str().unwrap().contains(why), "{err}");
     }
+    // A finding the entry's `known` matches is listed with its `what` and
+    // not scored.
+    let base = git(&demo, &["rev-parse", "HEAD"]);
+    std::fs::write(demo.join("known.rs"), "fn f() {}\n").unwrap();
+    git(&demo, &["add", "."]);
+    git(&demo, &["commit", "-qm", "known"]);
+    let head = git(&demo, &["rev-parse", "HEAD"]);
+    let known = format!(
+        "[[entry]]\nname = \"known\"\nrepo = \"o/demo\"\nbase = \"{base}\"\nhead = \"{head}\"\n\
+         goal = \"GOAL-KNOWN\"\nknown = [{{ paths = [\"known.rs\"], words = [\"STALE\"], what = \"kw\" }}]\n"
+    );
+    std::fs::write(dir.path().join("known.toml"), known).unwrap();
+    let (ok, out) = eval("known.toml", &[]);
+    assert!(ok, "{out}");
+    let row = &out["entries"][0];
+    assert_eq!(
+        (&row["outcome"], &row["findings"]),
+        (&json!("clean"), &json!([]))
+    );
+    assert_eq!(
+        (&row["known"][0]["title"], &row["known"][0]["known"]),
+        (&json!("A stale todo"), &json!("kw"))
+    );
     // Codex cannot start: a change big enough for its lens is reviewed by
     // its fallback, counted per entry and in the totals.
     let base = git(&demo, &["rev-parse", "HEAD"]);
