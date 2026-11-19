@@ -321,7 +321,6 @@ pub fn pr_open(
             Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => Err(failed(&e.to_string())),
         }
     };
-    // A PR's own title is kept when it fits; a new one is never guessed.
     if rules.title.is_some() && title.is_none() {
         let no_title = || {
             let why =

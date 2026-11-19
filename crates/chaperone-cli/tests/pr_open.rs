@@ -326,7 +326,7 @@ fn pr_open_follows_the_base_profiles_pr_rules() {
 /// A `[pr]` rule that cannot be kept refuses before any gh call or push: a
 /// title or head on a lane with no tracker key, an unknown key, and a title
 /// template with no `{text}`, a second `{type}`, another brace, or `{type}`
-/// and no `types`.
+/// and no `types`. A template with no `{type}` needs no `types`.
 #[test]
 fn pr_open_refuses_a_broken_pr_rule() {
     let key = ["--source", "linear", "--source-id", "CORE-12"];
@@ -351,4 +351,14 @@ fn pr_open_refuses_a_broken_pr_rule() {
         );
         assert_eq!(lane.file("gh.log") + &lane.pushed(), "");
     }
+    let lane = lane(&key, "[pr]\ntitle = \"{key}: {text}\"\n");
+    let (code, err) = lane.run(
+        "lane",
+        &["pr", "open", "--work", "1", "--title", "CORE-12: Do it"],
+    );
+    assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
+    assert!(
+        lane.file("gh.log")
+            .contains("--title CORE-12: Do it --body-file -")
+    );
 }
