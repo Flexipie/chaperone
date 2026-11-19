@@ -1,3 +1,7 @@
+# The review eval set (`chaperone review eval`, docs/cli-contract.md). `bug` is what a review
+# must find; `known` lists real leftovers a review may find, which are not scored. Both match a
+# finding by its path and a word, so each needs `paths`: one with none is refused.
+
 [[entry]]
 name = "passage-twin-loss"
 repo = "Flexipie/passage"
@@ -64,6 +68,11 @@ repo = "Flexipie/passage"
 base = "e64ea8265b7235e1033f8c65febba94d24a7e76e"
 head = "6dbae52464e6a2721d2a54403b573a1615dbf09a"
 goal = "Notes: a note that reads as UTF-8 is found before one another app saved in another encoding"
+known = [
+  { paths = ["Sources/Passage/FileMemory.swift"], words = ["no properties"], what = "real: FileMemory.swift:127 returns for a remembered note with no properties, so a note an agent or Annotations writes into is no longer remembered (before, rememberNote switched the pane to it)" },
+  { paths = ["Sources/Passage/FileMemory.swift"], words = ["copies"], what = "real: FileMemory.swift:127 repeats NoteLocator.find's check at NotesFolder.swift:36" },
+  { paths = ["Sources/Passage/Notes/NoteBuffer.swift"], words = ["unrelated", "bundled"], what = "real: 3dda55e (a disk check for every note read) is in the change and is not about encoding" },
+]
 
 [[entry]]
 name = "passage-csv-fills-tab"
@@ -78,6 +87,10 @@ repo = "Flexipie/shepherd"
 base = "5002d85deefdb195fc7b34b497977074b39dd2e6"
 head = "281f9f57d4de0431fad6c2c8e313cede7ad92241"
 goal = "Palette: Return picks the highlighted row, not the first"
+known = [
+  { paths = ["Sources/ShepherdUI/Surfaces/Palette/PaletteView.swift"], words = ["results"], what = "by the change's own premise (PaletteView.swift:168-169, the field can keep an older onSubmit) its captured results is as stale as the selection was; not reproduced in the app" },
+  { paths = ["Sources/ShepherdUI/Surfaces/Palette/PaletteView.swift"], words = ["no test"], what = "real: the fix adds no test that Return picks a row other than the first" },
+]
 
 [[entry]]
 name = "shepherd-newtask-return"
@@ -85,6 +98,10 @@ repo = "Flexipie/shepherd"
 base = "c6cb8072d3d1ee64e8c006e10b2dd37d82f5e227"
 head = "e98175b7d94010de40ec8cd6417a36fa4758901b"
 goal = "New task: Return in the prompt field starts the task"
+known = [
+  { paths = ["Sources/ShepherdUI/Surfaces/Notch/NewTaskView.swift"], words = ["no test"], what = "real: the Return gate (modifiers, input method) has no test" },
+  { paths = ["Sources/ShepherdUI/Surfaces/Notch/NewTaskView.swift"], words = ["window"], what = "real: NewTaskView.swift:62 reads NSApp.keyWindow in ShepherdUI, against shepherd CLAUDE.md:37 (values in, no windows)" },
+]
 
 [[entry]]
 name = "shepherd-notch-flush"
@@ -106,3 +123,6 @@ repo = "Flexipie/strain"
 base = "754398eb76e7a952f684b1efcbdd435118318900"
 head = "782f5332460ebe9a47efc617a09adc1e5c4b5055"
 goal = "actions: stop children first and match the sheet to the rows"
+known = [
+  { paths = ["docs/todo.md"], words = ["todo"], what = "real: docs/todo.md:134-135 still list children-first stop and sheet attribution as open after this change fixed them" },
+]

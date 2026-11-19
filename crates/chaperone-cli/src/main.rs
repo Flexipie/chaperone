@@ -93,7 +93,12 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
             checks::merge(&Ledger::open(&path)?, work, head, &actor.resolve())
         }
         Cmd::Reviews(cmd) => checks::reviews(&Ledger::open(&path)?, cmd),
-        Cmd::Review(ReviewCmd::Eval { set, repos, only }) => eval::run(&path, &set, &repos, only),
+        Cmd::Review(ReviewCmd::Eval {
+            set,
+            repos,
+            only,
+            runs,
+        }) => eval::run(&path, &set, &repos, only, runs.into()),
         Cmd::Jobs(cmd) => checks::jobs(&Ledger::open(&path)?, cmd),
         Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),
         Cmd::Attention(cmd) => checks::attention(&Ledger::open(&path)?, cmd),

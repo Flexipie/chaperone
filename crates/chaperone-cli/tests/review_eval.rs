@@ -102,6 +102,7 @@ fn each_outcome_is_scored() {
         says("# Verify the review's findings", json!({"rulings": []})),
         says("GOAL-HIT", risk("hit.rs", "Overflow in add")),
         says("GOAL-ALARM", risk("alarm.rs", "alarm-title")),
+        says("GOAL-KNOWN", risk("known.rs", "A stale todo")),
         says("GOAL-REFUTED", refuted),
         says("GOAL-UNPROVEN", unproven),
         says("GOAL-BROKEN", json!({"bogus": 1})),
@@ -157,7 +158,7 @@ fn each_outcome_is_scored() {
         ]
     );
     let totals = json!({"hit": 2, "miss": 1, "false_alarm": 1, "clean": 2, "skipped": 2,
-        "error": 1});
+        "error": 1, "convention": 0, "fallbacks": 0});
     assert_eq!((&out["totals"], &out["score"]), (&totals, &json!("4/6")));
     assert_eq!(out["entries"][1]["bug"], "w");
     assert!(
@@ -169,18 +170,89 @@ fn each_outcome_is_scored() {
     let (_, only) = eval("set.toml", &["--only", "hit"]);
     assert_eq!(only["entries"].as_array().unwrap().len(), 1);
     assert_eq!(only["score"], "1/1");
+    let (_, twice) = eval("set.toml", &["--runs", "2"]);
+    assert_eq!(twice["entries"].as_array().unwrap().len(), 18);
+    assert_eq!(twice["entries"][1]["run"], 2);
+    assert_eq!(twice["per_entry"]["alarm"], json!({"false_alarm": 2}));
+    assert_eq!(twice["totals"]["hit"], 4);
+    assert_eq!(
+        (&twice["score"], &twice["mean"]),
+        (&json!("8/12"), &json!(4.67))
+    );
     // Refused, before any session: no such entry, a set that does not
     // parse, a name that is not a plain directory name.
     std::fs::write(dir.path().join("bad.toml"), "entry = 1\n").unwrap();
     std::fs::write(dir.path().join("dots.toml"), entry("../x", "o/demo")).unwrap();
+    let pathless =
+        entry("p", "o/demo") + "known = [{ paths = [], words = [\"w\"], what = \"w\" }]\n";
+    std::fs::write(dir.path().join("pathless.toml"), pathless).unwrap();
+    let twice = entry("t", "o/demo") + &entry("t", "o/demo");
+    std::fs::write(dir.path().join("twice.toml"), twice).unwrap();
+    let k = "{ paths = [\"a\"], words = [\"w\"], what = \"same\" }";
+    let whats = entry("w", "o/demo") + &format!("known = [{k}, {k}]\n");
+    std::fs::write(dir.path().join("whats.toml"), whats).unwrap();
     for (set, only, why) in [
         ("set.toml", &["--only", "nope"][..], "no entry \"nope\""),
         ("bad.toml", &[], "is not a review eval set"),
         ("dots.toml", &[], "entry name \"../x\""),
+        ("pathless.toml", &[], "with no paths"),
+        ("twice.toml", &[], "repeats a name"),
+        ("whats.toml", &[], "repeats a name or a known's what"),
     ] {
         let (ok, err) = eval(set, only);
         assert!(!ok && err["code"] == "invalid_input", "{err}");
         assert!(err["message"].as_str().unwrap().contains(why), "{err}");
     }
+    let (ok, err) = eval("set.toml", &["--runs", "0"]);
+    assert!(!ok && err["code"] == "usage", "{err}");
+    let base = git(&demo, &["rev-parse", "HEAD"]);
+    std::fs::write(demo.join("known.rs"), "fn f() {}\n").unwrap();
+    git(&demo, &["add", "."]);
+    git(&demo, &["commit", "-qm", "known"]);
+    let head = git(&demo, &["rev-parse", "HEAD"]);
+    let known = format!(
+        "[[entry]]\nname = \"known\"\nrepo = \"o/demo\"\nbase = \"{base}\"\nhead = \"{head}\"\n\
+         goal = \"GOAL-KNOWN\"\nknown = [{{ paths = [\"known.rs\"], words = [\"STALE\"], what = \"kw\" }}, {{ paths = [\"known.rs\"], words = [\"never\"], what = \"nw\" }}]\n"
+    );
+    std::fs::write(dir.path().join("known.toml"), known).unwrap();
+    let (ok, out) = eval("known.toml", &[]);
+    assert!(ok, "{out}");
+    let row = &out["entries"][0];
+    assert_eq!(
+        (&row["outcome"], &row["findings"]),
+        (&json!("clean"), &json!([]))
+    );
+    assert_eq!(
+        (&row["known"][0]["title"], &row["known"][0]["known"]),
+        (&json!("A stale todo"), &json!("kw"))
+    );
+    assert_eq!(
+        out["unused_known"],
+        json!([{"name": "known", "what": "nw"}])
+    );
+    let base = git(&demo, &["rev-parse", "HEAD"]);
+    std::fs::write(demo.join("big.rs"), "x\n".repeat(200)).unwrap();
+    git(&demo, &["add", "."]);
+    git(&demo, &["commit", "-qm", "big"]);
+    let head = git(&demo, &["rev-parse", "HEAD"]);
+    let big = format!(
+        "[[entry]]\nname = \"big\"\nrepo = \"o/demo\"\nbase = \"{base}\"\nhead = \"{head}\"\ngoal = \"g\"\n"
+    );
+    std::fs::write(dir.path().join("big.toml"), big).unwrap();
+    std::fs::remove_file(bin.join("codex")).unwrap();
+    std::fs::write(bin.join("codex"), "not a program").unwrap();
+    let (ok, fell) = eval("big.toml", &["--runs", "2"]);
+    assert!(ok, "{fell}");
+    assert_eq!(
+        fell["per_entry"]["big"],
+        json!({"clean": 2, "fallbacks": 2})
+    );
+    assert_eq!(
+        (
+            &fell["entries"][0]["fallbacks"],
+            &fell["totals"]["fallbacks"]
+        ),
+        (&json!(1), &json!(2))
+    );
     assert!(!db.exists(), "the eval opened the ledger");
 }

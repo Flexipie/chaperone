@@ -56,7 +56,7 @@ that stays only in this file is the last resort.
 | An event kind | `docs/events.md` and the enum updated together. The drift test passes. |
 | A CLI flag | The `--help` snapshot updated in the same commit. |
 | A performance budget | The table in the R14 note updated, with the measurement in the PR. |
-| A review prompt, model or lens | `chaperone review eval --repos <clones>` with main's build and with the PR's, both scores in the PR. The change is kept only if the score does not drop. |
+| A review prompt, model or lens | `chaperone review eval --repos <clones> --runs 3` with main's build and with the PR's, both `mean`s in the PR. The change is rejected only if its `mean` is 2 or more below main's. A comparison where either eval's `totals` has any `fallbacks` is not valid. |
 
 The five layers and their time limits:
 

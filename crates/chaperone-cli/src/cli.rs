@@ -814,13 +814,15 @@ pub enum RunKind {
 pub enum ReviewCmd {
     /// Run the newest pipeline's review lenses and verifier on each entry
     /// of a set of past changes, in a fresh checkout of its head, and print
-    /// per entry hit, miss, false_alarm, clean, skipped (not on this
-    /// machine) or error (a session did not run), totals and the score.
-    /// Never opens the ledger
+    /// per entry and run hit, miss, false_alarm, clean, convention (a clean
+    /// entry with only design_tests findings, not scored), skipped (not on
+    /// this machine) or error (a session did not run), each entry's k of N
+    /// runs, totals, the score and its mean per run. Never opens the ledger
     Eval {
         /// The set: TOML `[[entry]]` tables of name, repo, base, head, goal
         /// and, for a change with a bug the review must find, `bug = {paths,
-        /// words, what}`
+        /// words, what}`; `known`, a list of the same, matches real leftovers
+        /// that are not scored
         #[arg(long, default_value = "evals/review.toml")]
         set: PathBuf,
         /// The directory of the local clones: repo `owner/name` is read
@@ -830,6 +832,9 @@ pub enum ReviewCmd {
         /// Only the entry with this name
         #[arg(long)]
         only: Option<String>,
+        /// Review each entry this many times
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..))]
+        runs: u16,
     },
 }
 
