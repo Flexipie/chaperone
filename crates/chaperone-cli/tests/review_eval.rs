@@ -204,6 +204,9 @@ fn each_outcome_is_scored() {
         assert!(!ok && err["code"] == "invalid_input", "{err}");
         assert!(err["message"].as_str().unwrap().contains(why), "{err}");
     }
+    // At least one run.
+    let (ok, err) = eval("set.toml", &["--runs", "0"]);
+    assert!(!ok && err["code"] == "usage", "{err}");
     // A finding the entry's `known` matches is listed with its `what` and
     // not scored.
     let base = git(&demo, &["rev-parse", "HEAD"]);
