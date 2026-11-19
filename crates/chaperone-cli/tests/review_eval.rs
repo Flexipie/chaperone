@@ -170,7 +170,6 @@ fn each_outcome_is_scored() {
     let (_, only) = eval("set.toml", &["--only", "hit"]);
     assert_eq!(only["entries"].as_array().unwrap().len(), 1);
     assert_eq!(only["score"], "1/1");
-    // Each entry k of N runs; the fake answers alike, so every run agrees.
     let (_, twice) = eval("set.toml", &["--runs", "2"]);
     assert_eq!(twice["entries"].as_array().unwrap().len(), 18);
     assert_eq!(twice["entries"][1]["run"], 2);
@@ -204,11 +203,8 @@ fn each_outcome_is_scored() {
         assert!(!ok && err["code"] == "invalid_input", "{err}");
         assert!(err["message"].as_str().unwrap().contains(why), "{err}");
     }
-    // At least one run.
     let (ok, err) = eval("set.toml", &["--runs", "0"]);
     assert!(!ok && err["code"] == "usage", "{err}");
-    // A finding the entry's `known` matches is listed with its `what` and
-    // not scored.
     let base = git(&demo, &["rev-parse", "HEAD"]);
     std::fs::write(demo.join("known.rs"), "fn f() {}\n").unwrap();
     git(&demo, &["add", "."]);
@@ -234,8 +230,6 @@ fn each_outcome_is_scored() {
         out["unused_known"],
         json!([{"name": "known", "what": "nw"}])
     );
-    // Codex cannot start: a change big enough for its lens is reviewed by
-    // its fallback, counted per entry and in the totals.
     let base = git(&demo, &["rev-parse", "HEAD"]);
     std::fs::write(demo.join("big.rs"), "x\n".repeat(200)).unwrap();
     git(&demo, &["add", "."]);

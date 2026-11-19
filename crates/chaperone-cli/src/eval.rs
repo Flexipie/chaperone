@@ -91,8 +91,6 @@ pub fn run(
             return Err(refuse(format!("entry name {name:?} is not a-z0-9-")));
         }
     }
-    // A finding is matched by its path, so one with none would match nothing;
-    // the output keys an entry by its name and a `known` by its `what`.
     let mut names = BTreeSet::new();
     for e in &set.entry {
         if e.bug.iter().chain(&e.known).any(|b| b.paths.is_empty()) {
@@ -130,8 +128,7 @@ pub fn run(
     for e in &set.entry {
         let clone = repos.join(e.repo.rsplit('/').next().unwrap_or_default());
         let why = missing(&clone, e);
-        // Its own, so a run beside it never removes it; the lenses only
-        // read it, so every run shares it.
+        // Its own, so a run beside it never removes it.
         let checkout = match why {
             Some(_) => None,
             None => {
@@ -162,8 +159,6 @@ pub fn run(
             row["run"] = json!(n);
             entries.push(row);
         }
-        // A `known` no run matched may be worded out of date: shown, so it
-        // never drifts silently.
         if OUTCOMES[..5].iter().any(|o| counts.contains_key(o)) {
             let unused = e.known.iter().filter(|k| !matched.contains(&k.what));
             unused_known.extend(unused.map(|k| json!({"name": e.name, "what": k.what})));
@@ -248,7 +243,6 @@ fn review_one(
         .iter()
         .map(|l| (&l.lens, l.outcome.as_ref().err()));
     let mut ran = lenses.chain(verifier.iter().map(|v| (&v.lens, v.outcome.as_ref().err())));
-    // Sessions another engine answered (`fallback_from` in a lane's review).
     let fallbacks = review
         .lenses
         .iter()
@@ -349,7 +343,6 @@ mod tests {
     #[test]
     fn mean_leaves_out_unscored_rows() {
         assert_eq!(mean(26, 45, 15), 8.67);
-        // 3 runs of 15, two rows convention: 26 of 43 scored.
         assert_eq!(mean(26, 43, 15), 9.07);
         assert_eq!(mean(0, 0, 0), 0.0);
     }
