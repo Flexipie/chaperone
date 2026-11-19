@@ -700,8 +700,9 @@ fn companions(
 /// `[assets]` glob, and binary by git's own test (a NUL in the first 8000
 /// bytes) of the blob at `head`, or at `base`'s merge base when deleted.
 /// `cat-file` applies no attributes, so text an attributes rule hides is
-/// never one; a read that fails is none either. No asset when the diff
-/// changes a `.gitattributes`.
+/// never one; a blob neither side has is none either. Each read has a
+/// deadline of its own, and one past it refuses rather than read as no
+/// asset. No asset when the diff changes a `.gitattributes`.
 fn assets(
     wt: &Path,
     files: &[ChangedFile],
@@ -716,21 +717,27 @@ fn assets(
         return Ok(Vec::new());
     }
     let base = merge_base(wt, base, head)?;
-    let deadline = Instant::now() + RUN_TIMEOUT;
+    let bin = git::git_bin(Instant::now() + RUN_TIMEOUT);
     let first = |rev: &str, path: &str| {
         let blob = format!("{rev}:{path}");
         let args = ["cat-file", "blob", "--end-of-options", &blob];
-        git::git(Path::new("git"), wt, &args, deadline, 8000).ok()
+        match git::git(&bin, wt, &args, Instant::now() + RUN_TIMEOUT, 8000) {
+            Ok((bytes, _)) => Ok(Some(bytes)),
+            Err(git::Failure::TimedOut) => Err(refuse(format!("git cat-file {blob}: timed out"))),
+            Err(_) => Ok(None),
+        }
     };
-    let binary = |f: &&&ChangedFile| {
-        let blob = first(head, &f.path).or_else(|| first(&base, &f.path));
-        blob.is_some_and(|(bytes, _)| bytes.contains(&0))
-    };
-    Ok(named
-        .iter()
-        .filter(binary)
-        .map(|f| f.path.clone())
-        .collect())
+    let mut found = Vec::new();
+    for f in named {
+        let blob = match first(head, &f.path)? {
+            Some(bytes) => Some(bytes),
+            None => first(&base, &f.path)?,
+        };
+        if blob.is_some_and(|bytes| bytes.contains(&0)) {
+            found.push(f.path.clone());
+        }
+    }
+    Ok(found)
 }
 
 /// Of `files`, the code ones (named by `globs`, else not [`NOT_CODE`]),
