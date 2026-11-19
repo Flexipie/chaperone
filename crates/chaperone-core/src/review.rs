@@ -78,6 +78,8 @@ pub struct Facts {
     /// The code lines of the harness `diff` on `head`; none without one, or
     /// when it has uncounted files.
     pub code_lines: Option<i64>,
+    /// The paths of `files` the harness `diff` counts as assets.
+    pub assets: Vec<String>,
 }
 
 /// A lens as the pipeline defines it.
@@ -296,13 +298,25 @@ pub fn change(facts: &Facts) -> (String, bool) {
     let mut text = format!(
         "## The change\n\nYou are in a checkout of commit {head}; its merge base is {base}.\n\n\
          Files changed (lines added, removed, path; - for a file git counts no lines of: \
-         binary, or hidden by an attributes rule such as `-diff`, so not in the diff either):\n\n"
+         binary, or hidden by an attributes rule such as `-diff`, so not in the diff either; \
+         `asset` after the path: a binary the repo names an asset, which you cannot read, so \
+         judge it by its name):\n\n"
     );
     let count = |n: Option<u64>| n.map_or("-".into(), |n| n.to_string());
+    let asset = |p: &String| {
+        if facts.assets.contains(p) {
+            "\tasset"
+        } else {
+            ""
+        }
+    };
     let files: String = facts
         .files
         .iter()
-        .map(|f| format!("{}\t{}\t{}\n", count(f.added), count(f.removed), f.path))
+        .map(|f| {
+            let (added, removed) = (count(f.added), count(f.removed));
+            format!("{added}\t{removed}\t{}{}\n", f.path, asset(&f.path))
+        })
         .collect();
     text += &fenced("", &files);
     // A newline is never inside a character, so the cut is not either.
@@ -1194,10 +1208,10 @@ pub fn finish(
         ("complete".into(), json!(complete)),
         ("diff_bytes".into(), json!(review.diff_bytes)),
         ("diff_cut".into(), json!(review.diff_cut)),
-        // As `diff` counts them: in no lens's diff text.
+        // As `diff` counts them: in no lens's diff text, assets aside.
         (
             "uncounted_files".into(),
-            json!(facts.files.iter().filter(|f| f.added.is_none()).count()),
+            json!(facts.files.iter().filter(|f| f.added.is_none()).count() - facts.assets.len()),
         ),
     ]);
     // A blocking finding the verifier ruled unproven is kept as a question,
@@ -1341,6 +1355,7 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
             smoke: Value::Null,
             plan: String::new(),
             code_lines: None,
+            assets: vec!["logo.png".into()],
         }
     }
 
@@ -1391,8 +1406,10 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
         let want = format!(
             "## The change\n\nYou are in a checkout of commit {c}; its merge base is {b}.\n\n\
              Files changed (lines added, removed, path; - for a file git counts no lines of: \
-             binary, or hidden by an attributes rule such as `-diff`, so not in the diff either):\n\n\
-             ```\n3\t2\tsrc/a.rs\n-\t-\tlogo.png\n```\n\n## The diff\n\n```diff\n+a\n```\n"
+             binary, or hidden by an attributes rule such as `-diff`, so not in the diff either; \
+             `asset` after the path: a binary the repo names an asset, which you cannot read, so \
+             judge it by its name):\n\n\
+             ```\n3\t2\tsrc/a.rs\n-\t-\tlogo.png\tasset\n```\n\n## The diff\n\n```diff\n+a\n```\n"
         );
         assert_eq!((&*change, cut), (&*want, false));
         let p = pipeline(PIPELINE);

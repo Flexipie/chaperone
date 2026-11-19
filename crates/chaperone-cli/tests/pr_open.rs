@@ -105,7 +105,8 @@ fn lane(create: &[&str]) -> Lane {
         &["init", "-q", "--bare", "-b", "main", origin],
         &[],
     );
-    let profile: &[u8] = b"[tests]\ncommands = [[\"test\", \"!\", \"-e\", \"FAIL\"]]\n";
+    let profile: &[u8] =
+        b"[tests]\ncommands = [[\"test\", \"!\", \"-e\", \"FAIL\"]]\n[assets]\nglobs = [\"*.png\"]\n";
     let files: &[(&str, &[u8])] = &[("lib.rs", b"a\n"), (".chaperone/profile.toml", profile)];
     git(&wt, &["init", "-q", "-b", "main"], files);
     git(&wt, &["add", "."], &[]);
@@ -235,6 +236,22 @@ fn pr_open_refuses_what_cannot_pass() {
     git(&lane.wt, &["add", "blob"], &[("blob", b"\0\x01")]);
     git(&lane.wt, &["commit", "-qm", "blob"], &[]);
     refused("and 1 uncounted");
+}
+
+/// A binary an `[assets]` glob names opens its PR, whose Size line counts it.
+#[test]
+fn pr_open_lets_an_asset_through() {
+    let lane = lane(&[]);
+    git(&lane.wt, &["add", "logo.png"], &[("logo.png", b"\0\x01")]);
+    git(&lane.wt, &["commit", "-qm", "logo"], &[]);
+    let (code, err) = lane.run("lane", &["pr", "open", "--work", "1"]);
+    assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
+    let size = "- Size: 1 code lines and 0 test lines in 2 files, 1 of them assets\n";
+    assert!(
+        lane.file("body.md").contains(size),
+        "{}",
+        lane.file("body.md")
+    );
 }
 
 /// A GitHub lane's body closes its issue: by its full key before the PR

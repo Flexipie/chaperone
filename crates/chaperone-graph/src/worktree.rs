@@ -393,6 +393,14 @@ struct Size {
     tests: Vec<String>,
 }
 
+/// `[assets]`, a table of its own as `[size]` is: the globs of asset files,
+/// those with no line counts that a size gate does not refuse.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Assets {
+    globs: Vec<String>,
+}
+
 /// A `[[companions]]` rule (its own table, so a binary that predates it
 /// still loads `[diff]`): a diff that changes a file `when` names
 /// must change one `needs` names too.
@@ -422,6 +430,8 @@ pub struct BaseCode {
     pub code: Vec<String>,
     /// `[size] tests`: code files counted as test lines.
     pub tests: Vec<String>,
+    /// `[assets] globs`: binary files the size gate lets through.
+    pub assets: Vec<String>,
     pub companions: Vec<Companion>,
     /// `[[review.required]]`: the lenses a review of the files they name needs.
     pub required: Vec<Required>,
@@ -433,7 +443,7 @@ pub struct BaseCode {
 /// The [`BaseCode`] of the base branch's [`REPO_PROFILE`] for the repo
 /// `dir` is in; None when there is none. No `[diff]` names no globs. A
 /// profile that is a link or no file, is not TOML, or whose `[diff]`, `[size]`,
-/// `[[companions]]` or `[[review.required]]` does not load refuses, as does a rule
+/// `[assets]`, `[[companions]]` or `[[review.required]]` does not load refuses, as does a rule
 /// with an empty list or a name that is empty or holds a space or `:` (a trailer
 /// names a companion rule, a lens row a required lens), or a blank prompt.
 pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<BaseCode>, Error> {
@@ -453,6 +463,13 @@ pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<Ba
         .transpose()
         .map_err(bad)?
         .map_or_else(Vec::new, |s| s.tests);
+    let assets = profile
+        .remove("assets")
+        .map(toml::Value::try_into::<Assets>);
+    let assets = assets
+        .transpose()
+        .map_err(bad)?
+        .map_or_else(Vec::new, |a| a.globs);
     let rules = profile
         .remove("companions")
         .map(toml::Value::try_into::<Vec<Companion>>);
@@ -489,6 +506,7 @@ pub fn code_globs(bin: &Path, dir: &Path, deadline: Instant) -> Result<Option<Ba
     Ok(Some(BaseCode {
         code,
         tests,
+        assets,
         companions,
         required,
         hash: format!("{:x}", Sha256::digest(&found.text)),

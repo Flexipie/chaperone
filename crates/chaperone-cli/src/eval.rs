@@ -232,6 +232,7 @@ fn review_one(
         smoke: Value::Null,
         plan: String::new(),
         code_lines: counted.then_some(lines as i64),
+        assets: Vec::new(),
     };
     let io = |e: std::io::Error| CliError::Internal(e.to_string());
     let review = review::run(&plan.lenses, agents, dir, &facts, store).map_err(io)?;
