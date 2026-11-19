@@ -1213,6 +1213,7 @@ pub fn finish(
             "uncounted_files".into(),
             json!(facts.files.iter().filter(|f| f.added.is_none()).count() - facts.assets.len()),
         ),
+        ("asset_files".into(), json!(facts.assets.len())),
     ]);
     // A blocking finding the verifier ruled unproven is kept as a question,
     // with the severity its lens gave and the verifier's why.

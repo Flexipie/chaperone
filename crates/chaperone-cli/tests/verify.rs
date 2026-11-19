@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use chaperone_core::ledger::lock_lane;
+use chaperone_core::ledger::{Evidence, lock_lane};
 use chaperone_core::review;
 use serde_json::{Value, json};
 
@@ -422,6 +422,28 @@ fn a_diff_with_an_uncounted_file_runs_the_codex_lens() {
     git(&lane.wt, &["commit", "-qm", "bin"], &[]);
     lane.verify();
     assert_eq!(lane.codex().0["ran"], true);
+}
+
+/// A binary an `[assets]` glob names is an asset to the review too: not
+/// uncounted, so a small diff still skips the Codex lens, and each lens's
+/// file list marks it.
+#[test]
+fn a_review_counts_an_asset_apart() {
+    let rules = "[assets]\nglobs = [\"*.png\"]\n";
+    let lane = lane_on(claude(json!({"findings": []}), json!([])), rules);
+    lane.answer("lane", "accept");
+    git(&lane.wt, &["add", "logo.png"], &[("logo.png", b"\0\x01")]);
+    git(&lane.wt, &["commit", "-qm", "logo"], &[]);
+    lane.verify();
+    let p = lane.review();
+    assert_eq!(
+        (&p["uncounted_files"], &p["asset_files"]),
+        (&json!(0), &json!(1))
+    );
+    assert_eq!(lane.codex().0["ran"], false);
+    let row = &p["lenses"][0];
+    let prompt = Evidence::beside(&lane.db).get(row["prompt_ref"].as_str().unwrap());
+    assert!(prompt.unwrap().contains("-\t-\tlogo.png\tasset\n"), "{row}");
 }
 
 /// The plugin's stop hook on a ready lane: nothing while the branch is at
