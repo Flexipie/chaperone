@@ -379,6 +379,95 @@ pub fn declares(bin: &Path, dir: &Path, table: &str, deadline: Instant) -> Resul
     }
 }
 
+/// The `[pr]` rules of a base branch's profile that `chaperone pr open`
+/// keeps to. Its other keys (`flow`, `create`, `address`, `merge`,
+/// `stack`) are accepted and not read.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrRules {
+    /// The title template: `{type}` one of `types`, `{key}` the lane's
+    /// tracker key, `{text}` the lane's words, the rest literal.
+    pub title: Option<String>,
+    pub types: Vec<String>,
+    /// The body's first lines, `{key}` filled.
+    pub head: Vec<String>,
+    /// Set with the reviewers when the PR is first recorded.
+    pub assignee: Option<String>,
+    pub reviewers: Vec<String>,
+}
+
+impl PrRules {
+    /// Whether `title` fills the template with `key`, one of `types` and a
+    /// `{text}` that is not empty and has no space at either end. With no
+    /// template, any title fits.
+    pub fn fits(&self, title: &str, key: &str) -> bool {
+        let Some(template) = &self.title else {
+            return true;
+        };
+        let Some((pre, post)) = template.split_once("{text}") else {
+            return false;
+        };
+        let none = [String::new()];
+        let types = match template.contains("{type}") {
+            true => &self.types[..],
+            false => &none[..],
+        };
+        let fill = |s: &str, t: &str| s.replace("{type}", t).replace("{key}", key);
+        types.iter().any(|t| {
+            let text = title.strip_prefix(&fill(pre, t));
+            let text = text.and_then(|r| r.strip_suffix(&fill(post, t)));
+            text.is_some_and(|text| !text.is_empty() && text.trim() == text)
+        })
+    }
+
+    /// The `head` lines with `{key}` filled, then a blank line; empty when
+    /// there are none.
+    pub fn head(&self, key: &str) -> String {
+        let head: String = self
+            .head
+            .iter()
+            .map(|l| l.replace("{key}", key) + "\n")
+            .collect();
+        if head.is_empty() { head } else { head + "\n" }
+    }
+}
+
+/// The [`PrRules`] of the base branch's [`REPO_PROFILE`] for the repo `dir`
+/// is in, never the worktree's copy; none when there is no profile or no
+/// `[pr]`. A profile that is not TOML, a `[pr]` that does not load, or a
+/// `title` without exactly one `{text}`, with a second `{type}` or `{key}`,
+/// another brace, or `{type}` and no `types` refuses.
+pub fn pr_rules(bin: &Path, dir: &Path, deadline: Instant) -> Result<PrRules, Error> {
+    let Some(found) = base_profile(bin, dir, deadline)? else {
+        return Ok(PrRules::default());
+    };
+    let bad = |why: &str| Error::Invalid(format!("profile {}: {why}", found.at()));
+    let mut profile: toml::Table = toml::from_str(&found.text).map_err(|e| bad(e.message()))?;
+    let Some(pr) = profile.remove("pr") else {
+        return Ok(PrRules::default());
+    };
+    let mut pr: toml::Table = pr.try_into().map_err(|e| bad(e.message()))?;
+    for key in ["flow", "create", "address", "merge", "stack"] {
+        pr.remove(key);
+    }
+    let rules: PrRules = toml::Value::Table(pr)
+        .try_into()
+        .map_err(|e| bad(e.message()))?;
+    if let Some(t) = &rules.title {
+        let rest = t.replacen("{text}", "", 1).replacen("{type}", "", 1);
+        if t.matches("{text}").count() != 1
+            || rest.replacen("{key}", "", 1).contains(['{', '}'])
+            || (t.contains("{type}") && rules.types.is_empty())
+        {
+            return Err(bad(&format!(
+                "[pr] title {t:?} needs one {{text}}, at most one {{type}} and one {{key}}, no \
+                 other brace, and `types` when it names {{type}}"
+            )));
+        }
+    }
+    Ok(rules)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Diff {
