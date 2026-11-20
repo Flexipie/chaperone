@@ -73,8 +73,10 @@ impl Lane {
 
 /// Lane 1 on v20 on branch `feat`, one commit (one code line) past `main`
 /// on `origin`; the base profile's test fails when a file `FAIL` exists.
-/// Its plan check is waived by the owner; `create` adds to `work create`.
-fn lane(create: &[&str]) -> Lane {
+/// Its plan check is waived by the owner; `create` adds to `work create`,
+/// `pr` to the base profile. The fake's `gh api user` is `me`, and its
+/// `gh pr view` title the file `title`.
+fn lane(create: &[&str], pr: &str) -> Lane {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, bin) = (
         dir.path().join("ledger.db"),
@@ -84,7 +86,7 @@ fn lane(create: &[&str]) -> Lane {
     std::fs::create_dir_all(wt.join(".chaperone")).unwrap();
     std::fs::create_dir(&bin).unwrap();
     let (log, body) = (dir.path().join("gh.log"), dir.path().join("body.md"));
-    let opened = dir.path().join("opened");
+    let (opened, title) = (dir.path().join("opened"), dir.path().join("title"));
     let gh = bin.join("gh");
     std::fs::write(
         &gh,
@@ -92,7 +94,7 @@ fn lane(create: &[&str]) -> Lane {
             "#!/bin/sh\necho \"$*\" >> {log:?}\ncase $2 in\n\
              list) cat {opened:?} 2>/dev/null;;\n\
              create) cat > {body:?}; echo https://github.com/o/r/pull/7 > {opened:?}; exit 1;;\n\
-             edit) cat > {body:?};;\nesac\nexit 0\n"
+             edit) cat > {body:?};;\nuser) echo me;;\nview) cat {title:?};;\nesac\nexit 0\n"
         ),
     )
     .unwrap();
@@ -105,8 +107,9 @@ fn lane(create: &[&str]) -> Lane {
         &["init", "-q", "--bare", "-b", "main", origin],
         &[],
     );
-    let profile: &[u8] = b"[tests]\ncommands = [[\"test\", \"!\", \"-e\", \"FAIL\"]]\n";
-    let files: &[(&str, &[u8])] = &[("lib.rs", b"a\n"), (".chaperone/profile.toml", profile)];
+    let profile = format!("[tests]\ncommands = [[\"test\", \"!\", \"-e\", \"FAIL\"]]\n{pr}");
+    let profile = (".chaperone/profile.toml", profile.as_bytes());
+    let files: &[(&str, &[u8])] = &[("lib.rs", b"a\n"), profile];
     git(&wt, &["init", "-q", "-b", "main"], files);
     git(&wt, &["add", "."], &[]);
     git(&wt, &["commit", "-qm", "base"], &[]);
@@ -141,7 +144,7 @@ fn lane(create: &[&str]) -> Lane {
 /// that edits the PR the lane holds and records nothing.
 #[test]
 fn pr_open_creates_the_pr_from_ledger_facts() {
-    let lane = lane(&[]);
+    let lane = lane(&[], "");
     let head = git(&lane.wt, &["rev-parse", "HEAD"], &[]);
     let open = ["pr", "open", "--work", "1"];
     let (code, err) = lane.run("lane", &open);
@@ -189,7 +192,7 @@ fn pr_open_creates_the_pr_from_ledger_facts() {
 /// or gh call; the owner's size waiver lifts only the line limit.
 #[test]
 fn pr_open_refuses_what_cannot_pass() {
-    let lane = lane(&[]);
+    let lane = lane(&[], "");
     let refused = |says: &str| {
         let (code, err) = lane.run("lane", &["pr", "open", "--work", "1"]);
         assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
@@ -247,11 +250,115 @@ fn pr_open_closes_a_github_lanes_issue() {
         ("o/r#5", "Closes o/r#5", "Closes #5"),
         ("x/y#5", "Closes x/y#5", "Closes x/y#5"),
     ] {
-        let lane = lane(&["--source", "github", "--source-id", issue]);
+        let lane = lane(&["--source", "github", "--source-id", issue], "");
         let closes = |line: &str| format!("Tracker: {issue}\n\n{line}\n\n- Size");
         assert_eq!(lane.run("lane", &open).0, 1);
         assert!(lane.file("body.md").contains(&closes(created)));
         assert_eq!(lane.run("lane", &open).0, 0);
         assert!(lane.file("body.md").contains(&closes(edited)));
     }
+}
+
+const RULES: &str = "[pr]\nflow = \"pr\"\ntitle = \"{type}({key}): {text}\"\n\
+    types = [\"feat\", \"fix\"]\nhead = [\"linear: [{key}](https://l/{key})\"]\n\
+    assignee = \"@me\"\nreviewers = [\"ana\", \"Me\"]\n";
+
+/// With the base profile's `[pr]` rules, a missing or off-template title is
+/// refused before any gh call or push; the create sets the assignee and the
+/// reviewers but the gh login, and so does the first recorded edit of a PR
+/// the create left unrecorded. A later edit keeps the PR's own title when it
+/// fits and sets neither again; the head line leads every body.
+#[test]
+fn pr_open_follows_the_base_profiles_pr_rules() {
+    let lane = lane(&["--source", "linear", "--source-id", "CORE-12"], RULES);
+    let open = ["pr", "open", "--work", "1"];
+    let run = |args: &[&str]| lane.run("lane", &[&open[..], args].concat());
+    let refused = |args: &[&str], says: &str| {
+        let (code, err) = run(args);
+        assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+        assert!(err["message"].as_str().unwrap().contains(says), "{err}");
+    };
+    refused(&[], "passes a --title that fits");
+    for off in [
+        "chore(CORE-12): Do it",
+        "feat(CORE-1): Do it",
+        "feat(CORE-12): ",
+        "feat(CORE-12):  Do it",
+        "feat(CORE-12): Do it ",
+    ] {
+        refused(&["--title", off], "does not fit");
+    }
+    assert_eq!(lane.file("gh.log") + &lane.pushed(), "");
+
+    let title = "feat(CORE-12): Do it";
+    let (code, err) = run(&["--title", title]);
+    assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
+    let list = "pr list --head feat --json url --jq .[0].url\n";
+    let me = "api user --jq .login\n";
+    let create = format!(
+        "pr create --base main --head feat --title {title} --assignee @me --reviewer ana \
+         --body-file -\n"
+    );
+    assert_eq!(lane.file("gh.log"), [list, me, &create].concat());
+    assert_eq!(run(&["--title", title]).0, 0);
+    let recovered = format!(
+        "pr edit 7 --repo o/r --title {title} --add-assignee @me --add-reviewer ana \
+         --body-file -\n"
+    );
+    std::fs::write(lane.dir.path().join("title"), format!("{title}\n")).unwrap();
+    assert_eq!(run(&[]).0, 0);
+    let view = "pr view 7 --repo o/r --json title --jq .title\n";
+    let edit = "pr edit 7 --repo o/r --body-file -\n";
+    let log = [list, me, &create, list, me, &recovered, view, edit].concat();
+    assert_eq!(lane.file("gh.log"), log);
+    let led = "linear: [CORE-12](https://l/CORE-12)\n\nt\n\nTracker: CORE-12\n\n- Size";
+    assert!(
+        lane.file("body.md").starts_with(led),
+        "{}",
+        lane.file("body.md")
+    );
+
+    std::fs::write(lane.dir.path().join("title"), "Do it\n").unwrap();
+    refused(&[], "does not fit");
+    assert_eq!(lane.file("gh.log"), log + view);
+}
+
+/// A `[pr]` rule that cannot be kept refuses before any gh call or push: a
+/// title or head on a lane with no tracker key, an unknown key, and a title
+/// template with no `{text}`, a second `{type}`, another brace, or `{type}`
+/// and no `types`. A template with no `{type}` needs no `types`.
+#[test]
+fn pr_open_refuses_a_broken_pr_rule() {
+    let key = ["--source", "linear", "--source-id", "CORE-12"];
+    for (create, pr, says) in [
+        (&[][..], "head = [\"x\"]", "need a tracker key"),
+        (&key[..], "reviewer = [\"ana\"]", "unknown field"),
+        (&key[..], "title = \"{key}\"", "needs one {text}"),
+        (
+            &key[..],
+            "title = \"{type}{type} {text}\"\ntypes = [\"a\"]",
+            "needs one {text}",
+        ),
+        (&key[..], "title = \"{kind} {text}\"", "needs one {text}"),
+        (&key[..], "title = \"{type}: {text}\"", "needs one {text}"),
+    ] {
+        let lane = lane(create, &format!("[pr]\n{pr}\n"));
+        let (code, err) = lane.run("lane", &["pr", "open", "--work", "1", "--title", "x"]);
+        assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+        assert!(
+            err["message"].as_str().unwrap().contains(says),
+            "{pr}: {err}"
+        );
+        assert_eq!(lane.file("gh.log") + &lane.pushed(), "");
+    }
+    let lane = lane(&key, "[pr]\ntitle = \"{key}: {text}\"\n");
+    let (code, err) = lane.run(
+        "lane",
+        &["pr", "open", "--work", "1", "--title", "CORE-12: Do it"],
+    );
+    assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
+    assert!(
+        lane.file("gh.log")
+            .contains("--title CORE-12: Do it --body-file -")
+    );
 }

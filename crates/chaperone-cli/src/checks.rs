@@ -27,7 +27,7 @@ use chaperone_core::runner::{Agent, session_var};
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
 use chaperone_core::work::{UpdateInput, WorkItem, is_terminal};
-use chaperone_graph::{Companion, Required, code_globs, commands_in, declares, glob};
+use chaperone_graph::{Companion, Required, code_globs, commands_in, declares, glob, pr_rules};
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
@@ -264,7 +264,9 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
 /// past the pipeline's `code_lines` limit or when the tests fail. Then the
 /// push of that commit and `gh pr create`, or `gh pr edit` on the PR the
 /// lane holds or gh lists for the branch, with [`pr_body`]; a PR new to the
-/// ledger is `pr.opened` on the commit.
+/// ledger is `pr.opened` on the commit. The base profile's [`chaperone_graph::PrRules`]
+/// hold: a title that fits, the head lines first in the body, and the
+/// assignee and reviewers set when the PR is first recorded.
 pub fn pr_open(
     ledger: &Ledger,
     db: &Path,
@@ -287,6 +289,53 @@ pub fn pr_open(
              {head}): commit or stash the change, check out the branch, and run again",
             wt.display()
         )));
+    }
+    let rules = pr_rules(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
+    let key = item.source_key.clone().unwrap_or_default();
+    if (rules.title.is_some() || !rules.head.is_empty()) && item.source_key.is_none() {
+        return Err(refuse(format!(
+            "the base profile's [pr] title and head need a tracker key; work item {work} has none"
+        )));
+    }
+    let off = |t: &str| {
+        refuse(format!(
+            "the title {t:?} does not fit the base profile's [pr] title {:?} (types {:?}, key \
+             {key:?}): pass a --title that does",
+            rules.title.as_deref().unwrap_or_default(),
+            rules.types
+        ))
+    };
+    if let Some(t) = title.as_deref().filter(|t| !rules.fits(t, &key)) {
+        return Err(off(t));
+    }
+    let gh = |args: &[&str], input: Option<&[u8]>| {
+        let failed = |why: &str| CliError::Internal(format!("gh {}: {why}", args[..2].join(" ")));
+        let mut cmd = Command::new(gh);
+        let deadline = Instant::now() + FORGE_TIMEOUT;
+        match child::run_input(cmd.args(args).current_dir(&wt), input, deadline, 1 << 20) {
+            Ok(done) if done.status.success() => {
+                Ok(String::from_utf8_lossy(&done.out).into_owned())
+            }
+            Ok(done) => Err(failed(String::from_utf8_lossy(&done.err).trim())),
+            Err(child::Failed::TimedOut) => Err(failed("timed out")),
+            Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => Err(failed(&e.to_string())),
+        }
+    };
+    if rules.title.is_some() && title.is_none() {
+        let no_title = || {
+            let why =
+                "the base profile has a [pr] title: a lane with no PR passes a --title that fits";
+            refuse(why.into())
+        };
+        let pr = item.pr_ref.as_deref().and_then(|pr| pr.rsplit_once('#'));
+        let (repo, n) = pr.ok_or_else(no_title)?;
+        let args = [
+            "pr", "view", n, "--repo", repo, "--json", "title", "--jq", ".title",
+        ];
+        let now = gh(&args, None)?;
+        if !rules.fits(now.trim_end_matches('\n'), &key) {
+            return Err(off(now.trim_end_matches('\n')));
+        }
     }
     // Before any push: a PR the ledger then refuses would go unrecorded.
     if item.pr_ref.is_none() {
@@ -328,19 +377,6 @@ pub fn pr_open(
             tests["evidence_ref"]
         )));
     }
-    let gh = |args: &[&str], input: Option<&[u8]>| {
-        let failed = |why: &str| CliError::Internal(format!("gh pr {}: {why}", args[1]));
-        let mut cmd = Command::new(gh);
-        let deadline = Instant::now() + FORGE_TIMEOUT;
-        match child::run_input(cmd.args(args).current_dir(&wt), input, deadline, 1 << 20) {
-            Ok(done) if done.status.success() => {
-                Ok(String::from_utf8_lossy(&done.out).into_owned())
-            }
-            Ok(done) => Err(failed(String::from_utf8_lossy(&done.err).trim())),
-            Err(child::Failed::TimedOut) => Err(failed("timed out")),
-            Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => Err(failed(&e.to_string())),
-        }
-    };
     // gh names a PR by its URL: https://github.com/<owner>/<repo>/pull/<n>.
     let pr_of = |url: &str| {
         let (repo, n) = url.trim().split_once("/pull/")?;
@@ -359,7 +395,15 @@ pub fn pr_open(
         )?),
     };
     let held = item.pr_ref.clone().or(listed.clone());
-    let body = pr_body(ledger, db, &item, held.as_deref(), &head, &diff, &tests)?;
+    // Requesting a review notifies: only when the PR is first recorded.
+    let mut reviewers = rules.reviewers.clone();
+    if item.pr_ref.is_none() && !reviewers.is_empty() {
+        let me = gh(&["api", "user", "--jq", ".login"], None)?;
+        reviewers.retain(|r| !r.eq_ignore_ascii_case(me.trim()));
+    }
+    let reviewers = reviewers.join(",");
+    let body =
+        rules.head(&key) + &pr_body(ledger, db, &item, held.as_deref(), &head, &diff, &tests)?;
     let push = format!("{head}:refs/heads/{branch}");
     harness_git(
         &wt,
@@ -373,6 +417,18 @@ pub fn pr_open(
     let title = title.or(held.is_none().then(|| item.title.clone()));
     if let Some(title) = &title {
         args.extend(["--title", title]);
+    }
+    if item.pr_ref.is_none() {
+        let (assign, review) = match listed {
+            Some(_) => ("--add-assignee", "--add-reviewer"),
+            None => ("--assignee", "--reviewer"),
+        };
+        if let Some(assignee) = &rules.assignee {
+            args.extend([assign, assignee]);
+        }
+        if !reviewers.is_empty() {
+            args.extend([review, &reviewers]);
+        }
     }
     args.extend(["--body-file", "-"]);
     args.extend((draft && held.is_none()).then_some("--draft"));

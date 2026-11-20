@@ -118,7 +118,7 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
                 .collect();
             let starts = |seq: &[&str]| parts.iter().any(|p| p.starts_with(seq));
             let ready = ["chaperone", "work", "ready"];
-            let reason = if starts(&["gh", "pr", "create"]) {
+            let reason = if starts(&["gh", "pr", "create"]) || starts(&["gh", "pr", "edit"]) {
                 format!("Open the PR with `chaperone pr open --work {work}`.")
             } else if starts(&["gh", "pr", "merge"]) {
                 "The owner merges, with `chaperone merge`.".to_string()

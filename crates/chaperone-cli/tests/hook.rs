@@ -167,6 +167,7 @@ fn pre_bash_denies_what_the_binary_owns() {
         ("gh pr create --fill", open),
         ("url=$(gh pr create --fill)", open),
         ("(gh pr create)", open),
+        ("gh pr edit 5 --title x", open),
         ("cd wt && GH_DEBUG=1 gh pr merge 5 --squash", merge),
         ("chaperone work ready 1 --yes;", ready),
         ("gh pr view \"$PR\" | grep merge", ""),

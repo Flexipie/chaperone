@@ -20,7 +20,7 @@ variable does not last between calls). The plan, handoff JSON and `lane-state.md
 
 ## Never
 
-- `gh pr create`, `gh pr merge`, `chaperone work ready --yes`: the hook denies them.
+- `gh pr create`, `gh pr edit`, `gh pr merge`, `chaperone work ready --yes`: the hook denies them.
   `chaperone pr open` opens the PR; the owner merges.
 - Push to the base branch, push the branch yourself, merge, `--no-verify`, amend or rebase
   after `pr open` (it pushes without force).
@@ -125,7 +125,10 @@ ledger keeps a copy; `pr open` refuses untracked files. A code change with no sm
 ## 7. Open the PR
 
 `chaperone pr open --work $2` pushes and opens or updates the PR, its body from the ledger.
-Its refusals name the fix; a gh failure (`internal`): retry once, then Needs you. Note `pr`.
+When the base profile's `[pr]` has a `title` (`git show origin/<base>:.chaperone/profile.toml`),
+pass `--title` filled from it: `{key}` the task's key exactly, `{type}` one of `types` that fits
+the change, `{text}` a short title. Its refusals name the fix; a gh failure (`internal`): retry
+once, then Needs you. Note `pr`.
 
 ## 8. Ready handoff
 

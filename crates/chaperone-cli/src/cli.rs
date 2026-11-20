@@ -196,7 +196,8 @@ pub enum Cmd {
 pub enum HookEvent {
     /// The lane's state, gates not passing yet and commands, as context
     SessionStart,
-    /// Deny `gh pr create`, `gh pr merge` and `chaperone work ready --yes`
+    /// Deny `gh pr create`, `gh pr edit`, `gh pr merge` and `chaperone work
+    /// ready --yes`
     PreBash,
     /// Block a stop once the branch moved past the lane's ready handoff
     Stop,
@@ -220,7 +221,10 @@ pub enum PrCmd {
     Open {
         #[arg(long)]
         work: i64,
-        /// Default on create: the work item's title; on edit, kept
+        /// Default on create: the work item's title; on edit, kept. With the
+        /// base profile's `[pr] title`, needed until the lane records its PR and
+        /// refused unless it fits; after that, the PR's own title is kept only
+        /// when it fits
         #[arg(long)]
         title: Option<String>,
         /// Open it as a draft (create only)
