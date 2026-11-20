@@ -360,7 +360,8 @@ pub fn pr_open(
         |limit: &&i64| (lines.as_i64().is_none_or(|n| n > **limit) && !waived) || uncounted != 0;
     if let Some(limit) = lane_pipeline(&item)?.limits.get("code_lines").filter(over) {
         return Err(refuse(format!(
-            "the diff has {lines} code lines and {uncounted} uncounted (binary) files; the \
+            "the diff has {lines} code lines and {uncounted} uncounted (binary) files no \
+             `[assets]` glob names; the \
              pipeline allows {limit} and none: split the lane, or ask the owner for \
              `check waive size`"
         )));
@@ -536,8 +537,10 @@ fn pr_body(
         let files = claim["evidence_files"].as_array().map_or(0, Vec::len);
         smokes.push(format!("session claim {outcome}, {files} evidence files"));
     }
+    let assets = diff["asset_files"].as_u64().filter(|n| *n > 0);
+    let assets = assets.map_or_else(String::new, |n| format!(", {n} of them assets"));
     body += &format!(
-        "- Size: {} code lines and {} test lines in {} files\n- Tests: passed on {head}: {}\n\
+        "- Size: {} code lines and {} test lines in {} files{assets}\n- Tests: passed on {head}: {}\n\
          - Plan check: {plan}\n- Smoke: {}\n\nMade by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],
         diff["test_lines"],
@@ -640,6 +643,8 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     companions(&wt, &base, &input.head, &files, rules)?;
     let tests = found.as_ref().map_or(&[][..], |f| &f.tests);
     let (code, code_lines, test_lines) = code(&files, globs, tests);
+    let asset_globs = found.as_ref().map_or(&[][..], |f| &f.assets);
+    let assets = assets(&wt, &files, asset_globs, &base, &input.head)?;
     let added: u64 = files.iter().filter_map(|f| f.added).sum();
     let removed: u64 = files.iter().filter_map(|f| f.removed).sum();
     input.fields = Map::from_iter([
@@ -652,16 +657,24 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         ("changes_code".into(), json!(!code.is_empty())),
         // Binary, or text an attributes rule (`-diff`) hides: no lines
         // counted, so a size gate can refuse rather than trust the totals.
+        // An asset is a binary the owner named, so not one of them.
         (
             "uncounted_files".into(),
-            json!(files.iter().filter(|f| f.added.is_none()).count()),
+            json!(files.iter().filter(|f| f.added.is_none()).count() - assets.len()),
         ),
+        ("asset_files".into(), json!(assets.len())),
     ]);
     // One row per line: the store keeps a long text's end, and a cut list
     // still reads line by line.
     let list: String = files
         .iter()
-        .map(|f| json!({"path": f.path, "added": f.added, "removed": f.removed}).to_string() + "\n")
+        .map(|f| {
+            let mut row = json!({"path": f.path, "added": f.added, "removed": f.removed});
+            if assets.contains(&f.path) {
+                row["asset"] = json!(true);
+            }
+            row.to_string() + "\n"
+        })
         .collect();
     let stored = Evidence::beside(db).put(&list).map_err(LedgerError::from)?;
     let truncated = json!(stored.truncated);
@@ -737,6 +750,50 @@ fn companions(
         "{}; change it too, or add a trailer `No-companion: <rule> <why>` to a lane commit",
         why.join("; ")
     )))
+}
+
+/// Of `files`, the paths of the assets: no line counts, named by an
+/// `[assets]` glob, and binary by git's own test (a NUL in the first 8000
+/// bytes) of the blob at `head`, or at `base`'s merge base when deleted.
+/// `cat-file` applies no attributes, so text an attributes rule hides is
+/// never one; a blob neither side has is none either. Each read has a
+/// deadline of its own, and one past it refuses rather than read as no
+/// asset. No asset when the diff changes a `.gitattributes`.
+fn assets(
+    wt: &Path,
+    files: &[ChangedFile],
+    globs: &[String],
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>, CliError> {
+    let attributes = |f: &ChangedFile| f.path.rsplit('/').next() == Some(".gitattributes");
+    let named = |f: &&ChangedFile| f.added.is_none() && globs.iter().any(|g| glob(g, &f.path));
+    let named: Vec<_> = files.iter().filter(named).collect();
+    if named.is_empty() || files.iter().any(attributes) {
+        return Ok(Vec::new());
+    }
+    let base = merge_base(wt, base, head)?;
+    let bin = git::git_bin(Instant::now() + RUN_TIMEOUT);
+    let first = |rev: &str, path: &str| {
+        let blob = format!("{rev}:{path}");
+        let args = ["cat-file", "blob", "--end-of-options", &blob];
+        match git::git(&bin, wt, &args, Instant::now() + RUN_TIMEOUT, 8000) {
+            Ok((bytes, _)) => Ok(Some(bytes)),
+            Err(git::Failure::TimedOut) => Err(refuse(format!("git cat-file {blob}: timed out"))),
+            Err(_) => Ok(None),
+        }
+    };
+    let mut found = Vec::new();
+    for f in named {
+        let blob = match first(head, &f.path)? {
+            Some(bytes) => Some(bytes),
+            None => first(&base, &f.path)?,
+        };
+        if blob.is_some_and(|bytes| bytes.contains(&0)) {
+            found.push(f.path.clone());
+        }
+    }
+    Ok(found)
 }
 
 /// Of `files`, the code ones (named by `globs`, else not [`NOT_CODE`]),
@@ -1239,6 +1296,9 @@ fn change(
     let base = merge_base(wt, &base, head)?;
     let checkout = lane_checkout(db, wt, item.id, head, Instant::now() + CHECKOUT_TIMEOUT)?;
     let diff = diff(&checkout.dir, &base, head)?;
+    let found = code_globs(Path::new("git"), wt, Instant::now() + RUN_TIMEOUT)?;
+    let globs = found.as_ref().map_or(&[][..], |f| &f.assets);
+    let assets = assets(wt, &files, globs, &base, head)?;
     // A count that leaves files out is no size to skip a lens on.
     let measured = ledger.project(item.id, Some(head))?;
     // Code and test lines both, as the lens minimums were measured (#223).
@@ -1263,6 +1323,7 @@ fn change(
         plan: review::plan_findings(ledger, item.id)?
             + &review::earlier_section(&review::earlier(ledger, item.id)?),
         code_lines,
+        assets,
     };
     Ok((checkout, facts))
 }

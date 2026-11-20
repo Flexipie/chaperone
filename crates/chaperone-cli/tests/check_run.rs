@@ -103,7 +103,7 @@ fn a_run_measures_the_lane_commit() {
     let evidence = p.as_object_mut().unwrap().remove("evidence_ref").unwrap();
     let want = json!({"check": "diff", "outcome": "ran", "head_sha": tip, "tree": tree,
         "base": "origin/main", "files": 3, "added": 3, "removed": 1, "code_lines": 3,
-        "test_lines": 0, "changes_code": true, "uncounted_files": 1, "files_truncated": false});
+        "test_lines": 0, "changes_code": true, "uncounted_files": 1, "asset_files": 0, "files_truncated": false});
     assert_eq!(p, want);
     assert_eq!(producer["kind"], "harness");
     assert!(producer["bin"].as_str().unwrap().ends_with("/chaperone"));
@@ -257,6 +257,93 @@ fn test_files_are_test_lines() {
         "{err}"
     );
     assert_eq!(events(&db), before + 2, "the lane's create and claim only");
+}
+
+/// A binary file an `[assets]` glob names, added or deleted, is an asset,
+/// not uncounted; a binary no glob names, text an attributes rule hides and
+/// any file once the diff changes a `.gitattributes` stay uncounted; a text
+/// file a glob names keeps its lines; no table behaves as before, and a
+/// table that does not load is refused and writes nothing.
+#[test]
+fn assets_are_named_not_uncounted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
+    setup(dir.path());
+    let base = |profile: &[u8]| {
+        git(&wt, &["checkout", "-q", "main"], &[]);
+        git(&wt, &["add", "."], &[(".chaperone/profile.toml", profile)]);
+        git(&wt, &["commit", "-qm", "profile"], &[]);
+        git(
+            &wt,
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+            &[],
+        );
+        git(&wt, &["checkout", "-q", "feat"], &[]);
+        git(&wt, &["rebase", "-q", "main"], &[]);
+    };
+    git(&wt, &["add", "."], &[("old.png", b"\0old")]);
+    git(&wt, &["commit", "-qm", "old"], &[]);
+    git(&wt, &["checkout", "-qb", "feat"], &[]);
+    base(b"[assets]\nglobs = [\"**/*.png\", \"*.svg\", \"*.txt\"]\n");
+    let attributes: &[(&str, &[u8])] = &[(".git/info/attributes", b"hidden.txt -diff\n")];
+    git(&wt, &["rm", "-q", "old.png"], attributes);
+    let files: &[(&str, &[u8])] = &[
+        ("img/a.png", b"\x89PNG\0\x01"),
+        ("blob.bin", b"\0\x01"),
+        ("icon.svg", b"<svg/>\n"),
+        ("hidden.txt", b"fn x() {}\n"),
+    ];
+    git(&wt, &["add", "."], files);
+    git(&wt, &["commit", "-qm", "feat"], &[]);
+    let id = lane(
+        &db,
+        &["--worktree", wt.to_str().unwrap(), "--branch", "feat"],
+    );
+    let diff = ["check", "run", "diff", "--work", &id];
+    let measured = || {
+        let (code, data) = run(&db, &diff);
+        assert_eq!(code, 0, "{data}");
+        let p = &data["payload"];
+        let got = ["asset_files", "uncounted_files", "code_lines"].map(|k| p[k].clone());
+        (
+            got,
+            p["evidence_ref"].as_str().unwrap_or_default().to_string(),
+        )
+    };
+    let (got, evidence) = measured();
+    assert_eq!(got, [json!(2), json!(2), json!(1)]);
+    let list = Evidence::beside(&db).get(&evidence).unwrap();
+    let marked: Vec<_> = list
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|r| r["asset"] == true)
+        .map(|r| r["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(marked, ["img/a.png", "old.png"]);
+
+    git(
+        &wt,
+        &["add", "."],
+        &[("img/.gitattributes", b"*.png binary\n")],
+    );
+    git(&wt, &["commit", "-qm", "attributes"], &[]);
+    assert_eq!(measured().0, [json!(0), json!(4), json!(2)]);
+
+    base(b"[size]\ntests = []\n");
+    assert_eq!(measured().0, [json!(0), json!(4), json!(2)]);
+
+    base(b"[assets]\nglob = [\"*.png\"]\n");
+    let before = events(&db);
+    let (code, err) = run(&db, &diff);
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown field `glob`"),
+        "{err}"
+    );
+    assert_eq!(events(&db), before);
 }
 
 /// A commit that changes a file a base profile's companion rule names

@@ -380,7 +380,7 @@ read as remote-tracking refs, so a local branch named `origin/main` is never tak
 its tree, those two within one 10 s deadline. A lane with no worktree, a relative or missing
 one, a git call that fails or times out (not marked retryable yet), a numstat past 16 MiB and
 a base profile that is a link or no file, is not TOML (with or without `[diff]`) or whose
-`[diff]`, `[size]`, `[[companions]]` or `[[review.required]]` does not load (a required lens
+`[diff]`, `[size]`, `[assets]`, `[[companions]]` or `[[review.required]]` does not load (a required lens
 needs a `name` with no space or `:`, a non-empty `when` and a prompt) are `invalid_input` and
 write nothing. So is a
 commit that breaks a companion rule of the base profile: each `[[companions]]` has a `name`
@@ -486,7 +486,8 @@ tree. Else it asks `--version` of each CLI a session on this diff uses (`claude`
 does (removed when the command ends), and reads `git diff <merge base> <commit>` there,
 where the lane's git config does not reach. The reviewed commit's own `.gitattributes` still
 applies: a file a rule such as `-diff` hides has no text in the diff, and the event counts
-such files in `uncounted_files`. A CLI that cannot start, a checkout that cannot be made and
+such files in `uncounted_files`, but for assets (`[assets] globs`, as `diff` names them in
+`asset_files`), which the file list marks `asset` for the lenses to judge by name. A CLI that cannot start, a checkout that cannot be made and
 a diff past 16 MiB are `invalid_input` and write nothing beyond those leftover rulings, except a
 CLI that only sessions whose runner names a `fallback` on another CLI use (v20: `codex`): those
 sessions are answered by the fallback, and the row says so (events.md, `review`).
@@ -642,7 +643,7 @@ refusal's message, why the step did not pass, or `the lane moved from <sha> to <
 lane's branch, with any change or untracked file, or not at that branch's tip; a lane with no PR
 whose `work update` the ledger would refuse (a dry run); a lane that moves while it runs; a
 `check run diff` past the pipeline's `[limits] code_lines` (the number `code_lines_at_most`
-reads) unless the owner's size waiver covers it (`commit.size_waived`), with an uncounted file or missing a count (no limit, no refusal); a base that is no
+reads) unless the owner's size waiver covers it (`commit.size_waived`), with an uncounted file (an asset is none) or missing a count (no limit, no refusal); a base that is no
 `origin/` branch; and `check run tests` that did not pass. Diff and tests run as `check run`
 runs them, so a pass on the same tree replays. A lane with no PR first asks `gh pr list --head
 <branch>` for an open one a run opened and never recorded. Then `git push origin
@@ -652,7 +653,7 @@ the body on stdin): `gh pr create --base <base> --head <branch> --title <t> --bo
 <owner/repo> [--title <t>] --body-file -`. The body is ledger facts only: the newest handoff's
 goal or the title, the tracker key, for a GitHub lane (`source_id` `owner/repo#N`) `Closes
 #N` when the PR is in the issue's repo, else (another repo, or no PR yet) `Closes
-owner/repo#N`, the diff's code lines and files, the test commands that
+owner/repo#N`, the diff's code lines and files (and how many are assets, when any), the test commands that
 passed on the head, the plan check's outcome and the head's smoke (the harness's result, a
 session's claim and its evidence file count). A PR new to the lane is `pr.opened` with
 `head_sha` the head, as `work update --pr` records it. A gh failure is `internal`. It prints
@@ -862,7 +863,7 @@ gates, in the order a denial names the first that fails:
 | Gate | Holds when | Facts a denial lists |
 | --- | --- | --- |
 | `stamp_ok` | the lane is stamped `v20` | `pipeline.id` |
-| `no_uncounted_files` | a harness `diff` on the commit has no file git counts no lines of | `commit.uncounted_files` |
+| `no_uncounted_files` | a harness `diff` on the commit has no file git counts no lines of, but assets (`asset_files`) | `commit.uncounted_files` |
 | `code_lines_at_most` | that diff counts at most 400 code lines (test lines, `[size] tests`, not counted), or at most the owner's `check waive size --lines` for the lane | `commit.code_lines`, `commit.size_waived` |
 | `tests_passed` | the newest harness `tests` on the commit passed | `tests.passed` |
 | `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree or `patch_id` counts) | `review.complete` |
