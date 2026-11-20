@@ -659,6 +659,24 @@ session's claim and its evidence file count). A PR new to the lane is `pr.opened
 `head_sha` the head, as `work update --pr` records it. A gh failure is `internal`. It prints
 `{work_id, pr, head, created, steps}`, `steps` as `verify`'s.
 
+A repo's PR rules are the `[pr]` table of the base profile (read as `impact` reads it, never the
+worktree): `title` (a template), `types`, `head`, `assignee` and `reviewers`, beside `flow`,
+`create`, `address`, `merge` and `stack`, which are accepted and not read. Another key, a `title`
+without exactly one `{text}`, with a second `{type}` or `{key}`, any other brace, or naming
+`{type}` with no `types`, is `invalid_input`. A title fits the template when `{key}` is the
+item's `source_key` exactly, `{type}` one of `types`, `{text}` non-empty with no space at either
+end, and the rest literal. With `title` or `head` set, a lane with no `source_key` is refused;
+with `title` set, a `--title` that does not fit is refused, and so is no `--title` while the lane
+has no PR recorded (a type is never guessed), all right after the clean-worktree check, before
+any gh call or push. A lane holding a PR and passing no `--title` reads it with `gh pr view <n>
+--repo <owner/repo> --json title --jq .title` and is refused unless it fits, else it is kept.
+The `head` lines, `{key}` filled, then a blank line, lead the body on every rewrite. When the
+lane has no PR recorded and `reviewers` is set, `gh api user --jq .login` names the current
+login, left out of them (any case). Then the create gains `--assignee <assignee>` and
+`--reviewer <a,b>`, the edit of a listed PR `--add-assignee` and `--add-reviewer`, each when
+set and not empty; an edit of a PR the lane holds sets neither, since requesting a review
+notifies. With none of these keys, the gh calls and the body are as above.
+
 `merge --work <id> [--head <sha>]` is the owner's merge of the lane's PR (its `pr_ref`), as
 chaperone-ui's Merge does it. `--head` is the head the owner confirms; it defaults to the newest
 handoff's commit. It refuses (`invalid_input`, no `gh pr merge`) a session or an agent that has
@@ -703,7 +721,7 @@ and opens the ledger read-only for every event but `stop-failure` and `prompt` (
 status, pipeline, branch, head, PR, the ready gates not passing yet (as the lane page reads them)
 and the lane's commands. `pre-bash` splits a Bash `tool_input.command` at `&&`, `||`, `;`, `|`, newlines,
 `$(`, parentheses and backticks, drops each part's leading `VAR=value` words, and denies a part
-that starts `gh pr create`, `gh pr merge` or `chaperone work ready` with `--yes` later in it,
+that starts `gh pr create`, `gh pr edit`, `gh pr merge` or `chaperone work ready` with `--yes` later in it,
 naming the command to run instead. `stop` blocks once (never with `stop_hook_active`) when the newest handoff is ready and
 the branch tip, read as a ready handoff reads it, is not its commit. After printing its answer, `stop` records the lane session's tokens, every turn, so the lane never has to: `usage report --work <lane>`'s write, on its own writable open, reading only the folder of the hook's `transcript_path` (that session's project folder, its sessions matched by first `cwd` as always, and their subagents), since reading every transcript under `~/.claude` can pass the hook's 10 s timeout. It waits at most 5 s for it (a busy ledger is left, with whole events written, and the next turn adds the rest). Without a `transcript_path` it records nothing, any error is ignored, and with `DAISY_CLI_READONLY=1` it skips this write and stays a read. `stop-failure` records
 `attention.recorded` type `stopped`, by `orchestrator`, its note the hook's `error`, as
