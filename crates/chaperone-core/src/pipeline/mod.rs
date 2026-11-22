@@ -282,6 +282,7 @@ static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
         include_str!("../../../../pipelines/v17.1.toml"),
         include_str!("../../../../pipelines/v19.toml"),
         include_str!("../../../../pipelines/v20.toml"),
+        include_str!("../../../../pipelines/v21.toml"),
     ]
     .iter()
     .map(|src| {
@@ -291,7 +292,7 @@ static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
     .collect()
 });
 
-/// Where [`current`] is in [`KNOWN`]: v19, while v20 is newer. The owner
+/// Where [`current`] is in [`KNOWN`]: v19, while v20 and v21 are newer. The owner
 /// moves it at the M3 cutover, with no lane running.
 const DEFAULT: usize = 2;
 
@@ -350,6 +351,8 @@ mod tests {
     const V19_HASH: &str = "d45442e63a1b77001987bb5d82e987d730c26ddf4ba7c2941b6c09622287f5ea";
     const V20: &str = include_str!("../../../../pipelines/v20.toml");
     const V20_HASH: &str = "6a3f7d2164708a23e8203889cd4d864b77327e50dc0d6a4b8c6741658ac0e5f0";
+    const V21: &str = include_str!("../../../../pipelines/v21.toml");
+    const V21_HASH: &str = "966205afea3874d71798381aa1d34b402b4da5dfcdf9b7811e23462561cba2b5";
 
     const MINI: &str = r#"
 schema = 1
@@ -430,30 +433,32 @@ requires = ["a"]
         assert!(!p.gates.contains_key("ci_not_red"));
     }
 
-    /// v20 names every check the harness asks for by name, and the limits
-    /// that cap its runs.
+    /// v20 and v21 name every check the harness asks for by name, and the
+    /// limits that cap its runs.
     #[test]
-    fn v20_loads_with_pinned_hash() {
-        let p = Pipeline::load_with_prompts(V20, PROMPT_FILES).unwrap();
-        assert_eq!((p.id.as_str(), p.hash.as_str()), ("v20", V20_HASH));
-        let review = crate::review::plan(&p).unwrap();
-        assert_eq!(review.attempts, 2);
-        crate::verdict::plan(&p).unwrap();
-        crate::plan::plan(&p).unwrap();
-        for limit in ["verdict_attempts", "plan_attempts"] {
-            assert!(p.limits[limit] >= 1, "{limit}");
+    fn v20_and_v21_load_with_pinned_hash() {
+        for (src, id, hash) in [(V20, "v20", V20_HASH), (V21, "v21", V21_HASH)] {
+            let p = Pipeline::load_with_prompts(src, PROMPT_FILES).unwrap();
+            assert_eq!((p.id.as_str(), p.hash.as_str()), (id, hash));
+            let review = crate::review::plan(&p).unwrap();
+            assert_eq!(review.attempts, 2);
+            crate::verdict::plan(&p).unwrap();
+            crate::plan::plan(&p).unwrap();
+            for limit in ["verdict_attempts", "plan_attempts"] {
+                assert!(p.limits[limit] >= 1, "{limit}");
+            }
+            assert_eq!(p.limits["code_lines"], 400);
+            assert_eq!(p.limits["codex_min_code_lines"], 200);
+            for (name, check) in &p.checks {
+                let file = PROMPT_FILES.iter().find(|(f, _)| *f == check.prompt);
+                assert_eq!(check.text, file.unwrap().1, "{name}");
+            }
+            // Every prompt file is a check's.
+            assert_eq!(p.checks.len(), PROMPT_FILES.len());
+            // Only the gated handoff runs, so there is no other row.
+            assert!(p.transitions.iter().all(|t| t.id == "handoff"));
+            assert_eq!(by_id(id).unwrap().hash, hash);
         }
-        assert_eq!(p.limits["code_lines"], 400);
-        assert_eq!(p.limits["codex_min_code_lines"], 200);
-        for (name, check) in &p.checks {
-            let file = PROMPT_FILES.iter().find(|(f, _)| *f == check.prompt);
-            assert_eq!(check.text, file.unwrap().1, "{name}");
-        }
-        // Every prompt file is a check's.
-        assert_eq!(p.checks.len(), PROMPT_FILES.len());
-        // Only the gated handoff runs, so v20 has no other row.
-        assert!(p.transitions.iter().all(|t| t.id == "handoff"));
-        assert_eq!(by_id("v20").unwrap().hash, V20_HASH);
     }
 
     #[test]
@@ -464,7 +469,7 @@ requires = ["a"]
         assert!(by_id("v18").is_none());
         assert_eq!(current().id, "v19");
         let newer: Vec<_> = newer().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(newer, ["v20"]);
+        assert_eq!(newer, ["v20", "v21"]);
     }
 
     #[test]

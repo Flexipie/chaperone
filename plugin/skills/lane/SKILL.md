@@ -57,7 +57,8 @@ always write `summary`, `status`, `next_action` and the whole `brief`. Here: `st
 
 Write `$G/plan.md`: goal and done-when, the files and the change in each, the smoke (exact
 commands and the output that proves the done-when), the tests the repo's bar asks for, a
-code-line estimate against `code_lines`, and for a bug the root cause as `file:line`.
+line `Estimated added code lines: N` (the harness reads it; past `code_lines` on v21 the plan
+check asks split, naming the slices, or keep whole, as a finding you answer), and for a bug the root cause as `file:line`.
 
 `chaperone check run plan --work $2 --file "$G/plan.md"`, in the background (a model session,
 up to `plan_timeout` seconds). Then:
@@ -82,11 +83,13 @@ what the base profile's `[diff] code` names.
 The smallest complete change. A bug whose cause is not plain: invoke `chaperone:diagnose`
 with the symptom, the failing command and `--fix`. Commit with short plain messages; leave
 the tree clean. Then:
-- `chaperone check run diff --work $2`: `code_lines` over the limit or `uncounted_files`
-  over 0 will not pass (a binary an `[assets]` glob of the base profile names is
-  `asset_files` instead, and passes). Test files (`test_lines`) do not count. Never get under by
+- `chaperone check run diff --work $2`: `uncounted_files` over 0 will not pass (a binary an
+  `[assets]` glob of the base profile names is `asset_files` instead, and passes).
+  `code_lines` counts added lines; removed lines (`removed_code`) and test files
+  (`test_lines`) do not count. Over the limit, on v20 it will not pass; from v21 the review
+  asks what to cut or split, and a `cut:` finding blocks like any other. Never get under by
   compressing code, removing checks or dropping behavior: cut only what the done-when does
-  not need, split a piece that stands alone into its own PR, or, when the change only
+  not need, split a piece that stands alone into its own PR, or, on v20 when the change only
   makes sense whole, Needs you asking the owner for `check waive size` with the lines and why.
   A refused companion rule names a doc the change must update: update it, or, when the
   change truly needs no edit there, commit a `No-companion: <rule> <why>` trailer.
@@ -145,7 +148,7 @@ On the commit verify passed (`git rev-parse HEAD` is its `head`):
 ```
 
 A `gate_denied` names the first gate that fails. `smoke_or_no_code`: step 5.
-`plan_or_no_code`: Needs you. `code_lines_at_most`: step 4. Any other: verify has not passed
+`plan_or_no_code`: Needs you. `code_lines_at_most` (v20 only): step 4. Any other: verify has not passed
 on this commit (a missing diff reads as `no_uncounted_files`): back to 5.
 
 ## 9. Wait, then done

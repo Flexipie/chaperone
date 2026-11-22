@@ -123,8 +123,8 @@ fn session_start_names_the_lane_and_what_is_missing() {
     }
 }
 
-/// An install that edits a v20 prompt moves v20's hash (#244): a lane
-/// stamped before it still loads v20 by id, and keeps the hash it ran.
+/// An install that edits a prompt of the id edited in place moves its hash
+/// (#244): a lane stamped before it still loads by id, and keeps the hash it ran.
 #[test]
 fn a_lane_stamped_with_an_older_v20_hash_keeps_working() {
     let lane = Lane::new();

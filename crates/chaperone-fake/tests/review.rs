@@ -96,6 +96,7 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
         plan: String::new(),
         code_lines: None,
         assets: Vec::new(),
+        over_cap: None,
     };
     let store = Evidence::beside(&dir.path().join("ledger.db"));
     Env {
@@ -269,6 +270,45 @@ fn a_lens_with_no_answer_did_not_run() {
         error.starts_with("unreadable answer: the last message is not JSON"),
         "{error}"
     );
+}
+
+/// A diff over the cap asks the design and tests lens, and tells the
+/// verifier, what could be cut or split; no other lens, and nothing under
+/// the cap.
+#[test]
+fn an_over_cap_diff_asks_what_to_cut() {
+    let none = |lens: &str| json!({"when": format!("LENS {lens}"), "stdout": result(json!({"findings": []}))});
+    let claude = json!(["correctness", "design_tests", "intent", "verifier"].map(none));
+    let mut env = env(claude, json!([]), 10);
+    env.facts.over_cap = Some((401, 400));
+    let pipeline = pipeline();
+    let (dir, facts) = (env.checkout(), &env.facts);
+    let planned = review::lenses(&pipeline).unwrap();
+    review::run(&planned, &env.agents(), &dir, facts, &env.store).unwrap();
+    let p = review::verifier(&pipeline).unwrap();
+    let found = review::findings(
+        "design_tests",
+        json!({"findings": [found("risk", "cut: x")]}),
+    );
+    review::verify(
+        &p,
+        &env.agents(),
+        &dir,
+        facts,
+        &found.unwrap(),
+        &[],
+        &env.store,
+    )
+    .unwrap();
+    let asks = "adds 401 code lines (test files aside; removed lines are not counted), past the \
+                pipeline's cap of 400";
+    for lens in ["correctness", "design_tests", "intent", "verifier"] {
+        let call = call(env.dir.path(), "claude", lens);
+        let prompt = call["prompt"].as_str().unwrap();
+        let shown = matches!(lens, "design_tests" | "verifier");
+        assert_eq!(prompt.contains(asks), shown, "{lens}");
+        assert_eq!(prompt.contains("`cut: <what>`"), shown, "{lens}");
+    }
 }
 
 /// The verifier is shown every finding by its key, with the lenses'
@@ -1150,6 +1190,7 @@ fn judge_with(env: &Env, ledger: &Ledger, head: &str, tree: &str, smoke: bool) -
         plan: String::new(),
         code_lines: None,
         assets: Vec::new(),
+        over_cap: None,
     };
     let (dir, agents) = (env.checkout(), env.agents());
     let got = verdict::record(
@@ -1368,6 +1409,7 @@ fn attack(env: &Env, ledger: &Ledger, text: &str) -> Recorded {
         goal: "GOAL add a widget",
         plan: &kept,
         base: "1111111",
+        cap: Some(400),
     };
     let me = lane_session();
     let got = plan::record(ledger, &me, input, &p, &agents, &dir, &given, &env.store);
@@ -1454,6 +1496,84 @@ fn the_plan_check_attacks_the_plan() {
     };
     assert!(why.contains("its limit plan_attempts"), "{why}");
     assert_eq!(calls(&env), 3);
+}
+
+/// A plan estimated past the cap tells the session so; a `risk` titled
+/// split (any case) is the size finding, an answer with none, or with a
+/// split only as a `question`, gets the harness's split-or-keep risk, and a plan with no estimate records it
+/// null and is asked nothing.
+#[test]
+fn an_over_cap_estimate_asks_split_or_keep() {
+    let answer = |findings: Value| {
+        let said = json!({"findings": findings});
+        json!([{"when": "LENS plan", "stdout": session("p", said)}])
+    };
+    let env = env(
+        answer(json!([found("risk", "Split: the stats in their own PR")])),
+        json!([]),
+        10,
+    );
+    let ledger = ledger(&env);
+    let titles = |r: &Recorded| match &r.payload.findings {
+        Some(Findings::List(f)) => f.iter().map(|f| f.title.clone()).collect::<Vec<_>>(),
+        other => panic!("no findings list: {other:?}"),
+    };
+    let prompt = || {
+        let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
+        let last: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        last["prompt"].as_str().unwrap().to_string()
+    };
+
+    let split = attack(&env, &ledger, "PLAN one\n- Estimated added code lines: 900");
+    assert_eq!(split.payload.rest["estimate"], 900);
+    assert_eq!(titles(&split), ["Split: the stats in their own PR"]);
+    let asked = prompt();
+    assert!(
+        asked.contains("estimates 900 added code lines, past the pipeline's cap of 400"),
+        "{asked}"
+    );
+
+    rescript(
+        &env,
+        "claude",
+        answer(json!([found("question", "split: maybe")])),
+    );
+    let asked = attack(&env, &ledger, "PLAN one b\nEstimated added code lines: 450");
+    assert_eq!(titles(&asked).len(), 2, "a question is no size answer");
+    rescript(&env, "claude", answer(json!([found("nit", "a word")])));
+    let silent = attack(&env, &ledger, "PLAN two\nEstimated added code lines: 450");
+    assert_eq!(
+        titles(&silent),
+        [
+            "a word",
+            "split or keep: the plan estimates 450 added code lines, past the cap of 400"
+        ]
+    );
+    let Some(Findings::List(found)) = &silent.payload.findings else {
+        unreachable!()
+    };
+    assert_eq!(
+        (
+            &*found[1].severity,
+            found[1].finding_key.starts_with("plan-")
+        ),
+        ("risk", true)
+    );
+    let open: Vec<_> = ledger
+        .plan_findings(1)
+        .unwrap()
+        .into_iter()
+        .map(|f| f.status)
+        .collect();
+    assert_eq!(open, ["open", "open"]);
+
+    rescript(&env, "claude", answer(json!([])));
+    let none = attack(&env, &ledger, "PLAN three, size not stated");
+    assert_eq!(
+        (&none.payload.rest["estimate"], titles(&none).len()),
+        (&Value::Null, 0)
+    );
+    assert!(!prompt().contains("Over the size cap"));
 }
 
 /// An amend that keeps the tree carries the tree's complete review and

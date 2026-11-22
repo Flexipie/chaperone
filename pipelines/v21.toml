@@ -1,0 +1,245 @@
+# v21 (2026-11-22) starts as v20's rules under a new id: v20.toml says why each rule is
+# there. What differs:
+# - Size is a review question, not a refusal (#292): v21 has no `code_lines_at_most` gate,
+#   so `pr open` does not refuse past `code_lines` and ready does not gate on it. Past it the
+#   design and tests lens is asked what could be cut or split, and each `cut:` finding blocks
+#   as any finding does. A lane stopped at a cap, waived, and stopped again when review fixes
+#   grew it; and the cap counted a cleanup's removed lines, which `code_lines` (added lines
+#   only, from #292 for every pipeline) no longer holds.
+#
+# From v21 on, v20 is not edited, and v21 is the id edited in place (#244's rule, moved from
+# v20): a lane stamped with an older v21 hash still loads this document by id. v21 names
+# v20's prompt files today; a prompt that changes for v21 becomes a new file in
+# pipelines/prompts/ that only v21 names, so v20's prompt digests, and its hash, never move.
+# The semantic hash covers the schema, [limits], [runners], [checks] with each prompt's
+# sha256, the gates and the transitions. Comments, key order, `published` and [cohort] do
+# not change it.
+
+schema = 2
+id = "v21"
+published = "2026-11-22T12:00:00Z"
+
+[cohort]
+target_lanes = 25
+
+[limits]
+code_lines = 400
+sha_min = 7
+sha_max = 40
+review_attempts = 2
+verdict_attempts = 2
+plan_attempts = 2
+lens_budget = 400
+lens_timeout = 900
+codex_min_code_lines = 200
+verifier_budget = 400
+verifier_timeout = 900
+verdict_budget = 400
+verdict_timeout = 900
+plan_budget = 300
+plan_timeout = 600
+
+# --- runners and checks ----------------------------------------------------
+
+[runners.lens]
+cli = "claude"
+model = "claude-opus-5-5"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "lens_budget"
+timeout_limit = "lens_timeout"
+
+[runners.codex_lens]
+cli = "codex"
+budget_limit = "lens_budget"
+timeout_limit = "lens_timeout"
+fallback = "codex_fallback"
+
+[runners.codex_fallback]
+cli = "claude"
+model = "claude-sonnet-5-5"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "lens_budget"
+timeout_limit = "lens_timeout"
+
+[runners.verifier]
+cli = "claude"
+model = "claude-opus-5-5"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "verifier_budget"
+timeout_limit = "verifier_timeout"
+
+[runners.verdict]
+cli = "claude"
+model = "claude-opus-5-5"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "verdict_budget"
+timeout_limit = "verdict_timeout"
+
+[runners.plan]
+cli = "claude"
+model = "claude-opus-5-5"
+tools = ["Read", "Grep", "Glob"]
+budget_limit = "plan_budget"
+timeout_limit = "plan_timeout"
+
+[checks.review_correctness]
+runner = "lens"
+prompt = "review_correctness.md"
+
+[checks.review_design_tests]
+runner = "lens"
+prompt = "review_design_tests.md"
+
+[checks.review_intent]
+runner = "lens"
+prompt = "review_intent.md"
+
+[checks.review_codex]
+runner = "codex_lens"
+prompt = "review_codex.md"
+
+[checks.review_verifier]
+runner = "verifier"
+prompt = "review_verifier.md"
+
+[checks.verdict]
+runner = "verdict"
+prompt = "verdict.md"
+
+[checks.plan]
+runner = "plan"
+prompt = "plan.md"
+
+# --- gates -------------------------------------------------------------------
+
+# The engine found this document by the lane's id, so the id is the stamp.
+[[gate]]
+id = "stamp_ok"
+fn = "eq"
+args = { field = "pipeline.id", value = "v21" }
+
+# Absent without a harness diff on the commit, so it also requires one. A file git counts no
+# lines of (binary, or hidden by `-diff`) is in no line total.
+[[gate]]
+id = "no_uncounted_files"
+fn = "eq"
+args = { field = "commit.uncounted_files", value = 0 }
+
+[[gate]]
+id = "no_code_change"
+fn = "eq"
+args = { field = "commit.changes_code", value = false }
+
+[[gate]]
+id = "tests_passed"
+fn = "eq"
+args = { field = "tests.passed", value = true }
+
+[[gate]]
+id = "review_complete"
+fn = "eq"
+args = { field = "review.complete", value = true }
+
+[[gate]]
+id = "no_blocking_findings"
+fn = "eq"
+args = { field = "findings.open_blocking", value = 0 }
+
+[[gate]]
+id = "plan_ran"
+fn = "eq"
+args = { field = "plan_check.outcome", value = "ran" }
+
+[[gate]]
+id = "plan_waived"
+fn = "eq"
+args = { field = "plan_check.reason", value = "waived" }
+
+[[gate]]
+id = "plan_ok"
+fn = "any"
+args = { of = ["plan_ran", "plan_waived"] }
+
+[[gate]]
+id = "plan_or_no_code"
+fn = "any"
+args = { of = ["no_code_change", "plan_ok"] }
+
+[[gate]]
+id = "smoke_passed"
+fn = "eq"
+args = { field = "smoke.passed", value = true }
+
+[[gate]]
+id = "smoke_harness_ran"
+fn = "present"
+args = { field = "smoke.passed" }
+
+[[gate]]
+id = "no_harness_smoke"
+fn = "not"
+args = { of = "smoke_harness_ran" }
+
+[[gate]]
+id = "smoke_claimed"
+fn = "eq"
+args = { field = "smoke.claimed", value = true }
+
+# The lane's claim stands in only when the harness ran no smoke on the commit: a harness
+# smoke that failed is not outvoted by a claim.
+[[gate]]
+id = "smoke_claim_only"
+fn = "all"
+args = { of = ["no_harness_smoke", "smoke_claimed"] }
+
+[[gate]]
+id = "smoke_ok"
+fn = "any"
+args = { of = ["smoke_passed", "smoke_claim_only"] }
+
+[[gate]]
+id = "smoke_or_no_code"
+fn = "any"
+args = { of = ["no_code_change", "smoke_ok"] }
+
+[[gate]]
+id = "verdict_is_yes"
+fn = "eq"
+args = { field = "verdict.decision", value = "yes" }
+
+[[gate]]
+id = "verdict_on_head"
+fn = "sha_same_commit"
+args = { left = "verdict.sha", right = "commit.sha", min_limit = "sha_min", max_limit = "sha_max" }
+
+[[gate]]
+id = "verdict_yes_on_head"
+fn = "all"
+args = { of = ["verdict_is_yes", "verdict_on_head"] }
+
+[[gate]]
+id = "done_verdict"
+fn = "any"
+args = { of = ["no_code_change", "verdict_yes_on_head"] }
+
+# --- the gated handoff -------------------------------------------------------
+
+# A handoff with ready: true enters ready; a handoff to done, or `work update --status
+# done`, enters done. Any phase. An investigation or no_pr lane has no ready row, so it is
+# denied. The first gate that does not hold is the denial. The plan check runs first, before
+# any code, but sits after the measurements of the commit, next to the smoke it is skipped with.
+[[transition]]
+id = "handoff"
+routes = ["code_pr", "direct"]
+to = "ready"
+requires = [
+  "stamp_ok", "no_uncounted_files", "tests_passed", "review_complete",
+  "no_blocking_findings", "plan_or_no_code", "smoke_or_no_code", "verdict_is_yes",
+  "verdict_on_head",
+]
+
+[[transition]]
+id = "handoff"
+routes = ["code_pr", "direct", "no_pr", "investigation"]
+to = "done"
+requires = ["stamp_ok", "plan_or_no_code", "done_verdict"]

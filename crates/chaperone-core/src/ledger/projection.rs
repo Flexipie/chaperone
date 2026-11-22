@@ -199,7 +199,12 @@ pub(crate) fn project(
     }
     if head.is_some() {
         let field = |check: &str, key: &str| on_head.get(check).and_then(|p| p.rest.get(key));
-        for key in ["code_lines", "test_lines", "uncounted_files"] {
+        for key in [
+            "code_lines",
+            "removed_code",
+            "test_lines",
+            "uncounted_files",
+        ] {
             let int = field("diff", key).and_then(Value::as_i64);
             f.set(
                 &format!("commit.{key}"),

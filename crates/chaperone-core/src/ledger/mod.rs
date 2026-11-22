@@ -311,8 +311,8 @@ pub fn lock_lane(ledger: &Path, lane: i64) -> Result<Result<File, Refusal>, Ledg
     }
 }
 
-/// Holds one of `slots` machine-wide test slots, files beside the ledger at
-/// `ledger`, until the file is dropped or the process ends, so a killed
+/// Holds one of `slots` test slots shared by runs on the ledger at `ledger`,
+/// files beside it, until the file is dropped or the process ends, so a killed
 /// holder frees its slot. Each is tried in order and the one taken names
 /// `lane`; while all are held, `waiting` is told once the lanes holding
 /// them, and they are tried again every 200 ms, in no first-come order.

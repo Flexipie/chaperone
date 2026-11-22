@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 pub const FACTS: &[&str] = &[
     "commit.changes_code",
     "commit.code_lines",
+    "commit.removed_code",
     "commit.sha",
     "commit.size_waived",
     "commit.test_lines",
