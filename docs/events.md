@@ -182,7 +182,7 @@ The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the firs
 `lane.claimed`, by the write itself: the default pipeline (`pipeline current`, `v19`) and
 the route from the lane's kind and flow (lane facts below). A first claim may carry
 `pipeline_id` naming an embedded pipeline newer than the default (`work claim --pipeline`,
-`v20` today); the write stamps that one, with its hash, and refuses any other id, older or
+`v20` or `v21` today); the write stamps that one, with its hash, and refuses any other id, older or
 unknown (`invalid_input`), and a `pipeline_id` on a claim of a lane already stamped. Any
 other event that carries a stamp field is `invalid_input`. A takeover keeps it. A claim, renewal or takeover on a lane
 stamped with an id this binary has no document for is refused (`pipeline_unknown`) and

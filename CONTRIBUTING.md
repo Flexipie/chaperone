@@ -115,7 +115,7 @@ a silent CLI break.
 | Binary `0.y.z` | A minor bump may break CLI flags. A patch bump must not. 1.0 is the vision's milestone 8, not the first public commit. |
 | `PRAGMA user_version` | Older binaries refuse to write. The newer binary is the only migrator. |
 | Integration contract | Starts at 0, shared with the event schema ([docs/events.md](docs/events.md)). A removed or renamed field, kind or tool bumps it. A new nullable field does not. |
-| Pipeline id + hash | A lane runs the document its id names, as this binary has it. Its stamped hash records the document at claim. v20 is edited in place ([ADR 0004](docs/decisions/0004-pipeline-semantic-hash.md), #244), so a running lane picks up an edited v20 prompt; older ids are not edited. New claims can move. |
+| Pipeline id + hash | A lane runs the document its id names, as this binary has it. Its stamped hash records the document at claim. v21 is edited in place ([ADR 0004](docs/decisions/0004-pipeline-semantic-hash.md), #244), so a running lane picks up an edited v21 prompt; v20 and older ids are not edited. A v21 prompt that changes is a new file in `pipelines/prompts/` only v21 names, so v20's hash never moves. New claims can move. |
 
 ## Docs and decisions
 
