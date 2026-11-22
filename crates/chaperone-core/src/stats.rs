@@ -59,6 +59,8 @@ struct Review {
     findings: Vec<Finding>,
     /// Its findings the verifier ruled `same` as an earlier one.
     same: i64,
+    /// A harness review of a diff past the cap (`over_cap`).
+    over_cap: bool,
 }
 
 struct Finding {
@@ -177,6 +179,16 @@ struct Row {
 }
 
 impl Lane {
+    /// The `cut:` findings the design and tests lens raised on reviews
+    /// past the cap; a carried review has none of its own.
+    fn cut_findings(&self) -> usize {
+        let over = self.reviews.iter().filter(|r| r.over_cap);
+        let found = over.flat_map(|r| &r.findings);
+        let cut =
+            |f: &&Finding| f.lens.as_deref() == Some("design_tests") && f.title.starts_with("cut:");
+        found.filter(cut).count()
+    }
+
     fn row(&self) -> Row {
         let with_pr = !self.prs.is_empty();
         let merged = with_pr && self.prs.iter().all(|pr| self.merged.contains_key(pr));
@@ -357,6 +369,8 @@ impl Lane {
             "plan_check": self.plan_check,
             "quality_gate": self.quality_gate,
             "size_waiver": self.size_waiver,
+            "over_cap": self.reviews.iter().any(|r| r.over_cap),
+            "cut_findings": self.cut_findings(),
             "merge_verdict": self.verdicts.last().map(|(head, yes)| {
                 json!({ "decision": if *yes { "yes" } else { "no" }, "head_sha": head })
             }),
@@ -554,6 +568,7 @@ impl Lane {
                     head: text("head_sha").map(String::from),
                     findings,
                     same,
+                    over_cap: p.get("over_cap").is_some(),
                 });
             }
             _ => {}
@@ -935,6 +950,8 @@ fn summarize(lanes: &[Lane]) -> Value {
         "lanes_quality_gated": count(&|l, r| r.with_pr && outcome(&l.quality_gate).as_deref() == Some("ran")),
         "quality_gate_skipped": skipped(&|l| &l.quality_gate),
         "lanes_size_waived": count(&|l, _| !l.size_waiver.is_null()),
+        "lanes_over_cap": count(&|l, _| l.reviews.iter().any(|r| r.over_cap)),
+        "lanes_with_cut_finding": count(&|l, _| l.cut_findings() > 0),
         "lanes_verdict_on_head": count(&|_, r| r.with_pr && r.verdict_on_head == Some(true)),
         "missing": missing,
         "sources": { "reviews": review_sources, "ready_point": ready_points },

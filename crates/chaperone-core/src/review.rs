@@ -80,6 +80,42 @@ pub struct Facts {
     pub code_lines: Option<i64>,
     /// The paths of `files` the harness `diff` counts as assets.
     pub assets: Vec<String>,
+    /// The added code lines and the [`cut_cap`] they pass, when they do.
+    pub over_cap: Option<(i64, i64)>,
+}
+
+/// The cap past which the review asks what to cut or split: the
+/// `code_lines` limit of a pipeline that gates nothing on size (v21 on).
+/// One with the `code_lines_at_most` gate (to v20) refuses past it instead.
+pub fn cut_cap(pipeline: &Pipeline) -> Option<i64> {
+    let gated = pipeline.gates.contains_key("code_lines_at_most");
+    pipeline
+        .limits
+        .get("code_lines")
+        .copied()
+        .filter(|_| !gated)
+}
+
+/// The design and tests lens's and the verifier's section on a diff over
+/// the cap; empty under it.
+fn over_cap(facts: &Facts) -> String {
+    let Some((n, cap)) = facts.over_cap else {
+        return String::new();
+    };
+    format!(
+        "\n## Over the size cap\n\nThis change adds {n} code lines (test files aside; removed \
+         lines are not counted), past the pipeline's cap of {cap}. Over the cap a change still \
+         gets its review, and the design and tests review answers one more thing: what could be \
+         cut, or split into its own pull request so the rest stands without it, tests the bars \
+         do not ask for included (test lines are not capped, but they count here). Never a cut \
+         that compresses code, removes a check or drops behavior. Each is a `risk` titled \
+         `cut: <what>`, with the path and the line where it starts, and in the body what goes \
+         or where the split falls and why the goal does not need it here. Its proof is that \
+         cited line with this rule, the repo's size bar in `CONTRIBUTING.md`: the verifier \
+         does not rule one `unproven` for having no failing run, and refutes one only when the \
+         goal does need what it cuts. When nothing can go, one `question` titled \
+         `size stands: <why>`: why the change is needed whole.\n"
+    )
 }
 
 /// A lens as the pipeline defines it.
@@ -552,7 +588,12 @@ pub fn run(
     let lenses = std::thread::scope(|s| {
         let threads: Vec<_> = runs
             .map(|p| {
-                let prompt = prompt(p, &facts.goal, &facts.smoke, &change);
+                let asks = if p.lens == "design_tests" {
+                    over_cap(facts)
+                } else {
+                    String::new()
+                };
+                let prompt = prompt(p, &facts.goal, &facts.smoke, &(change.clone() + &asks));
                 let schema = &schema;
                 let parse = |out| findings(p.lens, out);
                 s.spawn(move || one(p, agents, dir, prompt, schema, store, parse))
@@ -794,7 +835,8 @@ pub fn verify(
     if !earlier.is_empty() {
         findings += &format!("\n## Earlier findings\n\n{}", lines(earlier));
     }
-    let prompt = prompt(p, "", &Value::Null, &(change(facts).0 + &findings));
+    let change = change(facts).0 + &over_cap(facts) + &findings;
+    let prompt = prompt(p, "", &Value::Null, &change);
     let keys: BTreeSet<_> = found.iter().map(|f| f.finding_key.as_str()).collect();
     let fixable: BTreeSet<_> = earlier
         .iter()
@@ -1215,6 +1257,10 @@ pub fn finish(
         ),
         ("asset_files".into(), json!(facts.assets.len())),
     ]);
+    if let Some((n, cap)) = facts.over_cap {
+        let over = json!({"code_lines": n, "cap": cap});
+        input.fields.insert("over_cap".into(), over);
+    }
     // A blocking finding the verifier ruled unproven is kept as a question,
     // with the severity its lens gave and the verifier's why.
     let found = review.found().map(|f| {
@@ -1357,6 +1403,7 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
             plan: String::new(),
             code_lines: None,
             assets: vec!["logo.png".into()],
+            over_cap: None,
         }
     }
 

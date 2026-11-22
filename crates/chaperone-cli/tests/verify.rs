@@ -220,6 +220,11 @@ fn claimed(claude: Value) -> Lane {
 
 /// [`claimed`] with `rules` added to the base profile.
 fn claimed_on(claude: Value, rules: &str) -> Lane {
+    claimed_in("v20", claude, rules)
+}
+
+/// [`claimed_on`] on `pipeline`.
+fn claimed_in(pipeline: &str, claude: Value, rules: &str) -> Lane {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, bin) = (
         dir.path().join("ledger.db"),
@@ -261,7 +266,7 @@ fn claimed_on(claude: Value, rules: &str) -> Lane {
     assert!(migrate.unwrap().success());
     let lane = Lane { dir, db, wt };
     let claim = format!(
-        "work claim 1 --worktree {} --branch feat --pipeline v20",
+        "work claim 1 --worktree {} --branch feat --pipeline {pipeline}",
         lane.wt.display()
     );
     let claim: Vec<_> = claim.split(' ').collect();
@@ -424,6 +429,32 @@ fn a_diff_with_an_uncounted_file_runs_the_codex_lens() {
     assert_eq!(lane.codex().0["ran"], true);
 }
 
+/// The Codex lens skips on #223's measure, removed lines too: a changed
+/// line is two, and a diff recorded before `removed_code` (its
+/// `code_lines` held them) still skips on its `code_lines`.
+#[test]
+fn the_codex_skip_counts_removed_lines() {
+    let lane = claimed(claude(json!({"findings": []}), json!([])));
+    lane.plan("1. do it\n");
+    git(&lane.wt, &["commit", "-qam", "feat"], &[("lib.rs", b"c\n")]);
+    lane.answer("lane", "accept");
+    let skipped = |n: i64| format!("{n} code lines, under codex_min_code_lines 200");
+    lane.run("lane", &["check", "run", "diff", "--work", "1"]);
+    let conn = rusqlite::Connection::open(&lane.db).unwrap();
+    let old = "UPDATE events SET payload_json = json_set(json_remove(payload_json,
+        '$.removed_code'), '$.code_lines', 3) WHERE payload_json->>'check' = 'diff'";
+    conn.execute(old, []).unwrap();
+    lane.run("lane", &["check", "run", "review", "--work", "1"]);
+    assert_eq!(lane.codex().0["skipped"], skipped(3));
+    git(
+        &lane.wt,
+        &["commit", "-qam", "again"],
+        &[("lib.rs", b"d\n")],
+    );
+    lane.verify();
+    assert_eq!(lane.codex().0["skipped"], skipped(2));
+}
+
 /// A binary an `[assets]` glob names is an asset to the review too: not
 /// uncounted, so a small diff still skips the Codex lens, and each lens's
 /// file list marks it.
@@ -499,6 +530,49 @@ fn a_blocking_finding_stops_verify_before_the_verdict() {
     assert_eq!(out["stopped"], stopped);
     assert_eq!(steps(&out).len(), 3);
     assert_eq!(lane.events("payload_json->>'check' = 'merge_verdict'"), 0);
+}
+
+/// On v21 a diff past the cap reaches review, which records it over the
+/// cap, and the design and tests lens's `cut:` finding the verifier
+/// verifies stops verify there, as any blocking finding does.
+#[test]
+fn an_over_cap_diff_on_v21_reaches_review_and_a_cut_blocks() {
+    let cut = json!({"findings": [{"severity": "risk", "title": "cut: the helper",
+        "body": "the goal does not need it", "path": "lib.rs", "line": 2}]});
+    let key = review::findings("design_tests", cut.clone()).unwrap()[0]
+        .finding_key
+        .clone();
+    let rulings = json!([{"key": key, "verdict": "verified", "why": "it is not needed"}]);
+    // First match wins: the verifier is told about the cap too.
+    let mut runs = vec![
+        says(
+            "# Verify the review's findings",
+            json!({"rulings": rulings}),
+        ),
+        says("## Over the size cap", cut),
+    ];
+    runs.extend(
+        claude(json!({"findings": []}), json!([]))
+            .as_array()
+            .unwrap()
+            .clone(),
+    );
+    let lane = claimed_in("v21", json!(runs), "");
+    lane.plan("1. do it\n");
+    let big = format!("a\n{}", "b\n".repeat(401));
+    git(
+        &lane.wt,
+        &["commit", "-qam", "feat"],
+        &[("lib.rs", big.as_bytes())],
+    );
+    lane.answer("lane", "accept");
+    let out = lane.verify();
+    let stopped = json!({"check": "review", "why": "1 finding(s) still block"});
+    assert_eq!(out["stopped"], stopped);
+    assert_eq!(
+        lane.review()["over_cap"],
+        json!({"code_lines": 401, "cap": 400})
+    );
 }
 
 /// While another run holds the lane's lock, verify is a conflict and

@@ -620,3 +620,65 @@ fn finding_outcomes_by_lens() {
         })
     );
 }
+
+/// A lane whose harness review was past the cap counts as over it, and as
+/// one with a cut finding when the design and tests lens raised a `cut:`
+/// there; a `cut:` title from another lens, or under the cap, is none.
+#[test]
+fn over_cap_lanes_and_their_cut_findings() {
+    let (_dir, _path, ledger) = common::ledger();
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    let review = |work: i64, over: bool, findings: Value| {
+        let mut p = json!({"check": "review", "outcome": "ran", "head_sha": HEAD,
+            "producer": harness, "complete": true, "findings": findings});
+        if over {
+            p["over_cap"] = json!({"code_lines": 500, "cap": 400});
+        }
+        let event = Mutation::Event {
+            kind: EventKind::CheckFinished,
+            lane_id: Some(work),
+            spec_id: None,
+            payload: serde_json::from_value(p).unwrap(),
+        };
+        committed(
+            ledger
+                .apply(&actor("h"), None, &ledger.now().unwrap(), event)
+                .unwrap(),
+        );
+    };
+    let f = |lens: &str, title: &str| {
+        json!({"finding_key": format!("{lens}-{title}"), "lens": lens, "severity": "risk",
+            "title": title, "body": "b"})
+    };
+    let (cut, stood, under) = (lane(&ledger), lane(&ledger), lane(&ledger));
+    review(
+        cut,
+        true,
+        json!([f("design_tests", "cut: the helper"), f("correctness", "x")]),
+    );
+    review(
+        stood,
+        true,
+        json!([f("correctness", "cut: not a size finding")]),
+    );
+    review(
+        under,
+        false,
+        json!([f("design_tests", "cut: under the cap")]),
+    );
+    let out = stats(&ledger, Cohort::Work(vec![cut, stood, under]));
+    let lanes = out["lanes"].as_array().unwrap().iter();
+    let lanes: Vec<_> = lanes
+        .map(|l| (&l["over_cap"], &l["cut_findings"]))
+        .collect();
+    assert_eq!(
+        lanes,
+        [
+            (&json!(true), &json!(1)),
+            (&json!(true), &json!(0)),
+            (&json!(false), &json!(0))
+        ]
+    );
+    assert_eq!(out["cohort"]["lanes_over_cap"], 2);
+    assert_eq!(out["cohort"]["lanes_with_cut_finding"], 1);
+}

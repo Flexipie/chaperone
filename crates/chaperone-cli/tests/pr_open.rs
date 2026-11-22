@@ -77,6 +77,11 @@ impl Lane {
 /// `pr` to the base profile. The fake's `gh api user` is `me`, and its
 /// `gh pr view` title the file `title`.
 fn lane(create: &[&str], pr: &str) -> Lane {
+    lane_on("v20", create, pr)
+}
+
+/// [`lane`] on `pipeline`.
+fn lane_on(pipeline: &str, create: &[&str], pr: &str) -> Lane {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, bin) = (
         dir.path().join("ledger.db"),
@@ -131,7 +136,7 @@ fn lane(create: &[&str], pr: &str) -> Lane {
     let create = [&["work", "create", "--title", "t"], create].concat();
     assert_eq!(lane.run("lane", &create).0, 0);
     assert_eq!(
-        lane.run("lane", &[&claim[..], &["--pipeline", "v20"]].concat())
+        lane.run("lane", &[&claim[..], &["--pipeline", pipeline]].concat())
             .0,
         0
     );
@@ -175,7 +180,7 @@ fn pr_open_creates_the_pr_from_ledger_facts() {
     let edit = "pr edit 7 --repo o/r --body-file -\n";
     assert_eq!(lane.file("gh.log"), [list, create, list, edit].concat());
     let body = format!(
-        "t\n\n- Size: 1 code lines and 0 test lines in 1 files\n- Tests: passed on {head}: `test ! -e FAIL`\n\
+        "t\n\n- Size: 1 code lines added, 0 removed, and 0 test lines in 1 files\n- Tests: passed on {head}: `test ! -e FAIL`\n\
          - Plan check: skipped (waived)\n- Smoke: none\n\nMade by `chaperone pr open` from the ledger.\n"
     );
     assert_eq!(lane.file("body.md"), body);
@@ -239,7 +244,60 @@ fn pr_open_refuses_what_cannot_pass() {
     git(&lane.wt, &["rm", "-q", "big.rs"], &[]);
     git(&lane.wt, &["add", "blob"], &[("blob", b"\0\x01")]);
     git(&lane.wt, &["commit", "-qm", "blob"], &[]);
-    refused("and 1 uncounted");
+    refused("1 uncounted (binary) files");
+}
+
+/// On v21 the size counts added code lines and is the review's question,
+/// never a refusal: a cleanup removing 400 lines opens its PR, and so does a
+/// diff past the cap; a binary no `[assets]` glob names still refuses.
+#[test]
+fn pr_open_on_v21_counts_added_lines_and_refuses_no_size() {
+    let lane = lane_on("v21", &[], "");
+    let old = "x\n".repeat(400);
+    git(
+        &lane.wt,
+        &["checkout", "-q", "main"],
+        &[("old.rs", old.as_bytes())],
+    );
+    git(&lane.wt, &["add", "old.rs"], &[]);
+    git(&lane.wt, &["commit", "-qm", "old"], &[]);
+    git(&lane.wt, &["push", "-q", "origin", "main"], &[]);
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+    git(&lane.wt, &["merge", "-q", "--no-edit", "main"], &[]);
+    git(&lane.wt, &["rm", "-q", "old.rs"], &[]);
+    let new = "y\n".repeat(50);
+    git(&lane.wt, &["add", "new.rs"], &[("new.rs", new.as_bytes())]);
+    git(&lane.wt, &["commit", "-qm", "cleanup"], &[]);
+    let open = ["pr", "open", "--work", "1"];
+    let (code, err) = lane.run("lane", &open);
+    // The fake's first `pr create` opens #7 and fails.
+    assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
+    let size = "- Size: 51 code lines added, 400 removed, and 0 test lines in 3 files\n";
+    assert!(
+        lane.file("body.md").contains(size),
+        "{}",
+        lane.file("body.md")
+    );
+    let big = "z\n".repeat(401);
+    git(&lane.wt, &["add", "big.rs"], &[("big.rs", big.as_bytes())]);
+    git(&lane.wt, &["commit", "-qm", "big"], &[]);
+    let (code, out) = lane.run("lane", &open);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        lane.file("body.md")
+            .contains("- Size: 452 code lines added")
+    );
+    git(&lane.wt, &["add", "blob"], &[("blob", b"\0\x01")]);
+    git(&lane.wt, &["commit", "-qm", "blob"], &[]);
+    let (code, err) = lane.run("lane", &open);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("1 uncounted (binary) files"),
+        "{err}"
+    );
 }
 
 /// A binary an `[assets]` glob names opens its PR, whose Size line counts it.
@@ -250,7 +308,8 @@ fn pr_open_lets_an_asset_through() {
     git(&lane.wt, &["commit", "-qm", "logo"], &[]);
     let (code, err) = lane.run("lane", &["pr", "open", "--work", "1"]);
     assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
-    let size = "- Size: 1 code lines and 0 test lines in 2 files, 1 of them assets\n";
+    let size =
+        "- Size: 1 code lines added, 0 removed, and 0 test lines in 2 files, 1 of them assets\n";
     assert!(
         lane.file("body.md").contains(size),
         "{}",

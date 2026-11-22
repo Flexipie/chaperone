@@ -64,6 +64,37 @@ fn lane(db: &Path, claim: &[&str]) -> String {
     id
 }
 
+/// A diff recorded before `code_lines` counted added lines only (no
+/// measure in its `profile`, no `removed_code`) does not replay: the same
+/// commit measures again.
+#[test]
+fn an_old_measure_does_not_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let (base, db, wt) = (
+        setup(dir.path()),
+        dir.path().join("ledger.db"),
+        dir.path().join("wt"),
+    );
+    git(&wt, &["update-ref", "refs/remotes/origin/main", &base], &[]);
+    git(&wt, &["checkout", "-qb", "feat"], &[("lib.rs", b"a\nc\n")]);
+    git(&wt, &["commit", "-qam", "feat"], &[]);
+    let id = lane(
+        &db,
+        &["--worktree", wt.to_str().unwrap(), "--branch", "feat"],
+    );
+    let diff = ["check", "run", "diff", "--work", &id];
+    assert_eq!(run(&db, &diff).0, 0);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let old = "UPDATE events SET payload_json = json_set(json_remove(payload_json, '$.profile',
+        '$.removed_code'), '$.code_lines', 2) WHERE payload_json->>'check' = 'diff'";
+    conn.execute(old, []).unwrap();
+    let (code, again) = run(&db, &diff);
+    assert_eq!(code, 0, "{again}");
+    let p = &again["payload"];
+    let got = (&again["replayed"], &p["code_lines"], &p["removed_code"]);
+    assert_eq!(got, (&json!(false), &json!(1), &json!(1)));
+}
+
 /// The branch tip is measured exactly against the remote base, past a
 /// local branch named like it, while a later layer is checked out; the same
 /// commit replays, a reworded one and a return to the first append; docs
@@ -102,7 +133,7 @@ fn a_run_measures_the_lane_commit() {
     let producer = p.as_object_mut().unwrap().remove("producer").unwrap();
     let evidence = p.as_object_mut().unwrap().remove("evidence_ref").unwrap();
     let want = json!({"check": "diff", "outcome": "ran", "head_sha": tip, "tree": tree,
-        "base": "origin/main", "files": 3, "added": 3, "removed": 1, "code_lines": 3,
+        "base": "origin/main", "profile": "added", "files": 3, "added": 3, "removed": 1, "code_lines": 2, "removed_code": 1,
         "test_lines": 0, "changes_code": true, "uncounted_files": 1, "asset_files": 0, "files_truncated": false});
     assert_eq!(p, want);
     assert_eq!(producer["kind"], "harness");

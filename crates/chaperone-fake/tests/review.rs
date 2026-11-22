@@ -96,6 +96,7 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
         plan: String::new(),
         code_lines: None,
         assets: Vec::new(),
+        over_cap: None,
     };
     let store = Evidence::beside(&dir.path().join("ledger.db"));
     Env {
@@ -269,6 +270,45 @@ fn a_lens_with_no_answer_did_not_run() {
         error.starts_with("unreadable answer: the last message is not JSON"),
         "{error}"
     );
+}
+
+/// A diff over the cap asks the design and tests lens, and tells the
+/// verifier, what could be cut or split; no other lens, and nothing under
+/// the cap.
+#[test]
+fn an_over_cap_diff_asks_what_to_cut() {
+    let none = |lens: &str| json!({"when": format!("LENS {lens}"), "stdout": result(json!({"findings": []}))});
+    let claude = json!(["correctness", "design_tests", "intent", "verifier"].map(none));
+    let mut env = env(claude, json!([]), 10);
+    env.facts.over_cap = Some((401, 400));
+    let pipeline = pipeline();
+    let (dir, facts) = (env.checkout(), &env.facts);
+    let planned = review::lenses(&pipeline).unwrap();
+    review::run(&planned, &env.agents(), &dir, facts, &env.store).unwrap();
+    let p = review::verifier(&pipeline).unwrap();
+    let found = review::findings(
+        "design_tests",
+        json!({"findings": [found("risk", "cut: x")]}),
+    );
+    review::verify(
+        &p,
+        &env.agents(),
+        &dir,
+        facts,
+        &found.unwrap(),
+        &[],
+        &env.store,
+    )
+    .unwrap();
+    let asks = "adds 401 code lines (test files aside; removed lines are not counted), past the \
+                pipeline's cap of 400";
+    for lens in ["correctness", "design_tests", "intent", "verifier"] {
+        let call = call(env.dir.path(), "claude", lens);
+        let prompt = call["prompt"].as_str().unwrap();
+        let shown = matches!(lens, "design_tests" | "verifier");
+        assert_eq!(prompt.contains(asks), shown, "{lens}");
+        assert_eq!(prompt.contains("`cut: <what>`"), shown, "{lens}");
+    }
 }
 
 /// The verifier is shown every finding by its key, with the lenses'
@@ -1150,6 +1190,7 @@ fn judge_with(env: &Env, ledger: &Ledger, head: &str, tree: &str, smoke: bool) -
         plan: String::new(),
         code_lines: None,
         assets: Vec::new(),
+        over_cap: None,
     };
     let (dir, agents) = (env.checkout(), env.agents());
     let got = verdict::record(
