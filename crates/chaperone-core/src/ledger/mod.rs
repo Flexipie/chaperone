@@ -318,14 +318,14 @@ pub fn lock_lane(ledger: &Path, lane: i64) -> Result<Result<File, Refusal>, Ledg
 /// them, and they are tried again every 200 ms, in no first-come order.
 pub fn lock_slot(
     ledger: &Path,
-    slots: u32,
+    slots: std::num::NonZeroU32,
     lane: i64,
     waiting: impl FnOnce(&[String]),
 ) -> Result<File, LedgerError> {
     let mut waiting = Some(waiting);
     loop {
         let mut holders = Vec::new();
-        for n in 0..slots {
+        for n in 0..slots.get() {
             let mut slot = File::options()
                 .create(true)
                 .truncate(false)

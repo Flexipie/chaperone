@@ -936,8 +936,8 @@ fn run_tests(
 /// `work`, saying on stderr when it waits, and the event's `slot`.
 fn test_slot(db: &Path, work: i64) -> Result<(File, Value), CliError> {
     let slots = match std::env::var("CHAPERONE_SLOTS") {
-        Err(_) => 2,
-        Ok(n) => n.parse().ok().filter(|&n: &u32| n > 0).ok_or_else(|| {
+        Err(_) => std::num::NonZeroU32::new(2).unwrap_or(std::num::NonZeroU32::MIN),
+        Ok(n) => n.parse().map_err(|_| {
             refuse(format!(
                 "CHAPERONE_SLOTS must be a whole number of 1 or more, not {n:?}"
             ))

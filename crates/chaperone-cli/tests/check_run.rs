@@ -796,6 +796,10 @@ fn tests_fail_closed() {
             Some("commands = [[\"./noexec.sh\"]]"),
             "could not start [\"./noexec.sh\"]: not an executable file",
         ),
+        (
+            Some("commands = [[\"no-such-tool\"]]"),
+            "could not start [\"no-such-tool\"]: not an executable file",
+        ),
     ] {
         base_tests(&wt, profile);
         let before = events(&db);
@@ -1391,7 +1395,7 @@ fn runs_share_a_slot_in_order() {
     waiting.kill().unwrap();
     waiting.wait().unwrap();
     drop(unnamed);
-    let held = lock_slot(&db, 1, 99, |_| {}).unwrap();
+    let held = lock_slot(&db, std::num::NonZeroU32::MIN, 99, |_| {}).unwrap();
     let mut waiting = tests_on_one_slot(&db, &id);
     let line = format!("chaperone: lane {id} waits for a test slot (1 held, by lanes 99)\n");
     assert_eq!(waits(&mut waiting), line);
@@ -1407,7 +1411,7 @@ fn runs_share_a_slot_in_order() {
     assert_eq!(slot["slots"], 1);
     assert!(slot["wait_ms"].as_u64().unwrap() >= 300, "{slot}");
 
-    let _held = lock_slot(&db, 1, 99, |_| {}).unwrap();
+    let _held = lock_slot(&db, std::num::NonZeroU32::MIN, 99, |_| {}).unwrap();
     let (again, err) = finished(tests_on_one_slot(&db, &id));
     assert_eq!((&again["replayed"], err.as_str()), (&json!(true), ""));
 }
@@ -1475,7 +1479,7 @@ fn a_smoke_takes_no_slot() {
     git(&wt2, &["remote", "set-head", "origin", "-d"], &[]);
     let claim = ["--pipeline", "v20", "--worktree", wt2.to_str().unwrap()];
     let id = lane(&db, &[&claim[..], &["--branch", "feat"]].concat());
-    let _held = lock_slot(&db, 1, 99, |_| {}).unwrap();
+    let _held = lock_slot(&db, std::num::NonZeroU32::MIN, 99, |_| {}).unwrap();
     let mut smoke = run_on_slots(&db, "smoke", &id, "1");
     let started = std::time::Instant::now();
     while smoke.try_wait().unwrap().is_none() {
