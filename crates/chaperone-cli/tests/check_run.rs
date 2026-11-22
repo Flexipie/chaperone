@@ -4,8 +4,9 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
-use chaperone_core::ledger::{Evidence, lock_lane};
+use chaperone_core::ledger::{Evidence, lock_lane, lock_slot};
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_chaperone");
@@ -1325,4 +1326,96 @@ fn prune_removes_only_lane_dirs() {
         ["lane-", "lane-+1", "lane-1x", "lane-7", "lane-9", "other"]
     );
     assert!(outside.join("keep").exists());
+}
+/// `check run tests` on lane `id` on a machine with one test slot.
+fn tests_on_one_slot(db: &Path, id: &str) -> std::process::Child {
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--db")
+        .arg(db)
+        .args(["check", "run", "tests", "--work", id]);
+    cmd.args(["--agent", "a", "--session", "s"])
+        .env("CHAPERONE_SLOTS", "1");
+    let piped = std::process::Stdio::piped;
+    cmd.stdout(piped()).stderr(piped()).spawn().unwrap()
+}
+
+/// The run's `data`, and its stderr.
+fn finished(child: std::process::Child) -> (Value, String) {
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    (v["data"].clone(), String::from_utf8(out.stderr).unwrap())
+}
+
+/// A run waits while the slot is held, says for whom, then runs and
+/// records the wait; a replay takes no slot.
+#[test]
+fn runs_share_a_slot_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, id) = tests_lane(dir.path());
+    base_tests(&wt, Some(r#"commands = [["true"]]"#));
+    let held = lock_slot(&db, 1, 99, |_| {}).unwrap();
+    let mut waiting = tests_on_one_slot(&db, &id);
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(
+        waiting.try_wait().unwrap().is_none(),
+        "ran past a held slot"
+    );
+    drop(held);
+    let (data, err) = finished(waiting);
+    let slot = &data["payload"]["slot"];
+    assert_eq!(data["payload"]["result"], "pass");
+    assert_eq!(slot["slots"], 1);
+    assert!(slot["wait_ms"].as_u64().unwrap() >= 300, "{slot}");
+    let line = format!("chaperone: lane {id} waits for a test slot (1 held, by lanes 99)\n");
+    assert_eq!(err, line);
+
+    let _held = lock_slot(&db, 1, 99, |_| {}).unwrap();
+    let (again, err) = finished(tests_on_one_slot(&db, &id));
+    assert_eq!((&again["replayed"], err.as_str()), (&json!(true), ""));
+}
+
+/// A holder killed mid-run frees its slot for the lane waiting on it.
+#[test]
+fn a_killed_holder_frees_the_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, first) = tests_lane(dir.path());
+    let hold = r#"commands = [["sh", "-c", "if [ -e hold ]; then sleep 20; fi"]]"#;
+    base_tests(&wt, Some(hold));
+    let wt2 = dir.path().join("wt2");
+    git(
+        dir.path(),
+        &["clone", "-q", wt.to_str().unwrap(), "wt2"],
+        &[],
+    );
+    git(
+        &wt2,
+        &["update-ref", "refs/remotes/origin/main", "origin/main"],
+        &[],
+    );
+    let second = lane(
+        &db,
+        &["--worktree", wt2.to_str().unwrap(), "--branch", "feat"],
+    );
+    git(&wt, &["add", "."], &[("hold", b"x\n")]);
+    git(&wt, &["commit", "-qm", "hold"], &[]);
+
+    let mut holder = tests_on_one_slot(&db, &first);
+    let slot = dir.path().join("ledger.db.slot-0.lock");
+    let started = std::time::Instant::now();
+    while std::fs::read_to_string(&slot).unwrap_or_default() != first {
+        assert!(started.elapsed() < Duration::from_secs(10), "never held");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let waiting = tests_on_one_slot(&db, &second);
+    std::thread::sleep(Duration::from_millis(300));
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+    let (data, err) = finished(waiting);
+    assert_eq!(data["payload"]["result"], "pass");
+    assert!(err.contains(&format!("by lanes {first})")), "{err}");
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "waited for the sleep"
+    );
 }

@@ -442,6 +442,22 @@ a signal, a moved `HEAD`, a dirty tree, a cut listing and a timeout are a `check
 `result` `fail`; a command that cannot start, or a checkout that cannot be made (git's own
 message is kept), writes nothing.
 
+Each command runs as `nice -n 10 <argv>`, so the repo's commands run at low priority; the event
+and evidence name the repo's argv. A program that is not a file with an exec bit (a path from the
+checkout, else a name on `PATH`) is a command that cannot start.
+
+A `check run tests` (and the tests step of `verify`) that has to run takes one of the machine's
+test slots first, after the replay check and before its timeout starts, so the wait is not timed:
+`<ledger>.slot-<n>.lock` beside the ledger, n below `CHAPERONE_SLOTS` (a whole number of 1 or
+more, default 2; another value is `invalid_input`), each a file lock the OS releases when its
+holder ends, so a killed run never keeps a slot. A run that finds every slot held writes one line
+to stderr, `chaperone: lane <id> waits for a test slot (<n> held, by lanes <ids>)` (`?` for a
+holder that has not written its id yet), before any error envelope, and tries again every
+200 ms, in no first-come order. The slot is released once the commands and the checks after them
+end, before the event is written; the event's `slot` has `slots` and `wait_ms`. The commit under
+test is the one read before the wait, so a lane that commits while waiting has its earlier commit
+tested and recorded. A replay and `check run smoke` take no slot.
+
 `check run smoke` is `check run tests` on the base profile's `[smoke]` table, which has the
 same keys and rules as `[tests]`, recorded as check `smoke` with the harness producer (events.md).
 A profile with no `[smoke]` is refused (`invalid_input`, nothing written), never a pass: whether
