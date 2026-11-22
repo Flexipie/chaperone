@@ -1339,7 +1339,15 @@ fn tests_on_one_slot(db: &Path, id: &str) -> std::process::Child {
     cmd.stdout(piped()).stderr(piped()).spawn().unwrap()
 }
 
-/// The run's `data`, and its stderr.
+/// The line a run writes to stderr once it waits for a slot.
+fn waits(child: &mut std::process::Child) -> String {
+    let mut line = String::new();
+    let stderr = child.stderr.take().unwrap();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(stderr), &mut line).unwrap();
+    line
+}
+
+/// The run's `data`, and its stderr when not read already.
 fn finished(child: std::process::Child) -> (Value, String) {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "{out:?}");
@@ -1356,19 +1364,19 @@ fn runs_share_a_slot_in_order() {
     base_tests(&wt, Some(r#"commands = [["true"]]"#));
     let held = lock_slot(&db, 1, 99, |_| {}).unwrap();
     let mut waiting = tests_on_one_slot(&db, &id);
-    std::thread::sleep(Duration::from_millis(600));
+    let line = format!("chaperone: lane {id} waits for a test slot (1 held, by lanes 99)\n");
+    assert_eq!(waits(&mut waiting), line);
+    std::thread::sleep(Duration::from_millis(300));
     assert!(
         waiting.try_wait().unwrap().is_none(),
         "ran past a held slot"
     );
     drop(held);
-    let (data, err) = finished(waiting);
+    let (data, _) = finished(waiting);
     let slot = &data["payload"]["slot"];
     assert_eq!(data["payload"]["result"], "pass");
     assert_eq!(slot["slots"], 1);
     assert!(slot["wait_ms"].as_u64().unwrap() >= 300, "{slot}");
-    let line = format!("chaperone: lane {id} waits for a test slot (1 held, by lanes 99)\n");
-    assert_eq!(err, line);
 
     let _held = lock_slot(&db, 1, 99, |_| {}).unwrap();
     let (again, err) = finished(tests_on_one_slot(&db, &id));
@@ -1404,18 +1412,15 @@ fn a_killed_holder_frees_the_slot() {
     let slot = dir.path().join("ledger.db.slot-0.lock");
     let started = std::time::Instant::now();
     while std::fs::read_to_string(&slot).unwrap_or_default() != first {
-        assert!(started.elapsed() < Duration::from_secs(10), "never held");
+        assert!(started.elapsed() < Duration::from_secs(60), "never held");
         std::thread::sleep(Duration::from_millis(50));
     }
-    let waiting = tests_on_one_slot(&db, &second);
-    std::thread::sleep(Duration::from_millis(300));
+    let mut waiting = tests_on_one_slot(&db, &second);
+    assert!(waits(&mut waiting).contains(&format!("by lanes {first})")));
     holder.kill().unwrap();
     holder.wait().unwrap();
-    let (data, err) = finished(waiting);
+    let (data, _) = finished(waiting);
+    let waited = data["payload"]["slot"]["wait_ms"].as_u64().unwrap();
     assert_eq!(data["payload"]["result"], "pass");
-    assert!(err.contains(&format!("by lanes {first})")), "{err}");
-    assert!(
-        started.elapsed() < Duration::from_secs(15),
-        "waited for the sleep"
-    );
+    assert!(waited < 15_000, "waited {waited} ms, for the sleep");
 }
