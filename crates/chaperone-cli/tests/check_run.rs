@@ -4,8 +4,9 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
-use chaperone_core::ledger::{Evidence, lock_lane};
+use chaperone_core::ledger::{Evidence, lock_lane, lock_slot};
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_chaperone");
@@ -775,7 +776,7 @@ fn tests_fail_closed() {
     assert_eq!((&p["result"], &p["dirty"]), (&json!("fail"), &json!(true)));
     for (profile, timed_out) in [
         (
-            "commands = [[\"sleep\", \"5\"], [\"true\"]]\ntimeout_secs = 1",
+            "commands = [[\"sleep\", \"10\"], [\"true\"]]\ntimeout_secs = 3",
             true,
         ),
         (
@@ -793,6 +794,8 @@ fn tests_fail_closed() {
         assert_eq!(p["commands"].as_array().unwrap().len(), 1);
     }
 
+    git(&wt, &["add", "."], &[("noexec.sh", b"true\n")]);
+    git(&wt, &["commit", "-qm", "script"], &[]);
     for (profile, why) in [
         (None, "no .chaperone/profile.toml on the base"),
         (Some("commands = []"), "no [tests] commands"),
@@ -819,6 +822,14 @@ fn tests_fail_closed() {
         (
             Some("commands = [[\"/no/such/command\"]]"),
             "could not start",
+        ),
+        (
+            Some("commands = [[\"./noexec.sh\"]]"),
+            "could not start [\"./noexec.sh\"]: not an executable file",
+        ),
+        (
+            Some("commands = [[\"no-such-tool\"]]"),
+            "could not start [\"no-such-tool\"]: not an executable file",
         ),
     ] {
         base_tests(&wt, profile);
@@ -1356,4 +1367,192 @@ fn prune_removes_only_lane_dirs() {
         ["lane-", "lane-+1", "lane-1x", "lane-7", "lane-9", "other"]
     );
     assert!(outside.join("keep").exists());
+}
+/// `check run tests` on lane `id` with one test slot.
+fn tests_on_one_slot(db: &Path, id: &str) -> std::process::Child {
+    run_on_slots(db, "tests", id, "1")
+}
+
+/// `check run <check>` on lane `id` with `CHAPERONE_SLOTS` set to `slots`.
+fn run_on_slots(db: &Path, check: &str, id: &str, slots: &str) -> std::process::Child {
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--db")
+        .arg(db)
+        .args(["check", "run", check, "--work", id]);
+    cmd.args(["--agent", "a", "--session", "s"])
+        .env("CHAPERONE_SLOTS", slots);
+    let piped = std::process::Stdio::piped;
+    cmd.stdout(piped()).stderr(piped()).spawn().unwrap()
+}
+
+/// The line a run writes to stderr once it waits for a slot.
+fn waits(child: &mut std::process::Child) -> String {
+    let mut line = String::new();
+    let stderr = child.stderr.take().unwrap();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(stderr), &mut line).unwrap();
+    line
+}
+
+/// The run's `data`, and its stderr when not read already.
+fn finished(child: std::process::Child) -> (Value, String) {
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    (v["data"].clone(), String::from_utf8(out.stderr).unwrap())
+}
+
+/// A run waits while the slot is held, says for whom, then runs and
+/// records the wait; a replay takes no slot.
+#[test]
+fn runs_share_a_slot_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, id) = tests_lane(dir.path());
+    base_tests(&wt, Some(r#"commands = [["true"]]"#));
+    for slots in ["0", "x"] {
+        let before = events(&db);
+        let out = run_on_slots(&db, "tests", &id, slots)
+            .wait_with_output()
+            .unwrap();
+        let err: Value = serde_json::from_slice(&out.stderr).unwrap();
+        let got = (out.status.code(), &err["error"]["code"], events(&db));
+        assert_eq!(got, (Some(1), &json!("invalid_input"), before), "{slots}");
+        let why = format!("CHAPERONE_SLOTS must be a whole number of 1 or more, not \"{slots}\"");
+        assert_eq!(err["error"]["message"], why);
+    }
+    let unnamed = std::fs::File::create(dir.path().join("ledger.db.slot-0.lock")).unwrap();
+    unnamed.try_lock().unwrap();
+    let mut waiting = tests_on_one_slot(&db, &id);
+    assert!(waits(&mut waiting).ends_with("(1 held, by lanes ?)\n"));
+    waiting.kill().unwrap();
+    waiting.wait().unwrap();
+    drop(unnamed);
+    let held = lock_slot(&db, std::num::NonZeroU32::MIN, 99, |_| {}).unwrap();
+    let mut waiting = tests_on_one_slot(&db, &id);
+    let line = format!("chaperone: lane {id} waits for a test slot (1 held, by lanes 99)\n");
+    assert_eq!(waits(&mut waiting), line);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        waiting.try_wait().unwrap().is_none(),
+        "ran past a held slot"
+    );
+    drop(held);
+    let (data, _) = finished(waiting);
+    let slot = &data["payload"]["slot"];
+    assert_eq!(data["payload"]["result"], "pass");
+    assert_eq!(slot["slots"], 1);
+    assert!(slot["wait_ms"].as_u64().unwrap() >= 300, "{slot}");
+
+    let _held = lock_slot(&db, std::num::NonZeroU32::MIN, 99, |_| {}).unwrap();
+    let (again, err) = finished(tests_on_one_slot(&db, &id));
+    assert_eq!((&again["replayed"], err.as_str()), (&json!(true), ""));
+}
+
+/// A holder killed mid-run frees its slot for the lane waiting on it.
+#[test]
+fn a_killed_holder_frees_the_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, first) = tests_lane(dir.path());
+    let hold = r#"commands = [["sh", "-c", "if [ -e hold ]; then sleep 20; fi"]]"#;
+    base_tests(&wt, Some(hold));
+    let wt2 = dir.path().join("wt2");
+    git(
+        dir.path(),
+        &["clone", "-q", wt.to_str().unwrap(), "wt2"],
+        &[],
+    );
+    git(
+        &wt2,
+        &["update-ref", "refs/remotes/origin/main", "origin/main"],
+        &[],
+    );
+    let second = lane(
+        &db,
+        &["--worktree", wt2.to_str().unwrap(), "--branch", "feat"],
+    );
+    git(&wt, &["add", "."], &[("hold", b"x\n")]);
+    git(&wt, &["commit", "-qm", "hold"], &[]);
+
+    let mut holder = tests_on_one_slot(&db, &first);
+    let slot = dir.path().join("ledger.db.slot-0.lock");
+    let started = std::time::Instant::now();
+    while std::fs::read_to_string(&slot).unwrap_or_default() != first {
+        assert!(started.elapsed() < Duration::from_secs(60), "never held");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut waiting = tests_on_one_slot(&db, &second);
+    assert!(waits(&mut waiting).contains(&format!("by lanes {first})")));
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+    let (data, _) = finished(waiting);
+    let waited = data["payload"]["slot"]["wait_ms"].as_u64().unwrap();
+    assert_eq!(data["payload"]["result"], "pass");
+    assert!(waited < 15_000, "waited {waited} ms, for the sleep");
+}
+
+/// A harness smoke runs while the only test slot is held.
+#[test]
+fn a_smoke_takes_no_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, _) = tests_lane(dir.path());
+    let profile = "commands = [[\"true\"]]\n[smoke]\ncommands = [[\"true\"]]";
+    base_tests(&wt, Some(profile));
+    let wt2 = dir.path().join("wt2");
+    git(
+        dir.path(),
+        &["clone", "-q", wt.to_str().unwrap(), "wt2"],
+        &[],
+    );
+    git(
+        &wt2,
+        &["update-ref", "refs/remotes/origin/main", "origin/main"],
+        &[],
+    );
+    git(&wt2, &["remote", "set-head", "origin", "-d"], &[]);
+    let claim = ["--pipeline", "v20", "--worktree", wt2.to_str().unwrap()];
+    let id = lane(&db, &[&claim[..], &["--branch", "feat"]].concat());
+    let _held = lock_slot(&db, std::num::NonZeroU32::MIN, 99, |_| {}).unwrap();
+    let mut smoke = run_on_slots(&db, "smoke", &id, "1");
+    let started = std::time::Instant::now();
+    while smoke.try_wait().unwrap().is_none() {
+        if started.elapsed() > Duration::from_secs(60) {
+            smoke.kill().unwrap();
+            panic!("the smoke waited for a slot");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (data, err) = finished(smoke);
+    let got = (
+        &data["payload"]["result"],
+        &data["payload"]["slot"],
+        err.as_str(),
+    );
+    assert_eq!(got, (&json!("pass"), &Value::Null, ""));
+}
+
+/// A relative `PATH` entry names a directory of the checkout, where the
+/// command runs.
+#[test]
+fn a_relative_path_entry_is_the_checkouts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, id) = tests_lane(dir.path());
+    std::fs::create_dir(wt.join("bin")).unwrap();
+    std::fs::write(wt.join("bin/tool"), "#!/bin/sh\ntrue\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let exec = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(wt.join("bin/tool"), exec).unwrap();
+    git(&wt, &["add", "bin/tool"], &[]);
+    git(&wt, &["commit", "-qm", "tool"], &[]);
+    base_tests(&wt, Some(r#"commands = [["tool"]]"#));
+    let path = format!("bin:{}", std::env::var("PATH").unwrap());
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--db")
+        .arg(&db)
+        .args(["check", "run", "tests", "--work", &id]);
+    let out = cmd
+        .args(["--agent", "a", "--session", "s"])
+        .env("PATH", path);
+    let out = out.current_dir(dir.path()).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["payload"]["result"], "pass");
 }

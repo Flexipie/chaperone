@@ -14,6 +14,7 @@ mod write;
 
 use std::ffi::OsString;
 use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -307,6 +308,52 @@ pub fn lock_lane(ledger: &Path, lane: i64) -> Result<Result<File, Refusal>, Ledg
             message: format!("lane {lane} has a check run in progress; wait for it to end"),
         })),
         Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+/// Holds one of `slots` test slots shared by runs on the ledger at `ledger`,
+/// files beside it, until the file is dropped or the process ends, so a killed
+/// holder frees its slot. Each is tried in order and the one taken names
+/// `lane`; while all are held, `waiting` is told once the lanes holding
+/// them, and they are tried again every 200 ms, in no first-come order.
+pub fn lock_slot(
+    ledger: &Path,
+    slots: std::num::NonZeroU32,
+    lane: i64,
+    waiting: impl FnOnce(&[String]),
+) -> Result<File, LedgerError> {
+    let mut waiting = Some(waiting);
+    loop {
+        let mut holders = Vec::new();
+        for n in 0..slots.get() {
+            let mut slot = File::options()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(lock_path(ledger, &format!(".slot-{n}.lock")))?;
+            match slot.try_lock() {
+                Ok(()) => {
+                    slot.set_len(0)?;
+                    slot.write_all(lane.to_string().as_bytes())?;
+                    return Ok(slot);
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    let mut holder = String::new();
+                    slot.read_to_string(&mut holder)?;
+                    holders.push(if holder.is_empty() {
+                        "?".into()
+                    } else {
+                        holder
+                    });
+                }
+                Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+            }
+        }
+        if let Some(tell) = waiting.take() {
+            tell(&holders);
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
 

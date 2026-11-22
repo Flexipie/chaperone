@@ -7,7 +7,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{DirBuilder, File};
 use std::io::Read;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -891,6 +891,9 @@ fn run_tests(
     if let Some(stored) = ledger.run_replay(&key)? {
         return one(stored);
     }
+    let slot = (check == "tests")
+        .then(|| test_slot(db, work))
+        .transpose()?;
     let tests = &base.tests;
     let timeout = tests
         .timeout_secs
@@ -922,6 +925,7 @@ fn run_tests(
         text = found.listing;
     }
     drop(checkout);
+    let slot = slot.map(|(_, fields)| fields);
     text += &ran.text;
     let stored = Evidence::beside(&db)
         .put(&text)
@@ -941,7 +945,33 @@ fn run_tests(
         ),
     ]);
     input.fields.extend(after);
+    if let Some(slot) = slot {
+        input.fields.insert("slot".into(), slot);
+    }
     one(ledger.check_run(actor, &input)??)
+}
+
+/// One of the ledger's `CHAPERONE_SLOTS` (default 2) test slots for lane
+/// `work`, saying on stderr when it waits, and the event's `slot`.
+fn test_slot(db: &Path, work: i64) -> Result<(File, Value), CliError> {
+    let slots = match std::env::var("CHAPERONE_SLOTS") {
+        Err(_) => std::num::NonZeroU32::new(2).unwrap_or(std::num::NonZeroU32::MIN),
+        Ok(n) => n.parse().map_err(|_| {
+            refuse(format!(
+                "CHAPERONE_SLOTS must be a whole number of 1 or more, not {n:?}"
+            ))
+        })?,
+    };
+    let started = Instant::now();
+    let slot = ledger::lock_slot(db, slots, work, |held| {
+        eprintln!(
+            "chaperone: lane {work} waits for a test slot ({} held, by lanes {})",
+            held.len(),
+            held.join(", ")
+        );
+    })?;
+    let wait_ms = started.elapsed().as_millis() as u64;
+    Ok((slot, json!({"slots": slots, "wait_ms": wait_ms})))
 }
 
 /// `check run review`: the lane's pipeline's lenses and verifier
@@ -1550,7 +1580,8 @@ struct Ran {
 /// Each argv in order in `dir`, until one fails, with stdin empty and the
 /// environment less the session's variables and those that point git at
 /// another repository, plus `target` (the variable and the lane's build
-/// directory). Only the end of each stream is kept while it runs.
+/// directory), under `nice -n 10`. Only the end of each stream is kept
+/// while it runs.
 fn run_commands(
     commands: &[Vec<String>],
     dir: &Path,
@@ -1569,9 +1600,24 @@ fn run_commands(
         cut: false,
     };
     for argv in commands {
+        let runs = |p: PathBuf| {
+            p.metadata()
+                .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+        };
+        let found = match argv[0].contains('/') {
+            true => runs(dir.join(&argv[0])),
+            false => std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .any(|d| runs(dir.join(d).join(&argv[0]))),
+        };
+        if !found {
+            return Err(refuse(format!(
+                "could not start {argv:?}: not an executable file"
+            )));
+        }
         let started = Instant::now();
-        let mut cmd = Command::new(&argv[0]);
-        cmd.args(&argv[1..])
+        let mut cmd = Command::new("nice");
+        cmd.args(["-n", "10"])
+            .args(argv)
             .current_dir(dir)
             .env_clear()
             .envs(env.iter().cloned());
