@@ -7,7 +7,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{DirBuilder, File};
 use std::io::Read;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -1571,6 +1571,20 @@ fn run_commands(
         cut: false,
     };
     for argv in commands {
+        let runs = |p: PathBuf| {
+            p.metadata()
+                .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
+        };
+        let found = match argv[0].contains('/') {
+            true => runs(dir.join(&argv[0])),
+            false => std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .any(|d| runs(d.join(&argv[0]))),
+        };
+        if !found {
+            return Err(refuse(format!(
+                "could not start {argv:?}: not an executable file"
+            )));
+        }
         let started = Instant::now();
         let mut cmd = Command::new("nice");
         cmd.args(["-n", "10"])
@@ -1581,10 +1595,6 @@ fn run_commands(
         ran.text += &format!("$ {argv:?}\n");
         // A command killed by a signal has no exit code: a failure.
         let exit = match child::run_tail(&mut cmd, deadline, TAIL_BYTES) {
-            Ok(done) if exec_failed(&done, &argv[0]) => {
-                let why = String::from_utf8_lossy(&done.err);
-                return Err(refuse(format!("could not start {argv:?}: {}", why.trim())));
-            }
             Ok(done) => {
                 ran.text += &String::from_utf8_lossy(&done.err);
                 ran.text += &String::from_utf8_lossy(&done.out);
@@ -1612,25 +1622,6 @@ fn run_commands(
         }
     }
     Ok(ran)
-}
-
-/// Whether `done` is `nice` failing to exec `program`: 126 or 127, no
-/// stdout, and stderr only nice's one line naming it (bare on BSD, quoted
-/// by GNU).
-fn exec_failed(done: &child::Done, program: &str) -> bool {
-    let err = String::from_utf8_lossy(&done.err);
-    let line = err.strip_suffix('\n').unwrap_or(&err);
-    let names = [
-        program.to_string(),
-        format!("'{program}'"),
-        format!("\u{2018}{program}\u{2019}"),
-    ];
-    matches!(done.status.code(), Some(126 | 127))
-        && done.out.is_empty()
-        && !line.contains('\n')
-        && names
-            .iter()
-            .any(|n| line.starts_with(&format!("nice: {n}: ")))
 }
 
 pub fn reviews(ledger: &Ledger, cmd: ReviewsCmd) -> Result<Outcome, CliError> {
