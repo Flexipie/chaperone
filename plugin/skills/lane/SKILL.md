@@ -57,7 +57,8 @@ always write `summary`, `status`, `next_action` and the whole `brief`. Here: `st
 
 Write `$G/plan.md`: goal and done-when, the files and the change in each, the smoke (exact
 commands and the output that proves the done-when), the tests the repo's bar asks for, a
-code-line estimate against `code_lines`, and for a bug the root cause as `file:line`.
+line `Estimated added code lines: N` (the harness reads it; past `code_lines` on v21 the plan
+check asks split, naming the slices, or keep whole, as a finding you answer), and for a bug the root cause as `file:line`.
 
 `chaperone check run plan --work $2 --file "$G/plan.md"`, in the background (a model session,
 up to `plan_timeout` seconds). Then:
