@@ -682,3 +682,68 @@ fn over_cap_lanes_and_their_cut_findings() {
     assert_eq!(out["cohort"]["lanes_over_cap"], 2);
     assert_eq!(out["cohort"]["lanes_with_cut_finding"], 1);
 }
+
+/// A lane's estimate is held against its first harness diff: past
+/// `OVER_ESTIMATE` times it counts as over; a later bigger diff, or a
+/// lane diffed before it stated one, does not move the figure, and the
+/// owner's plan waiver, which states none, keeps the one before it.
+#[test]
+fn estimate_against_the_first_diff() {
+    let (_dir, _path, ledger) = common::ledger();
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    let finished = |work: i64, mut p: Value| {
+        if p.get("outcome").is_none() {
+            p["outcome"] = json!("ran");
+        }
+        p["head_sha"] = json!(HEAD);
+        p["producer"] = harness.clone();
+        let event = Mutation::Event {
+            kind: EventKind::CheckFinished,
+            lane_id: Some(work),
+            spec_id: None,
+            payload: serde_json::from_value(p).unwrap(),
+        };
+        committed(
+            ledger
+                .apply(&actor("h"), None, &ledger.now().unwrap(), event)
+                .unwrap(),
+        );
+    };
+    let planned = |work, estimate: Value| {
+        let p = json!({"check": "plan_check", "estimate": estimate, "findings": []});
+        finished(work, p);
+    };
+    let diffed = |work, n: i64| finished(work, json!({"check": "diff", "code_lines": n}));
+    let (over, under, none, late) = (lane(&ledger), lane(&ledger), lane(&ledger), lane(&ledger));
+    let waived = lane(&ledger);
+    planned(over, json!(100));
+    diffed(over, 160);
+    diffed(over, 900);
+    planned(under, json!(300));
+    diffed(under, 320);
+    planned(none, Value::Null);
+    diffed(none, 500);
+    diffed(late, 500);
+    planned(late, json!(100));
+    diffed(late, 600);
+    planned(waived, json!(200));
+    let waiver = json!({"check": "plan_check", "outcome": "skipped", "reason": "waived"});
+    finished(waived, waiver);
+    diffed(waived, 210);
+
+    let out = stats(&ledger, Cohort::Work(vec![over, under, none, late, waived]));
+    let lanes = out["lanes"].as_array().unwrap().iter();
+    let got: Vec<_> = lanes.map(|l| &l["size_estimate"]).collect();
+    assert_eq!(
+        got,
+        [
+            &json!({"estimate": 100, "measured": 160}),
+            &json!({"estimate": 300, "measured": 320}),
+            &Value::Null,
+            &Value::Null,
+            &json!({"estimate": 200, "measured": 210}),
+        ]
+    );
+    assert_eq!(out["cohort"]["lanes_estimated"], 3);
+    assert_eq!(out["cohort"]["lanes_over_estimate"], 1);
+}

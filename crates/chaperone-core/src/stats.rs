@@ -26,6 +26,9 @@ pub enum Cohort {
 
 /// R11: a cohort under 25 lanes is flagged, not scored.
 pub const TOO_FEW_LANES: usize = 25;
+/// A first diff past this many times the plan's estimate counts in
+/// `lanes_over_estimate`.
+pub const OVER_ESTIMATE: f64 = 1.5;
 /// R11's `lanes_peak_over_500k`.
 pub const PEAK_OVER: i64 = 500_000;
 const TOKENS: [&str; 4] = ["input_total", "cache_read", "cache_write", "output_total"];
@@ -115,6 +118,13 @@ struct Lane {
     /// one reads its original's.
     plan_findings: BTreeMap<i64, Value>,
     quality_gate: Value,
+    /// The newest plan check's `estimate` of its added code lines.
+    estimate: Option<i64>,
+    /// The estimate held at the lane's first harness `diff`, and that
+    /// diff's `code_lines`.
+    size_estimate: Option<(i64, i64)>,
+    /// A harness `diff` has been read.
+    diffed: bool,
     /// The newest owner size waiver: its raised limit and commit.
     size_waiver: Value,
     /// Verdicts that ran, in log order: head and whether it said yes.
@@ -371,6 +381,9 @@ impl Lane {
             "size_waiver": self.size_waiver,
             "over_cap": self.reviews.iter().any(|r| r.over_cap),
             "cut_findings": self.cut_findings(),
+            "size_estimate": self.size_estimate.map(|(estimate, measured)| {
+                json!({ "estimate": estimate, "measured": measured })
+            }),
             "merge_verdict": self.verdicts.last().map(|(head, yes)| {
                 json!({ "decision": if *yes { "yes" } else { "no" }, "head_sha": head })
             }),
@@ -508,10 +521,22 @@ impl Lane {
                     v["reason"] = json!(text("reason"));
                 }
                 if check == "plan_check" {
+                    if let Some(estimate) = p.get("estimate") {
+                        self.estimate = estimate.as_i64();
+                    }
                     self.plan_check = v;
                 } else {
                     self.quality_gate = v;
                 }
+            }
+            Some("diff")
+                if ran
+                    && !self.diffed
+                    && p.pointer("/producer/kind").and_then(Value::as_str) == Some("harness") =>
+            {
+                self.diffed = true;
+                let measured = p.get("code_lines").and_then(Value::as_i64);
+                self.size_estimate = self.estimate.zip(measured);
             }
             Some("size_waiver") => {
                 self.size_waiver = json!({ "lines": p.get("lines"), "head_sha": text("head_sha") });
@@ -952,6 +977,10 @@ fn summarize(lanes: &[Lane]) -> Value {
         "lanes_size_waived": count(&|l, _| !l.size_waiver.is_null()),
         "lanes_over_cap": count(&|l, _| l.reviews.iter().any(|r| r.over_cap)),
         "lanes_with_cut_finding": count(&|l, _| l.cut_findings() > 0),
+        "lanes_estimated": count(&|l, _| l.size_estimate.is_some()),
+        "lanes_over_estimate": count(&|l, _| {
+            l.size_estimate.is_some_and(|(e, m)| m as f64 > e as f64 * OVER_ESTIMATE)
+        }),
         "lanes_verdict_on_head": count(&|_, r| r.with_pr && r.verdict_on_head == Some(true)),
         "missing": missing,
         "sources": { "reviews": review_sources, "ready_point": ready_points },

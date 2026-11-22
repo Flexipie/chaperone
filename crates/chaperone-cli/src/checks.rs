@@ -1117,6 +1117,7 @@ fn run_plan(
         goal: &review::goal(ledger, &item)?,
         plan: &kept,
         base: &base,
+        cap: review::cut_cap(pipeline),
     };
     let store = Evidence::beside(db);
     one(plan::record(

@@ -1409,6 +1409,7 @@ fn attack(env: &Env, ledger: &Ledger, text: &str) -> Recorded {
         goal: "GOAL add a widget",
         plan: &kept,
         base: "1111111",
+        cap: Some(400),
     };
     let me = lane_session();
     let got = plan::record(ledger, &me, input, &p, &agents, &dir, &given, &env.store);
@@ -1495,6 +1496,84 @@ fn the_plan_check_attacks_the_plan() {
     };
     assert!(why.contains("its limit plan_attempts"), "{why}");
     assert_eq!(calls(&env), 3);
+}
+
+/// A plan estimated past the cap tells the session so; a `risk` titled
+/// split (any case) is the size finding, an answer with none, or with a
+/// split only as a `question`, gets the harness's split-or-keep risk, and a plan with no estimate records it
+/// null and is asked nothing.
+#[test]
+fn an_over_cap_estimate_asks_split_or_keep() {
+    let answer = |findings: Value| {
+        let said = json!({"findings": findings});
+        json!([{"when": "LENS plan", "stdout": session("p", said)}])
+    };
+    let env = env(
+        answer(json!([found("risk", "Split: the stats in their own PR")])),
+        json!([]),
+        10,
+    );
+    let ledger = ledger(&env);
+    let titles = |r: &Recorded| match &r.payload.findings {
+        Some(Findings::List(f)) => f.iter().map(|f| f.title.clone()).collect::<Vec<_>>(),
+        other => panic!("no findings list: {other:?}"),
+    };
+    let prompt = || {
+        let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
+        let last: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        last["prompt"].as_str().unwrap().to_string()
+    };
+
+    let split = attack(&env, &ledger, "PLAN one\n- Estimated added code lines: 900");
+    assert_eq!(split.payload.rest["estimate"], 900);
+    assert_eq!(titles(&split), ["Split: the stats in their own PR"]);
+    let asked = prompt();
+    assert!(
+        asked.contains("estimates 900 added code lines, past the pipeline's cap of 400"),
+        "{asked}"
+    );
+
+    rescript(
+        &env,
+        "claude",
+        answer(json!([found("question", "split: maybe")])),
+    );
+    let asked = attack(&env, &ledger, "PLAN one b\nEstimated added code lines: 450");
+    assert_eq!(titles(&asked).len(), 2, "a question is no size answer");
+    rescript(&env, "claude", answer(json!([found("nit", "a word")])));
+    let silent = attack(&env, &ledger, "PLAN two\nEstimated added code lines: 450");
+    assert_eq!(
+        titles(&silent),
+        [
+            "a word",
+            "split or keep: the plan estimates 450 added code lines, past the cap of 400"
+        ]
+    );
+    let Some(Findings::List(found)) = &silent.payload.findings else {
+        unreachable!()
+    };
+    assert_eq!(
+        (
+            &*found[1].severity,
+            found[1].finding_key.starts_with("plan-")
+        ),
+        ("risk", true)
+    );
+    let open: Vec<_> = ledger
+        .plan_findings(1)
+        .unwrap()
+        .into_iter()
+        .map(|f| f.status)
+        .collect();
+    assert_eq!(open, ["open", "open"]);
+
+    rescript(&env, "claude", answer(json!([])));
+    let none = attack(&env, &ledger, "PLAN three, size not stated");
+    assert_eq!(
+        (&none.payload.rest["estimate"], titles(&none).len()),
+        (&Value::Null, 0)
+    );
+    assert!(!prompt().contains("Over the size cap"));
 }
 
 /// An amend that keeps the tree carries the tree's complete review and
