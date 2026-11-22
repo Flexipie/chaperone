@@ -45,8 +45,8 @@ pub struct Given<'a> {
 const ESTIMATE: &str = "estimated added code lines:";
 
 /// The plan's estimate of its added code lines: the number after
-/// [`ESTIMATE`] on the first line that starts with it, past list, heading
-/// and bold marks. None when no line states one.
+/// `Estimated added code lines:` (any case) on the first line that starts
+/// with it, past list, heading and bold marks. None when no line states one.
 pub fn estimate(plan: &str) -> Option<i64> {
     let marks = |c: char| matches!(c, '-' | '*' | '#' | '>') || c.is_whitespace();
     plan.lines().find_map(|l| {
