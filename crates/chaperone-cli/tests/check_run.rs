@@ -741,6 +741,11 @@ fn tests_fail_closed() {
         out["payload"].clone()
     };
     assert_eq!(payload(r#"commands = [["false"]]"#)["result"], "fail");
+    let p = payload(r#"commands = [["sh", "-c", "echo 'nice: command failed' >&2; exit 127"]]"#);
+    assert_eq!(
+        (&p["result"], &p["commands"][0]["exit"]),
+        (&json!("fail"), &json!(127))
+    );
     let p = payload(r#"commands = [["sh", "-c", "echo x > new.txt"]]"#);
     assert_eq!((&p["result"], &p["dirty"]), (&json!("fail"), &json!(true)));
     for (profile, timed_out) in [

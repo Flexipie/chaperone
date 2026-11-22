@@ -339,7 +339,6 @@ pub fn lock_slot(
                     return Ok(slot);
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
-                    // Empty between a holder's lock and its write.
                     let mut holder = String::new();
                     slot.read_to_string(&mut holder)?;
                     holders.push(if holder.is_empty() {

@@ -872,7 +872,6 @@ fn run_tests(
     if let Some(stored) = ledger.run_replay(&key)? {
         return one(stored);
     }
-    // Before the deadline: the wait is not timed.
     let slot = (check == "tests")
         .then(|| test_slot(db, work))
         .transpose()?;
@@ -1582,11 +1581,7 @@ fn run_commands(
         ran.text += &format!("$ {argv:?}\n");
         // A command killed by a signal has no exit code: a failure.
         let exit = match child::run_tail(&mut cmd, deadline, TAIL_BYTES) {
-            // `nice` execs the command, so its own line means the exec failed.
-            Ok(done)
-                if matches!(done.status.code(), Some(126 | 127))
-                    && done.err.starts_with(b"nice: ") =>
-            {
+            Ok(done) if exec_failed(&done, &argv[0]) => {
                 let why = String::from_utf8_lossy(&done.err);
                 return Err(refuse(format!("could not start {argv:?}: {}", why.trim())));
             }
@@ -1617,6 +1612,25 @@ fn run_commands(
         }
     }
     Ok(ran)
+}
+
+/// Whether `done` is `nice` failing to exec `program`: 126 or 127, no
+/// stdout, and stderr only nice's one line naming it (bare on BSD, quoted
+/// by GNU).
+fn exec_failed(done: &child::Done, program: &str) -> bool {
+    let err = String::from_utf8_lossy(&done.err);
+    let line = err.strip_suffix('\n').unwrap_or(&err);
+    let names = [
+        program.to_string(),
+        format!("'{program}'"),
+        format!("\u{2018}{program}\u{2019}"),
+    ];
+    matches!(done.status.code(), Some(126 | 127))
+        && done.out.is_empty()
+        && !line.contains('\n')
+        && names
+            .iter()
+            .any(|n| line.starts_with(&format!("nice: {n}: ")))
 }
 
 pub fn reviews(ledger: &Ledger, cmd: ReviewsCmd) -> Result<Outcome, CliError> {
