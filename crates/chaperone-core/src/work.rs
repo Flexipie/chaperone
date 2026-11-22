@@ -1839,12 +1839,12 @@ mod tests {
         // A newer binary's stamp.
         ledger
             .conn()
-            .execute("UPDATE lanes SET pipeline_id = 'v21' WHERE id = 1", [])
+            .execute("UPDATE lanes SET pipeline_id = 'v99' WHERE id = 1", [])
             .unwrap();
         let events = || kinds(&ledger).len();
         let before = events();
         let unknown = Err(Refusal::PipelineUnknown {
-            pipeline_id: "v21".into(),
+            pipeline_id: "v99".into(),
             pipeline_hash: newest.hash.clone(),
         });
         assert_eq!(claim(&a, false).map(|_| ()), unknown, "renew");
