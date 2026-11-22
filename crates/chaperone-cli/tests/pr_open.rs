@@ -244,7 +244,7 @@ fn pr_open_refuses_what_cannot_pass() {
     git(&lane.wt, &["rm", "-q", "big.rs"], &[]);
     git(&lane.wt, &["add", "blob"], &[("blob", b"\0\x01")]);
     git(&lane.wt, &["commit", "-qm", "blob"], &[]);
-    refused("and 1 uncounted");
+    refused("1 uncounted (binary) files");
 }
 
 /// On v21 the size counts added code lines and is the review's question,
@@ -292,7 +292,10 @@ fn pr_open_on_v21_counts_added_lines_and_refuses_no_size() {
     let (code, err) = lane.run("lane", &open);
     assert_eq!(code, 1, "{err}");
     assert!(
-        err["message"].as_str().unwrap().contains("and 1 uncounted"),
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("1 uncounted (binary) files"),
         "{err}"
     );
 }

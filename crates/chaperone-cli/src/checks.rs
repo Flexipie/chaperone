@@ -261,7 +261,8 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
 
 /// `pr open`: under the lane's run lock, on a clean worktree at the tip of
 /// the lane's branch, `check run` diff and tests on that commit, refused
-/// past the pipeline's `code_lines` limit or when the tests fail. Then the
+/// with an uncounted file, past the pipeline's `code_lines` limit when it
+/// gates on size (to v20), or when the tests fail. Then the
 /// push of that commit and `gh pr create`, or `gh pr edit` on the PR the
 /// lane holds or gh lists for the branch, with [`pr_body`]; a PR new to the
 /// ledger is `pr.opened` on the commit. The base profile's [`chaperone_graph::PrRules`]
@@ -362,6 +363,12 @@ pub fn pr_open(
     let over =
         |limit: &&i64| (capped && lines.as_i64().is_none_or(|n| n > **limit)) || uncounted != 0;
     if let Some(limit) = pipeline.limits.get("code_lines").filter(over) {
+        if !capped {
+            return Err(refuse(format!(
+                "the diff has {uncounted} uncounted (binary) files no `[assets]` glob names; \
+                 the pipeline allows none"
+            )));
+        }
         return Err(refuse(format!(
             "the diff has {lines} code lines and {uncounted} uncounted (binary) files no \
              `[assets]` glob names; the \
