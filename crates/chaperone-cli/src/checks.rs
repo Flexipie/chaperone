@@ -7,7 +7,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{DirBuilder, File};
 use std::io::Read;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -1572,19 +1572,6 @@ fn run_commands(
         cut: false,
     };
     for argv in commands {
-        // `nice` would exit 127 or 126 for a program it cannot start.
-        let runs = |p: PathBuf| {
-            p.metadata()
-                .is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0)
-        };
-        let found = match argv[0].contains('/') {
-            true => runs(dir.join(&argv[0])),
-            false => std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .any(|d| runs(d.join(&argv[0]))),
-        };
-        if !found {
-            return Err(refuse(format!("could not start {argv:?}: not found")));
-        }
         let started = Instant::now();
         let mut cmd = Command::new("nice");
         cmd.args(["-n", "10"])
@@ -1595,6 +1582,14 @@ fn run_commands(
         ran.text += &format!("$ {argv:?}\n");
         // A command killed by a signal has no exit code: a failure.
         let exit = match child::run_tail(&mut cmd, deadline, TAIL_BYTES) {
+            // `nice` execs the command, so its own line means the exec failed.
+            Ok(done)
+                if matches!(done.status.code(), Some(126 | 127))
+                    && done.err.starts_with(b"nice: ") =>
+            {
+                let why = String::from_utf8_lossy(&done.err);
+                return Err(refuse(format!("could not start {argv:?}: {}", why.trim())));
+            }
             Ok(done) => {
                 ran.text += &String::from_utf8_lossy(&done.err);
                 ran.text += &String::from_utf8_lossy(&done.out);

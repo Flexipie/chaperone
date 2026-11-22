@@ -443,8 +443,9 @@ a signal, a moved `HEAD`, a dirty tree, a cut listing and a timeout are a `check
 message is kept), writes nothing.
 
 Each command runs as `nice -n 10 <argv>`, so the repo's commands run at low priority; the event
-and evidence name the repo's argv. A program that is not a file with an exec bit (a path from the
-checkout, else a name on `PATH`) is a command that cannot start.
+and evidence name the repo's argv. An exit of 126 or 127 whose stderr starts with `nice: ` is
+nice failing to exec the command (missing, no exec bit, a missing interpreter): a command that
+cannot start.
 
 A `check run tests` (and the tests step of `verify`) that has to run takes one of the machine's
 test slots first, after the replay check and before its timeout starts, so the wait is not timed:
