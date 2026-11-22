@@ -217,7 +217,8 @@ fn review_one(
     // As a lane measures it: code and test lines, by the clone's base
     // profile; none with a file git counts no lines of.
     let found = code_globs(Path::new("git"), clone, Instant::now() + CHECKOUT_TIMEOUT)?;
-    let (_, lines, _) = code(&files, found.as_ref().map_or(&[][..], |f| &f.code), &[]);
+    let (_, (added, removed), _) = code(&files, found.as_ref().map_or(&[][..], |f| &f.code), &[]);
+    let lines = added + removed;
     let counted = files.iter().all(|f| f.added.is_some());
     // The repo's required lenses too, as a lane's review runs them.
     let required = review::required(pipeline, &required_lenses(clone, &files)?).map_err(refuse)?;
@@ -233,6 +234,7 @@ fn review_one(
         plan: String::new(),
         code_lines: counted.then_some(lines as i64),
         assets: Vec::new(),
+        over_cap: None,
     };
     let io = |e: std::io::Error| CliError::Internal(e.to_string());
     let review = review::run(&plan.lenses, agents, dir, &facts, store).map_err(io)?;

@@ -102,7 +102,7 @@ fn a_run_measures_the_lane_commit() {
     let producer = p.as_object_mut().unwrap().remove("producer").unwrap();
     let evidence = p.as_object_mut().unwrap().remove("evidence_ref").unwrap();
     let want = json!({"check": "diff", "outcome": "ran", "head_sha": tip, "tree": tree,
-        "base": "origin/main", "files": 3, "added": 3, "removed": 1, "code_lines": 3,
+        "base": "origin/main", "files": 3, "added": 3, "removed": 1, "code_lines": 2, "removed_code": 1,
         "test_lines": 0, "changes_code": true, "uncounted_files": 1, "asset_files": 0, "files_truncated": false});
     assert_eq!(p, want);
     assert_eq!(producer["kind"], "harness");

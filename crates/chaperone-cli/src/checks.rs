@@ -354,11 +354,14 @@ pub fn pr_open(
     };
     let diff = step("diff", run_diff(ledger, db, work, actor))?;
     let (lines, uncounted) = (&diff["code_lines"], &diff["uncounted_files"]);
-    // The owner's size waiver lifts the line limit only.
+    // The owner's size waiver lifts the line limit only, and a pipeline
+    // whose review asks what to cut instead (v21 on) has none to lift.
     let waived = ledger.project(work, Some(&head))?.get("commit.size_waived") == &Fact::Bool(true);
+    let pipeline = lane_pipeline(&item)?;
+    let capped = !waived && review::cut_cap(pipeline).is_none();
     let over =
-        |limit: &&i64| (lines.as_i64().is_none_or(|n| n > **limit) && !waived) || uncounted != 0;
-    if let Some(limit) = lane_pipeline(&item)?.limits.get("code_lines").filter(over) {
+        |limit: &&i64| (capped && lines.as_i64().is_none_or(|n| n > **limit)) || uncounted != 0;
+    if let Some(limit) = pipeline.limits.get("code_lines").filter(over) {
         return Err(refuse(format!(
             "the diff has {lines} code lines and {uncounted} uncounted (binary) files no \
              `[assets]` glob names; the \
@@ -540,9 +543,11 @@ fn pr_body(
     let assets = diff["asset_files"].as_u64().filter(|n| *n > 0);
     let assets = assets.map_or_else(String::new, |n| format!(", {n} of them assets"));
     body += &format!(
-        "- Size: {} code lines and {} test lines in {} files{assets}\n- Tests: passed on {head}: {}\n\
-         - Plan check: {plan}\n- Smoke: {}\n\nMade by `chaperone pr open` from the ledger.\n",
+        "- Size: {} code lines added, {} removed, and {} test lines in {} files{assets}\n\
+         - Tests: passed on {head}: {}\n- Plan check: {plan}\n- Smoke: {}\n\n\
+         Made by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],
+        diff["removed_code"],
         diff["test_lines"],
         diff["files"],
         commands.join(", "),
@@ -642,7 +647,7 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     let rules = found.as_ref().map_or(&[][..], |f| &f.companions);
     companions(&wt, &base, &input.head, &files, rules)?;
     let tests = found.as_ref().map_or(&[][..], |f| &f.tests);
-    let (code, code_lines, test_lines) = code(&files, globs, tests);
+    let (code, (code_lines, removed_code), test_lines) = code(&files, globs, tests);
     let asset_globs = found.as_ref().map_or(&[][..], |f| &f.assets);
     let assets = assets(&wt, &files, asset_globs, &base, &input.head)?;
     let added: u64 = files.iter().filter_map(|f| f.added).sum();
@@ -653,6 +658,7 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
         ("added".into(), json!(added)),
         ("removed".into(), json!(removed)),
         ("code_lines".into(), json!(code_lines)),
+        ("removed_code".into(), json!(removed_code)),
         ("test_lines".into(), json!(test_lines)),
         ("changes_code".into(), json!(!code.is_empty())),
         // Binary, or text an attributes rule (`-diff`) hides: no lines
@@ -797,25 +803,28 @@ fn assets(
 }
 
 /// Of `files`, the code ones (named by `globs`, else not [`NOT_CODE`]),
-/// and their lines added plus removed: those of the ones `tests` names,
-/// then the rest's.
+/// the lines added and the lines removed of those `tests` does not name,
+/// and the lines added plus removed of those it does.
 pub(crate) fn code<'a>(
     files: &'a [ChangedFile],
     globs: &[String],
     tests: &[String],
-) -> (Vec<&'a str>, u64, u64) {
+) -> (Vec<&'a str>, (u64, u64), u64) {
     let code = files.iter().filter(|f| {
         globs.iter().any(|g| glob(g, &f.path)) || !NOT_CODE.iter().any(|g| glob(g, &f.path))
     });
-    code.fold((Vec::new(), 0, 0), |(mut paths, lines, test), f| {
-        paths.push(f.path.as_str());
-        let n = f.added.unwrap_or(0) + f.removed.unwrap_or(0);
-        if tests.iter().any(|g| glob(g, &f.path)) {
-            (paths, lines, test + n)
-        } else {
-            (paths, lines + n, test)
-        }
-    })
+    code.fold(
+        (Vec::new(), (0, 0), 0),
+        |(mut paths, (add, rm), test), f| {
+            paths.push(f.path.as_str());
+            let (a, r) = (f.added.unwrap_or(0), f.removed.unwrap_or(0));
+            if tests.iter().any(|g| glob(g, &f.path)) {
+                (paths, (add, rm), test + a + r)
+            } else {
+                (paths, (add + a, rm + r), test)
+            }
+        },
+    )
 }
 
 /// The files the commit `head` changes against the merge base, and the
@@ -1115,7 +1124,8 @@ fn run_plan(
 /// Refuses a commit `head` whose `files` change code, naming up to three
 /// of them and the owner's waiver: the plan check runs before any code.
 fn no_code(files: &[ChangedFile], globs: &[String], head: &str, work: i64) -> Result<(), CliError> {
-    let (code, lines, _) = code(files, globs, &[]);
+    let (code, (added, removed), _) = code(files, globs, &[]);
+    let lines = added + removed;
     if code.is_empty() {
         return Ok(());
     }
@@ -1306,13 +1316,20 @@ fn change(
         Fact::Int(n) => *n,
         _ => 0,
     };
-    let code_lines = match (
+    // Removed lines too: a record from before `removed_code` has them in
+    // `code_lines`.
+    let removed = match measured.get("commit.removed_code") {
+        Fact::Int(n) => *n,
+        _ => 0,
+    };
+    let added = match (
         measured.get("commit.code_lines"),
         measured.get("commit.uncounted_files"),
     ) {
-        (Fact::Int(n), Fact::Int(0)) => Some(*n + tests),
+        (Fact::Int(n), Fact::Int(0)) => Some(*n),
         _ => None,
     };
+    let cap = review::cut_cap(lane_pipeline(item)?);
     let facts = Facts {
         base,
         head: head.into(),
@@ -1322,8 +1339,9 @@ fn change(
         smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
         plan: review::plan_findings(ledger, item.id)?
             + &review::earlier_section(&review::earlier(ledger, item.id)?),
-        code_lines,
+        code_lines: added.map(|n| n + removed + tests),
         assets,
+        over_cap: added.zip(cap).filter(|(n, cap)| n > cap),
     };
     Ok((checkout, facts))
 }

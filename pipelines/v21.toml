@@ -1,5 +1,11 @@
 # v21 (2026-11-22) starts as v20's rules under a new id: v20.toml says why each rule is
-# there. Only `id` and the `stamp_ok` value differ, so v21's hash differs from v20's.
+# there. What differs:
+# - Size is a review question, not a refusal (#292): v21 has no `code_lines_at_most` gate,
+#   so `pr open` does not refuse past `code_lines` and ready does not gate on it. Past it the
+#   design and tests lens is asked what could be cut or split, and each `cut:` finding blocks
+#   as any finding does. A lane stopped at a cap, waived, and stopped again when review fixes
+#   grew it; and the cap counted a cleanup's removed lines, which `code_lines` (added lines
+#   only, from #292 for every pipeline) no longer holds.
 #
 # From v21 on, v20 is not edited, and v21 is the id edited in place (#244's rule, moved from
 # v20): a lane stamped with an older v21 hash still loads this document by id. v21 names
@@ -119,25 +125,6 @@ id = "no_uncounted_files"
 fn = "eq"
 args = { field = "commit.uncounted_files", value = 0 }
 
-# The cap counts code lines only: files the base profile's `[size] tests` names are
-# `test_lines`, never gated (#245). The owner may raise one lane's cap with `check waive
-# size` (refused from any session that held the lane): `commit.size_waived` holds when the
-# lane's newest waiver allows at least `commit.code_lines`.
-[[gate]]
-id = "code_lines_under_cap"
-fn = "lte"
-args = { field = "commit.code_lines", limit = "code_lines" }
-
-[[gate]]
-id = "code_lines_waived"
-fn = "eq"
-args = { field = "commit.size_waived", value = true }
-
-[[gate]]
-id = "code_lines_at_most"
-fn = "any"
-args = { of = ["code_lines_under_cap", "code_lines_waived"] }
-
 [[gate]]
 id = "no_code_change"
 fn = "eq"
@@ -246,7 +233,7 @@ id = "handoff"
 routes = ["code_pr", "direct"]
 to = "ready"
 requires = [
-  "stamp_ok", "no_uncounted_files", "code_lines_at_most", "tests_passed", "review_complete",
+  "stamp_ok", "no_uncounted_files", "tests_passed", "review_complete",
   "no_blocking_findings", "plan_or_no_code", "smoke_or_no_code", "verdict_is_yes",
   "verdict_on_head",
 ]
