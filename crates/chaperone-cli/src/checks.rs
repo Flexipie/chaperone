@@ -549,12 +549,13 @@ fn pr_body(
     }
     let assets = diff["asset_files"].as_u64().filter(|n| *n > 0);
     let assets = assets.map_or_else(String::new, |n| format!(", {n} of them assets"));
+    let removed = diff["removed_code"].as_u64();
+    let removed = removed.map_or_else(String::new, |n| format!(", {n} removed,"));
     body += &format!(
-        "- Size: {} code lines added, {} removed, and {} test lines in {} files{assets}\n\
+        "- Size: {} code lines added{removed} and {} test lines in {} files{assets}\n\
          - Tests: passed on {head}: {}\n- Plan check: {plan}\n- Smoke: {}\n\n\
          Made by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],
-        diff["removed_code"],
         diff["test_lines"],
         diff["files"],
         commands.join(", "),
@@ -648,8 +649,10 @@ fn run_diff(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outc
     plan_answered(ledger, work)?;
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
     let found = code_globs(Path::new("git"), &wt, Instant::now() + RUN_TIMEOUT)?;
-    // The profile says what code is, so a changed one measures again.
-    input.profile = found.as_ref().map(|f| f.hash.clone());
+    // The profile says what code is, so a changed one measures again; so
+    // does a record from before `code_lines` counted added lines only.
+    let measure = |f: &chaperone_graph::BaseCode| format!("{}+added", f.hash);
+    input.profile = Some(found.as_ref().map_or_else(|| "added".into(), measure));
     let globs = found.as_ref().map_or(&[][..], |f| &f.code);
     let rules = found.as_ref().map_or(&[][..], |f| &f.companions);
     companions(&wt, &base, &input.head, &files, rules)?;

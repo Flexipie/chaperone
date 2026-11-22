@@ -256,3 +256,54 @@ fn each_outcome_is_scored() {
     );
     assert!(!db.exists(), "the eval opened the ledger");
 }
+
+/// Eval skips the Codex lens on #223's measure, removed lines too: an entry
+/// removing 100 lines and adding 150 is 250, past `codex_min_code_lines`
+/// 200, so Codex runs; on its added lines alone it would be skipped.
+#[test]
+fn eval_skips_codex_on_added_plus_removed_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bin, demo) = (dir.path().join("bin"), dir.path().join("repos/demo"));
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&demo).unwrap();
+    git(&demo, &["init", "-q", "-b", "main"]);
+    std::fs::write(demo.join("old.rs"), "x\n".repeat(100)).unwrap();
+    git(&demo, &["add", "."]);
+    git(&demo, &["commit", "-qm", "base"]);
+    let base = git(&demo, &["rev-parse", "HEAD"]);
+    std::fs::remove_file(demo.join("old.rs")).unwrap();
+    std::fs::write(demo.join("new.rs"), "y\n".repeat(150)).unwrap();
+    git(&demo, &["add", "-A"]);
+    git(&demo, &["commit", "-qm", "swap"]);
+    let head = git(&demo, &["rev-parse", "HEAD"]);
+    let set = format!(
+        "[[entry]]\nname = \"swap\"\nrepo = \"o/demo\"\nbase = \"{base}\"\nhead = \"{head}\"\ngoal = \"g\"\n"
+    );
+    std::fs::write(dir.path().join("set.toml"), set).unwrap();
+    let claude = json!([says("# Review:", json!({"findings": []}))]);
+    let codex = json!([{"when": "# Review:", "write": {"-o": r#"{"findings": []}"#}}]);
+    let fake = Path::new(BIN).with_file_name("chaperone-fake");
+    for (cli, runs) in [("claude", claude), ("codex", codex)] {
+        std::os::unix::fs::symlink(&fake, bin.join(cli)).unwrap();
+        let script = json!({"version": "1 (fake)", "runs": runs}).to_string();
+        std::fs::write(bin.join(format!("{cli}.json")), script).unwrap();
+    }
+    let path = std::env::var("PATH").unwrap();
+    let out = Command::new(BIN)
+        .arg("--db")
+        .arg(dir.path().join("ledger.db"))
+        .args(["review", "eval", "--repos"])
+        .arg(dir.path().join("repos"))
+        .arg("--set")
+        .arg(dir.path().join("set.toml"))
+        .env("PATH", format!("{}:{path}", bin.display()))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let codex = std::fs::read_to_string(bin.join("codex.log")).unwrap_or_default();
+    assert_eq!(codex.lines().count(), 1, "codex ran once");
+}
