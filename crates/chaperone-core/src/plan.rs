@@ -46,14 +46,21 @@ const ESTIMATE: &str = "estimated added code lines:";
 
 /// The plan's estimate of its added code lines: the number after
 /// `Estimated added code lines:` (any case) on the first line that starts
-/// with it, past list, heading and bold marks. None when no line states one.
+/// with it, past list, heading and bold marks, thousands separators (`,`
+/// `_` `'`) dropped. None when no line states one.
 pub fn estimate(plan: &str) -> Option<i64> {
     let marks = |c: char| matches!(c, '-' | '*' | '#' | '>') || c.is_whitespace();
+    let separator = |c: char| matches!(c, ',' | '_' | '\'');
     plan.lines().find_map(|l| {
         let l = l.trim_start_matches(marks).to_lowercase();
         let n = l.strip_prefix(ESTIMATE)?.trim_start_matches(marks);
-        let end = n.find(|c: char| !c.is_ascii_digit()).unwrap_or(n.len());
-        n[..end].parse().ok()
+        let n = n
+            .chars()
+            .take_while(|&c| c.is_ascii_digit() || separator(c));
+        n.filter(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .ok()
     })
 }
 
@@ -62,11 +69,15 @@ fn over_cap(plan: &str, cap: Option<i64>) -> Option<(i64, i64)> {
     estimate(plan).zip(cap).filter(|(n, cap)| n > cap)
 }
 
-/// A finding that answers split or keep: its title, past bold marks,
-/// starts with either word, whatever its severity.
-fn sizes(f: &Finding) -> bool {
-    let t = f.title.trim_start_matches(['*', ' ']).to_lowercase();
-    t.starts_with("split") || t.starts_with("keep")
+/// A title that answers split or keep, whatever its severity: before its
+/// first `:`, bold marks aside and in any case, `split`, `keep`, `keep
+/// whole` or `keep as one`.
+fn sizes(title: &str) -> bool {
+    let Some((head, _)) = title.split_once(':') else {
+        return false;
+    };
+    let head = head.replace('*', "").trim().to_lowercase();
+    ["split", "keep", "keep whole", "keep as one"].contains(&head.as_str())
 }
 
 /// The plan reviewer's prompt: its check's prompt, what the change is for,
@@ -191,7 +202,7 @@ pub fn record(
                 })
                 .collect();
             if let Some((n, cap)) = over_cap(&plan.text, cap)
-                && !found.iter().any(sizes)
+                && !found.iter().any(|f| sizes(&f.title))
             {
                 found.extend(asked(n, cap));
             }
@@ -222,7 +233,7 @@ fn asked(n: i64, cap: i64) -> Vec<Finding> {
 
 #[cfg(test)]
 mod tests {
-    use super::estimate;
+    use super::{estimate, sizes};
 
     #[test]
     fn the_estimate_line() {
@@ -237,11 +248,30 @@ mod tests {
                 "> ESTIMATED ADDED CODE LINES:  12\nEstimated added code lines: 99",
                 Some(12),
             ),
+            (
+                "Estimated added code lines: 1,200 (tests aside)",
+                Some(1200),
+            ),
             ("Estimated added code lines: about 300", None),
             ("Size: 300 lines", None),
             ("", None),
         ] {
             assert_eq!(estimate(plan), want, "{plan:?}");
+        }
+    }
+
+    #[test]
+    fn a_size_answer() {
+        for (title, want) in [
+            ("split: the stats as their own PR", true),
+            ("**Split**: two slices", true),
+            ("Keep whole: one migration", true),
+            ("keep: it only works whole", true),
+            ("Keep the old parser for v20: it is used", false),
+            ("Splitting the arms loses a case", false),
+            ("split or keep: asked", false),
+        ] {
+            assert_eq!(sizes(title), want, "{title:?}");
         }
     }
 }

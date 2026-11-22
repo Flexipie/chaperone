@@ -521,7 +521,6 @@ impl Lane {
                     v["reason"] = json!(text("reason"));
                 }
                 if check == "plan_check" {
-                    // A plan check with no `estimate` field (the owner's waiver) keeps it.
                     if let Some(estimate) = p.get("estimate") {
                         self.estimate = estimate.as_i64();
                     }
