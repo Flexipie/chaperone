@@ -1498,9 +1498,9 @@ fn the_plan_check_attacks_the_plan() {
     assert_eq!(calls(&env), 3);
 }
 
-/// A plan estimated past the cap tells the session so; an answer titled
-/// split (any case) is the size finding, an answer with none gets the
-/// harness's split-or-keep risk, and a plan with no estimate records it
+/// A plan estimated past the cap tells the session so; a `risk` titled
+/// split (any case) is the size finding, an answer with none, or with a
+/// split only as a `question`, gets the harness's split-or-keep risk, and a plan with no estimate records it
 /// null and is asked nothing.
 #[test]
 fn an_over_cap_estimate_asks_split_or_keep() {
@@ -1533,6 +1533,13 @@ fn an_over_cap_estimate_asks_split_or_keep() {
         "{asked}"
     );
 
+    rescript(
+        &env,
+        "claude",
+        answer(json!([found("question", "split: maybe")])),
+    );
+    let asked = attack(&env, &ledger, "PLAN one b\nEstimated added code lines: 450");
+    assert_eq!(titles(&asked).len(), 2, "a question is no size answer");
     rescript(&env, "claude", answer(json!([found("nit", "a word")])));
     let silent = attack(&env, &ledger, "PLAN two\nEstimated added code lines: 450");
     assert_eq!(

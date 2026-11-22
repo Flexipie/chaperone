@@ -69,7 +69,7 @@ fn over_cap(plan: &str, cap: Option<i64>) -> Option<(i64, i64)> {
     estimate(plan).zip(cap).filter(|(n, cap)| n > cap)
 }
 
-/// A title that answers split or keep, whatever its severity: before its
+/// A title that answers split or keep (on a `risk`): before its
 /// first `:`, bold marks aside and in any case, `split`, `keep`, `keep
 /// whole` or `keep as one`.
 fn sizes(title: &str) -> bool {
@@ -202,7 +202,9 @@ pub fn record(
                 })
                 .collect();
             if let Some((n, cap)) = over_cap(&plan.text, cap)
-                && !found.iter().any(|f| sizes(&f.title))
+                && !found
+                    .iter()
+                    .any(|f| f.severity == "risk" && sizes(&f.title))
             {
                 found.extend(asked(n, cap));
             }
