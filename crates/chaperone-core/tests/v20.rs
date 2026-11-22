@@ -237,9 +237,14 @@ struct V20 {
 
 impl V20 {
     fn new(kind: &str) -> V20 {
+        V20::on("v20", kind)
+    }
+
+    /// Lane 1 of `kind`, claimed on `pipeline`.
+    fn on(pipeline: &str, kind: &str) -> V20 {
         let lane = V20::unclaimed(kind);
         let claim = ClaimInput {
-            pipeline: Some("v20".into()),
+            pipeline: Some(pipeline.into()),
             ..ClaimInput::default()
         };
         lane.ledger
@@ -668,16 +673,40 @@ fn a_session_plan_check_or_verdict_is_no_harness_fact() {
 }
 
 /// `stamp_ok` holds on every v20 lane (the climb above); its denial is the
-/// stamp of another pipeline, which no v20 lane can carry.
+/// stamp of another pipeline, which no v20 lane can carry. v21 is v20's
+/// rules with its own id: its own stamp passes `stamp_ok`, v20's does not.
 #[test]
 fn stamp_ok_denies_another_stamp() {
-    let mut facts = FactBundle::default();
-    facts.set("pipeline.id", "v19");
-    let v20 = &pipeline::newer()[0];
-    let denial = v20.evaluate("handoff", Route::CodePr, Phase::Ready, &facts);
     let expected = Denied {
         gate: "stamp_ok".into(),
         fact_paths: vec!["pipeline.id".into()],
     };
-    assert_eq!(denial, Err(expected));
+    for p in pipeline::newer() {
+        for (stamp, passes) in [
+            ("v19", false),
+            ("v20", p.id == "v20"),
+            ("v21", p.id == "v21"),
+        ] {
+            let mut facts = FactBundle::default();
+            facts.set("pipeline.id", stamp);
+            let denial = p.evaluate("handoff", Route::CodePr, Phase::Ready, &facts);
+            assert_eq!(
+                denial.err() == Some(expected.clone()),
+                !passes,
+                "{} {stamp}",
+                p.id
+            );
+        }
+    }
+}
+
+/// A lane claimed on v21 passes `stamp_ok` through the write and stops at
+/// v20's next gate, which a harness diff then meets.
+#[test]
+fn a_v21_lane_runs_v20_s_ready_row() {
+    let lane = V20::on("v21", "code");
+    let uncounted = denied("no_uncounted_files", &["commit.uncounted_files"]);
+    assert_eq!(lane.ready(HEAD), uncounted);
+    lane.diff(HEAD, 400, true);
+    assert_eq!(lane.ready(HEAD), denied("tests_passed", &["tests.passed"]));
 }
