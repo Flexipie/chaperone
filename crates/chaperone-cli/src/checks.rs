@@ -1578,7 +1578,7 @@ fn run_commands(
         let found = match argv[0].contains('/') {
             true => runs(dir.join(&argv[0])),
             false => std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .any(|d| runs(d.join(&argv[0]))),
+                .any(|d| runs(dir.join(d).join(&argv[0]))),
         };
         if !found {
             return Err(refuse(format!(

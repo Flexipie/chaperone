@@ -1497,3 +1497,31 @@ fn a_smoke_takes_no_slot() {
     );
     assert_eq!(got, (&json!("pass"), &Value::Null, ""));
 }
+
+/// A relative `PATH` entry names a directory of the checkout, where the
+/// command runs.
+#[test]
+fn a_relative_path_entry_is_the_checkouts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, wt, id) = tests_lane(dir.path());
+    std::fs::create_dir(wt.join("bin")).unwrap();
+    std::fs::write(wt.join("bin/tool"), "#!/bin/sh\ntrue\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let exec = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(wt.join("bin/tool"), exec).unwrap();
+    git(&wt, &["add", "bin/tool"], &[]);
+    git(&wt, &["commit", "-qm", "tool"], &[]);
+    base_tests(&wt, Some(r#"commands = [["tool"]]"#));
+    let path = format!("bin:{}", std::env::var("PATH").unwrap());
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--db")
+        .arg(&db)
+        .args(["check", "run", "tests", "--work", &id]);
+    let out = cmd
+        .args(["--agent", "a", "--session", "s"])
+        .env("PATH", path);
+    let out = out.current_dir(dir.path()).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["data"]["payload"]["result"], "pass");
+}
