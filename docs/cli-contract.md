@@ -5,7 +5,9 @@ contract number ([CONTRIBUTING.md](../CONTRIBUTING.md) "Versions"). The `chapero
 envelope and the exit codes of `daisy-cli` 0.2.0 (contract 1), so a skill moves from
 daisy to Chaperone by changing the binary path. That switch happens after the first demo
 ([ADR 0003](decisions/0003-chaperone-replaces-daisy.md)). The events each command writes
-are in [events.md](events.md).
+are in [events.md](events.md). The contract stays at 0 until the first demo, removals
+included (events.md, owner decision 2026-11-23): `impact`, `overlap` and `dossier` were
+removed in #311.
 
 ## Global flags and actor
 

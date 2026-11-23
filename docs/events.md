@@ -3,7 +3,9 @@
 Version **0**, 2026-11-03. The event schema and the integration contract share this
 number ([CONTRIBUTING.md](../CONTRIBUTING.md) "Versions"). A removed or renamed kind or
 field bumps it. A new nullable field does not. Kind and field names become one-way once
-a real ledger exists (after the first demo).
+a real ledger exists (after the first demo). Until then it stays at 0 (owner decision
+2026-11-23): the removals of #310 and #311 (the board, `impact`, `overlap`, `dossier`, the
+handoff's `areas`, the board's `overlaps`) did not bump it.
 
 This file is the source the `EventKind` enum is checked against (the drift test, #5).
 The CLI that writes these events is [cli-contract.md](cli-contract.md). Evidence:
