@@ -702,12 +702,14 @@ fn stamp_ok_denies_another_stamp() {
 
 /// A lane claimed on v21 passes `stamp_ok` through the write and stops at
 /// v20's next gate, which a harness diff then meets: one past the cap too,
-/// as v21 asks the review what to cut instead of gating on size.
+/// as v21 asks the review what to cut instead of gating on size. With no
+/// tests on the commit it stops at the review, as v21 leaves tests to CI.
 #[test]
-fn a_v21_lane_runs_v20_s_ready_row_but_the_size_gate() {
+fn a_v21_lane_runs_v20_s_ready_row_but_the_size_and_tests_gates() {
     let lane = V20::on("v21", "code");
     let uncounted = denied("no_uncounted_files", &["commit.uncounted_files"]);
     assert_eq!(lane.ready(HEAD), uncounted);
     lane.diff(HEAD, 500, true);
-    assert_eq!(lane.ready(HEAD), denied("tests_passed", &["tests.passed"]));
+    let review = denied("review_complete", &["review.complete"]);
+    assert_eq!(lane.ready(HEAD), review);
 }

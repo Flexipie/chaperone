@@ -195,7 +195,16 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
     }
 }
 
-/// `verify`: `check run` diff, tests, review and verdict on the lane's
+/// Whether the pipeline holds a lane to the repo's tests run on this machine.
+/// One with no `tests_passed` gate (v21 on) leaves them to the repo's CI:
+/// `verify` and `pr open` run none, and `check run tests` stays for a lane
+/// that wants one.
+fn gates_on_tests(pipeline: &Pipeline) -> bool {
+    pipeline.gates.contains_key("tests_passed")
+}
+
+/// `verify`: `check run` diff, tests (on a pipeline that gates on them),
+/// review and verdict on the lane's
 /// commit under one hold of its run lock, until a step is refused or does
 /// not pass, or the lane moves off the diff's commit; the verdict runs only
 /// after a complete review that leaves no finding blocking, as the gate
@@ -204,7 +213,12 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     let _lock = ledger::lock_lane(db, work)??;
     let _ = sweep(ledger, db);
     let (mut steps, mut stopped, mut from) = (Vec::new(), Value::Null, None::<String>);
+    let item = ledger.work_get(work, &ledger.now()?)??;
+    let local_tests = gates_on_tests(lane_pipeline(&item)?);
     for check in ["diff", "tests", "review", "verdict"] {
+        if check == "tests" && !local_tests {
+            continue;
+        }
         if let Some(from) = &from {
             let item = ledger.work_get(work, &ledger.now()?)??;
             let (wt, branch) = (item.worktree_path.as_deref(), item.branch.as_deref());
@@ -260,9 +274,10 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
 }
 
 /// `pr open`: under the lane's run lock, on a clean worktree at the tip of
-/// the lane's branch, `check run` diff and tests on that commit, refused
+/// the lane's branch, `check run` diff on that commit, and tests when the
+/// pipeline gates on them (to v20), refused
 /// with an uncounted file, past the pipeline's `code_lines` limit when it
-/// gates on size (to v20), or when the tests fail. Then the
+/// gates on size (to v20), or when those tests fail. Then the
 /// push of that commit and `gh pr create`, or `gh pr edit` on the PR the
 /// lane holds or gh lists for the branch, with [`pr_body`]; a PR new to the
 /// ledger is `pr.opened` on the commit. The base profile's [`chaperone_graph::PrRules`]
@@ -381,8 +396,11 @@ pub fn pr_open(
     let (named, _) = harness_git(&wt, &args, Instant::now() + RUN_TIMEOUT)?;
     let no_origin = || refuse(format!("the base {base} is no origin branch"));
     let base = named.trim().strip_prefix("origin/").ok_or_else(no_origin)?;
-    let tests = step("tests", run_tests(ledger, db, work, actor, "tests"))?;
-    if tests["result"] != "pass" {
+    let tests = match gates_on_tests(pipeline) {
+        true => step("tests", run_tests(ledger, db, work, actor, "tests"))?,
+        false => Value::Null,
+    };
+    if !tests.is_null() && tests["result"] != "pass" {
         return Err(refuse(format!(
             "the tests failed on {head} (`check run tests` evidence {}): fix them and run again",
             tests["evidence_ref"]
@@ -551,14 +569,17 @@ fn pr_body(
     let assets = assets.map_or_else(String::new, |n| format!(", {n} of them assets"));
     let removed = diff["removed_code"].as_u64();
     let removed = removed.map_or_else(String::new, |n| format!(", {n} removed,"));
+    let tests = match tests.is_null() {
+        true => "left to CI".into(),
+        false => format!("passed on {head}: {}", commands.join(", ")),
+    };
     body += &format!(
         "- Size: {} code lines added{removed} and {} test lines in {} files{assets}\n\
-         - Tests: passed on {head}: {}\n- Plan check: {plan}\n- Smoke: {}\n\n\
+         - Tests: {tests}\n- Plan check: {plan}\n- Smoke: {}\n\n\
          Made by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],
         diff["test_lines"],
         diff["files"],
-        commands.join(", "),
         if smokes.is_empty() {
             "none".into()
         } else {
