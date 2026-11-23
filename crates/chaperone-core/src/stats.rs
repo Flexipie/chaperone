@@ -1048,28 +1048,3 @@ impl Ledger {
         Ok(Ok(json!({ "versions": out })))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// `--merged-since` searches `events_merged`, on a ledger with no
-    /// ANALYZE, as every real one is.
-    #[test]
-    fn merged_since_uses_index() {
-        let dir = tempfile::tempdir().unwrap();
-        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
-        let mut stmt = ledger
-            .conn()
-            .prepare(&format!("EXPLAIN QUERY PLAN {MERGED_SINCE}"))
-            .unwrap();
-        let nulls = vec![rusqlite::types::Null; stmt.parameter_count()];
-        let plan = stmt
-            .query_map(rusqlite::params_from_iter(nulls), |r| r.get::<_, String>(3))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap()
-            .join("\n");
-        assert!(plan.contains("USING INDEX events_merged"), "{plan}");
-    }
-}

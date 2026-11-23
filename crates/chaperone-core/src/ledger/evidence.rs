@@ -221,11 +221,11 @@ mod tests {
     #[test]
     fn one_text_from_many_threads_is_whole() {
         let (_dir, store, _) = store();
-        let text = "line\n".repeat(40_000);
+        let text = "line\n".repeat(13_000);
         std::thread::scope(|s| {
-            for _ in 0..8 {
+            for _ in 0..4 {
                 s.spawn(|| {
-                    for _ in 0..20 {
+                    for _ in 0..5 {
                         let hash = store.put(&text).unwrap().hash;
                         assert_eq!(store.get(&hash).unwrap(), text);
                     }

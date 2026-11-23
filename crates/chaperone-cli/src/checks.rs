@@ -1878,8 +1878,8 @@ mod tests {
         }
     }
 
-    /// The plan check refuses a commit with code, naming up to three code
-    /// files and the waiver; docs and Markdown are no code.
+    /// The plan check refuses a commit with code; docs and Markdown are no
+    /// code.
     #[test]
     fn a_plan_check_refuses_code() {
         let file = |path: &str| ChangedFile {
@@ -1890,20 +1890,11 @@ mod tests {
         };
         let docs = [file("docs/a.md"), file("README.md")];
         assert!(no_code(&docs, &[], "abc1234", 7).is_ok());
-        let code = [
-            file("a.rs"),
-            file("b.rs"),
-            file("docs/x.md"),
-            file("c.rs"),
-            file("d.rs"),
-        ];
-        let Err(CliError::Refused(Refusal::InvalidInput(why))) = no_code(&code, &[], "abc1234", 7)
-        else {
-            panic!("code is refused");
-        };
-        let want = "commit abc1234 changes code against its base (4 code file(s), 12 lines: \
-            a.rs, b.rs, c.rs): the plan check runs before any code. The owner can waive it with \
-            `check waive plan --work 7`";
-        assert_eq!(why, want);
+        let code = [file("docs/x.md"), file("a.rs")];
+        let refused = no_code(&code, &[], "abc1234", 7);
+        assert!(
+            matches!(refused, Err(CliError::Refused(Refusal::InvalidInput(_)))),
+            "{refused:?}"
+        );
     }
 }

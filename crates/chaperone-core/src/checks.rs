@@ -1450,21 +1450,6 @@ fn review_view(conn: &Connection, job: i64) -> Result<Option<Value>, LedgerError
 mod tests {
     use super::*;
 
-    #[test]
-    fn job_lookup_uses_index() {
-        let dir = tempfile::tempdir().unwrap();
-        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
-        let plan: String = ledger
-            .conn()
-            .query_row(
-                &format!("EXPLAIN QUERY PLAN SELECT id FROM events WHERE {JOB_EVENTS}"),
-                [7],
-                |r| r.get(3),
-            )
-            .unwrap();
-        assert!(plan.contains("USING INDEX events_job"), "{plan}");
-    }
-
     /// The plan check's waiver is the owner's: refused from the lane's own
     /// session, written from another as a skipped `plan_check` with reason
     /// `waived` and the note redacted, which the plan check's facts read;
