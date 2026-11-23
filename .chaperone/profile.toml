@@ -139,7 +139,6 @@ lanes = ["crates/chaperone-core/src/*.rs", "crates/chaperone-core/src/spec/**", 
 ledger = ["crates/chaperone-core/src/ledger/**", "crates/chaperone-core/migrations/**"]
 engine = ["crates/chaperone-core/src/pipeline/**", "pipelines/**", "plugin/**", "evals/**"]
 graph = ["crates/chaperone-graph/**"]
-ui = ["crates/chaperone-ui/**"]
 tests = ["crates/chaperone-core/tests/**", "crates/chaperone-fake/**"]
 build = ["Cargo.toml", "Cargo.lock", "crates/chaperone-core/Cargo.toml", "rust-toolchain.toml", "rustfmt.toml", "deny.toml", ".gitignore", ".config/**", ".github/**", ".chaperone/**"]
 docs = ["docs/**", "README.md", "CONTRIBUTING.md", "LICENSE-APACHE", "LICENSE-MIT"]

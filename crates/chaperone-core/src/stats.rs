@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::LazyLock;
 
 use rusqlite::{ToSql, Transaction, TransactionBehavior};
 use serde_json::{Map, Value, json};
@@ -721,126 +720,6 @@ impl Ledger {
     }
 }
 
-/// What `chaperone-ui` draws beside the board: `stats` for every open
-/// lane and for the cohort merged since `since`.
-#[derive(Clone, Debug)]
-pub struct BoardStats {
-    /// The ledger's `data_version` these were read at.
-    pub data_version: i64,
-    /// The cohort's date as asked, or the default: 7 days ago (UTC).
-    pub since: String,
-    /// `stats --work <open lanes>`'s `lanes`.
-    pub lanes: Vec<Value>,
-    /// `stats --merged-since <since>`, or why it was refused.
-    pub cohort: Result<Value, Refusal>,
-    /// Done lanes merged in the last [`MERGED_DAYS`] days, newest first.
-    pub merged: Vec<MergedLane>,
-    /// The viewer's local time minus UTC, as SQLite's `localtime` reads
-    /// it now, for "merged today" from local midnight.
-    pub utc_offset_secs: i64,
-}
-
-/// How far back [`BoardStats::merged`] reads, and how many it keeps.
-pub const MERGED_DAYS: i64 = 7;
-const MERGED_MAX: i64 = 200;
-
-/// A done lane and its newest `pr.merged`.
-#[derive(Clone, Debug)]
-pub struct MergedLane {
-    pub id: i64,
-    pub repo_slug: Option<String>,
-    pub lane_key: Option<String>,
-    pub lane_pos: Option<i64>,
-    pub title: String,
-    /// Its newest handoff's non-empty `brief.goal`.
-    pub goal: Option<String>,
-    /// The newest `merged_at`, in seconds since the epoch.
-    pub merged_secs: i64,
-}
-
-/// The board's recently merged lanes, newest first. Done lanes only: an
-/// open one with a merged PR (a stack lane, or one not closed yet) stays an
-/// open lane. By `merged_at`, as `repo_median` reads: a lane closed before
-/// its PR merged is kept. On `events_merged` (migration 0006): the
-/// `+` keeps `lanes_status` out, which with no ANALYZE the planner would
-/// pick and then read every event of every done lane.
-pub(crate) static MERGED_LANES: LazyLock<String> = LazyLock::new(|| {
-    let goal = "json_extract(payload_json, '$.handoff.brief.goal')";
-    format!(
-        "SELECT l.id, l.repo_slug, l.lane_key, l.lane_pos, l.title,
-                unixepoch(max(json_extract(e.payload_json, '$.merged_at'))) AS merged,
-                (SELECT {goal} FROM events
-                  WHERE lane_id = l.id AND {IS_HANDOFF} AND trim(ifnull({goal}, '')) <> ''
-                  ORDER BY id DESC LIMIT 1)
-           FROM events e JOIN lanes l ON l.id = e.lane_id
-          WHERE e.kind = 'pr.merged' AND +l.status = 'done'
-            AND json_extract(e.payload_json, '$.merged_at')
-                >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)
-          GROUP BY l.id
-          ORDER BY merged DESC, l.id DESC LIMIT ?2"
-    )
-});
-
-impl Ledger {
-    /// [`BoardStats`] as of one snapshot, its schema re-checked inside it,
-    /// as `lane_board` does.
-    pub fn board_stats(&self, since: Option<&str>) -> Result<BoardStats, LedgerError> {
-        let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
-        check_schema(&tx)?;
-        let data_version = self.data_version()?;
-        let since = match since {
-            Some(s) => s.to_string(),
-            None => tx.query_row("SELECT date('now', '-7 days')", [], |r| r.get(0))?,
-        };
-        let mut stmt =
-            tx.prepare("SELECT id FROM lanes WHERE status NOT IN ('done', 'cancelled')")?;
-        let ids = stmt
-            .query_map([], |r| r.get(0))?
-            .collect::<Result<Vec<i64>, _>>()?;
-        // Every lane has its lane.created, so no open lane is refused.
-        let lanes = match self.stats(&Cohort::Work(ids))? {
-            Ok(mut v) => {
-                let Value::Array(lanes) = v["lanes"].take() else {
-                    unreachable!("summarize prints lanes as an array")
-                };
-                lanes
-            }
-            Err(r) => return Err(std::io::Error::other(format!("stats: {r:?}")).into()),
-        };
-        let cohort = self.stats(&Cohort::MergedSince(since.clone()))?;
-        let mut stmt = tx.prepare(&MERGED_LANES)?;
-        let merged = stmt
-            .query_map(
-                rusqlite::params![format!("-{MERGED_DAYS} days"), MERGED_MAX],
-                |r| {
-                    Ok(MergedLane {
-                        id: r.get(0)?,
-                        repo_slug: r.get(1)?,
-                        lane_key: r.get(2)?,
-                        lane_pos: r.get(3)?,
-                        title: r.get(4)?,
-                        merged_secs: r.get(5)?,
-                        goal: r.get(6)?,
-                    })
-                },
-            )?
-            .collect::<Result<_, _>>()?;
-        let utc_offset_secs = tx.query_row(
-            "SELECT unixepoch('now', 'localtime') - unixepoch('now')",
-            [],
-            |r| r.get(0),
-        )?;
-        Ok(BoardStats {
-            data_version,
-            since,
-            lanes,
-            cohort,
-            merged,
-            utc_offset_secs,
-        })
-    }
-}
-
 fn summarize(lanes: &[Lane]) -> Value {
     let rows: Vec<Row> = lanes.iter().map(Lane::row).collect();
     let reviews_known = lanes.iter().any(|l| !l.reviews.is_empty());
@@ -1102,8 +981,7 @@ impl Ledger {
     /// its first claim (`manual` before the first); a lane never claimed
     /// nor stamped ran no pipeline and is left out. Every changelog
     /// version is listed, newest first, then stamped versions the
-    /// changelog lacks, then `manual`. One read snapshot, schema checked,
-    /// so the UI can keep calling it.
+    /// changelog lacks, then `manual`. One read snapshot, schema checked.
     pub fn pipeline_history(&self, versions: &[Version], repo: Option<&str>) -> Checked<Value> {
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
         check_schema(&tx)?;
@@ -1168,5 +1046,30 @@ impl Ledger {
         out.extend(groups.into_iter().map(|(id, g)| row(&id, None, g)));
         out.extend(manual.map(|g| row("manual", None, g)));
         Ok(Ok(json!({ "versions": out })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--merged-since` searches `events_merged`, on a ledger with no
+    /// ANALYZE, as every real one is.
+    #[test]
+    fn merged_since_uses_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        let mut stmt = ledger
+            .conn()
+            .prepare(&format!("EXPLAIN QUERY PLAN {MERGED_SINCE}"))
+            .unwrap();
+        let nulls = vec![rusqlite::types::Null; stmt.parameter_count()];
+        let plan = stmt
+            .query_map(rusqlite::params_from_iter(nulls), |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("USING INDEX events_merged"), "{plan}");
     }
 }

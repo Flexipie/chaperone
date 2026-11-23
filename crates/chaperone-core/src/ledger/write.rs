@@ -439,7 +439,7 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
         }
         // On a key or a repo, never a lane, so they move no lane's
         // `updated_at` and are no fact anchor (ADR 0007, #119). `dossier
-        // note` and `backlog_prioritise` check the rest.
+        // note` checks the rest; nothing writes `backlog.prioritised` now.
         DossierNoted | BacklogPrioritised
             if event.lane_id.is_some() || event.spec_id.is_some() || !p.changed.is_empty() =>
         {
@@ -2066,6 +2066,15 @@ mod tests {
             assert!(got.starts_with(want), "case {i}: want {want}, got {got}");
             assert_eq!(events(&ledger), 4, "case {i}");
         }
+        // The shape the removed board wrote still passes its check.
+        let order = ev(
+            EventKind::BacklogPrioritised,
+            None,
+            None,
+            order("o/r", json!({"order": [], "after": null})),
+        );
+        let got = format!("{:?}", ledger.apply(&me, None, AT, order).unwrap());
+        assert!(got.starts_with("Committed("), "{got}");
     }
 
     /// A session id or an idempotency key shaped like a secret is refused

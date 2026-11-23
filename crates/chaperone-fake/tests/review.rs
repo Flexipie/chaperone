@@ -80,7 +80,6 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
     std::fs::create_dir(dir.path().join("checkout")).unwrap();
     let file = ChangedFile {
         path: "src/a.rs".into(),
-        area: None,
         added: Some(3),
         removed: Some(1),
         untracked: false,
@@ -1175,7 +1174,6 @@ fn judge_with(env: &Env, ledger: &Ledger, head: &str, tree: &str, smoke: bool) -
     let item = ledger.work_get(1, &ledger.now().unwrap()).unwrap().unwrap();
     let file = ChangedFile {
         path: "src/a.rs".into(),
-        area: None,
         added: Some(1),
         removed: Some(0),
         untracked: false,

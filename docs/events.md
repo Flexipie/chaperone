@@ -282,8 +282,7 @@ So each PR of a lane is measured from its own handoffs, even when a later PR was
 before an earlier one merged. When the owner made it ready, it is the newest
 `lane.ready_overridden` with `ready: true` in that window.
 
-The `--merged-since` cohort, the board's recently merged lanes and the lane page's repo median
-find merges on the partial index `events_merged` (migration 0006, ledger v6),
+The `--merged-since` cohort finds merges on the partial index `events_merged` (migration 0006, ledger v6),
 `json_extract(payload_json, '$.merged_at') WHERE kind = 'pr.merged'`.
 
 
@@ -320,14 +319,11 @@ appends. Notes are never edited: a correction supersedes. No fact reads `dossier
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `backlog.prioritised` | chaperone-ui's Backlog tab (`Ledger::backlog_prioritise`, no CLI command) | `repo` (`owner/repo`, lowercased), `order` (at most 500 distinct issue keys of that repo, `owner/repo#N` lowercased, first first), `after` (the event id of the repo's newest `backlog.prioritised` the order was built from, or null when it had none) |
+| `backlog.prioritised` | none now: the removed board's Backlog tab wrote it (#309); old events stay readable | `repo` (`owner/repo`, lowercased), `order` (at most 500 distinct issue keys of that repo, `owner/repo#N` lowercased, first first), `after` (the event id of the repo's newest `backlog.prioritised` the order was built from, or null when it had none) |
 
 The owner's order of a repo's open issues (#119). `lane_id` and `spec_id` are null: it folds
 nothing, never changes a lane's `updated_at` and is never a gate anchor. The newest one on a
-repo stands; the Backlog tab lists its keys first, in its order, then the rest by issue number.
-The write refuses it (`conflict`, nothing written) when `after` is not the repo's newest order,
-so an order another window wrote since is never lost. It takes no idempotency key. The newest
-order is read on the partial index `events_backlog` (migration 0005, ledger v5),
+repo stood; nothing reads it now. The partial index `events_backlog` (migration 0005, ledger v5),
 `json_extract(payload_json, '$.repo') WHERE kind = 'backlog.prioritised'`.
 
 ### Usage

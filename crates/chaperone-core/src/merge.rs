@@ -1,4 +1,4 @@
-//! The owner's merge of a lane's PR (#117), the UI's and the CLI's: as
+//! The owner's merge of a lane's PR (#117), the CLI's: as
 //! `/merge` does it, GitHub first, then `pr.merged`, then the done
 //! handoff when no live lease holds the lane, else a herdr prompt that
 //! tells the lane's agent to hand off done.
@@ -67,7 +67,7 @@ pub fn merge(
     let now = ledger.now().map_err(read)?;
     // What the confirm showed, read again now: a YES verdict on the
     // handoff head the owner confirmed, on the PR the lane holds.
-    let page = ledger.lane_page(work, None).map_err(read)?;
+    let page = ledger.lane_page(work).map_err(read)?;
     let gates = page.gates.as_ref();
     let passed = |id: &str| gates.is_some_and(|g| g.passed(id));
     let handed = gates.and_then(|g| g.head.as_deref()).unwrap_or_default();
@@ -190,7 +190,7 @@ pub fn merge(
         };
         return ok(Done::ByLane(told));
     }
-    let newest = page.detail.handoffs.first().map(|h| h.handoff.clone());
+    let newest = page.handoff.map(|h| h.handoff);
     let input = HandoffInput {
         summary: format!("{merged} from {from}."),
         status: Some("done".into()),

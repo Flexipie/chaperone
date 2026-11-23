@@ -273,13 +273,6 @@ fn same_question(a: &str, b: &str) -> bool {
     a == b || total > 0 && 2 * matched(&a, &b) * 100 >= 85 * total
 }
 
-/// A question's note asks about decision question `q`: the same question,
-/// or a note that names it, whole words (`"confirm: <q>"`).
-pub fn asks_about(note: &str, q: &str) -> bool {
-    let (n, w) = (words(note), words(q));
-    same_question(note, q) || !w.is_empty() && format!(" {n} ").contains(&format!(" {w} "))
-}
-
 /// The decisions whose newest line for their question is still agreed
 /// `provisional ...`: what the owner has yet to confirm, as `ship-handoff`
 /// reads them.
