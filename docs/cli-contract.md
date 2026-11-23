@@ -887,7 +887,7 @@ gates, in the order a denial names the first that fails:
 | `stamp_ok` | the lane is stamped `v20` | `pipeline.id` |
 | `no_uncounted_files` | a harness `diff` on the commit has no file git counts no lines of, but assets (`asset_files`) | `commit.uncounted_files` |
 | `code_lines_at_most` | to v20 only: that diff adds at most 400 code lines (removed lines and test lines, `[size] tests`, not counted), or at most the owner's `check waive size --lines` for the lane | `commit.code_lines`, `commit.size_waived` |
-| `tests_passed` | the newest harness `tests` on the commit passed | `tests.passed` |
+| `tests_passed` | to v20 only: the newest harness `tests` on the commit passed. v21 leaves the repo's tests to its CI, so `verify` and `pr open` run none | `tests.passed` |
 | `review_complete` | a complete harness review covers the commit (one carried to it from a commit with the same tree or `patch_id` counts) | `review.complete` |
 | `no_blocking_findings` | no complete harness review on the lane, of any tree, has a finding open, verified or disputed of severity `blocker`, `risk` or another blocking one; refuted, waived, fixed and answered findings, incomplete and session reviews' and the plan check's never count | `findings.open_blocking` |
 | `plan_or_no_code` | the diff changes no code, or the plan check ran (`check run plan`, before code) or the owner waived it (`check waive plan`) | `commit.changes_code`, `plan_check.outcome`, `plan_check.reason` |

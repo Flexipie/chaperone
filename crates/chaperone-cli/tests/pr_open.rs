@@ -272,17 +272,21 @@ fn pr_open_on_v21_counts_added_lines_and_refuses_no_size() {
     let (code, err) = lane.run("lane", &open);
     // The fake's first `pr create` opens #7 and fails.
     assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
-    let size = "- Size: 51 code lines added, 400 removed, and 0 test lines in 3 files\n";
+    let size = "- Size: 51 code lines added, 400 removed, and 0 test lines in 3 files\n\
+                - Tests: left to CI\n";
     assert!(
         lane.file("body.md").contains(size),
         "{}",
         lane.file("body.md")
     );
+
     let big = "z\n".repeat(401);
     git(&lane.wt, &["add", "big.rs"], &[("big.rs", big.as_bytes())]);
     git(&lane.wt, &["commit", "-qm", "big"], &[]);
     let (code, out) = lane.run("lane", &open);
     assert_eq!(code, 0, "{out}");
+    let steps = out["steps"].as_array().unwrap();
+    assert!(steps.iter().all(|s| s["check"] == "diff"), "{out}");
     assert!(
         lane.file("body.md")
             .contains("- Size: 452 code lines added")
