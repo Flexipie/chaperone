@@ -1,19 +1,23 @@
 //! `chaperone work ...`: runs a parsed command against the ledger and
 //! returns an `Outcome`; rendering is `output`'s.
 
+use std::ffi::OsStr;
 use std::io::{IsTerminal, Read};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{Forge, ForgePr, MergedInput, never_held};
+use chaperone_core::checks::MergedInput;
 use chaperone_core::child;
 use chaperone_core::cursor::Page;
 use chaperone_core::git;
-use chaperone_core::ledger::{Ledger, Refusal};
-use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter};
+use chaperone_core::ledger::{Actor, Ledger, Refusal};
+use chaperone_core::work::{
+    ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter, WorkItem,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::checks::refuse;
 use crate::cli::{ActorArgs, Format, WorkCmd};
 use crate::output::{self, CliError, Meta, Outcome};
 
@@ -184,26 +188,24 @@ pub fn run(
             patch_id,
             actor,
         } => {
-            let mut input = MergedInput {
-                work: id,
-                pr,
-                merge_sha,
-                head,
-                merged_at,
-                patch_id,
-                forge: Forge::NotAsked,
-            };
             let actor = actor.resolve();
-            // GitHub is asked only once the ledger's one refusal left is that the
-            // lane never held the PR, so bad input never reaches gh.
-            let recorded = match ledger.work_merged(&actor, &input)? {
-                Err(Refusal::InvalidInput(m)) if m == never_held(id, input.pr.trim()) => {
-                    input.forge = forge_pr(&input.pr)?.map_or(Forge::NotAsked, Forge::Pr);
-                    ledger.work_merged(&actor, &input)?
+            let item = ledger.work_get(id, &ledger.now()?)??;
+            let input = if item.pipeline_id.as_deref() == Some("v21") {
+                merged_on_github(ledger, &actor, &item, pr.trim(), patch_id)?
+            } else {
+                let given = |flag: &str, v: Option<String>| {
+                    v.ok_or_else(|| refuse(format!("{flag} is required off v21")))
+                };
+                MergedInput {
+                    work: id,
+                    pr,
+                    merge_sha: given("--merge-sha", merge_sha)?,
+                    head: given("--head", head)?,
+                    merged_at: given("--merged-at", merged_at)?,
+                    patch_id,
                 }
-                r => r,
             };
-            one(recorded?)
+            one(ledger.work_merged(&actor, &input)??)
         }
         WorkCmd::Events { id } => items(ledger.work_events(id)?),
         WorkCmd::Ready {
@@ -347,31 +349,53 @@ pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
     Ok(Outcome::One(value(v)?))
 }
 
-/// What `gh pr view` says of `owner/repo#N`; None for a ref of another
-/// shape, which the ledger refuses.
-fn forge_pr(pr: &str) -> Result<Option<ForgePr>, CliError> {
-    let Some((repo, n)) = pr.trim().rsplit_once('#') else {
-        return Ok(None);
+/// A v21 lane's merge as GitHub shows it (#308): the PR must be merged
+/// from the lane's branch, and its merge commit, head and time are
+/// GitHub's. A PR that is not the lane's yet becomes it first, with the
+/// write `work update --pr` makes.
+fn merged_on_github(
+    ledger: &Ledger,
+    actor: &Actor,
+    item: &WorkItem,
+    pr: &str,
+    patch_id: Option<String>,
+) -> Result<MergedInput, CliError> {
+    let Some((repo, n)) = pr.rsplit_once('#') else {
+        return Err(refuse(format!("--pr must be owner/repo#N, got {pr}")));
     };
-    let fields = "headRefName,headRefOid,isCrossRepository,state";
-    let mut cmd = std::process::Command::new("gh");
-    cmd.args(["pr", "view", n, "-R", repo, "--json", fields]);
-    let failed = |why: &str| CliError::Internal(format!("gh pr view {pr}: {why}"));
-    let out = match child::run(&mut cmd, Instant::now() + FORGE_TIMEOUT, 1 << 20) {
-        Ok(done) if done.status.success() => done.out,
-        Ok(done) => return Err(failed(String::from_utf8_lossy(&done.err).trim())),
-        Err(child::Failed::TimedOut) => return Err(failed("timed out")),
-        Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => {
-            return Err(failed(&e.to_string()));
-        }
-    };
-    let v: Value = serde_json::from_slice(&out).map_err(|e| failed(&e.to_string()))?;
-    Ok(Some(ForgePr {
-        head_branch: v["headRefName"].as_str().unwrap_or_default().into(),
-        head_sha: v["headRefOid"].as_str().unwrap_or_default().into(),
-        cross_repo: v["isCrossRepository"] != json!(false),
-        merged: v["state"] == "MERGED",
-    }))
+    let fields = "state,headRefName,headRefOid,mergeCommit,mergedAt";
+    let args = ["pr", "view", n, "-R", repo, "--json", fields];
+    let out =
+        child::cli("gh", OsStr::new("gh"), &args, FORGE_TIMEOUT, "").map_err(CliError::Internal)?;
+    let v: Value =
+        serde_json::from_str(&out).map_err(|e| CliError::Internal(format!("gh pr view: {e}")))?;
+    let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
+    let branch = text(&v["headRefName"]);
+    if v["state"] != "MERGED" {
+        return Err(refuse(format!("GitHub does not show {pr} merged")));
+    }
+    if item.branch.as_deref() != Some(branch.as_str()) {
+        return Err(refuse(format!(
+            "{pr}'s head branch on GitHub is {branch}, not the lane's branch {}",
+            item.branch.as_deref().unwrap_or("(none)")
+        )));
+    }
+    if item.pr_ref.as_deref() != Some(pr) {
+        let input = UpdateInput {
+            pr_ref: Some(pr.into()),
+            ..UpdateInput::default()
+        };
+        ledger.work_update(actor, item.id, &input, None, None, false)??;
+    }
+    Ok(MergedInput {
+        work: item.id,
+        pr: pr.into(),
+        merge_sha: text(&v["mergeCommit"]["oid"]),
+        head: text(&v["headRefOid"]),
+        // GitHub gives seconds; the ledger takes milliseconds.
+        merged_at: format!("{}.000Z", text(&v["mergedAt"]).trim_end_matches('Z')),
+        patch_id,
+    })
 }
 
 #[cfg(test)]

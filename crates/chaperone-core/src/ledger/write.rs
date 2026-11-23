@@ -522,10 +522,8 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
     let holder_rule =
         !(event.kind.keeps_updated_at() || event.kind == LaneTakenOver || owner_pause(event));
     let p = &mut event.payload;
-    // Their exemption must not reach the row: these kinds change no column,
-    // but a merge GitHub showed from the lane's branch makes it the lane's PR.
-    let merged_pr = event.kind == PrMerged && p.changed.keys().all(|k| k == "pr_ref");
-    if event.kind.keeps_updated_at() && !p.changed.is_empty() && !merged_pr {
+    // Their exemption must not reach the row: these kinds change no column.
+    if event.kind.keeps_updated_at() && !p.changed.is_empty() {
         refuse!(invalid(&format!("{} changes no lane column", event.kind)));
     }
     // A renewal names the lease it extends, so another pair's is held even

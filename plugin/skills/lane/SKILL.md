@@ -161,10 +161,10 @@ End the turn. Do not commit after the ready handoff (the stop hook blocks once i
 The owner merges. If the owner asks for changes: hand off `active`, change, then 5 to 8.
 
 After the merge: `chaperone work get $2`. `status` `done` (the merge handed it off): stop.
-Else, when the merge is not recorded (the owner merged outside `chaperone merge`), record it:
-`chaperone work merged $2 --pr <owner/repo#N> --merge-sha <sha> --head <PR head> --merged-at
-<mergedAt, with .000Z>`; a PR the lane never held (or set with `work update --pr`) is recorded when GitHub shows it merged from the
-lane's branch. Then hand off `status` `done`, `ready` false, `commit` the ready handoff's commit,
+Else, when the merge is not recorded (the owner merged outside `chaperone merge`), record it.
+On v21: `chaperone work merged $2 --pr <owner/repo#N>`; it reads the merge from GitHub, and a PR
+merged from the lane's branch becomes the lane's. Off v21 also pass `--merge-sha <sha> --head
+<PR head> --merged-at <mergedAt, with .000Z>`. Then hand off `status` `done`, `ready` false, `commit` the ready handoff's commit,
 `next_action` `done: merged as <sha>`. On v21 a recorded merge needs no verdict on that commit.
 
 ## Needs you

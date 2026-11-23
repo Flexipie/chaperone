@@ -131,12 +131,12 @@ fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
     assert_eq!(merges, [merge]);
 }
 
-/// `work merged` on a PR the lane never held (or set with `work update
-/// --pr`) asks GitHub once and records it only when it is in the lane's
-/// repo, from the lane's branch at `--head`, merged; each refusal says which
-/// failed. The PR is then the lane's.
+/// On v21 `work merged` asks GitHub: a PR not merged, or from another
+/// branch, is refused, each saying which; else the merge is GitHub's (not the
+/// flags'), and a PR that was not the lane's becomes its `pr_ref` first. Bad
+/// input makes no gh call, and a gh that fails is `internal`.
 #[test]
-fn work_merged_records_a_pr_opened_outside_pr_open() {
+fn work_merged_on_v21_records_what_github_shows() {
     let dir = tempfile::tempdir().unwrap();
     let (db, bin, view) = (
         dir.path().join("ledger.db"),
@@ -159,7 +159,7 @@ fn work_merged_records_a_pr_opened_outside_pr_open() {
             .arg("--db")
             .arg(&db)
             .args(args)
-            .envs([("DAISY_AGENT", "owner"), ("DAISY_SESSION", "owner")])
+            .envs([("DAISY_AGENT", "lane"), ("DAISY_SESSION", "lane")])
             .env("PATH", &path)
             .output()
             .unwrap();
@@ -170,116 +170,56 @@ fn work_merged_records_a_pr_opened_outside_pr_open() {
     for args in [
         &["migrate"][..],
         &["work", "create", "--title", "t", "--repo", "o/r"],
-        &["work", "claim", "1", "--branch", "lane-b"],
+        &[
+            "work",
+            "claim",
+            "1",
+            "--pipeline",
+            "v21",
+            "--branch",
+            "lane-b",
+        ],
     ] {
         assert!(run(args).0, "{args:?}");
     }
-    let merged = |pr: &str, branch: &str, cross: bool, state: &str| {
-        let v = json!({"headRefName": branch, "headRefOid": "1234567abc",
-            "isCrossRepository": cross, "state": state});
+    let merged = |pr: &str, branch: &str, state: &str| {
+        let v = json!({"headRefName": branch, "headRefOid": "1234567abc", "state": state,
+            "mergeCommit": {"oid": "abcdef1"}, "mergedAt": "2026-11-05T10:00:00Z"});
         std::fs::write(&view, v.to_string()).unwrap();
-        run(&[
-            "work",
-            "merged",
-            "1",
-            "--pr",
-            pr,
-            "--merge-sha",
-            "abcdef1",
-            "--head",
-            "1234567",
-            "--merged-at",
-            "2026-11-05T10:00:00.000Z",
-        ])
+        // The flags are not GitHub's, so they are not what is recorded.
+        let flags = ["--merge-sha", "fffffff", "--head", "eeeeeee"];
+        run(&[&["work", "merged", "1", "--pr", pr][..], &flags].concat())
     };
-    for (pr, branch, cross, state, why) in [
+    for (branch, state, why) in [
+        ("lane-b", "OPEN", "GitHub does not show o/r#5 merged"),
         (
-            "x/y#5",
-            "lane-b",
-            false,
-            "MERGED",
-            "it is not in the lane's repo o/r",
-        ),
-        (
-            "o/r#5",
-            "lane-b",
-            true,
-            "MERGED",
-            "its head is in another repository",
-        ),
-        (
-            "o/r#5",
             "other",
-            false,
             "MERGED",
-            "head branch on GitHub is other, not the lane's branch lane-b",
-        ),
-        (
-            "o/r#5",
-            "lane-b",
-            false,
-            "OPEN",
-            "GitHub does not show it merged",
+            "o/r#5's head branch on GitHub is other, not the lane's branch lane-b",
         ),
     ] {
-        let (ok, err) = merged(pr, branch, cross, state);
-        let message = err["message"].as_str().unwrap_or_default();
-        assert!(!ok && message.contains(why), "{why}: {err}");
+        let (ok, err) = merged("o/r#5", branch, state);
+        assert!(!ok && err["message"] == why, "{why}: {err}");
     }
-    // Bad input is the ledger's to refuse, before any gh call.
     std::fs::remove_file(&log).unwrap();
-    let (ok, err) = run(&[
-        "work",
-        "merged",
-        "1",
-        "--pr",
-        "o/r#5",
-        "--merge-sha",
-        "XYZ",
-        "--head",
-        "1234567",
-        "--merged-at",
-        "2026-11-05T10:00:00.000Z",
-    ]);
+    let (ok, err) = merged("not a pr", "lane-b", "MERGED");
     assert!(
         !ok && err["code"] == "invalid_input" && !log.exists(),
         "{err}"
     );
-    // A gh that fails is `internal`, never "never held".
     std::fs::remove_file(&view).unwrap();
-    let (ok, err) = run(&[
-        "work",
-        "merged",
-        "1",
-        "--pr",
-        "o/r#5",
-        "--merge-sha",
-        "abcdef1",
-        "--head",
-        "1234567",
-        "--merged-at",
-        "2026-11-05T10:00:00.000Z",
-    ]);
+    let (ok, err) = run(&["work", "merged", "1", "--pr", "o/r#5"]);
     assert!(!ok && err["code"] == "internal", "{err}");
-    let (ok, out) = merged("O/R#5", "lane-b", false, "MERGED");
+    let (ok, out) = merged("o/r#5", "lane-b", "MERGED");
     assert!(ok, "{out}");
-    assert_eq!(out["payload"]["pr"], "O/R#5");
-    assert_eq!(run(&["work", "get", "1"]).1["pr_ref"], "O/R#5");
-    // A PR set with `work update --pr` is not held: GitHub is asked.
-    let at = run(&["work", "get", "1"]).1["updated_at"].clone();
-    let update = [
-        "work",
-        "update",
-        "1",
-        "--pr",
-        "o/r#6",
-        "--expected-updated-at",
-    ];
-    assert!(run(&[&update[..], &[at.as_str().unwrap()]].concat()).0);
-    let (ok, err) = merged("o/r#6", "lane-b", false, "OPEN");
-    let message = err["message"].as_str().unwrap_or_default();
-    assert!(
-        !ok && message.contains("has never held PR o/r#6, and GitHub does not show it merged"),
-        "{err}"
+    let p = &out["payload"];
+    assert_eq!(
+        (&p["merge_sha"], &p["head_sha"], &p["merged_at"]),
+        (
+            &json!("abcdef1"),
+            &json!("1234567abc"),
+            &json!("2026-11-05T10:00:00.000Z")
+        )
     );
+    assert_eq!(run(&["work", "get", "1"]).1["pr_ref"], "o/r#5");
 }

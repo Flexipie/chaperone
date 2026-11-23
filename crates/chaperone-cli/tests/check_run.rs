@@ -6,8 +6,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use chaperone_core::checks::{Forge, MergedInput};
-use chaperone_core::ledger::{Actor, Evidence, Ledger, lock_lane, lock_slot};
+use chaperone_core::ledger::{Evidence, lock_lane, lock_slot};
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_chaperone");
@@ -1276,26 +1275,11 @@ fn prune_removes_merged_lanes_dirs() {
                 "--merged-at",
                 at,
             ];
-            // As `chaperone merge` records it: a PR set with `work update`
-            // is held only for a caller that saw the merge itself.
-            let input = MergedInput {
-                work: id.parse().unwrap(),
-                pr: pr.clone(),
-                merge_sha: args[1].into(),
-                head: args[3].into(),
-                merged_at: at.into(),
-                forge: Forge::Trusted,
-                ..MergedInput::default()
-            };
-            let owner = Actor {
-                agent: Some("o".into()),
-                session: Some("o".into()),
-            };
-            Ledger::open(&db)
-                .unwrap()
-                .work_merged(&owner, &input)
-                .unwrap()
-                .unwrap();
+            let (code, out) = run(
+                &db,
+                &[&["work", "merged", &id, "--pr", &pr], &args[..]].concat(),
+            );
+            assert_eq!(code, 0, "{out}");
         }
         if let Some(next) = next {
             let sql = "SELECT updated_at FROM lanes WHERE id = ?1";

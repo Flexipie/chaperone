@@ -741,7 +741,6 @@ fn a_v21_lane_whose_pr_merged_is_done_without_a_verdict() {
             merge_sha: "abcdef1".into(),
             head: "1234567".into(),
             merged_at: "2026-11-05T10:00:00.000Z".into(),
-            forge: chaperone_core::checks::Forge::Trusted,
             ..Default::default()
         };
         l.work_merged(&lane.owner, &merged).unwrap().unwrap();

@@ -159,19 +159,16 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 `work merged` is new (#59). `/merge` runs it after the merge, from any session (it skips the
 holder rule and leaves `updated_at` alone, as `check record` does). It appends one
 `pr.merged` (events.md, PR). It refuses (`invalid_input`, nothing written) a `--pr` that is not
-`owner/repo#N`, a PR already merged on another item, a sha that
+`owner/repo#N` or that the item has never held, a PR already merged on another item, a sha that
 is not 7 to 40 lowercase hex digits, and a `--merged-at` that is not RFC 3339 UTC with
 milliseconds (GitHub's `mergedAt`, `2026-11-05T10:00:00Z`, is passed as
-`2026-11-05T10:00:00.000Z`). The item holds a PR that `pr open` opened, that a ready handoff
-named in `pull_request`, or that an earlier `work merged` took from GitHub; a PR set any other
-way (`work update --pr`, a handoff not ready) is not held, so a lane cannot make one its own
-(#308); `chaperone merge`, which saw the merge itself, holds any PR the item's `pr_ref` named. A PR the item has never held, once every other check above has passed, costs one
-`gh pr view <n> -R <owner/repo> --json headRefName,headRefOid,isCrossRepository,state` (a gh
-failure is `internal`) and is recorded only when the ref's repo is the item's `repo`, its head is
-not from another repository, its head branch is the item's `branch`, its head commit is
-`--head` and it is `MERGED`; each other case is refused, the message saying which failed. That
-`pr.merged` also sets the item's `pr_ref` to it (events.md, PR). A PR the item holds makes no gh
-call. The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
+`2026-11-05T10:00:00.000Z`); off v21 those three flags are required. On a v21 item (#308) it
+asks GitHub every time, held PR or not: one `gh pr view <n> -R <owner/repo> --json
+state,headRefName,headRefOid,mergeCommit,mergedAt` (a gh failure is `internal`). A PR GitHub
+does not show `MERGED`, or whose head branch is not the item's `branch`, is refused, the message
+saying which. The merge commit, head and time recorded are GitHub's, never the flags'. A PR that
+is not the item's `pr_ref` yet is first made it, with the write `work update --pr` makes (its own
+event, under the holder rule), so the `pr.merged` names a PR the item holds. The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
 payload}`.
 
 `attention record` is new (#59). `/orchestrate` and the owner run it for each intervention on

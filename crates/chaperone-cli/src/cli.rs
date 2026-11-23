@@ -516,22 +516,22 @@ pub enum WorkCmd {
     Handoffs { id: i64 },
     /// The item's ledger, oldest first
     Events { id: i64 },
-    /// Record that one of the item's PRs merged (for /merge). The
-    /// same PR again replays and writes nothing
+    /// Record that one of the item's PRs merged (for /merge). On v21 it
+    /// asks GitHub. The same PR again replays and writes nothing
     Merged {
         id: i64,
-        /// owner/repo#N, a PR the item has held
+        /// owner/repo#N, a PR the item has held (on v21, from its branch)
         #[arg(long)]
         pr: String,
-        /// The merge commit on the base
+        /// The merge commit on the base (off v21; v21 reads GitHub's)
         #[arg(long)]
-        merge_sha: String,
-        /// The PR head that was merged
+        merge_sha: Option<String>,
+        /// The PR head that was merged (off v21)
         #[arg(long)]
-        head: String,
-        /// When the forge merged it, RFC 3339 UTC with milliseconds
+        head: Option<String>,
+        /// When the forge merged it, RFC 3339 UTC with milliseconds (off v21)
         #[arg(long)]
-        merged_at: String,
+        merged_at: Option<String>,
         /// git patch-id of the merged diff
         #[arg(long)]
         patch_id: Option<String>,
