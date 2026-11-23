@@ -4,6 +4,7 @@
 
 mod handoff;
 mod lane_page;
+pub(crate) use self::lane_page::CURRENT_PR_MERGED;
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -1266,7 +1267,7 @@ pub(crate) fn issue_key_ok(key: &str) -> bool {
 }
 
 /// `owner/name#digits`.
-pub(crate) fn pr_ref_ok(pr_ref: &str) -> bool {
+pub fn pr_ref_ok(pr_ref: &str) -> bool {
     let part_ok = |p: &str| {
         !p.is_empty()
             && p.chars()

@@ -160,7 +160,15 @@ holder rule and leaves `updated_at` alone, as `check record` does). It appends o
 `owner/repo#N` or that the item has never held, a PR already merged on another item, a sha that
 is not 7 to 40 lowercase hex digits, and a `--merged-at` that is not RFC 3339 UTC with
 milliseconds (GitHub's `mergedAt`, `2026-11-05T10:00:00Z`, is passed as
-`2026-11-05T10:00:00.000Z`). The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
+`2026-11-05T10:00:00.000Z`); off v21 those three flags are required. On a v21 item (#308) it
+asks GitHub every time, held PR or not, once the ref is `owner/repo#N`: one `gh pr view <n> -R
+<owner/repo> --json state,headRefName,headRefOid,isCrossRepository,mergeCommit,mergedAt` (a gh
+failure is `internal`). On an item with a `pr_ref`, any other PR is refused before gh. A PR not in the item's `repo`, with its head in another repository, whose
+head branch is not the item's `branch`, or not `MERGED` is refused, the message saying which. The
+merge commit, head and time recorded are GitHub's, never the flags'. The ledger checks "never
+held" last, so when that is its one refusal on an item with no `pr_ref`, the PR is made its `pr_ref` (with the write
+`work update --pr` makes, its own event, under the holder rule) and the merge is recorded; any
+other refusal leaves `pr_ref` as it was. The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
 payload}`.
 
 `attention record` is new (#59). `/orchestrate` and the owner run it for each intervention on
@@ -601,6 +609,10 @@ and refused with `plan` (`invalid_input`). It raises that lane's limit alone, fo
 A pipeline with no `code_lines_at_most` gate (v21 on) needs none: past the cap its review asks
 what to cut (`over_cap` on the review, docs/events.md).
 
+On v21 `done_verdict` is also met by `pr_merged`: the lane's current PR has a `pr.merged`
+(`pr.merged`), so after an owner merge with no verdict on the head the lane still hands off done.
+That `phase.entered` carries `merged_without_verdict: true` (events.md, Engine).
+
 `verify --work <id>` is what a lane runs in the background: `check run diff`, `tests`, `review`
 and `verdict` on the lane's commit, in that order, each exactly as that command runs it (the
 same events and keys, so a step on the same tree replays and starts no session). It takes the
@@ -702,8 +714,10 @@ and opens the ledger read-only for every event but `stop-failure` and `prompt` (
 status, pipeline, branch, head, PR, the ready gates not passing yet (as the lane page reads them)
 and the lane's commands. `pre-bash` splits a Bash `tool_input.command` at `&&`, `||`, `;`, `|`, newlines,
 `$(`, parentheses and backticks, drops each part's leading `VAR=value` words, and denies a part
-that starts `gh pr create`, `gh pr edit`, `gh pr merge` or `chaperone work ready` with `--yes` later in it,
-naming the command to run instead. `stop` blocks once (never with `stop_hook_active`) when the newest handoff is ready and
+that starts `gh pr merge` or `chaperone work ready` with `--yes` later in it, and on a lane not on
+v21 one that starts `gh pr create` or `gh pr edit`, naming the command to run instead. A v21 lane may
+open or edit its PR with gh when `pr open` will not; it records the PR in its ready handoff's
+`pull_request`. `stop` blocks once (never with `stop_hook_active`) when the newest handoff is ready and
 the branch tip, read as a ready handoff reads it, is not its commit. After printing its answer, `stop` records the lane session's tokens, every turn, so the lane never has to: `usage report --work <lane>`'s write, on its own writable open, reading only the folder of the hook's `transcript_path` (that session's project folder, its sessions matched by first `cwd` as always, and their subagents), since reading every transcript under `~/.claude` can pass the hook's 10 s timeout. It waits at most 5 s for it (a busy ledger is left, with whole events written, and the next turn adds the rest). Without a `transcript_path` it records nothing, any error is ignored, and with `DAISY_CLI_READONLY=1` it skips this write and stays a read. `stop-failure` records
 `attention.recorded` type `stopped`, by `orchestrator`, its note the hook's `error`, as
 `$DAISY_AGENT` and `$DAISY_SESSION`; a repeat with nothing new on the lane replays, as `attention

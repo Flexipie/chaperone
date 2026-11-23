@@ -6,7 +6,7 @@ Arguments:
   <EVENT>
           Possible values:
           - session-start: The lane's state, gates not passing yet and commands, as context
-          - pre-bash:      Deny `gh pr create`, `gh pr edit`, `gh pr merge` and `chaperone work ready --yes`
+          - pre-bash:      Deny `gh pr merge` and `chaperone work ready --yes`, and off v21 `gh pr create` and `gh pr edit`
           - stop:          Block a stop once the branch moved past the lane's ready handoff
           - stop-failure:  Record the API error the turn stopped on, once per error kind
           - prompt:        Record a prompt typed into the lane as attention `prompted`

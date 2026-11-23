@@ -57,6 +57,17 @@ impl Pipeline {
             .map(|(gates, _)| gates)
     }
 
+    /// Whether gate `id` holds on `facts`; None when the document has no such
+    /// gate or a fact it needs is absent.
+    pub fn holds(&self, id: &str, facts: &FactBundle) -> Option<bool> {
+        let eval = Eval {
+            pipeline: self,
+            facts,
+            loaded: Fact::Str(self.hash.clone()),
+        };
+        self.gates.contains_key(id).then(|| eval.gate(id)).flatten()
+    }
+
     fn row<'a>(
         &'a self,
         transition: &str,

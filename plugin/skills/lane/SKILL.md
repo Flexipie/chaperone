@@ -20,9 +20,9 @@ variable does not last between calls). The plan, handoff JSON and `lane-state.md
 
 ## Never
 
-- `gh pr create`, `gh pr edit`, `gh pr merge`, `chaperone work ready --yes`: the hook denies them.
-  `chaperone pr open` opens the PR; the owner merges.
-- Push to the base branch, push the branch yourself, merge, `--no-verify`, amend or rebase
+- `gh pr merge`, `chaperone work ready --yes`, and, except on v21, `gh pr create` and `gh pr edit`:
+  the hook denies them. `chaperone pr open` opens the PR; the owner merges.
+- Push to the base branch, push the branch yourself (but step 7's v21 fallback), merge, `--no-verify`, amend or rebase
   after `pr open` (it pushes without force).
 - `check record` anything but the smoke claim; `finding waive` and `check waive` are the
   owner's. Editing `.chaperone/profile.toml` changes nothing: checks read the base branch's.
@@ -134,6 +134,10 @@ pass `--title` filled from it: `{key}` the task's key exactly, `{type}` one of `
 the change, `{text}` a short title. Its refusals name the fix; a gh failure (`internal`): retry
 once, then Needs you. Note `pr`.
 
+On v21, when `pr open` keeps refusing a finished change for a reason outside the lane, push the
+branch and open or edit the PR with `gh pr create` / `gh pr edit` (the hook allows them there),
+then name it in the ready handoff's `pull_request`, which records it as the lane's.
+
 ## 8. Ready handoff
 
 On the commit verify passed (`git rev-parse HEAD` is its `head`):
@@ -157,8 +161,11 @@ End the turn. Do not commit after the ready handoff (the stop hook blocks once i
 The owner merges. If the owner asks for changes: hand off `active`, change, then 5 to 8.
 
 After the merge: `chaperone work get $2`. `status` `done` (the merge handed it off): stop.
-Else hand off `status` `done`, `ready` false, `commit` the ready handoff's commit,
-`next_action` `done: merged as <sha>`.
+Else, when the merge is not recorded (the owner merged outside `chaperone merge`), record it.
+On v21: `chaperone work merged $2 --pr <owner/repo#N>`; it reads the merge from GitHub, and records only
+the lane's PR; a lane with no PR takes one merged from its branch. Off v21 also pass `--merge-sha <sha> --head
+<PR head> --merged-at <mergedAt, with .000Z>`. Then hand off `status` `done`, `ready` false, `commit` the ready handoff's commit,
+`next_action` `done: merged as <sha>`. On v21 a recorded merge needs no verdict on that commit.
 
 ## Needs you
 

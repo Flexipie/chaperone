@@ -22,6 +22,7 @@ pub const FACTS: &[&str] = &[
     "pipeline.id",
     "plan_check.outcome",
     "plan_check.reason",
+    "pr.merged",
     "pr.opened_at",
     "quality_gate.at",
     "quality_gate.outcome",

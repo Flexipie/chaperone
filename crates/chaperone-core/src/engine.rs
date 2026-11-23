@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use crate::ledger::projection::project;
-use crate::ledger::{Checked, Event, EventKind, Mutation, Payload, Refusal};
+use crate::ledger::{Checked, Event, EventKind, LedgerError, Mutation, Payload, Refusal};
 use crate::pipeline::{self, Denied, Phase, Route};
 
 /// A gated command's event: `phase.entered` for `transition` to `to` on
@@ -38,10 +38,12 @@ pub(crate) fn enter(
 
 /// The `gate.denied` that replaces `entered`, a guarded `phase.entered`
 /// on lane `lane_id`, when its transition does not hold; None when it does.
+/// A done that passes on the pipeline's `pr_merged` without its
+/// `verdict_yes_on_head` gets `merged_without_verdict: true` on `entered`.
 /// A lane with no stamp is denied as `stamp_ok`, never passed on the newest
 /// pipeline; a stamped id this binary has no document for is refused
 /// (`pipeline_unknown`).
-pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<Option<Event>> {
+pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &mut Event) -> Checked<Option<Event>> {
     let p = &entered.payload;
     // The guard has refused any transition but the host's.
     let transition = p.transition.clone().unwrap_or_default();
@@ -56,6 +58,9 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
         Err(r) => return Ok(Err(r)),
     };
     let Err(Denied { gate, fact_paths }) = decided else {
+        if to == Phase::Done {
+            mark_merge_without_verdict(conn, lane_id, entered)?;
+        }
         return Ok(Ok(None));
     };
     // A retry of the same target and commit with no new event on the lane
@@ -79,6 +84,31 @@ pub(crate) fn deny(conn: &Connection, lane_id: i64, entered: &Event) -> Checked<
         },
         ..entered.clone()
     })))
+}
+
+/// Sets `merged_without_verdict` on a passed done whose pipeline's
+/// `pr_merged` holds and its `verdict_yes_on_head` does not (v21 on).
+fn mark_merge_without_verdict(
+    conn: &Connection,
+    lane_id: i64,
+    entered: &mut Event,
+) -> Result<(), LedgerError> {
+    let id: Option<String> = conn.query_row(
+        "SELECT pipeline_id FROM lanes WHERE id = ?1",
+        [lane_id],
+        |r| r.get(0),
+    )?;
+    let Some(doc) = id.as_deref().and_then(pipeline::by_id) else {
+        return Ok(());
+    };
+    let facts = project(conn, lane_id, entered.payload.head_sha.as_deref())?;
+    if doc.holds("pr_merged", &facts) == Some(true)
+        && doc.holds("verdict_yes_on_head", &facts) != Some(true)
+    {
+        let rest = &mut entered.payload.rest;
+        rest.insert("merged_without_verdict".into(), json!(true));
+    }
+    Ok(())
 }
 
 /// Whether `transition` to `to` holds for lane `lane_id` on `head`, on its

@@ -201,7 +201,7 @@ the same value, a trailing slash aside, still writes.
 
 | Kind | Written when | Payload |
 | --- | --- | --- |
-| `phase.entered` | A gated command passes (`work handoff` with `ready: true` or to `done`, `work update --status done`) | `transition`, `from`, `to`, `status`, `head_sha`, plus the command's fields: `changed`, and `handoff_id` and `handoff` for a handoff |
+| `phase.entered` | A gated command passes (`work handoff` with `ready: true` or to `done`, `work update --status done`) | `transition`, `from`, `to`, `status`, `head_sha`, plus the command's fields: `changed`, and `handoff_id` and `handoff` for a handoff; and `merged_without_verdict` `true` on a done that passed on its pipeline's `pr_merged` gate while its `verdict_yes_on_head` did not hold (v21 on), so stats can count merges that had no verdict |
 | `gate.denied` | A gated command fails | `transition`, `gate` (the first failing gate id), `fact_paths` (what that gate read), `head_sha` |
 
 `work events` shows `phase.entered` with the command's action (`handoff` or `update`).
@@ -271,7 +271,9 @@ a handoff, the handoff's event carries `changed.pr_ref` from null, and the fact
 
 `pr.merged` names one PR the lane has held (a `pr.opened` or any `changed.pr_ref.to` on its
 events), spelled as the lane held it, so a lane with several PRs records each merge. It changes no column but
-`head_event_id`, is not a lane action in `work events`, and no gate reads it. The ready and
+`head_event_id`, and is not a lane action in `work events`. Only v21's `pr_merged` gate reads it,
+through the fact `pr.merged` (true when the lane's current PR has one); on v21 `work merged`
+takes it from GitHub (cli-contract.md). The ready and
 handoff numbers are read from the log, never stored on it. Commits after the handoff are
 `git rev-list --count <handoff commit>..<head_sha>`, and ready to merge is `merged_at` minus
 the handoff's `at`. The handoff is R11's first real one (its `next_action` does not start
@@ -489,7 +491,9 @@ an older one), or a carried one (`carried_from`), read as the review it names, w
 that still block, as `blocking_findings` reads them (open, verified or disputed, and not
 `nit`, `improvement`, `question` or `convention`), so another tree's blocker blocks until it
 is ruled fixed, refuted or waived. It is absent while no review covers the commit, and
-findings of an incomplete run, a session's review or the plan check never count. Plan checks and verdicts get no new fact:
+findings of an incomplete run, a session's review or the plan check never count. `pr.merged` is
+true when the lane's current PR (`pr_ref`) has a `pr.merged`, as the lane page reads it, so a lane
+that took another PR since reads false; it is set with or without a commit. Plan checks and verdicts get no new fact:
 on a lane stamped with a schema 2 pipeline the projection reads only the harness's
 `plan_check` and `merge_verdict`, and the owner's plan waiver, into `plan_check.*` and
 `verdict.*`, whenever the event was written (a session's from before the claim, or an older

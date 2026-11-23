@@ -259,7 +259,7 @@ fn write(
                 return Ok(Applied::Refused(r));
             }
             if let (EventKind::PhaseEntered, Some(lane)) = (event.kind, event.lane_id) {
-                match engine::deny(tx, lane, &event)? {
+                match engine::deny(tx, lane, &mut event)? {
                     Ok(None) => {}
                     Ok(Some(denial)) => {
                         let key = denial.idempotency_key.as_deref().unwrap_or_default();

@@ -34,6 +34,21 @@ pub enum Done {
     ByLane(Result<(), String>),
 }
 
+/// The merge record of `pr`, merged from `head`, from `gh pr view`'s
+/// answer `v` (`mergeCommit`, `mergedAt`).
+pub fn merged_input(work: i64, pr: &str, head: String, v: &Value) -> MergedInput {
+    let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
+    MergedInput {
+        work,
+        pr: pr.into(),
+        merge_sha: text(&v["mergeCommit"]["oid"]),
+        head,
+        // GitHub gives seconds; the ledger takes milliseconds (cli-contract.md).
+        merged_at: format!("{}.000Z", text(&v["mergedAt"]).trim_end_matches('Z')),
+        patch_id: None,
+    }
+}
+
 /// Squash-merges `pr` at `head`, the handoff head the owner confirmed
 /// (default: the lane's handoff head), once the ledger and GitHub both
 /// still hold it; a PR already merged at that head is only recorded.
@@ -148,16 +163,7 @@ pub fn merge(
         state => return not(format!("{pr} is {state} on GitHub")),
     }
     let sha = v["mergeCommit"]["oid"].as_str().unwrap_or_default();
-    let at = v["mergedAt"].as_str().unwrap_or_default();
-    let input = MergedInput {
-        work,
-        pr: pr.into(),
-        merge_sha: sha.into(),
-        head: oid,
-        // GitHub gives seconds; the ledger takes milliseconds (cli-contract.md).
-        merged_at: format!("{}.000Z", at.trim_end_matches('Z')),
-        patch_id: None,
-    };
+    let input = merged_input(work, pr, oid, &v);
     let merged = format!("Merged {pr} as {}", short(sha));
     done(ledger.work_merged(actor, &input)).map_err(|e| {
         format!("{merged} on GitHub; recording failed: {e} (run merge again to record it).")

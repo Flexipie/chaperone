@@ -1,20 +1,28 @@
 //! `chaperone work ...`: runs a parsed command against the ledger and
 //! returns an `Outcome`; rendering is `output`'s.
 
+use std::ffi::OsStr;
 use std::io::{IsTerminal, Read};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::MergedInput;
+use chaperone_core::checks::{MergedInput, Recorded, never_held};
+use chaperone_core::child;
 use chaperone_core::cursor::Page;
-use chaperone_core::git;
-use chaperone_core::ledger::{Ledger, Refusal};
-use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter};
+use chaperone_core::ledger::{Actor, Ledger, Refusal};
+use chaperone_core::work::{
+    ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter, WorkItem,
+};
+use chaperone_core::{git, merge, work};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::checks::refuse;
 use crate::cli::{ActorArgs, Format, WorkCmd};
 use crate::output::{self, CliError, Meta, Outcome};
+
+/// How long `work merged` waits for `gh pr view`.
+const FORGE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long `work handoff` waits for `git rev-parse` in the worktree.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -180,15 +188,31 @@ pub fn run(
             patch_id,
             actor,
         } => {
-            let input = MergedInput {
-                work: id,
-                pr,
-                merge_sha,
-                head,
-                merged_at,
-                patch_id,
+            let actor = actor.resolve();
+            let item = ledger.work_get(id, &ledger.now()?)??;
+            if item.pipeline_id.as_deref() == Some("v21") {
+                return one(merged_on_github(
+                    ledger,
+                    &actor,
+                    &item,
+                    pr.trim(),
+                    patch_id,
+                )??);
+            }
+            let input = {
+                let given = |flag: &str, v: Option<String>| {
+                    v.ok_or_else(|| refuse(format!("{flag} is required off v21")))
+                };
+                MergedInput {
+                    work: id,
+                    pr,
+                    merge_sha: given("--merge-sha", merge_sha)?,
+                    head: given("--head", head)?,
+                    merged_at: given("--merged-at", merged_at)?,
+                    patch_id,
+                }
             };
-            one(ledger.work_merged(&actor.resolve(), &input)??)
+            one(ledger.work_merged(&actor, &input)??)
         }
         WorkCmd::Events { id } => items(ledger.work_events(id)?),
         WorkCmd::Ready {
@@ -330,6 +354,76 @@ pub(crate) fn value(v: impl Serialize) -> Result<Value, CliError> {
 
 pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
     Ok(Outcome::One(value(v)?))
+}
+
+/// A v21 lane's merge as GitHub shows it (#308): the PR must be in the
+/// lane's repo, not from a fork, from the lane's branch and merged, and its
+/// merge commit, head and time are GitHub's. A lane with a `pr_ref` records
+/// only that PR. A lane with none takes the PR as its `pr_ref` only once the
+/// ledger refuses it for never held alone, so any other refusal leaves it.
+fn merged_on_github(
+    ledger: &Ledger,
+    actor: &Actor,
+    item: &WorkItem,
+    pr: &str,
+    patch_id: Option<String>,
+) -> Result<Result<Recorded, Refusal>, CliError> {
+    let (repo, n) = match pr.rsplit_once('#') {
+        Some(ref_) if work::pr_ref_ok(pr) => ref_,
+        _ => return Err(refuse(format!("--pr must be owner/repo#N, got {pr}"))),
+    };
+    if let Some(held) = item
+        .pr_ref
+        .as_deref()
+        .filter(|h| !h.eq_ignore_ascii_case(pr))
+    {
+        return Err(refuse(format!("{pr} is not the lane's PR {held}")));
+    }
+    let fields = "state,headRefName,headRefOid,isCrossRepository,mergeCommit,mergedAt";
+    let args = ["pr", "view", n, "-R", repo, "--json", fields];
+    let out =
+        child::cli("gh", OsStr::new("gh"), &args, FORGE_TIMEOUT, "").map_err(CliError::Internal)?;
+    let v: Value =
+        serde_json::from_str(&out).map_err(|e| CliError::Internal(format!("gh pr view: {e}")))?;
+    let (lane_repo, lane_branch) = (
+        item.repo_slug.as_deref().unwrap_or("(none)"),
+        item.branch.as_deref().unwrap_or("(none)"),
+    );
+    let branch = v["headRefName"].as_str().unwrap_or_default();
+    let why = if !item
+        .repo_slug
+        .as_deref()
+        .is_some_and(|r| r.eq_ignore_ascii_case(repo))
+    {
+        format!("is not in the lane's repo {lane_repo}")
+    } else if v["isCrossRepository"] != json!(false) {
+        "has its head in another repository on GitHub".into()
+    } else if item.branch.as_deref() != Some(branch) {
+        format!("has head branch {branch} on GitHub, not the lane's branch {lane_branch}")
+    } else if v["state"] != "MERGED" {
+        "is not merged on GitHub".into()
+    } else {
+        String::new()
+    };
+    if !why.is_empty() {
+        return Err(refuse(format!("{pr} {why}")));
+    }
+    let head = v["headRefOid"].as_str().unwrap_or_default().to_string();
+    let input = MergedInput {
+        patch_id,
+        ..merge::merged_input(item.id, pr, head, &v)
+    };
+    Ok(match ledger.work_merged(actor, &input)? {
+        Err(Refusal::InvalidInput(m)) if m == never_held(item.id, pr) => {
+            let take = UpdateInput {
+                pr_ref: Some(pr.into()),
+                ..UpdateInput::default()
+            };
+            ledger.work_update(actor, item.id, &take, None, None, false)??;
+            ledger.work_merged(actor, &input)?
+        }
+        r => r,
+    })
 }
 
 #[cfg(test)]

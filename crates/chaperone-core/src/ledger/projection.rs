@@ -186,6 +186,8 @@ pub(crate) fn project(
         review_state = "running";
     }
     f.set("daisy_review.state", review_state);
+    let merged = format!("SELECT 1 {}", crate::work::CURRENT_PR_MERGED);
+    f.set("pr.merged", super::exists(conn, &merged, [lane_id])?);
     if let Some(round) = latest_round {
         let open: i64 = conn.query_row(
             &format!(
