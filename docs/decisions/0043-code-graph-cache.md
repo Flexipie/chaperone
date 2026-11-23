@@ -1,6 +1,6 @@
 # ADR 0043: The code graph lives in its own cache, keyed by content
 
-Status: accepted, 2026-11-07  
+Status: accepted, 2026-11-07; withdrawn 2026-11-23: `impact` and the code graph removed (#311), nothing measured them helping. Kept as the record  
 Evidence: issue [#43](https://github.com/Flexipie/chaperone/issues/43), the decisions on
 [#39](https://github.com/Flexipie/chaperone/issues/39) (2026-11-04), [R43](../research/r43-change-graph.md)
 

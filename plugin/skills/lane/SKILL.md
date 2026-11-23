@@ -45,8 +45,8 @@ After a compaction, read it, then `chaperone work get $2`.
 ## 2. Understand
 
 Read `${CLAUDE_SKILL_DIR}/judgement.md`, then the task (`gh issue view` for a GitHub key, the tracker's tool
-otherwise), `chaperone spec get --key $0` and `chaperone dossier get $0` (either may be
-`not_found`), then the code it touches. Then hand off progress with the goal:
+otherwise), `chaperone spec get --key $0` (it may be `not_found`), then the code it
+touches. Then hand off progress with the goal:
 the plan check, intent lens, verdict and PR body read `brief.goal` from the newest handoff.
 
 Every handoff is `chaperone work handoff $2 "$G/handoff.json"`. Each one replaces the last:

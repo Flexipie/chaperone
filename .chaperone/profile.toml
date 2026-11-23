@@ -30,9 +30,7 @@ code = ["pipelines/**", "plugin/**"]
 
 # Companion rules: `check run diff` refuses a commit that changes a file
 # `when` names and none `needs` names, unless a lane commit has the trailer
-# `No-companion: <name> <why>`. A new subcommand also belongs in
-# [[entry_points]], but it is a variant in cli.rs like any flag edit, so a
-# path rule cannot tell it apart: review catches that one.
+# `No-companion: <name> <why>`.
 [[companions]]
 name = "cli-contract"
 when = ["crates/chaperone-cli/src/cli.rs"]
@@ -58,91 +56,6 @@ commands = [
   ["env", "RUSTDOCFLAGS=-D warnings", "cargo", "doc", "-p", "chaperone-core", "--no-deps", "--locked"],
 ]
 target_dir = "CARGO_TARGET_DIR"
-
-# Entry points: what `chaperone impact --entry-points` reports (#44).
-# Each command names the file that implements it, not main.rs: the
-# dispatcher depends on every command, so a rule on it is reached by all.
-[[entry_points]]
-kind = "command"
-name = "work"
-path = "crates/chaperone-cli/src/work.rs"
-
-[[entry_points]]
-kind = "command"
-name = "spec"
-path = "crates/chaperone-cli/src/spec.rs"
-
-[[entry_points]]
-kind = "command"
-name = "check"
-path = "crates/chaperone-cli/src/checks.rs"
-
-[[entry_points]]
-kind = "command"
-name = "reviews"
-path = "crates/chaperone-cli/src/checks.rs"
-
-[[entry_points]]
-kind = "command"
-name = "review"
-path = "crates/chaperone-cli/src/eval.rs"
-
-[[entry_points]]
-kind = "command"
-name = "jobs"
-path = "crates/chaperone-cli/src/checks.rs"
-
-[[entry_points]]
-kind = "command"
-name = "usage"
-path = "crates/chaperone-cli/src/checks.rs"
-
-[[entry_points]]
-kind = "command"
-name = "attention"
-path = "crates/chaperone-cli/src/checks.rs"
-
-[[entry_points]]
-kind = "command"
-name = "dossier"
-path = "crates/chaperone-cli/src/checks.rs"
-
-[[entry_points]]
-kind = "command"
-name = "stats"
-path = "crates/chaperone-core/src/stats.rs"
-
-[[entry_points]]
-kind = "command"
-name = "migrate"
-path = "crates/chaperone-core/src/ledger/migrate.rs"
-
-[[entry_points]]
-kind = "command"
-name = "impact"
-path = "crates/chaperone-cli/src/impact.rs"
-
-[[entry_points]]
-kind = "command"
-name = "overlap"
-path = "crates/chaperone-cli/src/overlap.rs"
-
-[[entry_points]]
-kind = "command"
-name = "evidence"
-path = "crates/chaperone-cli/src/evidence.rs"
-
-# Every tracked file must be in exactly one area, or impact --entry-points refuses.
-[areas]
-cli = ["crates/chaperone-cli/**"]
-lanes = ["crates/chaperone-core/src/*.rs", "crates/chaperone-core/src/spec/**", "crates/chaperone-core/src/usage/**", "crates/chaperone-core/src/work/**"]
-ledger = ["crates/chaperone-core/src/ledger/**", "crates/chaperone-core/migrations/**"]
-engine = ["crates/chaperone-core/src/pipeline/**", "pipelines/**", "plugin/**", "evals/**"]
-graph = ["crates/chaperone-graph/**"]
-tests = ["crates/chaperone-core/tests/**", "crates/chaperone-fake/**"]
-build = ["Cargo.toml", "Cargo.lock", "crates/chaperone-core/Cargo.toml", "rust-toolchain.toml", "rustfmt.toml", "deny.toml", ".gitignore", ".config/**", ".github/**", ".chaperone/**"]
-docs = ["docs/**", "README.md", "CONTRIBUTING.md", "LICENSE-APACHE", "LICENSE-MIT"]
-spikes = ["spikes/**"]
 
 # Test files: `check run diff` counts their lines as `test_lines`, which the size cap
 # leaves out. Tests inside a source file still count as code.

@@ -168,8 +168,7 @@ pub struct MergedInput {
     pub patch_id: Option<String>,
 }
 
-/// What `check record` (or `dossier note`) wrote, or the event a retry
-/// replayed. A dossier note is on a key, so it has no `work_id`.
+/// What `check record` wrote, or the event a retry replayed.
 #[derive(Clone, Debug, Serialize)]
 pub struct Recorded {
     pub event_id: i64,
@@ -420,7 +419,7 @@ impl Ledger {
             json!({"kind": "session", "agent": actor.agent, "session": actor.session}),
         );
         // Hashed as the write will store it, so a waiver's note that had a
-        // secret redacted still replays (as `dossier note`).
+        // secret redacted still replays.
         let mut stored = payload.clone();
         match redact_payload(&mut stored)? {
             Ok(0) => {}

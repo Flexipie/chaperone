@@ -9,7 +9,7 @@ Public name **Chaperone** ([ADR 0005](docs/decisions/0005-chaperone-name.md)).
 gates, and lane coordination.
 
 The Rust workspace and CI are in place (`crates/chaperone-core`, `crates/chaperone-cli`,
-`crates/chaperone-fake`, `crates/chaperone-graph`); the ledger and gates are being built in
+`crates/chaperone-fake`, `crates/chaperone-graph` for the base profile reads); the ledger and gates are being built in
 milestone 1. To build and test, see [CONTRIBUTING.md](CONTRIBUTING.md) "Setup".
 
 There is no board UI: it was removed (#309) until it is shown to help agents write better code.

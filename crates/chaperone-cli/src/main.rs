@@ -7,9 +7,7 @@ mod doctor;
 mod eval;
 mod evidence;
 mod hook;
-mod impact;
 mod output;
-mod overlap;
 mod plugin;
 mod spec;
 mod work;
@@ -103,7 +101,6 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
         Cmd::Usage(cmd) => checks::usage(&Ledger::open(&path)?, cmd),
         Cmd::Attention(cmd) => checks::attention(&Ledger::open(&path)?, cmd),
         Cmd::Finding(cmd) => checks::finding(&Ledger::open(&path)?, cmd, meta),
-        Cmd::Dossier(cmd) => checks::dossier(&Ledger::open(&path)?, cmd),
         Cmd::Evidence(EvidenceCmd::Show { reference }) => evidence::show(&path, &reference),
         Cmd::Stats { merged_since, work } => {
             let cohort = match merged_since {
@@ -112,21 +109,6 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
             };
             Ok(Outcome::One(Ledger::open(&path)?.stats(&cohort)??))
         }
-        Cmd::Impact {
-            files,
-            cache,
-            entry_points,
-            profile,
-            declared,
-        } => impact::run(
-            files,
-            cache,
-            entry_points,
-            profile,
-            declared,
-            meta,
-            cli.format,
-        ),
         Cmd::Pipeline(PipelineCmd::Current) => {
             let p = pipeline::current();
             let newer: Vec<_> = pipeline::newer()
@@ -162,17 +144,10 @@ fn run(cli: Cli, meta: &mut Meta) -> Result<Outcome, CliError> {
                 ledger.pipeline_history(&versions, repo.as_deref())??,
             ))
         }
-        Cmd::Doctor {
-            skills,
-            repo,
-            profile,
-        } => doctor::run(&skills, repo.as_deref(), profile),
+        Cmd::Doctor { skills, repo } => doctor::run(&skills, repo.as_deref()),
         Cmd::Install => plugin::install(Path::new("claude")),
         Cmd::Uninstall => plugin::uninstall(Path::new("claude")),
         Cmd::Hook { event } => hook::run(event, &path),
-        Cmd::Overlap { repo, uncommitted } => {
-            overlap::run(&Ledger::open(&path)?, repo, uncommitted, meta, cli.format)
-        }
     }
 }
 

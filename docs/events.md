@@ -175,7 +175,7 @@ stamp's top-level fields, and `lane.ready_overridden` changes no column.
 | `lane.reopened` | `reopen` | `changed` (status `done` or `cancelled` to `queued`), `reason` |
 | `lane.cancelled` | `cancel` | `changed`, `reason` |
 | `lane.released` | `release` | `changed` (holder cleared; status `claimed` to `queued`, any other status kept) |
-| `lane.handed_off` | `handoff` | `handoff_id` (the id of its own event, set by the write on any lane event that carries `handoff`), `handoff` (daisy's `HandoffInput`: `summary`, `status`, `changed_files`, `areas` (absent when not declared), `verification`, `smoke`, `blockers`, `open_questions`, `next_action`, `commit`, `pull_request`, `ready`, `brief`), `changed` |
+| `lane.handed_off` | `handoff` | `handoff_id` (the id of its own event, set by the write on any lane event that carries `handoff`), `handoff` (daisy's `HandoffInput`: `summary`, `status`, `changed_files`, `verification`, `smoke`, `blockers`, `open_questions`, `next_action`, `commit`, `pull_request`, `ready`, `brief`; handoffs written before #311 may also hold `areas`, which nothing reads), `changed` |
 | `lane.ready_overridden` | `ready_override` | `ready` (`true`, `false`, or `null` for `--clear`), `reason` |
 
 The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the first
@@ -301,17 +301,13 @@ with `type: answered`. `question.opened` stays reserved for R12's question lifec
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `dossier.noted` | `dossier note` | `key` (`normalize_key`'s form, lowercased), `note` (at most 600 characters as sent, redacted at write), `links` (at most 5 `{kind, ref}`: `issue`, `pr`, `adr`, `doc` or `commit` with an identifier of that kind, at most 300 characters, never redacted; left out when none), `supersedes` (the event id of an earlier note on the same key; left out when none) |
+| `dossier.noted` | none now: `dossier note` wrote it until #311; old events stay readable | `key` (`normalize_key`'s form, lowercased), `note` (at most 600 characters as sent, redacted at write), `links` (at most 5 `{kind, ref}`: `issue`, `pr`, `adr`, `doc` or `commit` with an identifier of that kind, at most 300 characters, never redacted; left out when none), `supersedes` (the event id of an earlier note on the same key; left out when none) |
 
 An agent-only note on an issue key ([ADR 0007](decisions/0007-issue-dossier.md)). `lane_id` and
-`spec_id` are null, so it is no lane's event: it folds nothing, never changes a lane's
-`updated_at` and is never a gate anchor. The writer is the actor. The idempotency key is
-`dossier:` plus the sha256 of the key, the actor's agent and session, the payload as stored
-(redacted, with `redactions`, canonical) and the id of the key's newest note whose stored payload
-differs, so a retry replays, a restored note appends and another session's identical note
-appends. Notes are never edited: a correction supersedes. No fact reads `dossier.*`.
-`dossier get` finds a key's notes on the partial index `events_dossier` (migration 0004),
-`json_extract(payload_json, '$.key') WHERE kind = 'dossier.noted'`.
+`spec_id` are null: it folds nothing, never changes a lane's `updated_at` and is never a gate
+anchor. The write path refuses new ones; nothing reads it now. The partial index
+`events_dossier` (migration 0004), `json_extract(payload_json, '$.key') WHERE kind =
+'dossier.noted'`, stays with the schema.
 
 ### Backlog
 
@@ -321,7 +317,7 @@ appends. Notes are never edited: a correction supersedes. No fact reads `dossier
 
 The owner's order of a repo's open issues (#119). `lane_id` and `spec_id` are null: it folds
 nothing, never changes a lane's `updated_at` and is never a gate anchor. The newest one on a
-repo stood; nothing reads it now. The partial index `events_backlog` (migration 0005, ledger v5),
+repo stood; the write path refuses new ones (#311) and nothing reads it now. The partial index `events_backlog` (migration 0005, ledger v5),
 `json_extract(payload_json, '$.repo') WHERE kind = 'backlog.prioritised'`.
 
 ### Usage
