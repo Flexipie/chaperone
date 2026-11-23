@@ -163,12 +163,14 @@ holder rule and leaves `updated_at` alone, as `check record` does). It appends o
 is not 7 to 40 lowercase hex digits, and a `--merged-at` that is not RFC 3339 UTC with
 milliseconds (GitHub's `mergedAt`, `2026-11-05T10:00:00Z`, is passed as
 `2026-11-05T10:00:00.000Z`); off v21 those three flags are required. On a v21 item (#308) it
-asks GitHub every time, held PR or not: one `gh pr view <n> -R <owner/repo> --json
-state,headRefName,headRefOid,mergeCommit,mergedAt` (a gh failure is `internal`). A PR GitHub
-does not show `MERGED`, or whose head branch is not the item's `branch`, is refused, the message
-saying which. The merge commit, head and time recorded are GitHub's, never the flags'. A PR that
-is not the item's `pr_ref` yet is first made it, with the write `work update --pr` makes (its own
-event, under the holder rule), so the `pr.merged` names a PR the item holds. The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
+asks GitHub every time, held PR or not, once the ref is `owner/repo#N`: one `gh pr view <n> -R
+<owner/repo> --json state,headRefName,headRefOid,isCrossRepository,mergeCommit,mergedAt` (a gh
+failure is `internal`). A PR not in the item's `repo`, with its head in another repository, whose
+head branch is not the item's `branch`, or not `MERGED` is refused, the message saying which. The
+merge commit, head and time recorded are GitHub's, never the flags'. The ledger checks "never
+held" last, so when that is its one refusal, the PR is made the item's `pr_ref` (with the write
+`work update --pr` makes, its own event, under the holder rule) and the merge is recorded; any
+other refusal, or a replay, leaves `pr_ref` as it was. The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
 payload}`.
 
 `attention record` is new (#59). `/orchestrate` and the owner run it for each intervention on

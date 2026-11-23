@@ -131,8 +131,8 @@ fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
     assert_eq!(merges, [merge]);
 }
 
-/// On v21 `work merged` asks GitHub: a PR not merged, or from another
-/// branch, is refused, each saying which; else the merge is GitHub's (not the
+/// On v21 `work merged` asks GitHub: a PR in another repo, from a fork,
+/// from another branch or not merged is refused, each saying which; else the merge is GitHub's (not the
 /// flags'), and a PR that was not the lane's becomes its `pr_ref` first. Bad
 /// input makes no gh call, and a gh that fails is `internal`.
 #[test]
@@ -182,31 +182,49 @@ fn work_merged_on_v21_records_what_github_shows() {
     ] {
         assert!(run(args).0, "{args:?}");
     }
+    // A branch "fork" is the lane's branch name from another repository.
     let merged = |pr: &str, branch: &str, state: &str| {
-        let v = json!({"headRefName": branch, "headRefOid": "1234567abc", "state": state,
+        let fork = branch == "fork";
+        let v = json!({"headRefName": if fork { "lane-b" } else { branch },
+            "isCrossRepository": fork, "headRefOid": "1234567abc", "state": state,
             "mergeCommit": {"oid": "abcdef1"}, "mergedAt": "2026-11-05T10:00:00Z"});
         std::fs::write(&view, v.to_string()).unwrap();
         // The flags are not GitHub's, so they are not what is recorded.
         let flags = ["--merge-sha", "fffffff", "--head", "eeeeeee"];
         run(&[&["work", "merged", "1", "--pr", pr][..], &flags].concat())
     };
-    for (branch, state, why) in [
-        ("lane-b", "OPEN", "GitHub does not show o/r#5 merged"),
+    for (pr, branch, state, why) in [
         (
+            "x/y#5",
+            "lane-b",
+            "MERGED",
+            "x/y#5 is not in the lane's repo o/r",
+        ),
+        (
+            "o/r#5",
+            "fork",
+            "MERGED",
+            "o/r#5 has its head in another repository on GitHub",
+        ),
+        (
+            "o/r#5",
             "other",
             "MERGED",
-            "o/r#5's head branch on GitHub is other, not the lane's branch lane-b",
+            "o/r#5 has head branch other on GitHub, not the lane's branch lane-b",
         ),
+        ("o/r#5", "lane-b", "OPEN", "o/r#5 is not merged on GitHub"),
     ] {
-        let (ok, err) = merged("o/r#5", branch, state);
+        let (ok, err) = merged(pr, branch, state);
         assert!(!ok && err["message"] == why, "{why}: {err}");
     }
     std::fs::remove_file(&log).unwrap();
-    let (ok, err) = merged("not a pr", "lane-b", "MERGED");
-    assert!(
-        !ok && err["code"] == "invalid_input" && !log.exists(),
-        "{err}"
-    );
+    for bad in ["not a pr", "o/r#abc"] {
+        let (ok, err) = merged(bad, "lane-b", "MERGED");
+        assert!(
+            !ok && err["code"] == "invalid_input" && !log.exists(),
+            "{err}"
+        );
+    }
     std::fs::remove_file(&view).unwrap();
     let (ok, err) = run(&["work", "merged", "1", "--pr", "o/r#5"]);
     assert!(!ok && err["code"] == "internal", "{err}");
@@ -222,4 +240,13 @@ fn work_merged_on_v21_records_what_github_shows() {
         )
     );
     assert_eq!(run(&["work", "get", "1"]).1["pr_ref"], "o/r#5");
+    // The lane moves on to another PR; replaying the old merge does not
+    // take the lane back to it.
+    let at = run(&["work", "get", "1"]).1["updated_at"].clone();
+    let update = ["work", "update", "1", "--pr", "o/r#6"];
+    let cas = ["--expected-updated-at", at.as_str().unwrap()];
+    assert!(run(&[&update[..], &cas].concat()).0);
+    let (ok, out) = merged("o/r#5", "lane-b", "MERGED");
+    assert!(ok && out["replayed"] == true, "{out}");
+    assert_eq!(run(&["work", "get", "1"]).1["pr_ref"], "o/r#6");
 }

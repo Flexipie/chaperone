@@ -716,8 +716,9 @@ impl Ledger {
 
     /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
     /// `merge_sha` from head `head` at `merged_at` (the forge's time). Keyed
-    /// `merged:<lane>:<pr>`, so a retry replays. Refused for a PR the lane
-    /// never held and for one already merged on another lane.
+    /// `merged:<lane>:<pr>`, so a retry replays. Refused for one already
+    /// merged on another lane and, checked last, for a PR the lane never held
+    /// (`never_held`).
     pub fn work_merged(&self, actor: &Actor, input: &MergedInput) -> Checked<Recorded> {
         let pr = input.pr.trim();
         if !crate::work::pr_ref_ok(pr) {
@@ -769,6 +770,15 @@ impl Ledger {
                         input.merged_at
                     ));
                 }
+                let elsewhere = exists(
+                    conn,
+                    "SELECT 1 FROM events WHERE kind = 'pr.merged' AND lane_id != ?1
+                       AND lower(json_extract(payload_json, '$.pr')) = ?2",
+                    params![work, pr.to_lowercase()],
+                )?;
+                if elsewhere {
+                    return invalid(format!("PR {pr} is already merged on another work item"));
+                }
                 // Stored as the lane held it, so a reader matching merges to
                 // the lane's PRs by plain equality finds it.
                 let held: Option<String> = conn
@@ -784,19 +794,10 @@ impl Ledger {
                     )
                     .optional()?;
                 let Some(held) = held else {
-                    return invalid(format!("work item {work} has never held PR {pr}"));
+                    return invalid(never_held(work, pr));
                 };
                 let mut payload = payload;
                 payload.rest.insert("pr".into(), json!(held));
-                let elsewhere = exists(
-                    conn,
-                    "SELECT 1 FROM events WHERE kind = 'pr.merged' AND lane_id != ?1
-                       AND lower(json_extract(payload_json, '$.pr')) = ?2",
-                    params![work, pr.to_lowercase()],
-                )?;
-                if elsewhere {
-                    return invalid(format!("PR {pr} is already merged on another work item"));
-                }
                 Ok(Ok(check_event(EventKind::PrMerged, work, payload)))
             },
             |_, _, _| Ok(()),
@@ -1355,6 +1356,12 @@ pub(crate) fn one_line(note: &str) -> bool {
 /// A character a one-line note refuses (`attention record --note`).
 pub fn line_break(c: char) -> bool {
     c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')
+}
+
+/// `work merged`'s refusal of a PR the lane never held, its last check: on
+/// v21 the CLI takes that PR as the lane's on exactly this one.
+pub fn never_held(work: i64, pr: &str) -> String {
+    format!("work item {work} has never held PR {pr}")
 }
 
 pub(crate) fn sha_ok(sha: &str) -> bool {

@@ -1380,7 +1380,7 @@ pub(crate) fn issue_key_ok(key: &str) -> bool {
 }
 
 /// `owner/name#digits`.
-pub(crate) fn pr_ref_ok(pr_ref: &str) -> bool {
+pub fn pr_ref_ok(pr_ref: &str) -> bool {
     let part_ok = |p: &str| {
         !p.is_empty()
             && p.chars()
