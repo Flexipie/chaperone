@@ -1,7 +1,6 @@
-//! A child process with a deadline: `daisy-cli reviews get`, the UI
-//! backlog's daisy reads, the UI writer's herdr calls and merge's gh calls
-//! ([`cli`]), the git calls of `overlap`, `impact` and the UI's diff, agent
-//! sessions and the commands of `check run tests`.
+//! A child process with a deadline: `daisy-cli reviews get` and merge's
+//! gh and herdr calls ([`cli`]), the git calls of `overlap` and `impact`,
+//! agent sessions and the commands of `check run tests`.
 
 use std::ffi::OsStr;
 use std::io::{Read, Write};

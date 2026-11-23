@@ -1,5 +1,8 @@
 # GPUI spike (#134)
 
+Its code was removed with the board (#309); its README and screenshots stay as the
+spike's record. What follows describes the removed code.
+
 chaperone-ui's board in [GPUI](https://www.gpui.rs) and GPUI Kit
 (`gpui-component`), to decide whether GPUI replaces egui. It is its own
 Cargo workspace: the root workspace, CI and other lanes never compile it.

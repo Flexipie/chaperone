@@ -1388,7 +1388,6 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
     fn facts(diff: String) -> Facts {
         let file = |path: &str, lines: Option<u64>| ChangedFile {
             path: path.into(),
-            area: None,
             added: lines,
             removed: lines.map(|n| n - 1),
             untracked: false,
