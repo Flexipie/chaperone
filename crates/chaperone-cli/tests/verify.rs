@@ -325,9 +325,10 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
 }
 
 /// The Codex lens skips on the lane's measure, added, removed and test
-/// lines together: a changed line is two and a named asset none; a file
-/// git counts no lines of leaves no size to skip on; 198 test lines more
-/// make v20's minimum of 200.
+/// lines together: a diff recorded before `removed_code` skips on its
+/// `code_lines`, which held them, and a named asset counts none; a file
+/// git counts no lines of leaves no size to skip on; a changed line (two)
+/// and 198 test lines make v20's minimum of 200.
 #[test]
 fn the_codex_lens_skips_on_the_lanes_measure() {
     let rules = "[assets]\nglobs = [\"*.png\"]\n";
@@ -337,11 +338,16 @@ fn the_codex_lens_skips_on_the_lanes_measure() {
     git(&lane.wt, &["add", "logo.png"], files);
     git(&lane.wt, &["commit", "-qam", "feat"], &[]);
     lane.answer("lane", "accept");
-    lane.verify();
+    lane.run("lane", &["check", "run", "diff", "--work", "1"]);
+    let conn = rusqlite::Connection::open(&lane.db).unwrap();
+    let old = "UPDATE events SET payload_json = json_set(json_remove(payload_json,
+        '$.removed_code'), '$.code_lines', 3) WHERE payload_json->>'check' = 'diff'";
+    conn.execute(old, []).unwrap();
+    lane.run("lane", &["check", "run", "review", "--work", "1"]);
     let p = lane.review();
     let measured = (&p["uncounted_files"], &p["asset_files"]);
     assert_eq!(measured, (&json!(0), &json!(1)));
-    let skipped = "2 code lines, under codex_min_code_lines 200";
+    let skipped = "3 code lines, under codex_min_code_lines 200";
     assert_eq!(lane.codex().0["skipped"], skipped);
 
     git(&lane.wt, &["add", "a.bin"], &[("a.bin", b"\0\x01")]);
@@ -521,11 +527,20 @@ fn an_over_cap_diff_on_v21_reaches_review_and_a_cut_blocks() {
     assert_eq!(out["stopped"], stopped);
     let p = lane.review();
     assert_eq!(p["over_cap"], json!({"code_lines": 401, "cap": 400}));
-    // Only the design and tests lens is asked what to cut.
+    // Only the design and tests lens is asked what to cut, and the verifier
+    // is told.
     let store = Evidence::beside(&lane.db);
-    for (lens, asked) in [("correctness", false), ("design_tests", true)] {
-        let lenses = p["lenses"].as_array().unwrap();
-        let row = lenses.iter().find(|r| r["lens"] == lens).unwrap();
+    let lenses = p["lenses"].as_array().unwrap();
+    for (lens, asked) in [
+        ("correctness", false),
+        ("intent", false),
+        ("design_tests", true),
+        ("verifier", true),
+    ] {
+        let row = match lens {
+            "verifier" => &p["verifier"],
+            _ => lenses.iter().find(|r| r["lens"] == lens).unwrap(),
+        };
         let prompt = store.get(row["prompt_ref"].as_str().unwrap()).unwrap();
         assert_eq!(prompt.contains("`cut: <what>`"), asked, "{lens}");
     }
