@@ -1,6 +1,6 @@
 ---
 name: diagnose
-description: Find the root cause of a bug, a failing test, smoke or check before anyone changes code, then make the smallest complete fix. Use instead of guessing at a fix when the cause isn't obvious from the output. Runs in a fresh agent and returns the root cause as file:line with proof
+description: Find the root cause of a bug, a failing test or smoke, or a red non-flake CI check before anyone changes code, then make the smallest complete fix. Use instead of guessing at a fix when the cause isn't obvious from the output. Runs in a fresh agent and returns the root cause as file:line with proof
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 context: fork
 agent: general-purpose
@@ -20,8 +20,8 @@ fix (`--fix`) or only report. No `--fix`: report only, change nothing.
 
 ## 0. Cheap first
 
-One read-only pass: read the error, the stack and the code it names. Check whether the
-same check fails on the base branch, in a separate worktree; never switch this one. If this pass names the cause and a narrow fix with
+One read-only pass: read the error, the stack and the code it names. Check the repo's
+known flakes if it documents them, and whether the same check fails on the base branch, in a separate worktree; never switch this one. If this pass names the cause and a narrow fix with
 evidence, skip to step 4.
 
 ## 1. A loop that shows the bug

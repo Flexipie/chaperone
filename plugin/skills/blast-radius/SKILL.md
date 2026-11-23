@@ -23,7 +23,7 @@ The worktree and base (default `origin/main`). Diff: `git diff <base>...HEAD`.
    a removed or skipped call, a renamed field, a changed type or unit.
 2. **Old names and values.** For every identifier, constant, string, default or decision
    the diff changed or removed, `git grep` the old one across the repo. List each comment,
-   doc, test name or caller that still names the old one.
+   doc, test name, PR-body line or caller that still names the old one.
 3. **Where grep stops.** Check what text search misses: wire formats and API payloads,
    stored data (DB columns, saved files, caches, local storage) written by the old code,
    feature flags, config, other languages or packages, generated code.
