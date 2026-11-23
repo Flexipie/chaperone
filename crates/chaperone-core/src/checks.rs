@@ -788,9 +788,7 @@ impl Ledger {
                     (Some(held), _) => {
                         payload.rest.insert("pr".into(), json!(held));
                     }
-                    (None, None) => {
-                        return invalid(format!("work item {work} has never held PR {pr}"));
-                    }
+                    (None, None) => return invalid(never_held(work, pr)),
                     (None, Some(forge)) => {
                         let (repo, branch, pr_ref): (
                             Option<String>,
@@ -825,9 +823,7 @@ impl Ledger {
                             String::new()
                         };
                         if !why.is_empty() {
-                            return invalid(format!(
-                                "work item {work} has never held PR {pr}, and {why}"
-                            ));
+                            return invalid(format!("{}, and {why}", never_held(work, pr)));
                         }
                         let change = Change {
                             from: json!(pr_ref),
@@ -850,11 +846,6 @@ impl Ledger {
             |_, _, _| Ok(()),
         )?;
         Ok(recorded(applied, Some(work)))
-    }
-
-    /// The PR `pr` as lane `work` held it, or None when it never held it.
-    pub fn pr_held(&self, work: i64, pr: &str) -> Result<Option<String>, LedgerError> {
-        held_pr(self.conn(), work, pr.trim())
     }
 
     /// One `attention.recorded`: an intervention on lane `input.work` by the
@@ -1415,6 +1406,12 @@ pub(crate) fn sha_ok(sha: &str) -> bool {
         && sha
             .bytes()
             .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+}
+
+/// `work merged`'s refusal of a PR the lane never held, checked last: the
+/// CLI asks GitHub only on exactly this one.
+pub fn never_held(work: i64, pr: &str) -> String {
+    format!("work item {work} has never held PR {pr}")
 }
 
 /// PR `pr` as lane `work` held it (a `pr.opened` or a `changed.pr_ref.to`),

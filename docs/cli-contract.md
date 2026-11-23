@@ -163,7 +163,7 @@ holder rule and leaves `updated_at` alone, as `check record` does). It appends o
 is not 7 to 40 lowercase hex digits, and a `--merged-at` that is not RFC 3339 UTC with
 milliseconds (GitHub's `mergedAt`, `2026-11-05T10:00:00Z`, is passed as
 `2026-11-05T10:00:00.000Z`). A PR the item has never held (#308: opened or merged outside
-`pr open`) costs one `gh pr view <n> -R <owner/repo> --json headRefName,isCrossRepository,state`
+`pr open`), once every other check above has passed, costs one `gh pr view <n> -R <owner/repo> --json headRefName,isCrossRepository,state`
 (a gh failure is `internal`) and is recorded only when the ref's repo is the item's `repo`, its head is not
 from another repository, its head branch is the item's `branch` and it is `MERGED`; each other
 case is refused, the message saying which failed. That `pr.merged` also sets the item's `pr_ref`
@@ -752,8 +752,8 @@ and opens the ledger read-only for every event but `stop-failure` and `prompt` (
 status, pipeline, branch, head, PR, the ready gates not passing yet (as the lane page reads them)
 and the lane's commands. `pre-bash` splits a Bash `tool_input.command` at `&&`, `||`, `;`, `|`, newlines,
 `$(`, parentheses and backticks, drops each part's leading `VAR=value` words, and denies a part
-that starts `gh pr merge` or `chaperone work ready` with `--yes` later in it, and on a v20 lane one
-that starts `gh pr create` or `gh pr edit`, naming the command to run instead. From v21 a lane may
+that starts `gh pr merge` or `chaperone work ready` with `--yes` later in it, and on a lane not on
+v21 one that starts `gh pr create` or `gh pr edit`, naming the command to run instead. A v21 lane may
 open or edit its PR with gh when `pr open` will not; it records the PR in its ready handoff's
 `pull_request`. `stop` blocks once (never with `stop_hook_active`) when the newest handoff is ready and
 the branch tip, read as a ready handoff reads it, is not its commit. After printing its answer, `stop` records the lane session's tokens, every turn, so the lane never has to: `usage report --work <lane>`'s write, on its own writable open, reading only the folder of the hook's `transcript_path` (that session's project folder, its sessions matched by first `cwd` as always, and their subagents), since reading every transcript under `~/.claude` can pass the hook's 10 s timeout. It waits at most 5 s for it (a busy ledger is left, with whole events written, and the next turn adds the rest). Without a `transcript_path` it records nothing, any error is ignored, and with `DAISY_CLI_READONLY=1` it skips this write and stays a read. `stop-failure` records

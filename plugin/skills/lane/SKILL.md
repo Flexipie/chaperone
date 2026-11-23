@@ -20,8 +20,8 @@ variable does not last between calls). The plan, handoff JSON and `lane-state.md
 
 ## Never
 
-- `gh pr merge`, `chaperone work ready --yes`, and on v20 `gh pr create` and `gh pr edit`: the
-  hook denies them. `chaperone pr open` opens the PR; the owner merges.
+- `gh pr merge`, `chaperone work ready --yes`, and, except on v21, `gh pr create` and `gh pr edit`:
+  the hook denies them. `chaperone pr open` opens the PR; the owner merges.
 - Push to the base branch, push the branch yourself (but step 7's v21 fallback), merge, `--no-verify`, amend or rebase
   after `pr open` (it pushes without force).
 - `check record` anything but the smoke claim; `finding waive` and `check waive` are the

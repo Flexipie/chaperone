@@ -5,7 +5,7 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{ForgePr, MergedInput};
+use chaperone_core::checks::{ForgePr, MergedInput, never_held};
 use chaperone_core::child;
 use chaperone_core::cursor::Page;
 use chaperone_core::git;
@@ -184,21 +184,26 @@ pub fn run(
             patch_id,
             actor,
         } => {
-            // GitHub is asked only about a PR the ledger never saw the lane hold.
-            let forge = match ledger.pr_held(id, &pr)? {
-                Some(_) => None,
-                None => forge_pr(&pr)?,
-            };
-            let input = MergedInput {
+            let mut input = MergedInput {
                 work: id,
                 pr,
                 merge_sha,
                 head,
                 merged_at,
                 patch_id,
-                forge,
+                forge: None,
             };
-            one(ledger.work_merged(&actor.resolve(), &input)??)
+            let actor = actor.resolve();
+            // GitHub is asked only once the ledger's one refusal left is that the
+            // lane never held the PR, so bad input never reaches gh.
+            let recorded = match ledger.work_merged(&actor, &input)? {
+                Err(Refusal::InvalidInput(m)) if m == never_held(id, input.pr.trim()) => {
+                    input.forge = forge_pr(&input.pr)?;
+                    ledger.work_merged(&actor, &input)?
+                }
+                r => r,
+            };
+            one(recorded?)
         }
         WorkCmd::Events { id } => items(ledger.work_events(id)?),
         WorkCmd::Ready {

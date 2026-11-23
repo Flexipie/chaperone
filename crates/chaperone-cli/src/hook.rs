@@ -119,8 +119,8 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
             let starts = |seq: &[&str]| parts.iter().any(|p| p.starts_with(seq));
             let ready = ["chaperone", "work", "ready"];
             let opens = starts(&["gh", "pr", "create"]) || starts(&["gh", "pr", "edit"]);
-            // From v21 a lane may open or edit its PR with gh when `pr open` will not.
-            let reason = if opens && item.pipeline_id.as_deref() == Some("v20") {
+            // Only a v21 lane may open or edit its PR with gh when `pr open` will not.
+            let reason = if opens && item.pipeline_id.as_deref() != Some("v21") {
                 format!("Open the PR with `chaperone pr open --work {work}`.")
             } else if starts(&["gh", "pr", "merge"]) {
                 "The owner merges, with `chaperone merge`.".to_string()

@@ -144,7 +144,12 @@ fn work_merged_records_a_pr_opened_outside_pr_open() {
     );
     std::fs::create_dir(&bin).unwrap();
     let gh = bin.join("gh");
-    std::fs::write(&gh, format!("#!/bin/sh\ncat {view:?}\n")).unwrap();
+    let log = dir.path().join("gh.log");
+    std::fs::write(
+        &gh,
+        format!("#!/bin/sh\necho \"$*\" >> {log:?}\ncat {view:?}\n"),
+    )
+    .unwrap();
     let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
     std::fs::set_permissions(&gh, mode).unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
@@ -219,6 +224,41 @@ fn work_merged_records_a_pr_opened_outside_pr_open() {
         let message = err["message"].as_str().unwrap_or_default();
         assert!(!ok && message.contains(why), "{why}: {err}");
     }
+    // Bad input is the ledger's to refuse, before any gh call.
+    std::fs::remove_file(&log).unwrap();
+    let (ok, err) = run(&[
+        "work",
+        "merged",
+        "1",
+        "--pr",
+        "o/r#5",
+        "--merge-sha",
+        "XYZ",
+        "--head",
+        "1234567",
+        "--merged-at",
+        "2026-11-05T10:00:00.000Z",
+    ]);
+    assert!(
+        !ok && err["code"] == "invalid_input" && !log.exists(),
+        "{err}"
+    );
+    // A gh that fails is `internal`, never "never held".
+    std::fs::remove_file(&view).unwrap();
+    let (ok, err) = run(&[
+        "work",
+        "merged",
+        "1",
+        "--pr",
+        "o/r#5",
+        "--merge-sha",
+        "abcdef1",
+        "--head",
+        "1234567",
+        "--merged-at",
+        "2026-11-05T10:00:00.000Z",
+    ]);
+    assert!(!ok && err["code"] == "internal", "{err}");
     let (ok, out) = merged("O/R#5", "lane-b", false, "MERGED");
     assert!(ok, "{out}");
     assert_eq!(out["payload"]["pr"], "O/R#5");

@@ -144,3 +144,84 @@ fn refusals_write_nothing() {
     }
     assert_eq!(count(&read_only(&path), MERGED), 1);
 }
+
+/// A PR the lane never held is recorded when GitHub shows it merged from
+/// the lane's branch in its repo, and becomes the lane's PR; a `pr.merged`
+/// may change that column only.
+#[test]
+fn a_pr_github_shows_merged_from_the_lane_s_branch_is_the_lane_s() {
+    let (_dir, path, ledger) = common::ledger();
+    let a = actor("1");
+    let create = CreateInput {
+        title: "t".into(),
+        source: Some("manual".into()),
+        repo: Some("o/r".into()),
+        kind: "code".into(),
+        pr_flow: "pr".into(),
+        ..CreateInput::default()
+    };
+    let id = ledger
+        .work_create(&a, &create, None, false)
+        .unwrap()
+        .unwrap()
+        .id;
+    let claim = ClaimInput {
+        branch: Some("lane-b".into()),
+        ..ClaimInput::default()
+    };
+    ledger
+        .work_claim(&a, id, &claim, None, false)
+        .unwrap()
+        .unwrap();
+    let forge = |branch: &str, done: bool| MergedInput {
+        forge: Some(chaperone_core::checks::ForgePr {
+            head_branch: branch.into(),
+            cross_repo: false,
+            merged: done,
+        }),
+        ..merged(id, "o/r#5")
+    };
+    for (input, says) in [
+        (forge("other", true), "not the lane's branch lane-b"),
+        (forge("lane-b", false), "does not show it merged"),
+    ] {
+        let r = ledger.work_merged(&actor("9"), &input).unwrap();
+        assert!(
+            matches!(&r, Err(Refusal::InvalidInput(m)) if m.contains(says)),
+            "{r:?}"
+        );
+    }
+    ledger
+        .work_merged(&actor("9"), &forge("lane-b", true))
+        .unwrap()
+        .unwrap();
+    let item = ledger.work_get(id, common::AT).unwrap().unwrap();
+    assert_eq!(item.pr_ref.as_deref(), Some("o/r#5"));
+    let mut payload = Payload {
+        head_sha: Some("1234567".into()),
+        ..Payload::default()
+    };
+    for (k, v) in [
+        ("pr", "o/r#6"),
+        ("merge_sha", "abcdef1"),
+        ("merged_at", common::AT),
+    ] {
+        payload.rest.insert(k.into(), serde_json::json!(v));
+    }
+    let change = chaperone_core::ledger::Change {
+        from: serde_json::json!("lane-b"),
+        to: serde_json::json!("x"),
+    };
+    payload.changed.insert("branch".into(), change);
+    let other = Mutation::Event {
+        kind: EventKind::PrMerged,
+        lane_id: Some(id),
+        spec_id: None,
+        payload,
+    };
+    assert!(matches!(
+        ledger.apply(&a, None, common::AT, other).unwrap(),
+        Applied::Refused(Refusal::InvalidInput(m)) if m.contains("changes no lane column")
+    ));
+    assert_eq!(count(&read_only(&path), MERGED), 1);
+}
