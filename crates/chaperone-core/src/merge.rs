@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::checks::MergedInput;
+use crate::checks::{Forge, MergedInput};
 use crate::child;
 use crate::ledger::{Actor, Checked, Ledger, LedgerError, exists};
 use crate::pipeline::sha_prefix_eq;
@@ -157,7 +157,7 @@ pub fn merge(
         // GitHub gives seconds; the ledger takes milliseconds (cli-contract.md).
         merged_at: format!("{}.000Z", at.trim_end_matches('Z')),
         patch_id: None,
-        forge: None,
+        forge: Forge::Trusted,
     };
     let merged = format!("Merged {pr} as {}", short(sha));
     done(ledger.work_merged(actor, &input)).map_err(|e| {

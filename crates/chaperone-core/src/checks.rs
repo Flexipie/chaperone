@@ -166,14 +166,30 @@ pub struct MergedInput {
     pub head: String,
     pub merged_at: String,
     pub patch_id: Option<String>,
-    /// What GitHub says of a PR the lane never held; None for one it held.
-    pub forge: Option<ForgePr>,
+    /// Who says the PR merged, which decides what counts as held.
+    pub forge: Forge,
 }
 
-/// GitHub's view of a PR: `headRefName`, `isCrossRepository`, `state` MERGED.
+/// Who says a `work merged` PR merged.
+#[derive(Clone, Debug, Default)]
+pub enum Forge {
+    /// The caller saw it merge on GitHub itself (`chaperone merge`): any PR
+    /// the lane's `pr_ref` has named is held.
+    Trusted,
+    /// Nobody asked GitHub yet (`work merged`): only a PR `pr open`, a ready
+    /// handoff or GitHub gave the lane is held.
+    #[default]
+    NotAsked,
+    /// What GitHub says of a PR the lane never held.
+    Pr(ForgePr),
+}
+
+/// GitHub's view of a PR: `headRefName`, `headRefOid`, `isCrossRepository`,
+/// `state` MERGED.
 #[derive(Clone, Debug, Default)]
 pub struct ForgePr {
     pub head_branch: String,
+    pub head_sha: String,
     pub cross_repo: bool,
     pub merged: bool,
 }
@@ -727,26 +743,10 @@ impl Ledger {
     /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
     /// `merge_sha` from head `head` at `merged_at` (the forge's time). Keyed
     /// `merged:<lane>:<pr>`, so a retry replays. Refused for one already
-    /// merged on another lane, for one `input.forge` does not show merged, and
-    /// for a PR the lane never held unless `input.forge` shows it merged from
-    /// the lane's branch in the lane's repo; that one is then the lane's PR
-    /// (`changed.pr_ref`).
+    /// merged on another lane, and for a PR the lane never held unless
+    /// `input.forge` shows it merged from the lane's branch in the lane's
+    /// repo at head `head`; that one is then the lane's PR (`changed.pr_ref`).
     pub fn work_merged(&self, actor: &Actor, input: &MergedInput) -> Checked<Recorded> {
-        self.record_merged(actor, input, false)
-    }
-
-    /// `work_merged`'s checks with nothing written, so the CLI refuses bad
-    /// input before it asks GitHub.
-    pub fn work_merged_dry(&self, actor: &Actor, input: &MergedInput) -> Checked<Recorded> {
-        self.record_merged(actor, input, true)
-    }
-
-    fn record_merged(
-        &self,
-        actor: &Actor,
-        input: &MergedInput,
-        dry_run: bool,
-    ) -> Checked<Recorded> {
         let pr = input.pr.trim();
         if !crate::work::pr_ref_ok(pr) {
             return invalid(format!("--pr must be owner/repo#N, got {pr}"));
@@ -783,7 +783,7 @@ impl Ledger {
             actor,
             Some(&key),
             None,
-            dry_run,
+            false,
             |conn, _| {
                 if !lane_exists(conn, work)? {
                     return Ok(Err(Refusal::NotFound {
@@ -807,17 +807,17 @@ impl Ledger {
                     return invalid(format!("PR {pr} is already merged on another work item"));
                 }
                 let mut payload = payload;
-                match (held_pr(conn, work, pr)?, &input.forge) {
-                    (Some(_), Some(forge)) if !forge.merged => {
-                        return invalid(format!("GitHub does not show PR {pr} merged"));
-                    }
+                let trusted = matches!(input.forge, Forge::Trusted);
+                match (held_pr(conn, work, pr, trusted)?, &input.forge) {
                     // Stored as the lane held it, so a reader matching merges
                     // to the lane's PRs by plain equality finds it.
                     (Some(held), _) => {
                         payload.rest.insert("pr".into(), json!(held));
                     }
-                    (None, None) => return invalid(never_held(work, pr)),
-                    (None, Some(forge)) => {
+                    (None, Forge::Trusted | Forge::NotAsked) => {
+                        return invalid(never_held(work, pr));
+                    }
+                    (None, Forge::Pr(forge)) => {
                         let (repo, branch, pr_ref): (
                             Option<String>,
                             Option<String>,
@@ -844,6 +844,11 @@ impl Ledger {
                                 "its head branch on GitHub is {}, not the lane's branch {}",
                                 forge.head_branch,
                                 branch.as_deref().unwrap_or("(none)")
+                            )
+                        } else if !forge.head_sha.starts_with(input.head.as_str()) {
+                            format!(
+                                "its head on GitHub is {}, not --head {}",
+                                forge.head_sha, input.head
                             )
                         } else if !forge.merged {
                             "GitHub does not show it merged".into()
@@ -1427,24 +1432,34 @@ pub(crate) fn sha_ok(sha: &str) -> bool {
             .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
 }
 
-/// `work merged`'s refusal of a PR the lane never held when GitHub was not
-/// asked, checked last: the CLI asks GitHub past this one and no other.
+/// `work merged`'s refusal of a PR the lane never held, checked last: the
+/// CLI asks GitHub only on exactly this one.
 pub fn never_held(work: i64, pr: &str) -> String {
     format!("work item {work} has never held PR {pr}")
 }
 
-/// PR `pr` as lane `work` held it (a `pr.opened` or a `changed.pr_ref.to`),
-/// matched without case.
-fn held_pr(conn: &Connection, work: i64, pr: &str) -> Result<Option<String>, LedgerError> {
+/// PR `pr` as lane `work` held it, matched without case: one `pr open`
+/// opened, a ready handoff's `pull_request`, or a merge GitHub showed
+/// (`pr.merged`'s `changed.pr_ref`). Unless `any_ref`, a PR set any other way
+/// (`work update --pr`, a handoff not ready) is not held, so `work merged`
+/// asks GitHub.
+fn held_pr(
+    conn: &Connection,
+    work: i64,
+    pr: &str,
+    any_ref: bool,
+) -> Result<Option<String>, LedgerError> {
     Ok(conn
         .query_row(
             "SELECT iif(kind = 'pr.opened', json_extract(payload_json, '$.pr'),
                     json_extract(payload_json, '$.changed.pr_ref.to'))
              FROM events WHERE lane_id = ?1 AND (
                kind = 'pr.opened' AND lower(json_extract(payload_json, '$.pr')) = ?2
-               OR lower(json_extract(payload_json, '$.changed.pr_ref.to')) = ?2)
+                  AND (?3 OR json_extract(payload_json, '$.pr_open') = 1)
+               OR lower(json_extract(payload_json, '$.changed.pr_ref.to')) = ?2
+                  AND (?3 OR kind = 'pr.merged' OR json_extract(payload_json, '$.handoff.ready') = 1))
              LIMIT 1",
-            params![work, pr.to_lowercase()],
+            params![work, pr.to_lowercase(), any_ref],
             |r| r.get(0),
         )
         .optional()?)

@@ -544,7 +544,12 @@ impl Ledger {
             {
                 kind = PrOpened;
                 p.head_sha = match &input.head_sha {
-                    Some(head) => Some(head.clone()),
+                    // Only `pr open` passes the head, and `work merged` holds
+                    // a PR it opened (#308).
+                    Some(head) => {
+                        p.rest.insert("pr_open".into(), json!(true));
+                        Some(head.clone())
+                    }
                     None => latest_commit(conn, id)?,
                 };
                 p.rest.insert("pr".into(), json!(pr));

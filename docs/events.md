@@ -260,21 +260,21 @@ A requested review with no finish projects the fact `daisy_review.state` as `run
 
 | Kind | Command | Payload |
 | --- | --- | --- |
-| `pr.opened` | `work update --pr` or `pr open` when the PR goes from null to set | `pr`, `head_sha` (the commit `pr open` opened it on, else the latest handoff's `commit`, null if none), `changed` |
+| `pr.opened` | `work update --pr` or `pr open` when the PR goes from null to set | `pr`, `head_sha` (the commit `pr open` opened it on, else the latest handoff's `commit`, null if none), `pr_open` (true when `pr open` wrote it, #308; absent otherwise), `changed` |
 | `pr.merged` | `work merged` | `pr`, `merge_sha`, `head_sha` (the PR head that merged), `merged_at` (the forge's merge time; R11's `at`, kept apart from the envelope `at`, which is when it was recorded), `patch_id` (nullable) |
 
 It is that update's one event, in place of `lane.updated`, and `work events` shows it as `update`. When the PR first arrives in
 a handoff, the handoff's event carries `changed.pr_ref` from null, and the fact
 `pr.opened_at` is the `at` of whichever event first set the PR.
 
-`pr.merged` names one PR the lane has held (a `pr.opened` or any `changed.pr_ref.to` on its
-events), spelled as the lane held it, so a lane with several PRs records each merge. A PR the
+`pr.merged` names one PR the lane has held (a `pr.opened` with `pr_open`, a ready handoff's
+`changed.pr_ref.to`, or an earlier `pr.merged`'s; a `work update --pr` counts only for
+`chaperone merge`, which saw the merge itself), spelled as the lane held it, so a lane with several PRs records each merge. A PR the
 lane never held is recorded only when GitHub shows it merged from the lane's branch in the
-lane's repo (cli-contract.md, `work merged`); that event carries `changed.pr_ref`, the one
+lane's repo at the recorded head (cli-contract.md, `work merged`); that event carries `changed.pr_ref`, the one
 column a `pr.merged` may change, so the PR is the lane's from then on. Otherwise it changes no column but
 `head_event_id`, and it is not a lane action in `work events`. The fact `pr.merged` (true when
-the lane's current PR has one) is read only by v21's `pr_merged` gate; `work merged` records
-one only when GitHub shows the PR merged, so a lane cannot meet that gate without a merge. The ready and
+the lane's current PR has one) is read only by v21's `pr_merged` gate. The ready and
 handoff numbers are read from the log, never stored on it. Commits after the handoff are
 `git rev-list --count <handoff commit>..<head_sha>`, and ready to merge is `merged_at` minus
 the handoff's `at`. The handoff is R11's first real one (its `next_action` does not start

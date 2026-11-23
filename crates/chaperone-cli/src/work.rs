@@ -5,7 +5,7 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::{ForgePr, MergedInput, never_held};
+use chaperone_core::checks::{Forge, ForgePr, MergedInput, never_held};
 use chaperone_core::child;
 use chaperone_core::cursor::Page;
 use chaperone_core::git;
@@ -191,19 +191,19 @@ pub fn run(
                 head,
                 merged_at,
                 patch_id,
-                forge: None,
+                forge: Forge::NotAsked,
             };
             let actor = actor.resolve();
-            // The ledger's own checks run first, writing nothing, so bad input
-            // never reaches gh; then GitHub must show the PR merged.
-            match ledger.work_merged_dry(&actor, &input)? {
-                Err(Refusal::InvalidInput(m)) if m == never_held(id, input.pr.trim()) => {}
-                r => {
-                    r?;
+            // GitHub is asked only once the ledger's one refusal left is that the
+            // lane never held the PR, so bad input never reaches gh.
+            let recorded = match ledger.work_merged(&actor, &input)? {
+                Err(Refusal::InvalidInput(m)) if m == never_held(id, input.pr.trim()) => {
+                    input.forge = forge_pr(&input.pr)?.map_or(Forge::NotAsked, Forge::Pr);
+                    ledger.work_merged(&actor, &input)?
                 }
-            }
-            input.forge = forge_pr(&input.pr)?;
-            one(ledger.work_merged(&actor, &input)??)
+                r => r,
+            };
+            one(recorded?)
         }
         WorkCmd::Events { id } => items(ledger.work_events(id)?),
         WorkCmd::Ready {
@@ -353,7 +353,7 @@ fn forge_pr(pr: &str) -> Result<Option<ForgePr>, CliError> {
     let Some((repo, n)) = pr.trim().rsplit_once('#') else {
         return Ok(None);
     };
-    let fields = "headRefName,isCrossRepository,state";
+    let fields = "headRefName,headRefOid,isCrossRepository,state";
     let mut cmd = std::process::Command::new("gh");
     cmd.args(["pr", "view", n, "-R", repo, "--json", fields]);
     let failed = |why: &str| CliError::Internal(format!("gh pr view {pr}: {why}"));
@@ -368,6 +368,7 @@ fn forge_pr(pr: &str) -> Result<Option<ForgePr>, CliError> {
     let v: Value = serde_json::from_slice(&out).map_err(|e| failed(&e.to_string()))?;
     Ok(Some(ForgePr {
         head_branch: v["headRefName"].as_str().unwrap_or_default().into(),
+        head_sha: v["headRefOid"].as_str().unwrap_or_default().into(),
         cross_repo: v["isCrossRepository"] != json!(false),
         merged: v["state"] == "MERGED",
     }))

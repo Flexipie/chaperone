@@ -72,7 +72,7 @@ fn merged(ledger: &Ledger, work: i64, merged_at: &str) {
         head: HEAD.into(),
         merged_at: merged_at.into(),
         patch_id: None,
-        forge: None,
+        forge: chaperone_core::checks::Forge::Trusted,
     };
     ledger.work_merged(&actor("9"), &input).unwrap().unwrap();
 }

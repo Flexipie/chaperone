@@ -6,7 +6,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use chaperone_core::ledger::{Evidence, lock_lane, lock_slot};
+use chaperone_core::checks::{Forge, MergedInput};
+use chaperone_core::ledger::{Actor, Evidence, Ledger, lock_lane, lock_slot};
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_chaperone");
@@ -1249,16 +1250,6 @@ fn prune_removes_merged_lanes_dirs() {
     let db = dir.path().join("ledger.db");
     assert_eq!(run(&db, &["migrate"]).0, 0);
     let conn = rusqlite::Connection::open(&db).unwrap();
-    // `work merged` asks GitHub; this one says every PR merged.
-    let gh = dir.path().join("gh");
-    std::fs::write(&gh, "#!/bin/sh\necho '{\"state\":\"MERGED\"}'\n").unwrap();
-    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
-    std::fs::set_permissions(&gh, mode).unwrap();
-    let path = format!(
-        "{}:{}",
-        dir.path().display(),
-        std::env::var("PATH").unwrap()
-    );
     let lane = |n: &str, merged: bool, next: Option<&str>| {
         let (_, item) = run(&db, &["work", "create", "--title", n]);
         let (id, at) = (item["id"].to_string(), item["updated_at"].as_str().unwrap());
@@ -1285,16 +1276,26 @@ fn prune_removes_merged_lanes_dirs() {
                 "--merged-at",
                 at,
             ];
-            let out = Command::new(BIN)
-                .arg("--db")
-                .arg(&db)
-                .args(["work", "merged", &id, "--pr", &pr])
-                .args(args)
-                .args(["--agent", "a", "--session", "s"])
-                .env("PATH", &path)
-                .output()
+            // As `chaperone merge` records it: a PR set with `work update`
+            // is held only for a caller that saw the merge itself.
+            let input = MergedInput {
+                work: id.parse().unwrap(),
+                pr: pr.clone(),
+                merge_sha: args[1].into(),
+                head: args[3].into(),
+                merged_at: at.into(),
+                forge: Forge::Trusted,
+                ..MergedInput::default()
+            };
+            let owner = Actor {
+                agent: Some("o".into()),
+                session: Some("o".into()),
+            };
+            Ledger::open(&db)
+                .unwrap()
+                .work_merged(&owner, &input)
+                .unwrap()
                 .unwrap();
-            assert!(out.status.success(), "{out:?}");
         }
         if let Some(next) = next {
             let sql = "SELECT updated_at FROM lanes WHERE id = ?1";

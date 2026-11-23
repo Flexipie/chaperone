@@ -51,7 +51,7 @@ fn merged(work: i64, pr: &str) -> MergedInput {
         head: "1234567".into(),
         merged_at: "2026-11-05T10:00:00.000Z".into(),
         patch_id: None,
-        forge: None,
+        forge: chaperone_core::checks::Forge::Trusted,
     }
 }
 
@@ -177,15 +177,31 @@ fn a_pr_github_shows_merged_from_the_lane_s_branch_is_the_lane_s() {
         .unwrap()
         .unwrap();
     let forge = |branch: &str, done: bool| MergedInput {
-        forge: Some(chaperone_core::checks::ForgePr {
+        forge: chaperone_core::checks::Forge::Pr(chaperone_core::checks::ForgePr {
             head_branch: branch.into(),
+            head_sha: "1234567abc".into(),
             cross_repo: false,
             merged: done,
         }),
         ..merged(id, "o/r#5")
     };
+    // A PR the lane only set with `work update --pr` is not held unless
+    // the caller saw it merge.
+    let updated = lane(&ledger, &["o/r#8"]);
+    let unasked = MergedInput {
+        forge: chaperone_core::checks::Forge::NotAsked,
+        ..merged(updated, "o/r#8")
+    };
     for (input, says) in [
+        (unasked, "has never held PR o/r#8"),
         (forge("other", true), "not the lane's branch lane-b"),
+        (
+            MergedInput {
+                head: "7654321".into(),
+                ..forge("lane-b", true)
+            },
+            "not --head 7654321",
+        ),
         (forge("lane-b", false), "does not show it merged"),
     ] {
         let r = ledger.work_merged(&actor("9"), &input).unwrap();

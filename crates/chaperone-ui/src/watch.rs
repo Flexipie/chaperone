@@ -433,7 +433,7 @@ mod tests {
                     head: "abc1234".into(),
                     merged_at: at,
                     patch_id: None,
-                    forge: None,
+                    forge: chaperone_core::checks::Forge::Trusted,
                 };
                 rw.work_merged(&checker, &merged).unwrap().unwrap();
             }
