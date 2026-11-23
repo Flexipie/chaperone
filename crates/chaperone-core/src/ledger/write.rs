@@ -1201,7 +1201,7 @@ mod tests {
 
     /// A bad event is refused for its own reason and writes no event. Not
     /// every refusal is here: the gate, the pipeline stamp, `pr.merged`,
-    /// attention, dossier and usage have their own tests.
+    /// attention and usage have their own tests.
     #[test]
     fn refusals_write_nothing() {
         let dir = tempfile::tempdir().unwrap();
