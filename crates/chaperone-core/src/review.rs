@@ -1443,6 +1443,19 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
         }
     }
 
+    /// A lens with a minimum skips a diff under it and runs one at it or of
+    /// no known size; a lens without one always runs.
+    #[test]
+    fn a_lens_minimum_skips_a_smaller_diff_only() {
+        let p = pipeline(PIPELINE);
+        let planned = lenses(&p).unwrap();
+        let skips = |n| planned.iter().map(|l| l.skip(n)).collect::<Vec<_>>();
+        let under = Some("199 code lines, under codex_min_code_lines 200".to_string());
+        assert_eq!(skips(Some(199)), [None, None, None, under]);
+        assert_eq!(skips(Some(200)), vec![None; 4]);
+        assert_eq!(skips(None), vec![None; 4]);
+    }
+
     /// Every lens gets the same facts after its own prompt; only the
     /// intent lens gets the goal.
     #[test]

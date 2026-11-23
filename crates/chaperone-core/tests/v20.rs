@@ -3,104 +3,16 @@
 //! each of its gates both ways, on harness events written through the core
 //! functions `check run` calls.
 
-use chaperone_core::checks::{Attached, CheckInput, FindingMove, Recorded, RunInput};
-use chaperone_core::ledger::{
-    Actor, Applied, EventKind, Finding, Findings, Ledger, Mutation, Payload, Refusal,
-};
-use chaperone_core::pipeline::{self, Denied, Fact, FactBundle, Phase, Route};
+mod gated;
+
+use chaperone_core::checks::{Attached, CheckInput};
+use chaperone_core::ledger::{Actor, Applied};
+use chaperone_core::pipeline::{self, Fact};
 use chaperone_core::review;
 use chaperone_core::verdict::{self, Harness};
-use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput};
-use serde_json::{Map, Value, json};
-
-const HEAD: &str = "abc1234abc1234abc1234abc1234abc1234abc12";
-
-fn pair(agent: &str, session: &str) -> Actor {
-    Actor {
-        agent: Some(agent.into()),
-        session: Some(session.into()),
-    }
-}
-
-/// A new code lane, `id`, claimed by `lane`/`s1` on `stamp` (None: the
-/// default).
-fn lane(ledger: &Ledger, id: i64, stamp: Option<&str>) -> Result<(), Refusal> {
-    let create = CreateInput {
-        title: format!("lane {id}"),
-        kind: "code".into(),
-        pr_flow: "pr".into(),
-        ..CreateInput::default()
-    };
-    let lane = pair("lane", "s1");
-    ledger
-        .work_create(&lane, &create, None, false)
-        .unwrap()
-        .unwrap();
-    let claim = ClaimInput {
-        pipeline: stamp.map(String::from),
-        ..ClaimInput::default()
-    };
-    ledger
-        .work_claim(&lane, id, &claim, None, false)
-        .unwrap()
-        .map(|_| ())
-}
-
-fn open() -> (tempfile::TempDir, Ledger) {
-    let dir = tempfile::tempdir().unwrap();
-    let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
-    (dir, ledger)
-}
-
-fn refused(r: Result<impl std::fmt::Debug, Refusal>, says: &str) {
-    match r {
-        Err(Refusal::InvalidInput(m)) => assert!(m.contains(says), "{m}"),
-        other => panic!("expected a refusal saying {says:?}, got {other:?}"),
-    }
-}
-
-/// A `check.finished` `ran` on lane `work` from `producer`, as no command
-/// writes it but `apply` takes it, written by `fresh`/`s2`.
-fn raw(
-    ledger: &Ledger,
-    work: i64,
-    check: &str,
-    producer: &str,
-    rest: Value,
-) -> Result<Applied, Refusal> {
-    raw_as(ledger, &pair("fresh", "s2"), work, check, producer, rest)
-}
-
-fn raw_as(
-    ledger: &Ledger,
-    actor: &Actor,
-    work: i64,
-    check: &str,
-    producer: &str,
-    rest: Value,
-) -> Result<Applied, Refusal> {
-    let mut p = Payload {
-        check: Some(check.into()),
-        outcome: Some("ran".into()),
-        head_sha: Some(HEAD.into()),
-        ..Payload::default()
-    };
-    if let Value::Object(rest) = rest {
-        p.rest = rest;
-    }
-    p.rest.insert("producer".into(), json!({"kind": producer}));
-    let event = Mutation::Event {
-        kind: EventKind::CheckFinished,
-        lane_id: Some(work),
-        spec_id: None,
-        payload: p,
-    };
-    let at = ledger.now().unwrap();
-    match ledger.apply(actor, None, &at, event).unwrap() {
-        Applied::Refused(r) => Err(r),
-        applied => Ok(applied),
-    }
-}
+use chaperone_core::work::ClaimInput;
+use gated::*;
+use serde_json::{Value, json};
 
 #[test]
 fn a_first_claim_may_stamp_a_newer_pipeline_only() {
@@ -221,222 +133,6 @@ fn the_lane_records_its_own_smoke_claim_on_v20_only() {
     refused(smoke(2).unwrap(), "has held lane 2");
 }
 
-/// Another commit, and one with the same tree as `HEAD` (an amend).
-const OTHER: &str = "def5678def5678def5678def5678def5678def56";
-const AMEND: &str = "0123456789abcdef0123456789abcdef01234567";
-const THIRD: &str = "fedcba9876543210fedcba9876543210fedcba98";
-
-/// Lane 1 of `kind` on v20, claimed by the lane session `s1`; `owner` has
-/// never held it, as the verifier or the owner.
-struct V20 {
-    _dir: tempfile::TempDir,
-    ledger: Ledger,
-    lane: Actor,
-    owner: Actor,
-}
-
-impl V20 {
-    fn new(kind: &str) -> V20 {
-        V20::on("v20", kind)
-    }
-
-    /// Lane 1 of `kind`, claimed on `pipeline`.
-    fn on(pipeline: &str, kind: &str) -> V20 {
-        let lane = V20::unclaimed(kind);
-        let claim = ClaimInput {
-            pipeline: Some(pipeline.into()),
-            ..ClaimInput::default()
-        };
-        lane.ledger
-            .work_claim(&lane.lane, 1, &claim, None, false)
-            .unwrap()
-            .unwrap();
-        lane
-    }
-
-    /// Lane 1 of `kind`, created by the lane session and not yet claimed.
-    fn unclaimed(kind: &str) -> V20 {
-        let (dir, ledger) = open();
-        let create = CreateInput {
-            title: "t".into(),
-            kind: kind.into(),
-            pr_flow: "pr".into(),
-            ..CreateInput::default()
-        };
-        let me = pair("lane", "s1");
-        ledger
-            .work_create(&me, &create, None, false)
-            .unwrap()
-            .unwrap();
-        V20 {
-            _dir: dir,
-            ledger,
-            lane: me,
-            owner: pair("owner", "s3"),
-        }
-    }
-
-    /// `finding list` marks as blocking exactly what the gate counts on
-    /// HEAD, and lists `listed` findings (complete reviews' only).
-    fn agrees(&self, listed: usize) {
-        let found = self.ledger.lane_findings(1).unwrap();
-        let blocks = found.iter().filter(|f| f.blocks).count();
-        let facts = self.ledger.project(1, Some(HEAD)).unwrap();
-        let open = facts.get("findings.open_blocking");
-        assert_eq!((open, found.len()), (&Fact::Int(blocks as i64), listed));
-    }
-
-    /// The harness's `check` on `head`, as `check run` records it.
-    fn run(&self, check: &str, head: &str, fields: Value) -> Recorded {
-        let mut input = RunInput {
-            work: 1,
-            check: check.into(),
-            head: head.into(),
-            tree: tree(head).into(),
-            fields: fields.as_object().cloned().unwrap_or_default(),
-            bin: "chaperone".into(),
-            version: "0.1.0".into(),
-            ..RunInput::default()
-        };
-        if check == "review" && !input.fields.contains_key("carried_from") {
-            let found = ["blocker", "risk", "nit"].map(|severity| Finding {
-                finding_key: format!("correctness-{severity}"),
-                severity: severity.into(),
-                title: "t".into(),
-                body: "b".into(),
-                path: Some("a.rs".into()),
-                rest: Map::new(),
-            });
-            input.findings = Some(Findings::List(found.into()));
-        }
-        // As `check run review` and `verdict` key them: by the pipeline.
-        if matches!(check, "review" | "merge_verdict") {
-            input.profile = Some(pipeline::newer()[0].hash.clone());
-        }
-        self.ledger.check_run(&self.owner, &input).unwrap().unwrap()
-    }
-
-    fn diff(&self, head: &str, code_lines: i64, changes_code: bool) {
-        let fields = json!({"code_lines": code_lines, "changes_code": changes_code,
-            "uncounted_files": 0});
-        self.run("diff", head, fields);
-    }
-
-    /// A harness verdict on `head`; each on its own facts, so none replays.
-    fn verdict(&self, head: &str, decision: &str) {
-        let fields = json!({"decision": decision, "facts_sha256": "f"});
-        self.run("merge_verdict", head, fields);
-    }
-
-    /// A fresh session's smoke claim on `head`, its run and evidence file, as
-    /// `check record --check smoke --run` writes it.
-    fn claim(&self, head: &str) {
-        let input = CheckInput {
-            work: 1,
-            check: "smoke".into(),
-            head: head.into(),
-            outcome: "ran".into(),
-            run: Some(json!({"argv": ["bash", "s.sh"], "exit": 0})),
-            ..CheckInput::default()
-        };
-        let file = Attached {
-            path: "out.txt".into(),
-            sha256: "0".into(),
-            bytes: 1,
-            truncated: false,
-            redactions: 0,
-        };
-        let fresh = pair("fresh", "s2");
-        let r = self
-            .ledger
-            .check_record_with(&fresh, &input, &[file], false);
-        r.unwrap().unwrap();
-    }
-
-    /// `check run`'s input on the amend, before the check names itself.
-    fn amend(&self) -> RunInput {
-        RunInput {
-            work: 1,
-            head: AMEND.into(),
-            tree: tree(AMEND).into(),
-            bin: "chaperone".into(),
-            version: "0.1.0".into(),
-            ..RunInput::default()
-        }
-    }
-
-    fn rule(&self, who: &Actor, review: i64, key: &str, status: &str) {
-        let input = FindingMove {
-            check_event_id: review,
-            finding_key: key.into(),
-            status: status.into(),
-            reason: Some("because".into()),
-            waiver_kind: (status == "waived").then(|| "disproved".into()),
-            waiver_ref: (status == "waived").then(|| "t.rs:1".into()),
-            ..FindingMove::default()
-        };
-        self.ledger
-            .finding_update(who, &input, false)
-            .unwrap()
-            .unwrap();
-    }
-
-    fn handoff(&self, commit: &str, status: &str) -> Result<i64, Refusal> {
-        let input = HandoffInput {
-            summary: "s".into(),
-            status: Some(status.into()),
-            commit: Some(commit.into()),
-            ready: (status == "review").then_some(true),
-            ..HandoffInput::default()
-        };
-        let h = self
-            .ledger
-            .work_handoff(&self.lane, 1, &input, None, None, false);
-        h.unwrap().map(|h| h.id)
-    }
-
-    fn ready(&self, commit: &str) -> Result<i64, Refusal> {
-        self.handoff(commit, "review")
-    }
-
-    /// The board's ready and its reason.
-    fn board(&self) -> (bool, String) {
-        let now = self.ledger.now().unwrap();
-        let item = self.ledger.work_board_item(1, &now).unwrap().unwrap();
-        (item.ready, item.ready_reason)
-    }
-}
-
-/// An amend keeps the tree, so `AMEND` has `HEAD`'s.
-fn tree(head: &str) -> &'static str {
-    if head == OTHER {
-        "tree-other"
-    } else {
-        "tree-head"
-    }
-}
-
-fn denied(gate: &str, fact_paths: &[&str]) -> Result<i64, Refusal> {
-    Err(Refusal::GateDenied {
-        transition: "handoff".into(),
-        gate: gate.into(),
-        fact_paths: fact_paths.iter().map(|s| s.to_string()).collect(),
-    })
-}
-
-const PLAN: [&str; 3] = [
-    "commit.changes_code",
-    "plan_check.outcome",
-    "plan_check.reason",
-];
-const SMOKE: [&str; 3] = ["commit.changes_code", "smoke.passed", "smoke.claimed"];
-const DONE: [&str; 4] = [
-    "commit.changes_code",
-    "verdict.decision",
-    "verdict.sha",
-    "commit.sha",
-];
-
 /// A code lane climbs the ready row: each gate denies, with its id and the
 /// facts it read, until the harness fact it needs is recorded, then the
 /// next one denies, and the last fact passes the handoff. A harness run on
@@ -444,7 +140,7 @@ const DONE: [&str; 4] = [
 /// would really record next.
 #[test]
 fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
-    let lane = V20::new("code");
+    let lane = Gated::new("code");
     let binary = json!({"code_lines": 1, "changes_code": true, "uncounted_files": 1});
     lane.run("diff", THIRD, binary);
     let uncounted = denied("no_uncounted_files", &["commit.uncounted_files"]);
@@ -518,7 +214,7 @@ fn ready_on_a_code_lane_needs_each_harness_fact_in_turn() {
 /// counts for nothing.
 #[test]
 fn the_cap_counts_code_and_only_the_owner_raises_it() {
-    let v = V20::new("code");
+    let v = Gated::new("code");
     let tests = denied("tests_passed", &["tests.passed"]);
     let fields = json!({"code_lines": 400, "test_lines": 401, "changes_code": true,
         "uncounted_files": 0});
@@ -558,7 +254,7 @@ fn the_cap_counts_code_and_only_the_owner_raises_it() {
 /// smoke when the harness ran none.
 #[test]
 fn a_carried_review_and_verdict_pass_on_the_amend() {
-    let lane = V20::new("code");
+    let lane = Gated::new("code");
     let review = lane.run("review", HEAD, json!({"complete": true})).event_id;
     lane.rule(&lane.owner, review, "correctness-blocker", "refuted");
     lane.diff(AMEND, 10, true);
@@ -605,7 +301,7 @@ fn a_carried_review_and_verdict_pass_on_the_amend() {
 /// decide that, the diff does, and without one done needs both.
 #[test]
 fn a_lane_that_changes_no_code_skips_the_plan_and_the_smoke() {
-    let lane = V20::new("code");
+    let lane = Gated::new("code");
     lane.diff(HEAD, 0, false);
     lane.run("tests", HEAD, json!({"result": "pass"}));
     let review = lane.run("review", HEAD, json!({"complete": true})).event_id;
@@ -620,7 +316,7 @@ fn a_lane_that_changes_no_code_skips_the_plan_and_the_smoke() {
 
     // Declared docs, with no harness diff and then one that changes code:
     // the full row applies.
-    let docs = V20::new("docs");
+    let docs = Gated::new("docs");
     assert_eq!(docs.handoff(HEAD, "done"), denied("plan_or_no_code", &PLAN));
     docs.run("plan_check", OTHER, json!({}));
     assert_eq!(docs.handoff(HEAD, "done"), denied("done_verdict", &DONE));
@@ -634,7 +330,7 @@ fn a_lane_that_changes_no_code_skips_the_plan_and_the_smoke() {
 /// no rule refused them, satisfy no gate; the owner's waiver still does.
 #[test]
 fn a_session_plan_check_or_verdict_is_no_harness_fact() {
-    let lane = V20::unclaimed("code");
+    let lane = Gated::unclaimed("code");
     let fresh = pair("fresh", "s2");
     for (check, decision, findings) in [
         ("plan_check", None, Some(0)),
@@ -670,96 +366,4 @@ fn a_session_plan_check_or_verdict_is_no_harness_fact() {
     let yes = denied("verdict_is_yes", &["verdict.decision"]);
     assert_eq!(lane.ready(HEAD), yes);
     assert_eq!(lane.handoff(HEAD, "done"), denied("done_verdict", &DONE));
-}
-
-/// `stamp_ok` holds on every v20 lane (the climb above); its denial is the
-/// stamp of another pipeline, which no v20 lane can carry. v21 is v20's
-/// rules with its own id: its own stamp passes `stamp_ok`, v20's does not.
-#[test]
-fn stamp_ok_denies_another_stamp() {
-    let expected = Denied {
-        gate: "stamp_ok".into(),
-        fact_paths: vec!["pipeline.id".into()],
-    };
-    for p in pipeline::newer() {
-        for (stamp, passes) in [
-            ("v19", false),
-            ("v20", p.id == "v20"),
-            ("v21", p.id == "v21"),
-        ] {
-            let mut facts = FactBundle::default();
-            facts.set("pipeline.id", stamp);
-            let denial = p.evaluate("handoff", Route::CodePr, Phase::Ready, &facts);
-            assert_eq!(
-                denial.err() == Some(expected.clone()),
-                !passes,
-                "{} {stamp}",
-                p.id
-            );
-        }
-    }
-}
-
-/// A lane claimed on v21 passes `stamp_ok` through the write and stops at
-/// v20's next gate, which a harness diff then meets: one past the cap too,
-/// as v21 asks the review what to cut instead of gating on size. With no
-/// tests on the commit it stops at the review, as v21 leaves tests to CI.
-#[test]
-fn a_v21_lane_runs_v20_s_ready_row_but_the_size_and_tests_gates() {
-    let lane = V20::on("v21", "code");
-    let uncounted = denied("no_uncounted_files", &["commit.uncounted_files"]);
-    assert_eq!(lane.ready(HEAD), uncounted);
-    lane.diff(HEAD, 500, true);
-    let review = denied("review_complete", &["review.complete"]);
-    assert_eq!(lane.ready(HEAD), review);
-}
-
-/// v21: once the lane's PR is recorded merged, done needs no verdict, and
-/// the done event says the merge had none (not when it had a yes); v20
-/// still needs its verdict.
-#[test]
-fn a_v21_lane_whose_pr_merged_is_done_without_a_verdict() {
-    for (pipeline, yes) in [("v20", false), ("v21", false), ("v21", true)] {
-        let lane = V20::on(pipeline, "code");
-        lane.run("plan_check", OTHER, json!({}));
-        lane.diff(HEAD, 5, true);
-        let update = chaperone_core::work::UpdateInput {
-            pr_ref: Some("o/r#1".into()),
-            ..Default::default()
-        };
-        let l = &lane.ledger;
-        l.work_update(&lane.lane, 1, &update, None, None, false)
-            .unwrap()
-            .unwrap();
-        let unmerged = lane.handoff(HEAD, "done");
-        assert!(
-            matches!(&unmerged, Err(Refusal::GateDenied { gate, .. }) if gate == "done_verdict"),
-            "{pipeline}: {unmerged:?}"
-        );
-        let merged = chaperone_core::checks::MergedInput {
-            work: 1,
-            pr: "o/r#1".into(),
-            merge_sha: "abcdef1".into(),
-            head: "1234567".into(),
-            merged_at: "2026-11-05T10:00:00.000Z".into(),
-            ..Default::default()
-        };
-        l.work_merged(&lane.owner, &merged).unwrap().unwrap();
-        if yes {
-            lane.verdict(HEAD, "yes");
-        }
-        let done = lane.handoff(HEAD, "done");
-        if pipeline == "v20" {
-            assert!(
-                matches!(&done, Err(Refusal::GateDenied { gate, .. }) if gate == "done_verdict")
-            );
-            continue;
-        }
-        done.unwrap();
-        let events = l.work_events(1).unwrap();
-        let done = events.iter().rfind(|e| e.action == "handoff").unwrap();
-        let detail: Value = serde_json::from_str(&done.detail_json).unwrap();
-        let flag = if yes { Value::Null } else { json!(true) };
-        assert_eq!(detail["merged_without_verdict"], flag, "{detail}");
-    }
 }

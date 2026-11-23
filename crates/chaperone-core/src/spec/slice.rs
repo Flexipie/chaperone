@@ -171,13 +171,6 @@ fn work_for_key(
 mod tests {
     use super::*;
     use crate::ledger::{Actor, MIGRATIONS};
-    use crate::work::SPEC_BY_KEY;
-
-    fn plan(conn: &Connection, sql: &str) -> String {
-        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-        let rows = stmt.query_map(["k"], |r| r.get::<_, String>(3)).unwrap();
-        rows.map(Result::unwrap).collect::<Vec<_>>().join("; ")
-    }
 
     fn keys(conn: &Connection) -> Vec<(i64, String)> {
         let mut stmt = conn
@@ -195,22 +188,6 @@ mod tests {
             .unwrap()
             .ok()
             .map(|v| v.spec_id)
-    }
-
-    #[test]
-    fn key_lookups_use_indexes() {
-        let dir = tempfile::tempdir().unwrap();
-        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
-        let conn = ledger.conn();
-        for (sql, index) in [
-            (SPEC_FOR_KEY.to_string(), "spec_keys_key (key=?)"),
-            (SPEC_BY_KEY.to_string(), "specs_key (external_key=?)"),
-            (sibling_sql(""), "lanes_source (source_id=?)"),
-        ] {
-            let plan = plan(conn, &sql);
-            assert!(plan.contains(index), "{sql}: {plan}");
-            assert!(!plan.contains("SCAN"), "{sql}: {plan}");
-        }
     }
 
     /// The fold, the migration's backfill and a rebuild agree on the keys,

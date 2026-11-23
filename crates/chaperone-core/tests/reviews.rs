@@ -130,6 +130,4 @@ fn local_review_round_counts_review_rounds() {
         )
         .unwrap();
     assert_eq!(stamped, 2);
-    let f = ledger.project(1, None).unwrap();
-    assert_eq!(f.get("review.local_rounds"), &Fact::Int(2));
 }

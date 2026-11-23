@@ -304,16 +304,9 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
         (steps(&out), &out["stopped"]),
         (all(false).into(), &Value::Null)
     );
-    // The plan, three lenses and the verdict; nothing found, so no verifier.
-    // Codex is skipped: one code line, under v20's 200.
+    // The plan, three lenses and the verdict; nothing found, so no verifier,
+    // and the one code line skips Codex.
     assert_eq!(lane.sessions(), 5);
-    let skipped = json!({"lens": "codex", "ran": false,
-        "skipped": "1 code lines, under codex_min_code_lines 200"});
-    assert_eq!(lane.codex(), (skipped, json!(true)));
-    assert_eq!(
-        lane.events("kind = 'usage.reported' AND payload_json LIKE '%codex%'"),
-        0
-    );
     assert_eq!(steps(&lane.verify()), all(true));
     assert_eq!(lane.sessions(), 5);
     let (code, err) = lane.handoff();
@@ -331,25 +324,42 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
     assert_eq!(lane.handoff().0, 0);
 }
 
-/// A diff of 200 lines (the lane's one code line and 199 test lines), v20's
-/// minimum, runs the Codex lens too: the minimum counts test lines.
+/// The Codex lens skips on the lane's measure, added, removed and test
+/// lines together: a changed line is two and a named asset none; a file
+/// git counts no lines of leaves no size to skip on; 198 test lines more
+/// make v20's minimum of 200.
 #[test]
-fn a_diff_at_the_minimum_runs_the_codex_lens() {
-    let lane = lane(claude(json!({"findings": []}), json!([])));
+fn the_codex_lens_skips_on_the_lanes_measure() {
+    let rules = "[assets]\nglobs = [\"*.png\"]\n";
+    let lane = claimed_on(claude(json!({"findings": []}), json!([])), rules);
+    lane.plan("1. do it\n");
+    let files: &[(&str, &[u8])] = &[("lib.rs", b"c\n"), ("logo.png", b"\0\x01")];
+    git(&lane.wt, &["add", "logo.png"], files);
+    git(&lane.wt, &["commit", "-qam", "feat"], &[]);
     lane.answer("lane", "accept");
-    let lines = "x\n".repeat(199);
-    let files: &[(&str, &[u8])] = &[("tests/big.rs", lines.as_bytes())];
-    git(&lane.wt, &["add", "tests/big.rs"], files);
-    git(&lane.wt, &["commit", "-qm", "big"], &[]);
-    let out = lane.verify();
-    assert_eq!(out["stopped"], Value::Null, "{out}");
-    let (codex, complete) = lane.codex();
-    assert_eq!(
-        (&codex["ran"], &codex["skipped"], complete),
-        (&json!(true), &Value::Null, json!(true))
+    lane.verify();
+    let p = lane.review();
+    let measured = (&p["uncounted_files"], &p["asset_files"]);
+    assert_eq!(measured, (&json!(0), &json!(1)));
+    let skipped = "2 code lines, under codex_min_code_lines 200";
+    assert_eq!(lane.codex().0["skipped"], skipped);
+
+    git(&lane.wt, &["add", "a.bin"], &[("a.bin", b"\0\x01")]);
+    git(&lane.wt, &["commit", "-qm", "bin"], &[]);
+    lane.verify();
+    assert_eq!(lane.codex().0["ran"], true);
+
+    let lines = "x\n".repeat(198);
+    git(&lane.wt, &["rm", "-q", "a.bin"], &[]);
+    git(
+        &lane.wt,
+        &["add", "tests/big.rs"],
+        &[("tests/big.rs", lines.as_bytes())],
     );
-    // The plan, four lenses and the verdict.
-    assert_eq!(lane.sessions(), 6);
+    git(&lane.wt, &["commit", "-qm", "big"], &[]);
+    lane.verify();
+    let (codex, complete) = lane.codex();
+    assert_eq!((&codex["ran"], complete), (&json!(true), json!(true)));
 }
 
 /// With `codex` down (a file first on `PATH` that cannot start), a small
@@ -415,66 +425,6 @@ fn claude_down_refuses_the_review() {
     let message = err["message"].as_str().unwrap();
     assert!(message.starts_with("could not start claude"), "{message}");
     assert_eq!(lane.events("payload_json->>'check' = 'review'"), 0);
-}
-
-/// A small diff with a file git counts no lines of (binary) is no size to
-/// skip on: the Codex lens runs.
-#[test]
-fn a_diff_with_an_uncounted_file_runs_the_codex_lens() {
-    let lane = lane(claude(json!({"findings": []}), json!([])));
-    lane.answer("lane", "accept");
-    git(&lane.wt, &["add", "a.bin"], &[("a.bin", b"\0\x01")]);
-    git(&lane.wt, &["commit", "-qm", "bin"], &[]);
-    lane.verify();
-    assert_eq!(lane.codex().0["ran"], true);
-}
-
-/// The Codex lens skips on #223's measure, removed lines too: a changed
-/// line is two, and a diff recorded before `removed_code` (its
-/// `code_lines` held them) still skips on its `code_lines`.
-#[test]
-fn the_codex_skip_counts_removed_lines() {
-    let lane = claimed(claude(json!({"findings": []}), json!([])));
-    lane.plan("1. do it\n");
-    git(&lane.wt, &["commit", "-qam", "feat"], &[("lib.rs", b"c\n")]);
-    lane.answer("lane", "accept");
-    let skipped = |n: i64| format!("{n} code lines, under codex_min_code_lines 200");
-    lane.run("lane", &["check", "run", "diff", "--work", "1"]);
-    let conn = rusqlite::Connection::open(&lane.db).unwrap();
-    let old = "UPDATE events SET payload_json = json_set(json_remove(payload_json,
-        '$.removed_code'), '$.code_lines', 3) WHERE payload_json->>'check' = 'diff'";
-    conn.execute(old, []).unwrap();
-    lane.run("lane", &["check", "run", "review", "--work", "1"]);
-    assert_eq!(lane.codex().0["skipped"], skipped(3));
-    git(
-        &lane.wt,
-        &["commit", "-qam", "again"],
-        &[("lib.rs", b"d\n")],
-    );
-    lane.verify();
-    assert_eq!(lane.codex().0["skipped"], skipped(2));
-}
-
-/// A binary an `[assets]` glob names is an asset to the review too: not
-/// uncounted, so a small diff still skips the Codex lens, and each lens's
-/// file list marks it.
-#[test]
-fn a_review_counts_an_asset_apart() {
-    let rules = "[assets]\nglobs = [\"*.png\"]\n";
-    let lane = lane_on(claude(json!({"findings": []}), json!([])), rules);
-    lane.answer("lane", "accept");
-    git(&lane.wt, &["add", "logo.png"], &[("logo.png", b"\0\x01")]);
-    git(&lane.wt, &["commit", "-qm", "logo"], &[]);
-    lane.verify();
-    let p = lane.review();
-    assert_eq!(
-        (&p["uncounted_files"], &p["asset_files"]),
-        (&json!(0), &json!(1))
-    );
-    assert_eq!(lane.codex().0["ran"], false);
-    let row = &p["lenses"][0];
-    let prompt = Evidence::beside(&lane.db).get(row["prompt_ref"].as_str().unwrap());
-    assert!(prompt.unwrap().contains("-\t-\tlogo.png\tasset\n"), "{row}");
 }
 
 /// The plugin's stop hook on a ready lane: nothing while the branch is at
@@ -569,10 +519,16 @@ fn an_over_cap_diff_on_v21_reaches_review_and_a_cut_blocks() {
     let out = lane.verify();
     let stopped = json!({"check": "review", "why": "1 finding(s) still block"});
     assert_eq!(out["stopped"], stopped);
-    assert_eq!(
-        lane.review()["over_cap"],
-        json!({"code_lines": 401, "cap": 400})
-    );
+    let p = lane.review();
+    assert_eq!(p["over_cap"], json!({"code_lines": 401, "cap": 400}));
+    // Only the design and tests lens is asked what to cut.
+    let store = Evidence::beside(&lane.db);
+    for (lens, asked) in [("correctness", false), ("design_tests", true)] {
+        let lenses = p["lenses"].as_array().unwrap();
+        let row = lenses.iter().find(|r| r["lens"] == lens).unwrap();
+        let prompt = store.get(row["prompt_ref"].as_str().unwrap()).unwrap();
+        assert_eq!(prompt.contains("`cut: <what>`"), asked, "{lens}");
+    }
 }
 
 /// While another run holds the lane's lock, verify is a conflict and

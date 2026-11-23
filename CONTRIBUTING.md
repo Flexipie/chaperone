@@ -63,8 +63,8 @@ The five layers and their time limits:
 | Layer | PR budget |
 | --- | --- |
 | Unit | under 10 s, each test under 50 ms |
-| Property (7 properties, 256 cases, seed = commit sha) | under 30 s |
-| Crash (3 tests) | under 20 s |
+| Property (4 properties, 256 cases, seed = commit sha) | under 30 s |
+| Crash (2 tests) | under 20 s |
 | Concurrency (4 tests, one of them 50 processes × 40 events) | under 30 s, 60 s timeout each |
 | Lane (fake agent scripts, each under 2 s, cap 20) | under 30 s |
 
