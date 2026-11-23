@@ -78,15 +78,18 @@ fn lane_page_reads_handoff_and_gates() {
         .unwrap();
     check(&ledger, id, "plan_check");
     check(&ledger, id, "review_round");
-    let handoff = HandoffInput {
-        summary: "built".into(),
-        commit: Some("abc1234".into()),
-        ..HandoffInput::default()
-    };
-    ledger
-        .work_handoff(&actor("1"), id, &handoff, None, None, false)
-        .unwrap()
-        .unwrap();
+    // Two handoffs: the page (and merge's done handoff) takes the newest.
+    for (summary, commit) in [("first", "1234abc"), ("built", "abc1234")] {
+        let handoff = HandoffInput {
+            summary: summary.into(),
+            commit: Some(commit.into()),
+            ..HandoffInput::default()
+        };
+        ledger
+            .work_handoff(&actor("1"), id, &handoff, None, None, false)
+            .unwrap()
+            .unwrap();
+    }
 
     let page = ledger.lane_page(id).unwrap();
     let newest = page.handoff.unwrap().handoff;

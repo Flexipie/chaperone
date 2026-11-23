@@ -1,4 +1,4 @@
-//! The owner's merge of a lane's PR (#117), the UI's and the CLI's: as
+//! The owner's merge of a lane's PR (#117), the CLI's: as
 //! `/merge` does it, GitHub first, then `pr.merged`, then the done
 //! handoff when no live lease holds the lane, else a herdr prompt that
 //! tells the lane's agent to hand off done.

@@ -981,8 +981,7 @@ impl Ledger {
     /// its first claim (`manual` before the first); a lane never claimed
     /// nor stamped ran no pipeline and is left out. Every changelog
     /// version is listed, newest first, then stamped versions the
-    /// changelog lacks, then `manual`. One read snapshot, schema checked,
-    /// so the UI can keep calling it.
+    /// changelog lacks, then `manual`. One read snapshot, schema checked.
     pub fn pipeline_history(&self, versions: &[Version], repo: Option<&str>) -> Checked<Value> {
         let tx = Transaction::new_unchecked(self.conn(), TransactionBehavior::Deferred)?;
         check_schema(&tx)?;

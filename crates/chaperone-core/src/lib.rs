@@ -1,5 +1,5 @@
 //! Chaperone's ledger and engine, and the deadline-bounded child processes
-//! (git, daisy-cli) the CLI and the UI share. No CLI, no terminal I/O, no
+//! (git, daisy-cli) the CLI uses. No CLI, no terminal I/O, no
 //! home directory.
 
 pub mod checks;
