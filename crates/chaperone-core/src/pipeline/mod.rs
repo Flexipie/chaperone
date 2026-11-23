@@ -352,7 +352,7 @@ mod tests {
     const V20: &str = include_str!("../../../../pipelines/v20.toml");
     const V20_HASH: &str = "6a3f7d2164708a23e8203889cd4d864b77327e50dc0d6a4b8c6741658ac0e5f0";
     const V21: &str = include_str!("../../../../pipelines/v21.toml");
-    const V21_HASH: &str = "b4cabaee440104e1fb12bc003d87af0e8298b3d02ded9dab45deb3f9ac8f4555";
+    const V21_HASH: &str = "a22ac5759e6ad2443b5ca0b00fde71a7a5969a86d843b4e6188e95ad01b09c5b";
 
     const MINI: &str = r#"
 schema = 1

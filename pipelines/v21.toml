@@ -6,6 +6,11 @@
 #   as any finding does. A lane stopped at a cap, waived, and stopped again when review fixes
 #   grew it; and the cap counted a cleanup's removed lines, which `code_lines` (added lines
 #   only, from #292 for every pipeline) no longer holds.
+# - The repo's tests are CI's (2026-11-23): v21 has no `tests_passed` gate, so `verify` and
+#   `pr open` run none and ready does not wait for them. Six lanes on one laptop ran a
+#   9,000-test suite 16 times in a day, 8 minutes alone and up to 34 together, and five
+#   runs failed only on timeouts under that load, holding finished changes for hours. A
+#   lane still runs what its change needs, and `check run tests` stays.
 # - A finished lane is never held (#308): a lane whose current PR is recorded merged
 #   (`pr.merged`) can hand off done without a verdict on that head (`pr_merged` in
 #   `done_verdict`), and that `phase.entered` says `merged_without_verdict`. After an owner
@@ -135,11 +140,6 @@ fn = "eq"
 args = { field = "commit.changes_code", value = false }
 
 [[gate]]
-id = "tests_passed"
-fn = "eq"
-args = { field = "tests.passed", value = true }
-
-[[gate]]
 id = "review_complete"
 fn = "eq"
 args = { field = "review.complete", value = true }
@@ -242,7 +242,7 @@ id = "handoff"
 routes = ["code_pr", "direct"]
 to = "ready"
 requires = [
-  "stamp_ok", "no_uncounted_files", "tests_passed", "review_complete",
+  "stamp_ok", "no_uncounted_files", "review_complete",
   "no_blocking_findings", "plan_or_no_code", "smoke_or_no_code", "verdict_is_yes",
   "verdict_on_head",
 ]
