@@ -437,35 +437,10 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
             }
             event.lane_id = Some(next_id(tx, "lanes")?);
         }
-        // On a key or a repo, never a lane, so they move no lane's
-        // `updated_at` and are no fact anchor (ADR 0007, #119). `dossier
-        // note` checks the rest; nothing writes `backlog.prioritised` now.
-        DossierNoted | BacklogPrioritised
-            if event.lane_id.is_some() || event.spec_id.is_some() || !p.changed.is_empty() =>
-        {
-            refuse!(invalid(&format!(
-                "{} names no lane or spec and changes no column",
-                event.kind
-            )));
-        }
-        BacklogPrioritised => {
-            let lower = p.repo.as_deref().is_some_and(|r| r == r.to_lowercase());
-            if !lower
-                || !p.rest.get("order").is_some_and(Value::is_array)
-                || !p.rest.contains_key("after")
-            {
-                refuse!(invalid(
-                    "backlog.prioritised needs a lowercased repo, an order and after"
-                ));
-            }
-        }
-        DossierNoted => {
-            let lower = |v: &Value| v.as_str().is_some_and(|k| k == k.to_lowercase());
-            if !p.rest.get("key").is_some_and(lower)
-                || !p.rest.get("note").is_some_and(Value::is_string)
-            {
-                refuse!(invalid("dossier.noted needs a lowercased key and a note"));
-            }
+        // Kinds an older binary wrote: a ledger holding them still loads
+        // and folds, but nothing writes them now (#311).
+        DossierNoted | BacklogPrioritised => {
+            refuse!(invalid(&format!("{} is no longer written", event.kind)));
         }
         _ => {
             if event.spec_id.is_some() {
@@ -1226,7 +1201,7 @@ mod tests {
 
     /// A bad event is refused for its own reason and writes no event. Not
     /// every refusal is here: the gate, the pipeline stamp, `pr.merged`,
-    /// attention, dossier and usage have their own tests.
+    /// attention and usage have their own tests.
     #[test]
     fn refusals_write_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -1942,65 +1917,36 @@ mod tests {
         pause
             .changed
             .extend(change("blocker", json!(null), json!(PAUSED_BY_OWNER)).changed);
-        let order = |repo: &str, rest: serde_json::Value| Payload {
-            repo: Some(repo.into()),
-            rest: serde_json::from_value(rest).unwrap(),
-            ..Payload::default()
+        // Kinds an older binary wrote, in the shapes it wrote them.
+        let gone = |kind, rest| {
+            let rest = serde_json::from_value(rest).unwrap();
+            let p = Payload {
+                repo: Some("o/r".into()),
+                rest,
+                ..Payload::default()
+            };
+            ev(kind, None, None, p)
         };
-        let ok = order("o/r", json!({"order": [], "after": null}));
-        let backlog = [
+        let gone = [
             (
-                "backlog.prioritised names no lane or spec and changes",
-                ev(EventKind::BacklogPrioritised, Some(1), None, ok.clone()),
-            ),
-            (
-                "backlog.prioritised names no lane or spec and changes",
-                ev(EventKind::BacklogPrioritised, None, Some(1), ok.clone()),
-            ),
-            (
-                "backlog.prioritised names no lane or spec and changes",
-                ev(
+                "backlog.prioritised is no longer written",
+                gone(
                     EventKind::BacklogPrioritised,
-                    None,
-                    None,
-                    Payload {
-                        changed: change("status", json!("queued"), json!("done")).changed,
-                        ..ok
-                    },
+                    json!({"order": [], "after": null}),
                 ),
             ),
             (
-                "backlog.prioritised needs a lowercased repo, an order",
-                ev(
-                    EventKind::BacklogPrioritised,
-                    None,
-                    None,
-                    order("O/r", json!({"order": [], "after": null})),
-                ),
-            ),
-            (
-                "backlog.prioritised needs a lowercased repo, an order",
-                ev(
-                    EventKind::BacklogPrioritised,
-                    None,
-                    None,
-                    order("o/r", json!({"order": {}, "after": null})),
-                ),
-            ),
-            (
-                "backlog.prioritised needs a lowercased repo, an order",
-                ev(
-                    EventKind::BacklogPrioritised,
-                    None,
-                    None,
-                    order("o/r", json!({"order": []})),
+                "dossier.noted is no longer written",
+                gone(
+                    EventKind::DossierNoted,
+                    json!({"key": "o/r#1", "note": "n"}),
                 ),
             ),
         ];
         let cases = cases
             .into_iter()
             .map(|(want, at, key, m)| (want, &me, at, key, m))
-            .chain(backlog.map(|(want, m)| (want, &me, AT, None, m)))
+            .chain(gone.map(|(want, m)| (want, &me, AT, None, m)))
             .chain([
                 (
                     r#"Refused(LeaseHeld { by: "b/t", until:"#,
@@ -2066,15 +2012,6 @@ mod tests {
             assert!(got.starts_with(want), "case {i}: want {want}, got {got}");
             assert_eq!(events(&ledger), 4, "case {i}");
         }
-        // The shape the removed board wrote still passes its check.
-        let order = ev(
-            EventKind::BacklogPrioritised,
-            None,
-            None,
-            order("o/r", json!({"order": [], "after": null})),
-        );
-        let got = format!("{:?}", ledger.apply(&me, None, AT, order).unwrap());
-        assert!(got.starts_with("Committed("), "{got}");
     }
 
     /// A session id or an idempotency key shaped like a secret is refused

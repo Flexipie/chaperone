@@ -20,7 +20,7 @@ use crate::cli::Format;
 pub enum Outcome {
     One(Value),
     Page(Page<Value>),
-    /// Already on stdout (`write_board`, `write_one`).
+    /// Already on stdout (`write_board`).
     Written,
 }
 
@@ -74,7 +74,7 @@ pub enum CliError {
     Drift(Vec<Value>),
 }
 
-/// The code graph's: the caller's input, or this side's failure.
+/// A profile read's: the caller's input, or this side's failure.
 impl From<chaperone_graph::Error> for CliError {
     fn from(e: chaperone_graph::Error) -> Self {
         match e {
@@ -393,41 +393,6 @@ pub fn write_board(
         .and_then(|mut f| f.seek(SeekFrom::Start(0)).map(|_| f))
         .map_err(|e| CliError::Internal(format!("temp file: {e}")))?;
     let _ = std::io::copy(&mut file, &mut std::io::stdout().lock());
-    Ok(Outcome::Written)
-}
-
-/// One answer serialized straight to stdout, in the bytes `render_ok`
-/// gives for `Outcome::One`, without a `Value` copy of it: `data` declares
-/// its fields in sorted order, as `write_board`'s do. For a large answer
-/// read after the ledger read has ended (`overlap`).
-pub fn write_one(data: &impl Serialize, meta: &Meta, format: Format) -> Result<Outcome, CliError> {
-    #[derive(Serialize)]
-    struct Envelope<'a, T> {
-        data: &'a T,
-        meta: Value,
-        ok: bool,
-    }
-    let mut out = BufWriter::new(std::io::stdout().lock());
-    let _ = match format {
-        Format::Json => {
-            let env = Envelope {
-                data,
-                meta: serde_json::to_value(meta).map_err(|e| CliError::Internal(e.to_string()))?,
-                ok: true,
-            };
-            serde_json::to_writer_pretty(&mut out, &env)
-                .and_then(|()| out.write_all(b"\n").map_err(serde_json::Error::io))
-        }
-        Format::Jsonl => serde_json::to_writer(&mut out, data).and_then(|()| {
-            let page = PageMeta {
-                count: 1,
-                next_cursor: None,
-                has_more: false,
-            };
-            write!(out, "\n{}", jsonl_end(meta, page)).map_err(serde_json::Error::io)
-        }),
-    };
-    let _ = out.flush();
     Ok(Outcome::Written)
 }
 

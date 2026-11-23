@@ -102,15 +102,6 @@ fn help_matches_snapshots() {
             &["attention", "record"],
             include_str!("snapshots/attention-record.txt"),
         ),
-        (&["dossier"], include_str!("snapshots/dossier.txt")),
-        (
-            &["dossier", "note"],
-            include_str!("snapshots/dossier-note.txt"),
-        ),
-        (
-            &["dossier", "get"],
-            include_str!("snapshots/dossier-get.txt"),
-        ),
         (&["evidence"], include_str!("snapshots/evidence.txt")),
         (
             &["evidence", "show"],
@@ -143,9 +134,7 @@ fn help_matches_snapshots() {
             include_str!("snapshots/usage-report.txt"),
         ),
         (&["usage", "get"], include_str!("snapshots/usage-get.txt")),
-        (&["overlap"], include_str!("snapshots/overlap.txt")),
         (&["stats"], include_str!("snapshots/stats.txt")),
-        (&["impact"], include_str!("snapshots/impact.txt")),
         (&["verify"], include_str!("snapshots/verify.txt")),
         (&["pr"], include_str!("snapshots/pr.txt")),
         (&["pr", "open"], include_str!("snapshots/pr-open.txt")),

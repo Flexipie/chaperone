@@ -14,7 +14,6 @@ use chaperone_core::git::{Failure, git, git_bin};
 use chaperone_core::ledger::STATUSES;
 use chaperone_core::pipeline;
 use chaperone_core::work::{Brief, HandoffInput, LookAt, Smoke, Verification};
-use chaperone_graph::Error;
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{CommandFactory, Parser};
 use serde_json::{Value, json};
@@ -28,8 +27,6 @@ const OUT_BYTES: usize = 64 * 1024 * 1024;
 /// Stands in for a placeholder (`<id>`, `"$PR"`); a refusal of this value
 /// is the placeholder's, not the file's, and is not reported.
 const DUMMY: &str = "0";
-/// Profile findings listed per kind; the rest are counted.
-const LISTED: usize = 20;
 /// What the binary builds from: a commit that differs from main only
 /// elsewhere (docs) is not stale.
 const CODE: [&str; 4] = ["crates", "pipelines", "Cargo.toml", "Cargo.lock"];
@@ -57,11 +54,7 @@ impl Scan {
     }
 }
 
-pub fn run(
-    dirs: &[PathBuf],
-    repo: Option<&Path>,
-    profile: Option<PathBuf>,
-) -> Result<Outcome, CliError> {
+pub fn run(dirs: &[PathBuf], repo: Option<&Path>) -> Result<Outcome, CliError> {
     let current = pipeline::current();
     let mut scan = Scan {
         findings: Vec::new(),
@@ -121,7 +114,7 @@ pub fn run(
         "files": counted,
     });
     if let Some(dir) = repo {
-        data["origin_main"] = json!(repo_checks(dir, profile, &mut scan));
+        data["origin_main"] = json!(repo_checks(dir, &mut scan));
     }
     if scan.findings.is_empty() {
         Ok(Outcome::One(data))
@@ -622,7 +615,6 @@ fn full_handoff() -> HandoffInput {
         summary: s(),
         status: Some(s()),
         changed_files: vec![s()],
-        areas: Some(vec![s()]),
         verification: vec![Verification {
             command: s(),
             status: s(),
@@ -653,9 +645,9 @@ fn full_handoff() -> HandoffInput {
     }
 }
 
-/// The profile's areas against the tracked files, and this binary's code
-/// against origin/main. Returns origin/main's sha when git has one.
-fn repo_checks(dir: &Path, profile: Option<PathBuf>, scan: &mut Scan) -> Option<String> {
+/// This binary's code against origin/main. Returns origin/main's sha when
+/// git has one.
+fn repo_checks(dir: &Path, scan: &mut Scan) -> Option<String> {
     let deadline = Instant::now() + DEADLINE;
     let bin = git_bin(deadline);
     let call = |args: &[&str]| match git(&bin, dir, args, deadline, OUT_BYTES) {
@@ -665,43 +657,6 @@ fn repo_checks(dir: &Path, profile: Option<PathBuf>, scan: &mut Scan) -> Option<
         Err(Failure::BadRevision) => Err(format!("git {}: a commit this clone lacks", args[0])),
         Err(Failure::Other(e)) => Err(e),
     };
-    let origin = call(&["config", "--get", "remote.origin.url"]).ok();
-    let origin = origin.as_deref().map(str::trim);
-    match chaperone_graph::rules_in(&bin, dir, deadline, profile, origin) {
-        Err(Error::Invalid(e) | Error::Internal(e)) => scan.add(dir, None, "profile", e),
-        Ok(rules) => match call(&["ls-files", "-z", "--full-name", "--", ":/"]) {
-            Err(e) => scan.add(dir, None, "profile", e),
-            Ok(out) => {
-                let tree: Vec<&str> = out.split('\0').filter(|p| !p.is_empty()).collect();
-                let (mut none, mut several) = (Vec::new(), Vec::new());
-                for p in &tree {
-                    let areas: Vec<&str> = rules.areas(p).collect();
-                    match areas.len() {
-                        0 => none.push(format!("{p}: in no area")),
-                        1 => {}
-                        _ => several.push(format!("{p}: in areas {}", areas.join(", "))),
-                    }
-                }
-                for list in [none, several] {
-                    let more = list.len().saturating_sub(LISTED);
-                    for m in list.into_iter().take(LISTED) {
-                        scan.add(dir, None, "area", m);
-                    }
-                    if more > 0 {
-                        scan.add(dir, None, "area", format!("{more} more like the above"));
-                    }
-                }
-                // Its refusal (an entry point in no or several areas) is
-                // the per-file list above; only the unmatched rules are new.
-                if let Ok((unmatched, _)) = rules.check(tree.into_iter()) {
-                    for u in unmatched {
-                        let msg = format!("{} rule {} names no tracked file", u.kind, u.path);
-                        scan.add(dir, None, "entry_point", msg);
-                    }
-                }
-            }
-        },
-    }
     let sha = env!("CHAPERONE_GIT_SHA");
     let main = match call(&["rev-parse", "--verify", "origin/main^{commit}"]) {
         Ok(m) => m.trim().to_string(),

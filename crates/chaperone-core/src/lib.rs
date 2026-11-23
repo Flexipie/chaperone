@@ -5,12 +5,10 @@
 pub mod checks;
 pub mod child;
 pub mod cursor;
-pub mod dossier;
 mod engine;
 pub mod git;
 pub mod ledger;
 pub mod merge;
-pub mod overlap;
 pub mod pipeline;
 pub mod plan;
 pub mod review;

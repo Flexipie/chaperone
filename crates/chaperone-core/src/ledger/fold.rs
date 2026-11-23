@@ -293,6 +293,30 @@ impl Ledger {
 mod tests {
     use super::*;
 
+    /// A log an older binary wrote, holding a dossier note and a backlog
+    /// order, still rebuilds: both fold to nothing (#311).
+    #[test]
+    fn rebuild_folds_old_kinds_to_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
+        ledger
+            .conn()
+            .execute_batch(
+                "INSERT INTO events (lane_id, kind, payload_json, at) VALUES
+                 (NULL, 'dossier.noted', '{\"key\":\"o/r#1\",\"note\":\"n\"}',
+                  '2026-11-03T00:00:00.000Z'),
+                 (NULL, 'backlog.prioritised', '{\"repo\":\"o/r\",\"order\":[]}',
+                  '2026-11-03T00:00:00.000Z');",
+            )
+            .unwrap();
+        ledger.rebuild().unwrap();
+        let lanes: i64 = ledger
+            .conn()
+            .query_row("SELECT count(*) FROM lanes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(lanes, 0);
+    }
+
     /// A log this binary did not write (a lane column the write refuses to
     /// set, a lane no event created) fails the rebuild, and the tables stay
     /// as they were: the seeded `blocked` is not what a refold would write.

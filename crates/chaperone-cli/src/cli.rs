@@ -61,22 +61,7 @@ pub enum Cmd {
     #[command(subcommand)]
     Finding(FindingCmd),
     #[command(subcommand)]
-    Dossier(DossierCmd),
-    #[command(subcommand)]
     Evidence(EvidenceCmd),
-    /// Per file, the open lanes touching it: each lane's newest handoff
-    /// (changed_files), then the commits on its worktree's HEAD since the
-    /// merge-base with origin, all git calls within 5 s. Shared files
-    /// first. Call it before starting work
-    Overlap {
-        /// Only lanes in this repo (owner/repo, any case)
-        #[arg(long)]
-        repo: Option<String>,
-        /// Also each worktree's uncommitted and untracked files (stats
-        /// every tracked file: slower, more so in large repos)
-        #[arg(long)]
-        uncommitted: bool,
-    },
     /// R11's lane and cohort numbers, read from the ledger: claim to
     /// merge, tokens, peak context, attention, checks and the verdict on
     /// the merged head. A number nothing records yet is null, and
@@ -90,34 +75,6 @@ pub enum Cmd {
         /// These work items (repeat the flag for more)
         #[arg(long, group = "cohort")]
         work: Vec<i64>,
-    },
-    /// The files that depend on these Rust files, nearest first: module
-    /// nodes and import edges read with tree-sitter from the worktree,
-    /// facts cached by content per origin. Each depth says if it is exact
-    /// or a lower bound; at most 500 files listed
-    Impact {
-        /// Files, from the repo root or the current directory
-        #[arg(required = true)]
-        files: Vec<String>,
-        /// The cache file (default: one per origin in the user cache
-        /// directory)
-        #[arg(long)]
-        cache: Option<PathBuf>,
-        /// Also list the entry points (commands, routes, screens) the files
-        /// reach, each with its area and evidence, from the pipeline
-        /// profile's `[[entry_points]]` and `[areas]`
-        #[arg(long)]
-        entry_points: bool,
-        /// The profile (default: .chaperone/profile.toml on the repo's
-        /// base branch, else the origin's in
-        /// ~/dotfiles/claude/pipeline/profiles)
-        #[arg(long, requires = "entry_points")]
-        profile: Option<PathBuf>,
-        /// Compare these areas (comma-separated, from the profile's
-        /// `[areas]`, as a handoff's `areas` declares them) with the areas
-        /// the files are in and the entry points they reach
-        #[arg(long, requires = "entry_points", value_delimiter = ',')]
-        declared: Option<Vec<String>>,
     },
     /// Run `check run` diff, tests, review and verdict on the lane's commit
     /// in that order, under one hold of the lane's run lock (a second run is
@@ -152,8 +109,8 @@ pub enum Cmd {
     Pipeline(PipelineCmd),
     /// Check skill and script files against this binary: every chaperone
     /// command, flag and value they call, the handoff fields they write and
-    /// the pipeline version they name. With --repo, also the repo's profile
-    /// areas and whether this binary's code differs from the repo's origin/main.
+    /// the pipeline version they name. With --repo, also whether this
+    /// binary's code differs from the repo's origin/main.
     /// Any mismatch is a `drift` error (exit 1) listing each with file:line.
     /// Reads files and git, never the ledger
     Doctor {
@@ -161,16 +118,10 @@ pub enum Cmd {
         /// .py, and scripts with a shell or python shebang
         #[arg(long, required = true, num_args = 1..)]
         skills: Vec<PathBuf>,
-        /// A checkout of the repo: check its profile's `[areas]` and
-        /// `[[entry_points]]` against its tracked files, and this binary's
-        /// commit against its origin/main
+        /// A checkout of the repo: check this binary's commit against its
+        /// origin/main
         #[arg(long)]
         repo: Option<PathBuf>,
-        /// The profile (default: .chaperone/profile.toml on the --repo
-        /// base branch, else its origin's in
-        /// ~/dotfiles/claude/pipeline/profiles)
-        #[arg(long, requires = "repo")]
-        profile: Option<PathBuf>,
     },
     /// Create the ledger, or migrate it to this binary's version after a
     /// backup. Refuses a file that is not a Chaperone ledger
@@ -309,16 +260,12 @@ impl Cmd {
             Cmd::Finding(FindingCmd::Accept(_)) => Some("finding accept"),
             Cmd::Finding(FindingCmd::Answer(_)) => Some("finding answer"),
             Cmd::Finding(FindingCmd::List { .. }) => None,
-            Cmd::Dossier(DossierCmd::Note { .. }) => Some("dossier note"),
-            Cmd::Dossier(DossierCmd::Get { .. }) => None,
             Cmd::Evidence(EvidenceCmd::Show { .. }) => None,
             Cmd::Hook {
                 event: HookEvent::StopFailure,
             } => Some("hook stop-failure"),
             Cmd::Hook { .. }
-            | Cmd::Overlap { .. }
             | Cmd::Stats { .. }
-            | Cmd::Impact { .. }
             | Cmd::Pipeline(_)
             | Cmd::Review(_)
             | Cmd::Doctor { .. }
@@ -496,7 +443,7 @@ pub enum WorkCmd {
         actor: ActorArgs,
     },
     /// Record a structured handoff (JSON: summary, status, changed_files,
-    /// areas, verification, smoke, blockers, open_questions, next_action,
+    /// verification, smoke, blockers, open_questions, next_action,
     /// commit, pull_request, brief). Its status moves the item; a terminal status
     /// clears the holder. A ready or done handoff runs the handoff gate
     Handoff {
@@ -564,9 +511,8 @@ pub enum WorkCmd {
     /// One item with its lease state
     Get { id: i64 },
     /// Every open item with its newest handoff and whether it is ready: the
-    /// owner's override, else status review and a ready handoff, and the
-    /// paths its handoff shares with other open lanes' (`chaperone overlap`
-    /// adds worktrees). Every item is under `other`; specs are not grouped yet
+    /// owner's override, else status review and a ready handoff. Every item
+    /// is under `other`; specs are not grouped yet
     Board,
     /// List items, newest activity first; done and cancelled hidden
     /// unless --all
@@ -996,39 +942,6 @@ pub enum AttentionCmd {
         idempotency_key: Option<String>,
         #[command(flatten)]
         actor: ActorArgs,
-    },
-}
-
-/// The agent-only record of an issue key: notes, and one capped read of
-/// what the ledger knows about the key. Data for agents, never a gate
-#[derive(Subcommand, Debug)]
-pub enum DossierCmd {
-    /// Leave a note on a key: what you learned that the issue does not say.
-    /// The same note again from the same session replays. Notes are never
-    /// edited; --supersedes hides an older one from `dossier get`
-    Note {
-        /// The issue key: CORE-1234, PER-12 or owner/repo#12
-        key: String,
-        /// At most 600 characters. Redacted at write
-        #[arg(long)]
-        note: String,
-        /// <kind>:<ref>, up to 5: issue:CORE-1, pr:owner/repo#12,
-        /// adr:docs/decisions/0007-issue-dossier.md, doc:<path>, commit:<sha>
-        #[arg(long = "link")]
-        links: Vec<String>,
-        /// The event id of an earlier note on the same key that this one
-        /// replaces
-        #[arg(long)]
-        supersedes: Option<i64>,
-        #[command(flatten)]
-        actor: ActorArgs,
-    },
-    /// The key's slice and spec decisions, lanes, handoffs, files and notes,
-    /// capped (48,000 bytes at most as printed); every cut is counted in its
-    /// section's `omitted`. not_found when the ledger has none of them
-    Get {
-        /// The issue key: CORE-1234, PER-12 or owner/repo#12
-        key: String,
     },
 }
 

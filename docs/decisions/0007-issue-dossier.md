@@ -1,6 +1,6 @@
 # ADR 0007: An agent dossier per issue key
 
-Status: accepted, 2026-11-07, by the orchestrator in the night pass under the owner's grant (owner may overturn)  
+Status: accepted, 2026-11-07, by the orchestrator in the night pass under the owner's grant (owner may overturn); withdrawn 2026-11-23: `dossier` removed (#311), nothing measured it helping. Kept as the record  
 Builds on: the spec and lane kinds in [events.md](../events.md), #42 (files touched per
 lane), #53 (indexed key lookups)
 

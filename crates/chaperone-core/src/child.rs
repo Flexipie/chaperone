@@ -1,5 +1,5 @@
 //! A child process with a deadline: `daisy-cli reviews get` and merge's
-//! gh and herdr calls ([`cli`]), the git calls of `overlap` and `impact`,
+//! gh and herdr calls ([`cli`]), git calls,
 //! agent sessions and the commands of `check run tests`.
 
 use std::ffi::OsStr;

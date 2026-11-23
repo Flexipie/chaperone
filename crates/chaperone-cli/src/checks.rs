@@ -1,4 +1,4 @@
-//! `chaperone check`, `verify`, `pr open`, `merge`, `reviews`, `jobs`, `usage`, `attention`, `finding` and `dossier`. `reviews record` runs
+//! `chaperone check`, `verify`, `pr open`, `merge`, `reviews`, `jobs`, `usage`, `attention` and `finding`. `reviews record` runs
 //! `daisy-cli reviews get`, the CLI's only call into daisy, before the
 //! write opens its transaction. `check run` reads git in the lane's
 //! worktree, and runs tests and the review's and the verdict's sessions in
@@ -16,7 +16,6 @@ use chaperone_core::checks::{
     Attached, AttentionInput, CheckInput, FindingMove, RunInput, evidence_ok,
 };
 use chaperone_core::child;
-use chaperone_core::dossier::NoteInput;
 use chaperone_core::git::{self, ChangedFile};
 use chaperone_core::ledger::{self, Actor, Evidence, Kept, Ledger, LedgerError, Refusal};
 use chaperone_core::merge::{self, Done};
@@ -31,8 +30,7 @@ use chaperone_graph::{Companion, Required, code_globs, commands_in, declares, gl
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
-    AttentionCmd, CheckCmd, DossierCmd, FindingCmd, JobsCmd, ReviewsCmd, RunKind, UsageCmd,
-    WaiveKind,
+    AttentionCmd, CheckCmd, FindingCmd, JobsCmd, ReviewsCmd, RunKind, UsageCmd, WaiveKind,
 };
 use crate::output::{CliError, ErrorBody, Meta, Outcome};
 use crate::work::{items, observed_head, one};
@@ -1738,27 +1736,6 @@ pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outc
         waiver_ref: waiver_ref.flatten(),
     };
     one(ledger.finding_update(&args.actor.resolve(), &input, args.dry_run)??)
-}
-
-pub fn dossier(ledger: &Ledger, cmd: DossierCmd) -> Result<Outcome, CliError> {
-    match cmd {
-        DossierCmd::Note {
-            key,
-            note,
-            links,
-            supersedes,
-            actor,
-        } => {
-            let input = NoteInput {
-                key,
-                note,
-                links,
-                supersedes,
-            };
-            one(ledger.dossier_note(&actor.resolve(), &input)??)
-        }
-        DossierCmd::Get { key } => one(ledger.dossier_get(&key)??),
-    }
 }
 
 pub fn usage(ledger: &Ledger, cmd: UsageCmd) -> Result<Outcome, CliError> {
