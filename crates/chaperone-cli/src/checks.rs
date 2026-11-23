@@ -1907,7 +1907,6 @@ mod tests {
     fn a_plan_check_refuses_code() {
         let file = |path: &str| ChangedFile {
             path: path.into(),
-            area: None,
             added: Some(2),
             removed: Some(1),
             untracked: false,

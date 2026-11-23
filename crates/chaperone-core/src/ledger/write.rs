@@ -439,7 +439,7 @@ fn guard(tx: &Transaction, event: &mut Event) -> Checked<()> {
         }
         // On a key or a repo, never a lane, so they move no lane's
         // `updated_at` and are no fact anchor (ADR 0007, #119). `dossier
-        // note` and `backlog_prioritise` check the rest.
+        // note` checks the rest; nothing writes `backlog.prioritised` now.
         DossierNoted | BacklogPrioritised
             if event.lane_id.is_some() || event.spec_id.is_some() || !p.changed.is_empty() =>
         {

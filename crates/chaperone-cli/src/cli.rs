@@ -133,7 +133,7 @@ pub enum Cmd {
     },
     #[command(subcommand)]
     Pr(PrCmd),
-    /// The owner's merge of the lane's PR, as chaperone-ui's Merge: on a
+    /// The owner's merge of the lane's PR: on a
     /// YES verdict on --head, the lane ready and GitHub's PR head still
     /// --head, `gh pr merge --squash --delete-branch --match-head-commit`,
     /// then `pr.merged`, then the done handoff unless the lane's lease is

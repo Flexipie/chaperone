@@ -3,8 +3,6 @@
 //! inside its transaction.
 
 mod handoff;
-mod lane_board;
-mod lane_detail;
 mod lane_page;
 
 use std::collections::BTreeMap;
@@ -16,11 +14,7 @@ use serde_json::{Value, json};
 
 pub(crate) use self::handoff::commit_ok;
 pub use self::handoff::{Brief, Handoff, HandoffInput, LookAt, Smoke, Verification, WorkEvent};
-pub use self::lane_board::{AttentionRow, BoardLane, LaneBoard, SpecTitle, Stamps};
-pub use self::lane_detail::{DETAIL_ROWS, FindingRow, LaneDetail};
-pub use self::lane_page::{
-    DecisionRow, GateRow, Gates, LanePage, Question, ReviewRow, TimelineRow,
-};
+pub use self::lane_page::{GateRow, Gates, LanePage};
 use crate::cursor::{self, Cursor, Page};
 use crate::engine;
 use crate::ledger::{
@@ -35,8 +29,8 @@ const HANDOFF: &str = "handoff";
 const DEFAULT_LEASE_SECS: i64 = 900;
 /// Daisy's `tool` on handoff and event rows.
 const TOOL: &str = "chaperone";
-/// chaperone-ui's agent, and the blocker its pause writes: the one update
-/// it may make over another pair's live lease (cli-contract, `work update`).
+/// The owner's pause agent (the removed board's), and the blocker it
+/// writes: the one update it may make over another pair's live lease (cli-contract, `work update`).
 pub const OWNER_UI: &str = "owner-ui";
 pub const PAUSED_BY_OWNER: &str = "paused by owner";
 
@@ -1057,18 +1051,6 @@ impl Ledger {
         Ok(Ok(cursor::from_rows(rows, limit, |w| {
             vec![json!(w.updated_at), json!(w.id)]
         })))
-    }
-
-    /// Each issue key with a lane that is not cancelled, lowercased, and
-    /// whether one of its lanes is done: the UI's backlog leaves these out.
-    pub fn issue_lanes(&self) -> Result<BTreeMap<String, bool>, LedgerError> {
-        let mut stmt = self.conn().prepare(
-            "SELECT lower(source_id), max(status = 'done') FROM lanes
-              WHERE source IN ('linear', 'issue', 'github') AND source_id IS NOT NULL
-                AND status != 'cancelled' GROUP BY lower(source_id)",
-        )?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 }
 

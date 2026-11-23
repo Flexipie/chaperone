@@ -1,8 +1,6 @@
-//! git calls in a worktree, under a deadline: `overlap`, `impact`, the
-//! UI's diff and areas, and the lane page's files.
+//! git calls in a worktree, under a deadline: `overlap`, `impact` and
+//! the checks' diffs.
 
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -197,18 +195,13 @@ pub fn patch_id(
 #[derive(Debug, Serialize)]
 pub struct ChangedFile {
     pub path: String,
-    /// The repo profile's area, as the caller of [`lane_files`] maps it.
-    pub area: Option<String>,
     /// Lines against the merge base: the worktree's from [`changed_files`],
-    /// a commit's from [`commit_files`]. None for a binary file, and for an
-    /// untracked one past 1 MiB or not counted.
+    /// a commit's from [`commit_files`]. None for a binary file and an
+    /// untracked one.
     pub added: Option<u64>,
     pub removed: Option<u64>,
     pub untracked: bool,
 }
-
-/// An untracked file's lines are counted up to this size.
-const COUNT_BYTES: u64 = 1024 * 1024;
 
 /// Every file the worktree `wt` changes against the first base this clone
 /// has ([`BASES`], then the claimed `base_sha`): committed and uncommitted
@@ -236,7 +229,6 @@ pub fn changed_files(
     let untracked = whole(bin, wt, &args, deadline, cap)?.unwrap_or_default();
     files.extend(split_z(&untracked).map(|path| ChangedFile {
         path: path.to_string(),
-        area: None,
         added: None,
         removed: None,
         untracked: true,
@@ -345,7 +337,6 @@ fn numstat(
             let (added, removed) = (cols.next()?.parse().ok(), cols.next()?.parse().ok());
             Some(ChangedFile {
                 path: cols.next()?.to_string(),
-                area: None,
                 added,
                 removed,
                 untracked: false,
@@ -355,50 +346,8 @@ fn numstat(
     Ok((base, files))
 }
 
-/// [`changed_files`] with each file's area from `area`, and an untracked
-/// text file's lines as added (none once `deadline` has passed): the lane
-/// page's files.
-pub fn lane_files(
-    bin: &Path,
-    wt: &Path,
-    base_sha: Option<&str>,
-    deadline: Instant,
-    cap: usize,
-    area: impl Fn(&str) -> Option<String>,
-) -> Result<(String, Vec<ChangedFile>), String> {
-    let (base, mut files) = changed_files(bin, wt, base_sha, deadline, cap)?;
-    for f in &mut files {
-        f.area = area(&f.path);
-        if f.untracked && Instant::now() < deadline {
-            f.added = lines(&wt.join(&f.path));
-            f.removed = f.added.map(|_| 0);
-        }
-    }
-    Ok((base, files))
-}
-
 fn split_z(out: &[u8]) -> impl Iterator<Item = String> + '_ {
     out.split(|b| *b == 0)
         .filter(|p| !p.is_empty())
         .map(|p| String::from_utf8_lossy(p).into_owned())
-}
-
-/// A text file's lines (a last line without a newline counts), None when
-/// it is not a regular file (a symlink, a FIFO), binary (has a NUL), past
-/// [`COUNT_BYTES`] or unreadable.
-fn lines(path: &Path) -> Option<u64> {
-    if !std::fs::symlink_metadata(path).ok()?.is_file() {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    let read = File::open(path)
-        .ok()?
-        .take(COUNT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if read as u64 > COUNT_BYTES || bytes.contains(&0) {
-        return None;
-    }
-    let newlines = bytes.iter().filter(|b| **b == b'\n').count() as u64;
-    Some(newlines + u64::from(bytes.last().is_some_and(|b| *b != b'\n')))
 }

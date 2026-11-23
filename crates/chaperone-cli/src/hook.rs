@@ -76,7 +76,7 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
     let head = || observed_head(item.worktree_path.as_deref(), item.branch.as_deref());
     match event {
         HookEvent::SessionStart => {
-            let page = ledger.lane_page(work, None).ok()?;
+            let page = ledger.lane_page(work).ok()?;
             let gates = page.gates.iter().flat_map(|g| &g.gates);
             let failing: Vec<&str> = gates
                 .filter(|g| !g.passed)
@@ -194,7 +194,7 @@ fn answer(event: HookEvent, db: &Path, usage: &mut Option<(i64, PathBuf)>) -> Op
     }
 }
 
-/// How the prompts chaperone's own tools send start: chaperone-ui's
+/// How the prompts chaperone's own tools send start: an owner's
 /// answer and send-back record their own attention, `merge`'s notice is none.
 /// Claude Code injects `<task-notification>` when a background task ends.
 const TOOL_PROMPTS: &[&str] = &["Owner (", "Owner check (", "<task-notification>"];
