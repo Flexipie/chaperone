@@ -162,12 +162,14 @@ holder rule and leaves `updated_at` alone, as `check record` does). It appends o
 `owner/repo#N`, a PR already merged on another item, a sha that
 is not 7 to 40 lowercase hex digits, and a `--merged-at` that is not RFC 3339 UTC with
 milliseconds (GitHub's `mergedAt`, `2026-11-05T10:00:00Z`, is passed as
-`2026-11-05T10:00:00.000Z`). A PR the item has never held (#308: opened or merged outside
-`pr open`), once every other check above has passed, costs one `gh pr view <n> -R <owner/repo> --json headRefName,isCrossRepository,state`
-(a gh failure is `internal`) and is recorded only when the ref's repo is the item's `repo`, its head is not
-from another repository, its head branch is the item's `branch` and it is `MERGED`; each other
-case is refused, the message saying which failed. That `pr.merged` also sets the item's `pr_ref`
-to it (events.md, PR). A PR the item has held makes no gh call. The same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
+`2026-11-05T10:00:00.000Z`). Once every check above has passed (#308), it costs one
+`gh pr view <n> -R <owner/repo> --json headRefName,isCrossRepository,state` (a gh failure is
+`internal`), and a PR GitHub does not show `MERGED` is refused, so a lane cannot record a merge
+that did not happen. A PR the item has never held (opened or merged outside `pr open`) is
+recorded only when, as well, the ref's repo is the item's `repo`, its head is not from another
+repository and its head branch is the item's `branch`; each other case is refused, the message
+saying which failed. That `pr.merged` also sets the item's `pr_ref` to it (events.md, PR). The
+same PR again replays. It prints `{event_id, work_id, kind, replayed, at,
 payload}`.
 
 `attention record` is new (#59). `/orchestrate` and the owner run it for each intervention on

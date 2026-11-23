@@ -273,7 +273,8 @@ lane never held is recorded only when GitHub shows it merged from the lane's bra
 lane's repo (cli-contract.md, `work merged`); that event carries `changed.pr_ref`, the one
 column a `pr.merged` may change, so the PR is the lane's from then on. Otherwise it changes no column but
 `head_event_id`, and it is not a lane action in `work events`. The fact `pr.merged` (true when
-the lane's current PR has one) is read only by v21's `pr_merged` gate. The ready and
+the lane's current PR has one) is read only by v21's `pr_merged` gate; `work merged` records
+one only when GitHub shows the PR merged, so a lane cannot meet that gate without a merge. The ready and
 handoff numbers are read from the log, never stored on it. Commits after the handoff are
 `git rev-list --count <handoff commit>..<head_sha>`, and ready to merge is `merged_at` minus
 the handoff's `at`. The handoff is R11's first real one (its `next_action` does not start

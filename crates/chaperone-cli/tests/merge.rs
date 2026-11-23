@@ -131,9 +131,10 @@ fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
     assert_eq!(merges, [merge]);
 }
 
-/// `work merged` on a PR the lane never held asks GitHub once and records
-/// it only when it is in the lane's repo, from the lane's branch, merged;
-/// each refusal says which failed. The PR is then the lane's.
+/// `work merged` asks GitHub once and records a PR only when GitHub shows
+/// it merged; one the lane never held only when, as well, it is in the
+/// lane's repo and from the lane's branch. Each refusal says which failed.
+/// The PR is then the lane's.
 #[test]
 fn work_merged_records_a_pr_opened_outside_pr_open() {
     let dir = tempfile::tempdir().unwrap();
@@ -263,4 +264,21 @@ fn work_merged_records_a_pr_opened_outside_pr_open() {
     assert!(ok, "{out}");
     assert_eq!(out["payload"]["pr"], "O/R#5");
     assert_eq!(run(&["work", "get", "1"]).1["pr_ref"], "O/R#5");
+    // A PR the lane holds is not recorded until GitHub shows it merged.
+    let at = run(&["work", "get", "1"]).1["updated_at"].clone();
+    let update = [
+        "work",
+        "update",
+        "1",
+        "--pr",
+        "o/r#6",
+        "--expected-updated-at",
+    ];
+    assert!(run(&[&update[..], &[at.as_str().unwrap()]].concat()).0);
+    let (ok, err) = merged("o/r#6", "lane-b", false, "OPEN");
+    let message = err["message"].as_str().unwrap_or_default();
+    assert!(
+        !ok && message.contains("GitHub does not show PR o/r#6 merged"),
+        "{err}"
+    );
 }

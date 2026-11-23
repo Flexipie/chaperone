@@ -1249,6 +1249,16 @@ fn prune_removes_merged_lanes_dirs() {
     let db = dir.path().join("ledger.db");
     assert_eq!(run(&db, &["migrate"]).0, 0);
     let conn = rusqlite::Connection::open(&db).unwrap();
+    // `work merged` asks GitHub; this one says every PR merged.
+    let gh = dir.path().join("gh");
+    std::fs::write(&gh, "#!/bin/sh\necho '{\"state\":\"MERGED\"}'\n").unwrap();
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&gh, mode).unwrap();
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
     let lane = |n: &str, merged: bool, next: Option<&str>| {
         let (_, item) = run(&db, &["work", "create", "--title", n]);
         let (id, at) = (item["id"].to_string(), item["updated_at"].as_str().unwrap());
@@ -1275,11 +1285,16 @@ fn prune_removes_merged_lanes_dirs() {
                 "--merged-at",
                 at,
             ];
-            let (code, out) = run(
-                &db,
-                &[&["work", "merged", &id, "--pr", &pr], &args[..]].concat(),
-            );
-            assert_eq!(code, 0, "{out}");
+            let out = Command::new(BIN)
+                .arg("--db")
+                .arg(&db)
+                .args(["work", "merged", &id, "--pr", &pr])
+                .args(args)
+                .args(["--agent", "a", "--session", "s"])
+                .env("PATH", &path)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
         }
         if let Some(next) = next {
             let sql = "SELECT updated_at FROM lanes WHERE id = ?1";

@@ -727,10 +727,26 @@ impl Ledger {
     /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
     /// `merge_sha` from head `head` at `merged_at` (the forge's time). Keyed
     /// `merged:<lane>:<pr>`, so a retry replays. Refused for one already
-    /// merged on another lane, and for a PR the lane never held unless
-    /// `input.forge` shows it merged from the lane's branch in the lane's
-    /// repo; that one is then the lane's PR (`changed.pr_ref`).
+    /// merged on another lane, for one `input.forge` does not show merged, and
+    /// for a PR the lane never held unless `input.forge` shows it merged from
+    /// the lane's branch in the lane's repo; that one is then the lane's PR
+    /// (`changed.pr_ref`).
     pub fn work_merged(&self, actor: &Actor, input: &MergedInput) -> Checked<Recorded> {
+        self.record_merged(actor, input, false)
+    }
+
+    /// `work_merged`'s checks with nothing written, so the CLI refuses bad
+    /// input before it asks GitHub.
+    pub fn work_merged_dry(&self, actor: &Actor, input: &MergedInput) -> Checked<Recorded> {
+        self.record_merged(actor, input, true)
+    }
+
+    fn record_merged(
+        &self,
+        actor: &Actor,
+        input: &MergedInput,
+        dry_run: bool,
+    ) -> Checked<Recorded> {
         let pr = input.pr.trim();
         if !crate::work::pr_ref_ok(pr) {
             return invalid(format!("--pr must be owner/repo#N, got {pr}"));
@@ -767,7 +783,7 @@ impl Ledger {
             actor,
             Some(&key),
             None,
-            false,
+            dry_run,
             |conn, _| {
                 if !lane_exists(conn, work)? {
                     return Ok(Err(Refusal::NotFound {
@@ -781,8 +797,20 @@ impl Ledger {
                         input.merged_at
                     ));
                 }
+                let elsewhere = exists(
+                    conn,
+                    "SELECT 1 FROM events WHERE kind = 'pr.merged' AND lane_id != ?1
+                       AND lower(json_extract(payload_json, '$.pr')) = ?2",
+                    params![work, pr.to_lowercase()],
+                )?;
+                if elsewhere {
+                    return invalid(format!("PR {pr} is already merged on another work item"));
+                }
                 let mut payload = payload;
                 match (held_pr(conn, work, pr)?, &input.forge) {
+                    (Some(_), Some(forge)) if !forge.merged => {
+                        return invalid(format!("GitHub does not show PR {pr} merged"));
+                    }
                     // Stored as the lane held it, so a reader matching merges
                     // to the lane's PRs by plain equality finds it.
                     (Some(held), _) => {
@@ -831,15 +859,6 @@ impl Ledger {
                         };
                         payload.changed.insert("pr_ref".into(), change);
                     }
-                }
-                let elsewhere = exists(
-                    conn,
-                    "SELECT 1 FROM events WHERE kind = 'pr.merged' AND lane_id != ?1
-                       AND lower(json_extract(payload_json, '$.pr')) = ?2",
-                    params![work, pr.to_lowercase()],
-                )?;
-                if elsewhere {
-                    return invalid(format!("PR {pr} is already merged on another work item"));
                 }
                 Ok(Ok(check_event(EventKind::PrMerged, work, payload)))
             },
@@ -1408,8 +1427,8 @@ pub(crate) fn sha_ok(sha: &str) -> bool {
             .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
 }
 
-/// `work merged`'s refusal of a PR the lane never held, checked last: the
-/// CLI asks GitHub only on exactly this one.
+/// `work merged`'s refusal of a PR the lane never held when GitHub was not
+/// asked, checked last: the CLI asks GitHub past this one and no other.
 pub fn never_held(work: i64, pr: &str) -> String {
     format!("work item {work} has never held PR {pr}")
 }

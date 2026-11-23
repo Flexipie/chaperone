@@ -194,16 +194,16 @@ pub fn run(
                 forge: None,
             };
             let actor = actor.resolve();
-            // GitHub is asked only once the ledger's one refusal left is that the
-            // lane never held the PR, so bad input never reaches gh.
-            let recorded = match ledger.work_merged(&actor, &input)? {
-                Err(Refusal::InvalidInput(m)) if m == never_held(id, input.pr.trim()) => {
-                    input.forge = forge_pr(&input.pr)?;
-                    ledger.work_merged(&actor, &input)?
+            // The ledger's own checks run first, writing nothing, so bad input
+            // never reaches gh; then GitHub must show the PR merged.
+            match ledger.work_merged_dry(&actor, &input)? {
+                Err(Refusal::InvalidInput(m)) if m == never_held(id, input.pr.trim()) => {}
+                r => {
+                    r?;
                 }
-                r => r,
-            };
-            one(recorded?)
+            }
+            input.forge = forge_pr(&input.pr)?;
+            one(ledger.work_merged(&actor, &input)??)
         }
         WorkCmd::Events { id } => items(ledger.work_events(id)?),
         WorkCmd::Ready {
