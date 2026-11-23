@@ -93,6 +93,7 @@ fn refusals_write_nothing() {
     let a = actor("9");
     let id = lane(&ledger, &["o/r#1"]);
     let other = lane(&ledger, &["o/r#1"]);
+    let never = lane(&ledger, &[]);
     let refused = |input: MergedInput, says: &str| {
         let r = ledger.work_merged(&a, &input).unwrap();
         assert!(
@@ -125,6 +126,8 @@ fn refusals_write_nothing() {
         .unwrap()
         .unwrap();
     refused(merged(other, "o/r#1"), "another work item");
+    // Checked before never held, which v21's `work merged` relies on.
+    refused(merged(never, "o/r#1"), "another work item");
     // The write itself refuses a merge without its fields.
     for head_sha in [None, Some("1234567".to_string())] {
         let bare = Mutation::Event {

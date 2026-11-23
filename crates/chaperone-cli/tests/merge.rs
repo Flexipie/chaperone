@@ -133,8 +133,9 @@ fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
 
 /// On v21 `work merged` asks GitHub: a PR in another repo, from a fork,
 /// from another branch or not merged is refused, each saying which; else the merge is GitHub's (not the
-/// flags'), and a PR that was not the lane's becomes its `pr_ref` first. Bad
-/// input makes no gh call, and a gh that fails is `internal`.
+/// flags'), and a lane with no PR takes it as its `pr_ref`; a lane with one
+/// refuses any other. Bad input makes no gh call, and a gh that fails is
+/// `internal`. Off v21 the merge's flags are required.
 #[test]
 fn work_merged_on_v21_records_what_github_shows() {
     let dir = tempfile::tempdir().unwrap();
@@ -179,9 +180,16 @@ fn work_merged_on_v21_records_what_github_shows() {
             "--branch",
             "lane-b",
         ],
+        &["work", "create", "--title", "t"],
+        &["work", "claim", "2", "--pipeline", "v20"],
     ] {
         assert!(run(args).0, "{args:?}");
     }
+    let (ok, err) = run(&["work", "merged", "2", "--pr", "o/r#9"]);
+    assert!(
+        !ok && err["message"] == "--merge-sha is required off v21",
+        "{err}"
+    );
     // A branch "fork" is the lane's branch name from another repository.
     let merged = |pr: &str, branch: &str, state: &str| {
         let fork = branch == "fork";
@@ -240,13 +248,15 @@ fn work_merged_on_v21_records_what_github_shows() {
         )
     );
     assert_eq!(run(&["work", "get", "1"]).1["pr_ref"], "o/r#5");
-    // The lane moves on to another PR; replaying the old merge does not
-    // take the lane back to it.
+    // The lane moves on to another PR; the old merge is not its PR now.
     let at = run(&["work", "get", "1"]).1["updated_at"].clone();
     let update = ["work", "update", "1", "--pr", "o/r#6"];
     let cas = ["--expected-updated-at", at.as_str().unwrap()];
     assert!(run(&[&update[..], &cas].concat()).0);
-    let (ok, out) = merged("o/r#5", "lane-b", "MERGED");
-    assert!(ok && out["replayed"] == true, "{out}");
+    let (ok, err) = merged("o/r#5", "lane-b", "MERGED");
+    assert!(
+        !ok && err["message"] == "o/r#5 is not the lane's PR o/r#6",
+        "{err}"
+    );
     assert_eq!(run(&["work", "get", "1"]).1["pr_ref"], "o/r#6");
 }

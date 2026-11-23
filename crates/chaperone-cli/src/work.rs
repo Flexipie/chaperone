@@ -358,9 +358,9 @@ pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
 
 /// A v21 lane's merge as GitHub shows it (#308): the PR must be in the
 /// lane's repo, not from a fork, from the lane's branch and merged, and its
-/// merge commit, head and time are GitHub's. A PR the lane never held
-/// becomes its `pr_ref` only once the ledger refuses it for that alone, so
-/// any other refusal or a replay leaves `pr_ref` as it was.
+/// merge commit, head and time are GitHub's. A lane with a `pr_ref` records
+/// only that PR. A lane with none takes the PR as its `pr_ref` only once the
+/// ledger refuses it for never held alone, so any other refusal leaves it.
 fn merged_on_github(
     ledger: &Ledger,
     actor: &Actor,
@@ -372,6 +372,13 @@ fn merged_on_github(
         Some(ref_) if work::pr_ref_ok(pr) => ref_,
         _ => return Err(refuse(format!("--pr must be owner/repo#N, got {pr}"))),
     };
+    if let Some(held) = item
+        .pr_ref
+        .as_deref()
+        .filter(|h| !h.eq_ignore_ascii_case(pr))
+    {
+        return Err(refuse(format!("{pr} is not the lane's PR {held}")));
+    }
     let fields = "state,headRefName,headRefOid,isCrossRepository,mergeCommit,mergedAt";
     let args = ["pr", "view", n, "-R", repo, "--json", fields];
     let out =
