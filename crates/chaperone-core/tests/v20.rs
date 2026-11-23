@@ -711,3 +711,48 @@ fn a_v21_lane_runs_v20_s_ready_row_but_the_size_gate() {
     lane.diff(HEAD, 500, true);
     assert_eq!(lane.ready(HEAD), denied("tests_passed", &["tests.passed"]));
 }
+
+/// v21: once the lane's PR is recorded merged, done needs no verdict, and
+/// the done event says the merge had none; v20 still needs its verdict.
+#[test]
+fn a_v21_lane_whose_pr_merged_is_done_without_a_verdict() {
+    for pipeline in ["v20", "v21"] {
+        let lane = V20::on(pipeline, "code");
+        lane.run("plan_check", OTHER, json!({}));
+        lane.diff(HEAD, 5, true);
+        let update = chaperone_core::work::UpdateInput {
+            pr_ref: Some("o/r#1".into()),
+            ..Default::default()
+        };
+        let l = &lane.ledger;
+        l.work_update(&lane.lane, 1, &update, None, None, false)
+            .unwrap()
+            .unwrap();
+        let unmerged = lane.handoff(HEAD, "done");
+        assert!(
+            matches!(&unmerged, Err(Refusal::GateDenied { gate, .. }) if gate == "done_verdict"),
+            "{pipeline}: {unmerged:?}"
+        );
+        let merged = chaperone_core::checks::MergedInput {
+            work: 1,
+            pr: "o/r#1".into(),
+            merge_sha: "abcdef1".into(),
+            head: "1234567".into(),
+            merged_at: "2026-11-05T10:00:00.000Z".into(),
+            ..Default::default()
+        };
+        l.work_merged(&lane.owner, &merged).unwrap().unwrap();
+        let done = lane.handoff(HEAD, "done");
+        if pipeline == "v20" {
+            assert!(
+                matches!(&done, Err(Refusal::GateDenied { gate, .. }) if gate == "done_verdict")
+            );
+            continue;
+        }
+        done.unwrap();
+        let events = l.work_events(1).unwrap();
+        let done = events.iter().rfind(|e| e.action == "handoff").unwrap();
+        let detail: Value = serde_json::from_str(&done.detail_json).unwrap();
+        assert_eq!(detail["merged_without_verdict"], true, "{detail}");
+    }
+}

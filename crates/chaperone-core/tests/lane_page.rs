@@ -215,6 +215,7 @@ fn merged(ledger: &Ledger, work: i64, repo: &str, merged_at: &str) {
         head: "abc1234def".into(),
         merged_at: merged_at.into(),
         patch_id: None,
+        forge: None,
     };
     ledger.work_merged(&actor("9"), &input).unwrap().unwrap();
 }

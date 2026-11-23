@@ -6,6 +6,7 @@ mod handoff;
 mod lane_board;
 mod lane_detail;
 mod lane_page;
+pub(crate) use self::lane_page::CURRENT_PR_MERGED;
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;

@@ -196,8 +196,8 @@ pub enum Cmd {
 pub enum HookEvent {
     /// The lane's state, gates not passing yet and commands, as context
     SessionStart,
-    /// Deny `gh pr create`, `gh pr edit`, `gh pr merge` and `chaperone work
-    /// ready --yes`
+    /// Deny `gh pr merge` and `chaperone work ready --yes`, and on v20
+    /// `gh pr create` and `gh pr edit`
     PreBash,
     /// Block a stop once the branch moved past the lane's ready handoff
     Stop,

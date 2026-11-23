@@ -6,6 +6,10 @@
 #   as any finding does. A lane stopped at a cap, waived, and stopped again when review fixes
 #   grew it; and the cap counted a cleanup's removed lines, which `code_lines` (added lines
 #   only, from #292 for every pipeline) no longer holds.
+# - A finished lane is never held (#308): a lane whose current PR is recorded merged
+#   (`pr.merged`) can hand off done without a verdict on that head (`pr_merged` in
+#   `done_verdict`), and that `phase.entered` says `merged_without_verdict`. After an owner
+#   merge no verdict could be recorded, so the lane could never close.
 #
 # From v21 on, v20 is not edited, and v21 is the id edited in place (#244's rule, moved from
 # v20): a lane stamped with an older v21 hash still loads this document by id. v21 names
@@ -218,9 +222,14 @@ fn = "all"
 args = { of = ["verdict_is_yes", "verdict_on_head"] }
 
 [[gate]]
+id = "pr_merged"
+fn = "eq"
+args = { field = "pr.merged", value = true }
+
+[[gate]]
 id = "done_verdict"
 fn = "any"
-args = { of = ["no_code_change", "verdict_yes_on_head"] }
+args = { of = ["no_code_change", "verdict_yes_on_head", "pr_merged"] }
 
 # --- the gated handoff -------------------------------------------------------
 

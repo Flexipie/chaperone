@@ -16,12 +16,16 @@ struct Lane {
 
 impl Lane {
     fn new() -> Lane {
+        Lane::on("v20")
+    }
+
+    fn on(pipeline: &str) -> Lane {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("ledger.db");
         let lane = Lane { dir, db };
         lane.cli(&["migrate"]);
         lane.cli(&["work", "create", "--title", "t"]);
-        lane.cli(&["work", "claim", "1", "--pipeline", "v20"]);
+        lane.cli(&["work", "claim", "1", "--pipeline", pipeline]);
         lane
     }
 
@@ -186,6 +190,26 @@ fn pre_bash_denies_what_the_binary_owns() {
         let why = out["permissionDecisionReason"].as_str().unwrap();
         assert!(why.contains(reason), "{command}: {why}");
     }
+}
+
+/// From v21 a lane opens or edits its PR with gh when `pr open` will not;
+/// it still never merges it.
+#[test]
+fn pre_bash_on_v21_lets_the_lane_open_its_pr_but_not_merge_it() {
+    let lane = Lane::on("v21");
+    let bash = |command: &str| json!({"tool_input": {"command": command}});
+    for command in ["gh pr create --fill", "gh pr edit 5 --title x"] {
+        assert_eq!(
+            lane.hook(Some("1"), "pre-bash", bash(command)),
+            "",
+            "{command}"
+        );
+    }
+    let out = lane.json("pre-bash", bash("gh pr merge 5 --squash"));
+    assert_eq!(
+        out["hookSpecificOutput"]["permissionDecision"], "deny",
+        "{out}"
+    );
 }
 
 #[test]

@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::ledger::projection::{UNSETTLED, project};
 use crate::ledger::{
-    Actor, Applied, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation, Payload,
-    Refusal, canonical_at, exists, redact_payload,
+    Actor, Applied, Change, Checked, EventKind, Finding, Findings, Ledger, LedgerError, Mutation,
+    Payload, Refusal, canonical_at, exists, redact_payload,
 };
 use crate::pipeline::{Fact, canonical_string};
 
@@ -166,6 +166,16 @@ pub struct MergedInput {
     pub head: String,
     pub merged_at: String,
     pub patch_id: Option<String>,
+    /// What GitHub says of a PR the lane never held; None for one it held.
+    pub forge: Option<ForgePr>,
+}
+
+/// GitHub's view of a PR: `headRefName`, `isCrossRepository`, `state` MERGED.
+#[derive(Clone, Debug, Default)]
+pub struct ForgePr {
+    pub head_branch: String,
+    pub cross_repo: bool,
+    pub merged: bool,
 }
 
 /// What `check record` (or `dossier note`) wrote, or the event a retry
@@ -716,8 +726,10 @@ impl Ledger {
 
     /// One `pr.merged`: PR `input.pr`, which the lane has held, merged as
     /// `merge_sha` from head `head` at `merged_at` (the forge's time). Keyed
-    /// `merged:<lane>:<pr>`, so a retry replays. Refused for a PR the lane
-    /// never held and for one already merged on another lane.
+    /// `merged:<lane>:<pr>`, so a retry replays. Refused for one already
+    /// merged on another lane, and for a PR the lane never held unless
+    /// `input.forge` shows it merged from the lane's branch in the lane's
+    /// repo; that one is then the lane's PR (`changed.pr_ref`).
     pub fn work_merged(&self, actor: &Actor, input: &MergedInput) -> Checked<Recorded> {
         let pr = input.pr.trim();
         if !crate::work::pr_ref_ok(pr) {
@@ -769,25 +781,61 @@ impl Ledger {
                         input.merged_at
                     ));
                 }
-                // Stored as the lane held it, so a reader matching merges to
-                // the lane's PRs by plain equality finds it.
-                let held: Option<String> = conn
-                    .query_row(
-                        "SELECT iif(kind = 'pr.opened', json_extract(payload_json, '$.pr'),
-                                json_extract(payload_json, '$.changed.pr_ref.to'))
-                         FROM events WHERE lane_id = ?1 AND (
-                           kind = 'pr.opened' AND lower(json_extract(payload_json, '$.pr')) = ?2
-                           OR lower(json_extract(payload_json, '$.changed.pr_ref.to')) = ?2)
-                         LIMIT 1",
-                        params![work, pr.to_lowercase()],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                let Some(held) = held else {
-                    return invalid(format!("work item {work} has never held PR {pr}"));
-                };
                 let mut payload = payload;
-                payload.rest.insert("pr".into(), json!(held));
+                match (held_pr(conn, work, pr)?, &input.forge) {
+                    // Stored as the lane held it, so a reader matching merges
+                    // to the lane's PRs by plain equality finds it.
+                    (Some(held), _) => {
+                        payload.rest.insert("pr".into(), json!(held));
+                    }
+                    (None, None) => {
+                        return invalid(format!("work item {work} has never held PR {pr}"));
+                    }
+                    (None, Some(forge)) => {
+                        let (repo, branch, pr_ref): (
+                            Option<String>,
+                            Option<String>,
+                            Option<String>,
+                        ) = conn.query_row(
+                            "SELECT repo_slug, branch, pr_ref FROM lanes WHERE id = ?1",
+                            [work],
+                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                        )?;
+                        let pr_repo = pr.rsplit_once('#').map(|(r, _)| r);
+                        let why = if !repo
+                            .as_deref()
+                            .zip(pr_repo)
+                            .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+                        {
+                            format!(
+                                "it is not in the lane's repo {}",
+                                repo.as_deref().unwrap_or("(none)")
+                            )
+                        } else if forge.cross_repo {
+                            "GitHub says its head is in another repository".into()
+                        } else if branch.as_deref() != Some(forge.head_branch.as_str()) {
+                            format!(
+                                "its head branch on GitHub is {}, not the lane's branch {}",
+                                forge.head_branch,
+                                branch.as_deref().unwrap_or("(none)")
+                            )
+                        } else if !forge.merged {
+                            "GitHub does not show it merged".into()
+                        } else {
+                            String::new()
+                        };
+                        if !why.is_empty() {
+                            return invalid(format!(
+                                "work item {work} has never held PR {pr}, and {why}"
+                            ));
+                        }
+                        let change = Change {
+                            from: json!(pr_ref),
+                            to: json!(pr),
+                        };
+                        payload.changed.insert("pr_ref".into(), change);
+                    }
+                }
                 let elsewhere = exists(
                     conn,
                     "SELECT 1 FROM events WHERE kind = 'pr.merged' AND lane_id != ?1
@@ -802,6 +850,11 @@ impl Ledger {
             |_, _, _| Ok(()),
         )?;
         Ok(recorded(applied, Some(work)))
+    }
+
+    /// The PR `pr` as lane `work` held it, or None when it never held it.
+    pub fn pr_held(&self, work: i64, pr: &str) -> Result<Option<String>, LedgerError> {
+        held_pr(self.conn(), work, pr.trim())
     }
 
     /// One `attention.recorded`: an intervention on lane `input.work` by the
@@ -1362,6 +1415,23 @@ pub(crate) fn sha_ok(sha: &str) -> bool {
         && sha
             .bytes()
             .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+}
+
+/// PR `pr` as lane `work` held it (a `pr.opened` or a `changed.pr_ref.to`),
+/// matched without case.
+fn held_pr(conn: &Connection, work: i64, pr: &str) -> Result<Option<String>, LedgerError> {
+    Ok(conn
+        .query_row(
+            "SELECT iif(kind = 'pr.opened', json_extract(payload_json, '$.pr'),
+                    json_extract(payload_json, '$.changed.pr_ref.to'))
+             FROM events WHERE lane_id = ?1 AND (
+               kind = 'pr.opened' AND lower(json_extract(payload_json, '$.pr')) = ?2
+               OR lower(json_extract(payload_json, '$.changed.pr_ref.to')) = ?2)
+             LIMIT 1",
+            params![work, pr.to_lowercase()],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 pub(crate) fn lane_exists(conn: &Connection, id: i64) -> Result<bool, LedgerError> {

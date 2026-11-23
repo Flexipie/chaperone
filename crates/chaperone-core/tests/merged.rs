@@ -51,6 +51,7 @@ fn merged(work: i64, pr: &str) -> MergedInput {
         head: "1234567".into(),
         merged_at: "2026-11-05T10:00:00.000Z".into(),
         patch_id: None,
+        forge: None,
     }
 }
 

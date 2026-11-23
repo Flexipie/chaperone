@@ -433,6 +433,7 @@ mod tests {
                     head: "abc1234".into(),
                     merged_at: at,
                     patch_id: None,
+                    forge: None,
                 };
                 rw.work_merged(&checker, &merged).unwrap().unwrap();
             }

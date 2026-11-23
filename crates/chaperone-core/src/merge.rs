@@ -157,6 +157,7 @@ pub fn merge(
         // GitHub gives seconds; the ledger takes milliseconds (cli-contract.md).
         merged_at: format!("{}.000Z", at.trim_end_matches('Z')),
         patch_id: None,
+        forge: None,
     };
     let merged = format!("Merged {pr} as {}", short(sha));
     done(ledger.work_merged(actor, &input)).map_err(|e| {

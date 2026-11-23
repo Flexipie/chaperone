@@ -72,6 +72,7 @@ fn merged(ledger: &Ledger, work: i64, merged_at: &str) {
         head: HEAD.into(),
         merged_at: merged_at.into(),
         patch_id: None,
+        forge: None,
     };
     ledger.work_merged(&actor("9"), &input).unwrap().unwrap();
 }

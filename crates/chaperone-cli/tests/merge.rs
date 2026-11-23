@@ -130,3 +130,97 @@ fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
     let merge = format!("pr merge 1 -R o/r --squash --delete-branch --match-head-commit {head}");
     assert_eq!(merges, [merge]);
 }
+
+/// `work merged` on a PR the lane never held asks GitHub once and records
+/// it only when it is in the lane's repo, from the lane's branch, merged;
+/// each refusal says which failed. The PR is then the lane's.
+#[test]
+fn work_merged_records_a_pr_opened_outside_pr_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, bin, view) = (
+        dir.path().join("ledger.db"),
+        dir.path().join("bin"),
+        dir.path().join("view.json"),
+    );
+    std::fs::create_dir(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(&gh, format!("#!/bin/sh\ncat {view:?}\n")).unwrap();
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&gh, mode).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let run = |args: &[&str]| -> (bool, Value) {
+        let out = Command::new(BIN)
+            .arg("--db")
+            .arg(&db)
+            .args(args)
+            .envs([("DAISY_AGENT", "owner"), ("DAISY_SESSION", "owner")])
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        let ok = out.status.success();
+        let v: Value = serde_json::from_slice(if ok { &out.stdout } else { &out.stderr }).unwrap();
+        (ok, v[if ok { "data" } else { "error" }].clone())
+    };
+    for args in [
+        &["migrate"][..],
+        &["work", "create", "--title", "t", "--repo", "o/r"],
+        &["work", "claim", "1", "--branch", "lane-b"],
+    ] {
+        assert!(run(args).0, "{args:?}");
+    }
+    let merged = |pr: &str, branch: &str, cross: bool, state: &str| {
+        let v = json!({"headRefName": branch, "isCrossRepository": cross, "state": state});
+        std::fs::write(&view, v.to_string()).unwrap();
+        run(&[
+            "work",
+            "merged",
+            "1",
+            "--pr",
+            pr,
+            "--merge-sha",
+            "abcdef1",
+            "--head",
+            "1234567",
+            "--merged-at",
+            "2026-11-05T10:00:00.000Z",
+        ])
+    };
+    for (pr, branch, cross, state, why) in [
+        (
+            "x/y#5",
+            "lane-b",
+            false,
+            "MERGED",
+            "it is not in the lane's repo o/r",
+        ),
+        (
+            "o/r#5",
+            "lane-b",
+            true,
+            "MERGED",
+            "its head is in another repository",
+        ),
+        (
+            "o/r#5",
+            "other",
+            false,
+            "MERGED",
+            "head branch on GitHub is other, not the lane's branch lane-b",
+        ),
+        (
+            "o/r#5",
+            "lane-b",
+            false,
+            "OPEN",
+            "GitHub does not show it merged",
+        ),
+    ] {
+        let (ok, err) = merged(pr, branch, cross, state);
+        let message = err["message"].as_str().unwrap_or_default();
+        assert!(!ok && message.contains(why), "{why}: {err}");
+    }
+    let (ok, out) = merged("O/R#5", "lane-b", false, "MERGED");
+    assert!(ok, "{out}");
+    assert_eq!(out["payload"]["pr"], "O/R#5");
+    assert_eq!(run(&["work", "get", "1"]).1["pr_ref"], "O/R#5");
+}

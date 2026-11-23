@@ -5,7 +5,8 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use chaperone_core::checks::MergedInput;
+use chaperone_core::checks::{ForgePr, MergedInput};
+use chaperone_core::child;
 use chaperone_core::cursor::Page;
 use chaperone_core::git;
 use chaperone_core::ledger::{Ledger, Refusal};
@@ -15,6 +16,9 @@ use serde_json::{Value, json};
 
 use crate::cli::{ActorArgs, Format, WorkCmd};
 use crate::output::{self, CliError, Meta, Outcome};
+
+/// How long `work merged` waits for `gh pr view`.
+const FORGE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long `work handoff` waits for `git rev-parse` in the worktree.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -180,6 +184,11 @@ pub fn run(
             patch_id,
             actor,
         } => {
+            // GitHub is asked only about a PR the ledger never saw the lane hold.
+            let forge = match ledger.pr_held(id, &pr)? {
+                Some(_) => None,
+                None => forge_pr(&pr)?,
+            };
             let input = MergedInput {
                 work: id,
                 pr,
@@ -187,6 +196,7 @@ pub fn run(
                 head,
                 merged_at,
                 patch_id,
+                forge,
             };
             one(ledger.work_merged(&actor.resolve(), &input)??)
         }
@@ -330,6 +340,32 @@ pub(crate) fn value(v: impl Serialize) -> Result<Value, CliError> {
 
 pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
     Ok(Outcome::One(value(v)?))
+}
+
+/// What `gh pr view` says of `owner/repo#N`; None for a ref of another
+/// shape, which the ledger refuses.
+fn forge_pr(pr: &str) -> Result<Option<ForgePr>, CliError> {
+    let Some((repo, n)) = pr.trim().rsplit_once('#') else {
+        return Ok(None);
+    };
+    let fields = "headRefName,isCrossRepository,state";
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(["pr", "view", n, "-R", repo, "--json", fields]);
+    let failed = |why: &str| CliError::Internal(format!("gh pr view {pr}: {why}"));
+    let out = match child::run(&mut cmd, Instant::now() + FORGE_TIMEOUT, 1 << 20) {
+        Ok(done) if done.status.success() => done.out,
+        Ok(done) => return Err(failed(String::from_utf8_lossy(&done.err).trim())),
+        Err(child::Failed::TimedOut) => return Err(failed("timed out")),
+        Err(child::Failed::Spawn(e) | child::Failed::Wait(e)) => {
+            return Err(failed(&e.to_string()));
+        }
+    };
+    let v: Value = serde_json::from_slice(&out).map_err(|e| failed(&e.to_string()))?;
+    Ok(Some(ForgePr {
+        head_branch: v["headRefName"].as_str().unwrap_or_default().into(),
+        cross_repo: v["isCrossRepository"] != json!(false),
+        merged: v["state"] == "MERGED",
+    }))
 }
 
 #[cfg(test)]
