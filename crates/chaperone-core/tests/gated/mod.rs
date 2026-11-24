@@ -46,6 +46,19 @@ pub fn lane(ledger: &Ledger, id: i64, stamp: Option<&str>) -> Result<(), Refusal
         .map(|_| ())
 }
 
+/// Restamps lane `id` in the ledger at `db` with `pipeline`, as a lane
+/// claimed while it was the default: a claim only stamps v21 now.
+pub fn restamp(db: &std::path::Path, id: i64, pipeline: &str) {
+    let p = pipeline::by_id(pipeline).unwrap();
+    rusqlite::Connection::open(db)
+        .unwrap()
+        .execute(
+            "UPDATE lanes SET pipeline_id = ?1, pipeline_hash = ?2 WHERE id = ?3",
+            rusqlite::params![p.id, p.hash, id],
+        )
+        .unwrap();
+}
+
 pub fn open() -> (tempfile::TempDir, Ledger) {
     let dir = tempfile::tempdir().unwrap();
     let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();
@@ -121,18 +134,20 @@ impl Gated {
         Gated::on("v20", kind)
     }
 
-    /// Lane 1 of `kind`, claimed on `pipeline`.
+    /// Lane 1 of `kind`, claimed and stamped `pipeline`.
     pub fn on(pipeline: &str, kind: &str) -> Gated {
         let lane = Gated::unclaimed(kind);
-        let claim = ClaimInput {
-            pipeline: Some(pipeline.into()),
-            ..ClaimInput::default()
-        };
         lane.ledger
-            .work_claim(&lane.lane, 1, &claim, None, false)
+            .work_claim(&lane.lane, 1, &ClaimInput::default(), None, false)
             .unwrap()
             .unwrap();
+        restamp(&lane.db(), 1, pipeline);
         lane
+    }
+
+    /// The ledger file.
+    pub fn db(&self) -> std::path::PathBuf {
+        self._dir.path().join("ledger.db")
     }
 
     /// Lane 1 of `kind`, created by the lane session and not yet claimed.

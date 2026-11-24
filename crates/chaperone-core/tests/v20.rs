@@ -15,35 +15,35 @@ use gated::*;
 use serde_json::{Value, json};
 
 #[test]
-fn a_first_claim_may_stamp_a_newer_pipeline_only() {
+fn a_first_claim_stamps_the_default_or_a_newer_pipeline_only() {
     let (_dir, ledger) = open();
     lane(&ledger, 1, None).unwrap();
     let item = ledger.work_get(1, &ledger.now().unwrap()).unwrap().unwrap();
-    assert_eq!(item.pipeline_id.as_deref(), Some("v19"));
-    // The default, an older one and an unknown one are not newer.
-    for (id, older) in [(2, "v19"), (3, "v17"), (4, "v18")] {
-        refused(lane(&ledger, id, Some(older)), "newer than the default v19");
-    }
-    let v20 = &pipeline::newer()[0];
-    lane(&ledger, 5, Some("v20")).unwrap();
-    let item = ledger.work_get(5, &ledger.now().unwrap()).unwrap().unwrap();
+    let v21 = pipeline::current();
     let stamp = (item.pipeline_id.as_deref(), item.pipeline_hash.as_deref());
-    assert_eq!(stamp, (Some("v20"), Some(v20.hash.as_str())));
+    assert_eq!(stamp, (Some("v21"), Some(v21.hash.as_str())));
     assert_eq!(item.route.as_deref(), Some("code_pr"));
-    // The stamp is the first claim's: a renewal or a later claim may not move it.
+    // An older one and an unknown one are refused; naming the default stamps it.
+    for (id, older) in [(2, "v20"), (3, "v19"), (4, "v17"), (5, "v18")] {
+        refused(lane(&ledger, id, Some(older)), "the default v21 or a newer");
+    }
+    lane(&ledger, 6, Some("v21")).unwrap();
+    let item = ledger.work_get(6, &ledger.now().unwrap()).unwrap().unwrap();
+    assert_eq!(item.pipeline_id.as_deref(), Some("v21"));
+    // The stamp is the first claim's: a renewal or a later claim may not name one.
     let me = pair("lane", "s1");
     let again = ClaimInput {
-        pipeline: Some("v20".into()),
+        pipeline: Some("v21".into()),
         ..ClaimInput::default()
     };
     refused(
-        ledger.work_claim(&me, 5, &again, None, false).unwrap(),
+        ledger.work_claim(&me, 6, &again, None, false).unwrap(),
         "held",
     );
-    ledger.work_release(&me, 5, None, false).unwrap().unwrap();
+    ledger.work_release(&me, 6, None, false).unwrap().unwrap();
     refused(
-        ledger.work_claim(&me, 5, &again, None, false).unwrap(),
-        "is stamped v20",
+        ledger.work_claim(&me, 6, &again, None, false).unwrap(),
+        "is stamped v21",
     );
 }
 
@@ -52,9 +52,12 @@ fn a_first_claim_may_stamp_a_newer_pipeline_only() {
 /// claim stay writable. A v19 lane keeps `check record` as it was.
 #[test]
 fn harness_checks_are_the_harness_s_on_a_v20_lane() {
-    let (_dir, ledger) = open();
-    lane(&ledger, 1, Some("v20")).unwrap();
+    let (dir, ledger) = open();
+    let db = dir.path().join("ledger.db");
+    lane(&ledger, 1, None).unwrap();
     lane(&ledger, 2, None).unwrap();
+    restamp(&db, 1, "v20");
+    restamp(&db, 2, "v19");
     let fresh = pair("fresh", "s2");
     let record = |work: i64, check: &str, outcome: &str, reason: Option<&str>| {
         let input = CheckInput {
@@ -101,9 +104,12 @@ fn harness_checks_are_the_harness_s_on_a_v20_lane() {
 /// a claim: claimed, never passed. A v19 lane still refuses that session.
 #[test]
 fn the_lane_records_its_own_smoke_claim_on_v20_only() {
-    let (_dir, ledger) = open();
-    lane(&ledger, 1, Some("v20")).unwrap();
+    let (dir, ledger) = open();
+    let db = dir.path().join("ledger.db");
+    lane(&ledger, 1, None).unwrap();
     lane(&ledger, 2, None).unwrap();
+    restamp(&db, 1, "v20");
+    restamp(&db, 2, "v19");
     let file = Attached {
         path: "out.txt".into(),
         sha256: "0".into(),
@@ -241,7 +247,8 @@ fn the_cap_counts_code_and_only_the_owner_raises_it() {
     assert_eq!(v.ready(OTHER), tests);
     v.diff(THIRD, 501, true);
     assert_eq!(v.ready(THIRD), over);
-    lane(&v.ledger, 2, Some("v20")).unwrap();
+    lane(&v.ledger, 2, None).unwrap();
+    restamp(&v.db(), 2, "v20");
     let diff = json!({"code_lines": 450, "uncounted_files": 0});
     raw(&v.ledger, 2, "diff", "harness", diff).unwrap();
     let facts = v.ledger.project(2, Some(HEAD)).unwrap();
@@ -260,7 +267,7 @@ fn a_carried_review_and_verdict_pass_on_the_amend() {
     lane.diff(AMEND, 10, true);
     lane.run("tests", AMEND, json!({"result": "pass"}));
     // Carried as `check run review` carries a complete review of the tree.
-    let v20 = &pipeline::newer()[0];
+    let v20 = pipeline::by_id("v20").unwrap();
     let plan = review::plan(v20).unwrap();
     let carried = review::replay(&lane.ledger, &lane.owner, &mut lane.amend(), &plan);
     let carried = carried.unwrap().unwrap().unwrap();
@@ -347,12 +354,9 @@ fn a_session_plan_check_or_verdict_is_no_harness_fact() {
         };
         lane.ledger.check_record(&fresh, &input).unwrap().unwrap();
     }
-    let claim = ClaimInput {
-        pipeline: Some("v20".into()),
-        ..ClaimInput::default()
-    };
-    let claimed = lane.ledger.work_claim(&lane.lane, 1, &claim, None, false);
+    let claimed = (lane.ledger).work_claim(&lane.lane, 1, &ClaimInput::default(), None, false);
     claimed.unwrap().unwrap();
+    restamp(&lane.db(), 1, "v20");
     lane.diff(HEAD, 10, true);
     lane.run("tests", HEAD, json!({"result": "pass"}));
     let review = lane.run("review", HEAD, json!({"complete": true})).event_id;

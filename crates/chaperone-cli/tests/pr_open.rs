@@ -3,6 +3,8 @@
 //! the body it was given. Its `pr create` opens #7 and then fails, as a run
 //! that opened a PR and never recorded it; `pr list` lists #7 once opened.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -135,11 +137,8 @@ fn lane_on(pipeline: &str, create: &[&str], pr: &str) -> Lane {
     let claim = ["work", "claim", "1", "--worktree", wt, "--branch", "feat"];
     let create = [&["work", "create", "--title", "t"], create].concat();
     assert_eq!(lane.run("lane", &create).0, 0);
-    assert_eq!(
-        lane.run("lane", &[&claim[..], &["--pipeline", pipeline]].concat())
-            .0,
-        0
-    );
+    assert_eq!(lane.run("lane", &claim).0, 0);
+    common::restamp(&lane.db, 1, pipeline);
     let waive = ["check", "waive", "plan", "--work", "1", "--reason", "r"];
     assert_eq!(lane.run("owner", &waive).0, 0);
     lane

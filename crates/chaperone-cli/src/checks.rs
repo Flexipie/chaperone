@@ -1000,7 +1000,7 @@ fn test_slot(db: &Path, work: i64) -> Result<(File, Value), CliError> {
 /// (`review::replay`); then a complete review of the commit replays
 /// before anything runs, and one of its tree or of its diff's patch-id
 /// (read in the worktree) is carried. A lane whose pipeline has no review
-/// checks (v17 to v19) writes nothing; a CLI that cannot start, a checkout that
+/// checks (v19) writes nothing; a CLI that cannot start, a checkout that
 /// cannot be made and a diff past 16 MiB write nothing more.
 fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let Run {
@@ -1071,9 +1071,9 @@ pub(crate) fn required_lenses(
 /// change as the review is, the lane's goal and the harness's own results
 /// on the commit. A verdict on the same tree, pipeline and results replays
 /// (`verdict::replay`), carried to an amended commit, and starts nothing.
-/// A lane whose pipeline has no `verdict` (v17 to v19), and a commit
-/// without a harness `diff`, `tests` result and complete `review`, write
-/// nothing.
+/// A lane whose pipeline has no `verdict` (v19), and a commit without a
+/// harness `diff`, a `tests` result (where the pipeline gates on tests) and
+/// a complete `review`, write nothing.
 fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Outcome, CliError> {
     let Run {
         wt,
@@ -1092,12 +1092,13 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
     let mut lenses = review::plan(pipeline).map_err(refuse)?;
     lenses.require(pipeline, &required);
     let smoke = declares(Path::new("git"), &wt, "smoke", Instant::now() + RUN_TIMEOUT)?;
-    let harness = verdict::harness(ledger, &store, work, &head, &lenses.hash, smoke)?;
+    let gated = gates_on_tests(pipeline);
+    let harness = verdict::harness(ledger, &store, work, &head, &lenses.hash, smoke, gated)?;
     let harness = harness.map_err(|lacks| {
         refuse(format!(
             "commit {head} has no harness {lacks}; a verdict runs only on a clean commit: a \
-             `check run diff`, `tests` that pass, a complete `review` and, when the base \
-             profile declares `[smoke]`, a `smoke` that passes"
+             `check run diff`, `tests` that pass where the pipeline gates on them, a complete \
+             `review` and, when the base profile declares `[smoke]`, a `smoke` that passes"
         ))
     })?;
     let key = (&*pipeline.hash, attempts);
@@ -1127,7 +1128,7 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
 /// reviewer is sent); the same plan on the same tree and pipeline replays. Else one fresh
 /// session on the pipeline's `plan` check (`plan::record`) in the
 /// harness's checkout attacks it. A lane whose pipeline has no `plan`
-/// (v17 to v19) writes nothing.
+/// (v19) writes nothing.
 fn run_plan(
     ledger: &Ledger,
     db: &Path,

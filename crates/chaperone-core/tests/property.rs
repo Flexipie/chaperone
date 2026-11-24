@@ -109,7 +109,7 @@ enum Op {
         lane: u8,
         who: u8,
     },
-    /// Every stamp v19's ready and done gates read, on one commit.
+    /// Every harness fact v21's ready and done gates read, on one commit.
     Stamp {
         lane: u8,
         who: u8,
@@ -221,14 +221,16 @@ fn actor(who: u8) -> Actor {
 /// One `check.finished` per stamp of [`Op::Stamp`].
 fn stamps(lane: i64, sha: u8) -> Vec<Mutation> {
     [
-        ("plan_check", "ran", json!({})),
-        ("quality_gate", "ran", json!({})),
+        (
+            "diff",
+            "ran",
+            json!({"code_lines": 0, "changes_code": false, "uncounted_files": 0}),
+        ),
+        ("review", "ran", json!({"complete": true})),
         ("merge_verdict", "ran", json!({"decision": "yes"})),
-        ("smoke", "ran", json!({})),
-        ("kept_tests", "skipped", json!({"reason": "none"})),
     ]
     .into_iter()
-    .map(|(check, outcome, rest)| Mutation::Event {
+    .map(|(check, outcome, mut rest)| Mutation::Event {
         kind: EventKind::CheckFinished,
         lane_id: Some(lane),
         spec_id: None,
@@ -236,7 +238,10 @@ fn stamps(lane: i64, sha: u8) -> Vec<Mutation> {
             check: Some(check.into()),
             outcome: Some(outcome.into()),
             head_sha: Some(format!("abc123{sha}")),
-            rest: serde_json::from_value(rest).unwrap(),
+            rest: {
+                rest["producer"] = json!({"kind": "harness"});
+                serde_json::from_value(rest).unwrap()
+            },
             ..Payload::default()
         },
     })

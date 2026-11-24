@@ -1,5 +1,7 @@
 //! `pipeline limits` through the binary.
 
+mod common;
+
 use std::process::Command;
 
 use serde_json::Value;
@@ -23,8 +25,10 @@ fn limits_are_the_lanes_pipelines() {
     run(&["migrate"]);
     run(&["work", "create", "--title", "t"]);
     run(&["work", "create", "--title", "u"]);
-    run(&["work", "claim", "1", "--pipeline", "v20"]);
+    run(&["work", "claim", "1"]);
     run(&["work", "claim", "2"]);
+    common::restamp(&db, 1, "v20");
+    common::restamp(&db, 2, "v19");
     let v20 = run(&["pipeline", "limits", "--work", "1"]);
     assert_eq!(v20["pipeline"]["id"], "v20");
     assert_eq!(v20["limits"]["code_lines"], 400);

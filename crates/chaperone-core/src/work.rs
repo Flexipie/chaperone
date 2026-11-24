@@ -186,8 +186,8 @@ pub struct ClaimInput {
     pub lease_secs: Option<i64>,
     /// Take an item another pair holds live.
     pub takeover: bool,
-    /// At the first claim, an embedded pipeline newer than the default to
-    /// stamp ([`crate::pipeline::newer`]).
+    /// At the first claim, the default or an embedded pipeline newer than
+    /// it to stamp ([`crate::pipeline::newer`]).
     pub pipeline: Option<String>,
 }
 

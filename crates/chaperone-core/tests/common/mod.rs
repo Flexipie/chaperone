@@ -70,6 +70,20 @@ pub fn ledger() -> (tempfile::TempDir, PathBuf, Ledger) {
     (dir, path, ledger)
 }
 
+/// Restamps lane `id` with `pipeline` (`pipeline_hash` as given, else the
+/// document's), as a lane claimed while it was the default: a claim only
+/// stamps v21 now.
+pub fn restamp(path: &Path, id: i64, pipeline: &str, hash: Option<&str>) {
+    let doc = chaperone_core::pipeline::by_id(pipeline).unwrap();
+    Connection::open(path)
+        .unwrap()
+        .execute(
+            "UPDATE lanes SET pipeline_id = ?1, pipeline_hash = ?2 WHERE id = ?3",
+            rusqlite::params![doc.id, hash.unwrap_or(&doc.hash), id],
+        )
+        .unwrap();
+}
+
 pub fn read_only(path: &Path) -> Connection {
     Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap()
 }

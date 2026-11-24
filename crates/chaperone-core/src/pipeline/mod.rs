@@ -117,14 +117,12 @@ pub enum Pred {
         field: String,
         value: i64,
     },
-    /// `sha_prefix_eq`: `left` is a prefix of `right`. `sha_same_commit`
-    /// (`both_ways`): the shorter of the two is a prefix of the longer.
+    /// `sha_same_commit`: the shorter of the two is a prefix of the longer.
     ShaPrefixEq {
         left: String,
         right: String,
         min_len: i64,
         max_len: i64,
-        both_ways: bool,
     },
     OneOf {
         field: String,
@@ -278,8 +276,6 @@ const PROMPT_FILES: &[(&str, &str)] = &[
 /// any other id is `pipeline_unknown`.
 static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
     [
-        include_str!("../../../../pipelines/v17.toml"),
-        include_str!("../../../../pipelines/v17.1.toml"),
         include_str!("../../../../pipelines/v19.toml"),
         include_str!("../../../../pipelines/v20.toml"),
         include_str!("../../../../pipelines/v21.toml"),
@@ -292,8 +288,8 @@ static KNOWN: LazyLock<Vec<Pipeline>> = LazyLock::new(|| {
     .collect()
 });
 
-/// Where [`current`] is in [`KNOWN`]: v19, while v20 and v21 are newer. The owner
-/// moves it at the M3 cutover, with no lane running.
+/// Where [`current`] is in [`KNOWN`]: v21, the newest. v19 and v20 stay
+/// for the lanes already stamped with them; a claim never stamps them.
 const DEFAULT: usize = 2;
 
 /// The pipeline a new claim stamps.
@@ -343,10 +339,6 @@ mod tests {
 
     use super::*;
 
-    const V17: &str = include_str!("../../../../pipelines/v17.toml");
-    const V17_HASH: &str = "1a8a599ca26abaf2ab5b1dc9aaa301c019237d45fa3293f4326da0b47b6ea2c5";
-    const V17_1: &str = include_str!("../../../../pipelines/v17.1.toml");
-    const V17_1_HASH: &str = "d99d9de3d9fe7e59aa046cabdb80a6d34670d5a1dfcab1873a248ba245e32fd5";
     const V19: &str = include_str!("../../../../pipelines/v19.toml");
     const V19_HASH: &str = "d45442e63a1b77001987bb5d82e987d730c26ddf4ba7c2941b6c09622287f5ea";
     const V20: &str = include_str!("../../../../pipelines/v20.toml");
@@ -381,48 +373,6 @@ requires = ["a"]
         let src = MINI.replacen(from, to, 1);
         assert_ne!(src, MINI, "edit did not apply: {from}");
         Pipeline::load(&src).unwrap_err()
-    }
-
-    #[test]
-    fn v17_loads_with_pinned_hash() {
-        let p = Pipeline::load(V17).unwrap();
-        assert_eq!(p.id, "v17");
-        assert_eq!(p.hash, V17_HASH);
-        assert_eq!(
-            p.gates["verdict_on_head"].pred,
-            Pred::ShaPrefixEq {
-                left: "verdict.sha".into(),
-                right: "commit.sha".into(),
-                min_len: 7,
-                max_len: 40,
-                both_ways: false,
-            }
-        );
-        assert_eq!(
-            p.gates["code_lines_at_most"].pred,
-            Pred::Lte {
-                field: "diff.code_lines".into(),
-                value: 750,
-            }
-        );
-        let handoff: Vec<_> = p.transitions.iter().filter(|t| t.id == "handoff").collect();
-        assert_eq!(handoff.len(), 2);
-        assert!(handoff.iter().all(|t| t.from.is_none()));
-        let ready = handoff.iter().find(|t| t.to == Phase::Ready).unwrap();
-        assert!(!ready.routes.contains(&Route::Investigation));
-    }
-
-    #[test]
-    fn v17_1_loads_with_pinned_hash() {
-        let p = Pipeline::load(V17_1).unwrap();
-        assert_eq!((p.id.as_str(), p.hash.as_str()), ("v17.1", V17_1_HASH));
-        assert!(matches!(
-            p.gates["verdict_on_head"].pred,
-            Pred::ShaPrefixEq {
-                both_ways: true,
-                ..
-            }
-        ));
     }
 
     #[test]
@@ -463,13 +413,10 @@ requires = ["a"]
 
     #[test]
     fn by_id_finds_each_embedded_id() {
-        assert_eq!(by_id("v17").unwrap().hash, V17_HASH);
-        assert_eq!(by_id("v17.1").unwrap().hash, V17_1_HASH);
         assert_eq!(by_id("v19").unwrap().hash, V19_HASH);
-        assert!(by_id("v18").is_none());
-        assert_eq!(current().id, "v19");
-        let newer: Vec<_> = newer().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(newer, ["v20", "v21"]);
+        assert!(by_id("v17").is_none());
+        assert_eq!(current().id, "v21");
+        assert!(newer().is_empty());
     }
 
     #[test]
@@ -493,22 +440,22 @@ requires = ["a"]
 
     #[test]
     fn hash_ignores_comments_key_order_defaults_published_and_cohort() {
-        let base = hash(V17);
+        let base = hash(V19);
         // Move the first gate to the end of the gates.
-        let first = V17.find("[[gate]]").unwrap();
-        let second = first + 1 + V17[first + 1..].find("[[gate]]").unwrap();
+        let first = V19.find("[[gate]]").unwrap();
+        let second = first + 1 + V19[first + 1..].find("[[gate]]").unwrap();
         let moved = format!(
             "{}{}",
-            &V17[..first],
-            V17[second..].replacen("# --- M1", &format!("{}# --- M1", &V17[first..second]), 1)
+            &V19[..first],
+            V19[second..].replacen("# --- M1", &format!("{}# --- M1", &V19[first..second]), 1)
         );
-        assert_ne!(moved, V17);
+        assert_ne!(moved, V19);
         assert_eq!(hash(&moved), base);
 
-        let edited = V17
+        let edited = V19
             .replace("# --- gates", "# --- gates, reworded")
             .replace("schema = 1\n", "schema = 1\n# a new comment\n")
-            .replace("2026-11-01T17:30:00Z", "2026-12-01T00:00:00Z")
+            .replace("2026-11-08T16:00:00Z", "2026-12-01T00:00:00Z")
             .replace("target_lanes = 25", "target_lanes = 40")
             .replace(
                 r#"args = { field = "diff.code_lines", limit = "code_lines" }"#,
@@ -529,18 +476,18 @@ requires = ["a"]
 
     #[test]
     fn hash_changes_on_argument_limit_or_requires_order_edit() {
-        let base = hash(V17);
-        let arg = V17.replace(
+        let base = hash(V19);
+        let arg = V19.replace(
             r#"args = { field = "verdict.decision", value = "yes" }"#,
             r#"args = { field = "verdict.decision", value = "Yes" }"#,
         );
-        let limit = V17.replace("code_lines = 750", "code_lines = 400");
-        let order = V17.replace(
+        let limit = V19.replace("code_lines = 750", "code_lines = 400");
+        let order = V19.replace(
             r#"requires = ["previous_round_closed", "rounds_at_most"]"#,
             r#"requires = ["rounds_at_most", "previous_round_closed"]"#,
         );
         for edited in [arg, limit, order] {
-            assert_ne!(edited, V17);
+            assert_ne!(edited, V19);
             assert_ne!(hash(&edited), base);
         }
     }
@@ -642,7 +589,7 @@ args = { of = ["a"] }"#,
                 .replace(
                     r#"fn = "eq"
 args = { field = "x", value = 1 }"#,
-                    r#"fn = "sha_prefix_eq"
+                    r#"fn = "sha_same_commit"
 args = { left = "a", right = "b", min_limit = "lo", max_limit = "hi" }"#,
                 )
         };
@@ -806,7 +753,7 @@ args = { field = "verdict.decision", value = "yes" }"#;
                 r#"field = "verdict.sha", value_from = "x.y""#.into(),
             ),
             (
-                "sha_prefix_eq",
+                "sha_same_commit",
                 format!(r#"left = "verdict.sha", right = "commit.sha", {limits}"#),
                 format!(r#"left = "verdict.sha", right = "x.y", {limits}"#),
             ),

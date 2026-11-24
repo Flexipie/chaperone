@@ -1,6 +1,6 @@
 ---
 name: lane
-description: Take one Chaperone task from claim to a ready handoff on a v20 lane, then hand off done after the owner merges
+description: Take one Chaperone task from claim to a ready handoff on a v21 lane, then hand off done after the owner merges
 argument-hint: "<task key> --work <N>"
 disable-model-invocation: true
 allowed-tools: Bash(chaperone pipeline limits *)
@@ -37,8 +37,8 @@ After a compaction, read it, then `chaperone work get $2`.
 
 `chaperone work get $2`, then:
 - `pipeline_id` null (never claimed):
-  `chaperone work claim $2 --pipeline v20 --worktree "$(git rev-parse --show-toplevel)" --branch "$(git branch --show-current)" --lease-secs 86400`
-- `pipeline_id` `v20`, `agent` and `session` yours, `worktree_path` and `branch` this
+  `chaperone work claim $2 --worktree "$(git rev-parse --show-toplevel)" --branch "$(git branch --show-current)" --lease-secs 86400`
+- `pipeline_id` `v21` (or `v20`, a lane claimed before v21), `agent` and `session` yours, `worktree_path` and `branch` this
   worktree's: claimed already. If `lease_state` is not `active`, `chaperone work heartbeat $2`.
 - Anything else (another pipeline, holder, worktree or branch): Needs you.
 
