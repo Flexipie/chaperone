@@ -364,9 +364,8 @@ pub enum WorkCmd {
         /// Take an item another pair holds LIVE; recorded with their name
         #[arg(long)]
         takeover: bool,
-        /// At the first claim, stamp this embedded pipeline in place of the
-        /// default: one newer than it (`pipeline current`'s `newer`), for a
-        /// pilot lane
+        /// At the first claim, stamp this embedded pipeline: the default, or
+        /// one newer than it (`pipeline current`'s `newer`) for a pilot lane
         #[arg(long)]
         pipeline: Option<String>,
         /// Run the real write and roll it back; meta.dry_run is true

@@ -70,12 +70,13 @@ fn check(ledger: &Ledger, work: i64, check: &str) {
 
 #[test]
 fn lane_page_reads_handoff_and_gates() {
-    let (_dir, _path, ledger) = common::ledger();
+    let (_dir, path, ledger) = common::ledger();
     let id = lane(&ledger, "o/r", Some(PRE), Some(OLD));
     ledger
         .work_claim(&actor("1"), id, &ClaimInput::default(), None, false)
         .unwrap()
         .unwrap();
+    common::restamp(&path, id, "v19", None);
     check(&ledger, id, "plan_check");
     check(&ledger, id, "review_round");
     // Two handoffs: the page (and merge's done handoff) takes the newest.

@@ -181,11 +181,13 @@ stamp's top-level fields, and `lane.ready_overridden` changes no column.
 | `lane.ready_overridden` | `ready_override` | `ready` (`true`, `false`, or `null` for `--clear`), `reason` |
 
 The stamp (`pipeline_id`, `pipeline_hash`, `route`) is written once, on the first
-`lane.claimed`, by the write itself: the default pipeline (`pipeline current`, `v19`) and
+`lane.claimed`, by the write itself: the default pipeline (`pipeline current`, `v21`) and
 the route from the lane's kind and flow (lane facts below). A first claim may carry
-`pipeline_id` naming an embedded pipeline newer than the default (`work claim --pipeline`,
-`v20` or `v21` today); the write stamps that one, with its hash, and refuses any other id, older or
-unknown (`invalid_input`), and a `pipeline_id` on a claim of a lane already stamped. Any
+`pipeline_id` naming the default or an embedded pipeline newer than it (`work claim
+--pipeline`, none newer today); the write stamps that one, with its hash, and refuses any
+other id, older or unknown (`invalid_input`), and a `pipeline_id` on a claim of a lane
+already stamped. `v19` and `v20` stay embedded for the lanes already stamped with them; no
+claim stamps them. Any
 other event that carries a stamp field is `invalid_input`. A takeover keeps it. A claim, renewal or takeover on a lane
 stamped with an id this binary has no document for is refused (`pipeline_unknown`) and
 writes nothing. A lane's document is found by its id alone: the stamped hash is the record
@@ -396,7 +398,7 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
   them there; the one exception is the owner's plan waiver (`plan_check` `skipped`, `reason`
   `waived`). A session's `smoke` stays writable there as the lane's claim, told apart by its
   producer, and is refused when it carries `result`, the harness's field. `reviews record`
-  writes daisy's `local_review` and `pr_review`, which no v20 gate reads. A v17 to v19 lane
+  writes daisy's `local_review` and `pr_review`, which no v20 gate reads. A v19 lane
   keeps every producer as before. A harness
   check named like a session check (`merge_verdict`, `plan_check`, `smoke`) is the binary's too, so the session rule
   does not apply to it either.
@@ -441,7 +443,7 @@ reasons) are reserved for a `--file` input after M1.
 
 R5's `passed | failed`, `declined` and `ready` values, its NOT NULL `spec_id` and `pipeline_version`, and its `findings.review_event_id` name are replaced by the ones above.
 
-**Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr`, `direct` or `none`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `no_pr` if the flow is `none`, else `direct` if the flow is `direct`, else `code_pr`. The first claim also stamps the default pipeline (`v19`), or a newer one it opts into; a lane keeps the stamp it has, so a lane stamped `v17` or `v17.1` stays on it. `lane.changes_code` is true exactly when the kind is `code`: the declared kind, which v17 to v19 read; v20 reads the harness diff's `commit.changes_code` instead. Skip reasons are checked by list membership: when `changes_code` is false, any reason the check lists is accepted, and when it is true, `skipped` fails the gate. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with an allowed reason, and a `code` lane may not. No M1 input marks a lane test-only, so a test-only lane is `code` and runs both checks; the `tests` reason waits for that input.
+**Lane facts in M1.** `lane.kind` and `pr.flow` come from `work create --kind` (`code`, `docs`, `measure` or `investigation`; default `code`, so a lane that says nothing fails closed) and `--pr-flow` (`pr`, `direct` or `none`; default `pr`), stored on `lane.created`. The route is chosen once, at the first claim, by R7's rule: `investigation` if the kind is `investigation`, else `no_pr` if the flow is `none`, else `direct` if the flow is `direct`, else `code_pr`. The first claim also stamps the default pipeline (`v21`), or a newer one it opts into; a lane keeps the stamp it has, so a lane stamped `v19` or `v20` stays on it. `v17` and `v17.1` are no longer embedded: a lane stamped with one still lists, shows its handoffs and counts in `stats`, and any gated command on it is `pipeline_unknown`. `lane.changes_code` is true exactly when the kind is `code`: the declared kind, which v19 reads; v20 reads the harness diff's `commit.changes_code` instead. Skip reasons are checked by list membership: when `changes_code` is false, any reason the check lists is accepted, and when it is true, `skipped` fails the gate. So a `docs`, `measure` or `investigation` lane may skip its plan check and quality gate with an allowed reason, and a `code` lane may not. No M1 input marks a lane test-only, so a test-only lane is `code` and runs both checks; the `tests` reason waits for that input.
 
 **Facts in M1.** The projection reads the lane row's stamp and kind and the lane's
 events, never prose. `commit.sha` is the head the gated command names (the handoff's
@@ -471,8 +473,8 @@ gate reads it: CI is shown, never a gate),
 **Facts for pipeline v20.** Each is about the commit handed off (`commit.sha`, which may be
 a short form of the harness's whole sha) and is set only when there is one. Each reads only
 `check.finished` events whose producer is the harness, except `smoke.claimed`, which reads
-the session's claim and is told apart from a harness smoke by its producer. No v17 to v19
-gate reads one, so those pipelines mean what they did. `commit.code_lines`,
+the session's claim and is told apart from a harness smoke by its producer. No v19
+gate reads one, so that pipeline means what it did. `commit.code_lines`,
 `commit.removed_code`, `commit.test_lines`, `commit.uncounted_files` and `commit.changes_code` are
 the newest harness `diff`'s `code_lines`, `removed_code`, `test_lines`, `uncounted_files` and
 `changes_code` on the commit, absent

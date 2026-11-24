@@ -4,6 +4,7 @@
 //! recorded by another session, appends one `gate.denied` and does not move.
 
 use chaperone_core::ledger::{Actor, Applied, EventKind, Ledger, Mutation, Payload, Refusal};
+use chaperone_core::pipeline;
 use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput};
 use rusqlite::Connection;
 use serde_json::json;
@@ -60,6 +61,15 @@ impl Lane {
         lane.ledger
             .work_claim(me, 1, &claim, Some(T0), false)
             .unwrap()
+            .unwrap();
+        // These are v19's rules; a claim stamps v21, so restamp as a lane
+        // claimed before it.
+        let v19 = pipeline::by_id("v19").unwrap();
+        lane.db
+            .execute(
+                "UPDATE lanes SET pipeline_id = ?1, pipeline_hash = ?2 WHERE id = 1",
+                [&v19.id, &v19.hash],
+            )
             .unwrap();
         lane
     }
@@ -557,7 +567,7 @@ fn the_board_reads_the_newest_handoff_and_the_override() {
     );
 }
 
-/// v17.1: a lane that changes no code hands off done on its skips, with no
+/// A lane that changes no code hands off done on its skips, with no
 /// verdict and no commit, on a PR route and with no PR at all.
 #[test]
 fn a_no_code_lane_is_done_without_a_verdict_or_commit() {
@@ -607,25 +617,6 @@ fn a_full_sha_verdict_matches_a_short_commit() {
     lane.handoff("abc1234", "done", None).unwrap();
 }
 
-/// A lane stamped v17 keeps v17: no verdict still denies a docs lane's done.
-#[test]
-fn a_v17_lane_keeps_the_v17_rule() {
-    let lane = Lane::with("docs", "pr");
-    lane.db
-        .execute(
-            "UPDATE lanes SET pipeline_id = 'v17',
-             pipeline_hash = '1a8a599ca26abaf2ab5b1dc9aaa301c019237d45fa3293f4326da0b47b6ea2c5'
-             WHERE id = 1",
-            [],
-        )
-        .unwrap();
-    lane.skips();
-    assert_eq!(
-        lane.done_no_commit(),
-        denied("verdict_is_yes", &["verdict.decision"])
-    );
-}
-
 /// v19: a code lane's ready needs smoke, then kept tests, recorded; a skip
 /// with its reason counts.
 #[test]
@@ -667,26 +658,6 @@ fn v19_ready_caps_review_rounds() {
         }
         assert_eq!(lane.ready_denied_as().as_deref(), want, "{rounds} rounds");
     }
-}
-
-/// A lane stamped v17.1 keeps v17.1: ready needs no smoke, kept tests or
-/// round cap.
-#[test]
-fn a_v17_1_lane_keeps_the_v17_1_rule() {
-    let lane = Lane::new();
-    lane.db
-        .execute(
-            "UPDATE lanes SET pipeline_id = 'v17.1',
-             pipeline_hash = 'd99d9de3d9fe7e59aa046cabdb80a6d34670d5a1dfcab1873a248ba245e32fd5'
-             WHERE id = 1",
-            [],
-        )
-        .unwrap();
-    lane.stamps();
-    for _ in 0..4 {
-        lane.check(&lane.checker, "review_round", json!({}));
-    }
-    assert_eq!(lane.ready_denied_as(), None);
 }
 
 /// A ready handoff names the commit its worktree is on: another commit is

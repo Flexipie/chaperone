@@ -1,6 +1,8 @@
 //! `hook` through the binary, on lane 1 claimed on v20, and the plugin's
 //! shim. The stop hook's test is verify.rs's, on a lane verify made ready.
 
+mod common;
+
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -25,7 +27,8 @@ impl Lane {
         let lane = Lane { dir, db };
         lane.cli(&["migrate"]);
         lane.cli(&["work", "create", "--title", "t"]);
-        lane.cli(&["work", "claim", "1", "--pipeline", pipeline]);
+        lane.cli(&["work", "claim", "1"]);
+        common::restamp(&lane.db, 1, pipeline);
         lane
     }
 
@@ -101,6 +104,7 @@ fn a_hook_outside_a_lane_does_nothing() {
     lane.cli(&["work", "cancel", "2"]);
     lane.cli(&["work", "create", "--title", "v"]);
     lane.cli(&["work", "claim", "3"]);
+    common::restamp(&lane.db, 3, "v19");
     let before = lane.events();
     let input = json!({"error": "rate_limit", "tool_input": {"command": "gh pr create"}});
     for event in ["session-start", "pre-bash", "stop", "stop-failure"] {
@@ -337,7 +341,8 @@ fn stop_reports_the_lanes_usage() {
     std::fs::create_dir_all(&project).unwrap();
     let cwd = wt.to_str().unwrap();
     lane.cli(&["work", "create", "--title", "u"]);
-    lane.cli(&["work", "claim", "2", "--pipeline", "v20", "--worktree", cwd]);
+    lane.cli(&["work", "claim", "2", "--worktree", cwd]);
+    common::restamp(&lane.db, 2, "v20");
     let usage = json!({"input_tokens": 5, "cache_read_input_tokens": 7,
         "cache_creation_input_tokens": 1, "output_tokens": 2});
     let lines = [

@@ -1,9 +1,7 @@
 //! The predicate evaluator. These live outside `eval.rs` so the asserts'
 //! own branches do not count against its branch coverage.
 
-use chaperone_core::pipeline::{Denied, Fact, FactBundle, Phase, Pipeline, Route};
-
-const V17: &str = include_str!("../../../pipelines/v17.toml");
+use chaperone_core::pipeline::{Denied, Fact, FactBundle, Phase, Pipeline, Route, sha_prefix_eq};
 
 /// A document whose `handoff` (code_pr, to done) requires gate `a`.
 fn doc(gates: &str) -> Pipeline {
@@ -118,9 +116,9 @@ fn one_of() {
 }
 
 #[test]
-fn sha_prefix_eq() {
+fn sha_same_commit_bounds() {
     let p = gate(
-        "sha_prefix_eq",
+        "sha_same_commit",
         r#"{ left = "v", right = "h", min_limit = "lo", max_limit = "hi" }"#,
     );
     let head = "abc1234def567890abc1234def567890abc12345";
@@ -129,7 +127,9 @@ fn sha_prefix_eq() {
     assert_eq!(check(s(head)), Ok(()));
     let no = denied("a", &["v", "h"]);
     assert_eq!(check(s("abc123")), no, "under the floor");
-    assert_eq!(check(s(&format!("{head}0"))), no, "over the ceiling");
+    let long = format!("{head}0");
+    let both_long = run(&p, &[("v", s(&long)), ("h", s(&long))]);
+    assert_eq!(both_long, no, "over the ceiling");
     assert_eq!(check(s("abc123x")), no, "not hex");
     assert_eq!(check(s("fff9999a")), no, "not a prefix");
     assert_eq!(check(Fact::Int(1234567)), no, "not a string");
@@ -148,9 +148,8 @@ fn sha_same_commit() {
     let no = denied("a", &["v", "h"]);
     assert_eq!(check(full, "abc1235"), no, "a mismatch");
     assert_eq!(check(full, "abc123"), no, "under the floor");
-    // v17's one-way fn still refuses a full verdict on a short commit.
-    let p = gate("sha_prefix_eq", args);
-    assert_eq!(run(&p, &[("v", s(full)), ("h", s("abc1234"))]), no);
+    // One way, as merge and the hook ask it, a full sha is no prefix of a short one.
+    assert!(!sha_prefix_eq(full, "abc1234", 7..=40, false));
 }
 
 #[test]
@@ -340,89 +339,4 @@ fn no_row_is_denied_as_unstamped() {
     assert_eq!(p.evaluate("handof", Route::CodePr, Phase::Done, &f), no);
     assert_eq!(p.evaluate("handoff", Route::Direct, Phase::Done, &f), no);
     assert_eq!(p.evaluate("handoff", Route::CodePr, Phase::Ready, &f), no);
-}
-
-/// Every `ready_evidence` fact set so it holds, with `verdict.sha` as given
-/// (R7 "One gate the engine refuses").
-fn ready_lane(p: &Pipeline, verdict_sha: &str) -> FactBundle {
-    let head = "abc1234def567890";
-    let mut f = FactBundle::default();
-    f.set("pipeline.id", "v17")
-        .set("pipeline.hash", p.hash.as_str())
-        .set("lane.changes_code", true)
-        .set("plan_check.outcome", "ran")
-        .set("quality_gate.outcome", "ran")
-        .set("quality_gate.at", t("2026-11-03T05:00:00.000Z"))
-        .set("pr.opened_at", t("2026-11-03T06:00:00.000Z"))
-        .set("verdict.decision", "yes")
-        .set("verdict.sha", verdict_sha)
-        .set("commit.sha", head)
-        .set("review.local_head", head)
-        .set("review.local_rounds", 1)
-        .set("smoke.recorded", true)
-        .set("kept_tests.recorded", true)
-        .set("kept_tests.bar_ok", true)
-        .set("verification.unexplained_failures", 0)
-        .set("brief.oversize", false)
-        .set("ci.state", "green")
-        .set("threads.human_open", 0)
-        .set("daisy_review.state", "finished")
-        .set("pr.is_draft", false)
-        .set("pr.conflicting", false)
-        .set("diff.code_lines", 200);
-    f
-}
-
-#[test]
-fn r7_to_ready_is_denied_by_verdict_on_head_and_its_mirror_passes() {
-    let p = Pipeline::load(V17).unwrap();
-    let to_ready = |f: &FactBundle| p.evaluate("to_ready", Route::CodePr, Phase::Ready, f);
-    assert_eq!(
-        to_ready(&ready_lane(&p, "fff9999a")),
-        denied("verdict_on_head", &["verdict.sha", "commit.sha"])
-    );
-    assert_eq!(to_ready(&ready_lane(&p, "abc1234")), Ok(()));
-
-    // No verdict fails earlier, at verdict_is_yes.
-    let mut f = ready_lane(&p, "abc1234");
-    f.set("verdict.decision", Fact::Absent);
-    assert_eq!(
-        to_ready(&f),
-        denied("verdict_is_yes", &["verdict.decision"])
-    );
-}
-
-#[test]
-fn v17_reviewed_head_ok() {
-    let p = Pipeline::load(V17).unwrap();
-    let to_ready = |f: &FactBundle| p.evaluate("to_ready", Route::CodePr, Phase::Ready, f);
-    let mut f = ready_lane(&p, "abc1234");
-    f.set("review.local_head", "0123456");
-    assert_eq!(
-        to_ready(&f),
-        denied(
-            "reviewed_head_ok",
-            &[
-                "review.local_head",
-                "commit.sha",
-                "review.code_changed_since"
-            ]
-        )
-    );
-    f.set("review.code_changed_since", false);
-    assert_eq!(to_ready(&f), Ok(()));
-}
-
-#[test]
-fn v17_investigation_handoff_ready_is_denied() {
-    let p = Pipeline::load(V17).unwrap();
-    let f = ready_lane(&p, "abc1234");
-    assert_eq!(
-        p.evaluate("handoff", Route::Investigation, Phase::Ready, &f),
-        denied("stamp_ok", &["lane.pipeline_hash"])
-    );
-    assert_eq!(
-        p.evaluate("handoff", Route::Investigation, Phase::Done, &f),
-        Ok(())
-    );
 }

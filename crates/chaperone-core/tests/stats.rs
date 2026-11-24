@@ -120,8 +120,9 @@ fn stats(ledger: &Ledger, cohort: Cohort) -> Value {
 
 #[test]
 fn a_lane_folds_from_its_events() {
-    let (_dir, _path, ledger) = common::ledger();
+    let (_dir, path, ledger) = common::ledger();
     let id = lane(&ledger);
+    common::restamp(&path, id, "v19", None);
     usage(&ledger, id, "m1", "parent", 100);
     usage(&ledger, id, "m2", "parent", 300);
     usage(&ledger, id, "m3", "subagent", 900);
@@ -214,8 +215,9 @@ fn a_lane_folds_from_its_events() {
 
 #[test]
 fn without_reviews_review_numbers_are_null_and_named() {
-    let (_dir, _path, ledger) = common::ledger();
+    let (_dir, path, ledger) = common::ledger();
     let id = lane(&ledger);
+    common::restamp(&path, id, "v19", None);
     check(&ledger, id, "merge_verdict", Some("no"), None);
     merged(&ledger, id, "2026-11-06T10:00:00.000Z");
     let out = stats(&ledger, Cohort::MergedSince("2026-11-06".into()));
@@ -312,22 +314,12 @@ fn a_v20_lane_reads_the_harness_review() {
         .unwrap()
         .unwrap()
         .id;
-    let claim = ClaimInput {
-        pipeline: Some("v20".into()),
-        ..ClaimInput::default()
-    };
     ledger
-        .work_claim(&lane, id, &claim, None, false)
+        .work_claim(&lane, id, &ClaimInput::default(), None, false)
         .unwrap()
         .unwrap();
-    // Claimed before a prompt edit moved v20's hash.
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
-            "UPDATE lanes SET pipeline_hash = 'older' WHERE id = ?1",
-            [id],
-        )
-        .unwrap();
+    // Claimed on v20 before a prompt edit moved its hash.
+    common::restamp(&path, id, "v20", Some("older"));
     let handoff = HandoffInput {
         summary: "planning".into(),
         ..HandoffInput::default()

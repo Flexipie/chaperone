@@ -142,10 +142,9 @@ impl Eval<'_> {
                 right,
                 min_len,
                 max_len,
-                both_ways,
             } => match (self.val(left)?, self.val(right)?) {
                 (Fact::Str(left), Fact::Str(right)) => {
-                    sha_prefix_eq(left, right, *min_len..=*max_len, *both_ways)
+                    sha_prefix_eq(left, right, *min_len..=*max_len, true)
                 }
                 _ => false,
             },

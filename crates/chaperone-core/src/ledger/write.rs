@@ -550,19 +550,22 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 pipeline_hash: hash.clone(),
             });
         }
-        // A first claim may name a newer embedded pipeline to stamp
-        // (`work claim --pipeline`), never an older or unknown one.
+        // A first claim may name the default or a newer embedded pipeline
+        // to stamp (`work claim --pipeline`), never an older or unknown one.
         let asked = p.pipeline_id.take();
         if event.kind == LaneClaimed && hash.is_none() {
+            let current = crate::pipeline::current();
             let stamp = match &asked {
-                None => crate::pipeline::current(),
+                None => current,
                 Some(asked) => {
-                    let newer = crate::pipeline::newer();
-                    let Some(doc) = newer.iter().find(|d| d.id == *asked) else {
-                        let ids: Vec<_> = newer.iter().map(|d| d.id.as_str()).collect();
+                    let allowed: Vec<_> = std::iter::once(current)
+                        .chain(crate::pipeline::newer())
+                        .collect();
+                    let Some(&doc) = allowed.iter().find(|d| d.id == *asked) else {
+                        let ids: Vec<_> = allowed.iter().map(|d| d.id.as_str()).collect();
                         refuse!(invalid(&format!(
-                            "--pipeline names a pipeline newer than the default {}: one of {ids:?}, not {asked}",
-                            crate::pipeline::current().id
+                            "--pipeline names the default {} or a newer pipeline: one of {ids:?}, not {asked}",
+                            current.id
                         )));
                     };
                     doc

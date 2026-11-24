@@ -1120,7 +1120,7 @@ fn judge_with(env: &Env, ledger: &Ledger, head: &str, tree: &str, smoke: bool) -
     let pipeline = pipeline();
     let (p, attempts) = verdict::plan(&pipeline).unwrap();
     let me = lane_session();
-    let harness = verdict::harness(ledger, &env.store, 1, head, &pipeline.hash, smoke);
+    let harness = verdict::harness(ledger, &env.store, 1, head, &pipeline.hash, smoke, true);
     let harness = harness.unwrap().unwrap();
     let mut input = RunInput {
         head: head.into(),
@@ -1299,7 +1299,7 @@ fn no_answer_is_no_decision() {
     let ledger = ledger(&env);
     let (head, tree) = ("2".repeat(40), "3".repeat(40));
     let lacks = || {
-        verdict::harness(&ledger, &env.store, 1, &head, &pipeline().hash, false)
+        verdict::harness(&ledger, &env.store, 1, &head, &pipeline().hash, false, true)
             .unwrap()
             .err()
     };
@@ -1692,6 +1692,7 @@ fn a_no_is_reopened_only_by_a_waive_or_a_refutation() {
         check: "smoke".into(),
         head: h1.clone(),
         outcome: "ran".into(),
+        run: Some(json!({"argv": ["bash", "s.sh"], "exit": 0})),
         ..CheckInput::default()
     };
     let fresh = Actor {

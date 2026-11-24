@@ -24,7 +24,7 @@ use crate::ledger::{
 use crate::pipeline::{Phase, sha_prefix_eq};
 
 const ENTITY: &str = "work item";
-/// The M1 gated transition (pipelines/v19.toml).
+/// The gated transition every embedded pipeline runs.
 const HANDOFF: &str = "handoff";
 const DEFAULT_LEASE_SECS: i64 = 900;
 /// Daisy's `tool` on handoff and event rows.
@@ -186,8 +186,8 @@ pub struct ClaimInput {
     pub lease_secs: Option<i64>,
     /// Take an item another pair holds live.
     pub takeover: bool,
-    /// At the first claim, an embedded pipeline newer than the default to
-    /// stamp ([`crate::pipeline::newer`]).
+    /// At the first claim, the default or an embedded pipeline newer than
+    /// it to stamp ([`crate::pipeline::newer`]).
     pub pipeline: Option<String>,
 }
 

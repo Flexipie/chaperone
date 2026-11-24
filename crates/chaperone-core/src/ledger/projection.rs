@@ -17,7 +17,7 @@ use crate::pipeline::{Fact, FactBundle};
 /// finding is as unsettled as an open one, so a dispute never closes a
 /// round. Before these statuses a finding was `open`, `fixed` or
 /// `answered`, so an existing log reads as before. The finding commands
-/// work on any lane, so a v17 to v19 lane can now be disputed, which keeps
+/// work on any lane, so a v19 lane can now be disputed, which keeps
 /// its round open: that fails closed. No transition that runs today reads
 /// the fact (only `handoff` runs; `next_local_round` and
 /// `enter_final_head` list it).
@@ -428,7 +428,7 @@ mod tests {
         assert_eq!(lane.facts().get("plan_check.at"), &Fact::Absent);
     }
 
-    /// v17's `quality_gate_before_pr` on projected times: the first quality
+    /// v19's `quality_gate_before_pr` on projected times: the first quality
     /// gate counts, so one recorded again after the PR does not deny.
     #[test]
     fn quality_gate_before_pr_on_projected_times() {

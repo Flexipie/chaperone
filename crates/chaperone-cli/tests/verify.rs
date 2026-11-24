@@ -3,6 +3,8 @@
 //! one, so these tests need the workspace built (`cargo nextest run
 //! --workspace` builds it).
 
+mod common;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -266,12 +268,13 @@ fn claimed_in(pipeline: &str, claude: Value, rules: &str) -> Lane {
     assert!(migrate.unwrap().success());
     let lane = Lane { dir, db, wt };
     let claim = format!(
-        "work claim 1 --worktree {} --branch feat --pipeline {pipeline}",
+        "work claim 1 --worktree {} --branch feat",
         lane.wt.display()
     );
     let claim: Vec<_> = claim.split(' ').collect();
     assert_eq!(lane.run("lane", &["work", "create", "--title", "t"]).0, 0);
     assert_eq!(lane.run("lane", &claim).0, 0);
+    common::restamp(&lane.db, 1, pipeline);
     lane
 }
 
@@ -321,6 +324,25 @@ fn a_lane_is_ready_only_on_a_commit_verify_passed() {
     let (code, err) = lane.handoff();
     assert_eq!((code, &err["code"]), (1, &json!("gate_denied")), "{err}");
     assert_eq!(steps(&lane.verify()), all(false));
+    assert_eq!(lane.handoff().0, 0);
+}
+
+/// v21 has no `tests_passed` gate: verify runs no local tests, and the
+/// verdict runs on a commit with a complete review and no `tests` result.
+#[test]
+fn a_v21_lane_gets_a_verdict_with_no_local_test_run() {
+    let lane = claimed_in("v21", claude(json!({"findings": []}), json!([])), "");
+    lane.plan("1. do it\n");
+    lane.commit();
+    lane.answer("lane", "accept");
+    lane.smoke();
+    let out = lane.verify();
+    let passed = ["diff", "review", "verdict"].map(|c| (c.into(), true, false));
+    assert_eq!(
+        (steps(&out), &out["stopped"]),
+        (passed.into(), &Value::Null)
+    );
+    assert_eq!(lane.events("payload_json->>'check' = 'tests'"), 0);
     assert_eq!(lane.handoff().0, 0);
 }
 

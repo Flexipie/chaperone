@@ -2,6 +2,8 @@
 //! worktree, `tests` runs the base profile's commands in a checkout of it;
 //! each writes one harness check, or nothing.
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -61,7 +63,16 @@ fn setup(dir: &Path) -> String {
 /// A new lane claimed with these flags; its id.
 fn lane(db: &Path, claim: &[&str]) -> String {
     let id = run(db, &["work", "create", "--title", "t"]).1["id"].to_string();
-    assert_eq!(run(db, &[&["work", "claim", &id][..], claim].concat()).0, 0);
+    // A claim stamps v21; `--pipeline` here names an older stamp to restamp.
+    let stamp = claim.iter().position(|a| *a == "--pipeline");
+    let mut args = claim.to_vec();
+    if let Some(i) = stamp {
+        args.drain(i..i + 2);
+    }
+    assert_eq!(run(db, &[&["work", "claim", &id][..], &args].concat()).0, 0);
+    if let Some(i) = stamp {
+        common::restamp(db, id.parse().unwrap(), claim[i + 1]);
+    }
     id
 }
 
@@ -907,7 +918,7 @@ fn tests_check_the_checkout_after() {
     );
 }
 
-/// A lane on v17 to v19 has no review or verdict checks in its pipeline:
+/// A lane on v19 has no review or verdict checks in its pipeline:
 /// each is refused, says what such a lane records with, and writes
 /// nothing.
 #[test]
@@ -915,7 +926,10 @@ fn a_review_or_verdict_needs_a_pipeline_that_names_one() {
     let dir = tempfile::tempdir().unwrap();
     setup(dir.path());
     let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
-    let id = lane(&db, &["--worktree", wt.to_str().unwrap()]);
+    let id = lane(
+        &db,
+        &["--pipeline", "v19", "--worktree", wt.to_str().unwrap()],
+    );
     for (kind, said) in [
         (
             "review",
@@ -951,7 +965,14 @@ fn a_plan_check_needs_a_plan_file_and_a_pipeline() {
     git(&wt, &["commit", "-qm", "code"], &[]);
     let id = lane(
         &db,
-        &["--worktree", wt.to_str().unwrap(), "--branch", "plan"],
+        &[
+            "--pipeline",
+            "v19",
+            "--worktree",
+            wt.to_str().unwrap(),
+            "--branch",
+            "plan",
+        ],
     );
     let good = dir.path().join("plan.md");
     std::fs::write(&good, b"1. change lib.rs\n").unwrap();
@@ -1000,7 +1021,10 @@ fn smoke_evidence_stays_in_the_worktree() {
     let dir = tempfile::tempdir().unwrap();
     let base = setup(dir.path());
     let (db, wt) = (dir.path().join("ledger.db"), dir.path().join("wt"));
-    let id = lane(&db, &["--worktree", wt.to_str().unwrap()]);
+    let id = lane(
+        &db,
+        &["--pipeline", "v19", "--worktree", wt.to_str().unwrap()],
+    );
     let outside = dir.path().join("outside.log");
     for (path, bytes) in [
         (wt.join("out/smoke.log"), &b"ran: ok\n"[..]),
@@ -1184,14 +1208,15 @@ fn a_v20_smoke_claim_runs_its_command() {
 }
 
 /// A harness `smoke` passes v19's `smoke_recorded` whoever starts it, so
-/// `check run smoke` on a lane whose pipeline has no `verdict` (v17 to
-/// v19) is refused, even with a `[smoke]` in the base profile, and writes
+/// `check run smoke` on a lane whose pipeline has no `verdict` (v19) is
+/// refused, even with a `[smoke]` in the base profile, and writes
 /// nothing; such a lane records smoke with `check record` from a session
 /// that never held it.
 #[test]
 fn smoke_runs_need_a_harness_pipeline() {
     let dir = tempfile::tempdir().unwrap();
     let (db, wt, id) = tests_lane(dir.path());
+    common::restamp(&db, id.parse().unwrap(), "v19");
     base_tests(
         &wt,
         Some("commands = [[\"true\"]]\n[smoke]\ncommands = [[\"true\"]]"),

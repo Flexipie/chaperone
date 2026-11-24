@@ -2,7 +2,7 @@
 
 Status: accepted, 2026-11-03  
 Amends: [R7](../research/r7-process-engine.md) "Pin, diff, rollback, side by side" step 4  
-Code: `crates/chaperone-core/src/pipeline/hash.rs`, pinned by the v17 hash test
+Code: `crates/chaperone-core/src/pipeline/hash.rs`, pinned by the v19, v20 and v21 hash tests
 
 ## Context
 
@@ -57,4 +57,4 @@ never changes under v20.
 
 The hash is not interoperable with other RFC 8785 tools. If a document ever needs
 floats, or another tool must recompute the hash, this decision is revisited, and the
-v17 hash test shows whether the change moved existing hashes.
+pinned hash tests show whether the change moved existing hashes.

@@ -3,6 +3,8 @@
 //! merge`, and a fake `herdr` that logs its argv. The gates, GitHub's head
 //! and the replay are writer.rs's tests.
 
+mod common;
+
 use std::process::Command;
 
 use serde_json::{Value, json};
@@ -81,10 +83,19 @@ fn merge_is_the_owners_and_defaults_to_the_handoff_head() {
         "--decision",
         "yes",
     ];
+    for args in [
+        &["work", "create", "--title", "t"][..],
+        &["work", "claim", "1"],
+    ] {
+        assert!(run("lane", "lane", args).0, "{args:?}");
+    }
+    // A v19 lane records its verdict from a session.
+    common::restamp(&db, 1, "v19");
     for (who, args) in [
-        ("lane", &["work", "create", "--title", "t"][..]),
-        ("lane", &["work", "claim", "1"]),
-        ("lane", &["work", "handoff", "1", handoff.to_str().unwrap()]),
+        (
+            "lane",
+            &["work", "handoff", "1", handoff.to_str().unwrap()][..],
+        ),
         ("owner", &["work", "ready", "1", "--yes"]),
         ("owner", &verdict),
     ] {
@@ -171,20 +182,13 @@ fn work_merged_on_v21_records_what_github_shows() {
     for args in [
         &["migrate"][..],
         &["work", "create", "--title", "t", "--repo", "o/r"],
-        &[
-            "work",
-            "claim",
-            "1",
-            "--pipeline",
-            "v21",
-            "--branch",
-            "lane-b",
-        ],
+        &["work", "claim", "1", "--branch", "lane-b"],
         &["work", "create", "--title", "t"],
-        &["work", "claim", "2", "--pipeline", "v20"],
+        &["work", "claim", "2"],
     ] {
         assert!(run(args).0, "{args:?}");
     }
+    common::restamp(&db, 2, "v20");
     let (ok, err) = run(&["work", "merged", "2", "--pr", "o/r#9"]);
     assert!(
         !ok && err["message"] == "--merge-sha is required off v21",

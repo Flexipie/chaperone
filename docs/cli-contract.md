@@ -282,7 +282,7 @@ Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_mer
 
 `cohort` has `lanes`, `with_pr`, `merged`, `too_few_lanes` (under 25: flagged, not scored), `claim_to_merge_h_median`, `tokens` (summed per source; a message recorded on two lanes of the cohort, which usage's worktree match allows, counts on each), `attention` (summed per type), `waivers` (summed per kind), `accepted_without_ref` (every lane's, as `{work_id, finding}`), R11's first five (`lanes_with_usage` (lanes with a parent `input_total`), `peak_context_median`, `context_tokens_per_merged_pr_median` (parent `input_total` over the PR count, merged lanes with usage), `lanes_peak_over_500k`; `lanes_reviewed` (lanes with a recorded review: the coverage of row 2's sums), `flat_rounds`, `reraised_findings`; `lanes_head_reviewed`; `lanes_with_commits_after_handoff`, `verified_findings`, `verified_findings_after_handoff`; `lanes_plan_checked`, `plan_check_skipped` and `quality_gate_skipped` (counts by reason), `lanes_quality_gated`, `lanes_verdict_on_head`, the last two over lanes with a PR as R11 defines, `lanes_size_waived` (lanes the owner raised the size cap for, to compare their rounds and escapes), `lanes_over_cap` and `lanes_with_cut_finding` (lanes reviewed past the cap, and those of them with a `cut:` finding), `lanes_estimated` and `lanes_over_estimate` (lanes with a `size_estimate`, and those of them whose measured lines are past 1.5 times the estimate)), `finding_outcomes`, and `missing`. `finding_outcomes` counts, per lens (`none` when a finding names none), each finding of a counted, not carried harness `review` on a merged lane (`merged`) by outcome, from its newest `finding.updated` (#279): `fixed` (status `fixed`, or waived `fixed`), `wrong` (`refuted`, or waived `disproved`), `intentional` (waived `accepted`, `scope` or `deferred`: real, deliberately not changed in the PR), `did_not_matter` (ruled `unproven` by the verifier and not settled since) and `unlabelled` (anything else: a waiver written before waivers had kinds, an answered question, or any finding still unsettled when it merged, since the verifier rules `fixed` only on blocking ones). A `same_as` repeat is left out; `reraised_findings` counts it. Every lens lists all five, so its false-alarm rate is `wrong` plus `did_not_matter` over their sum, and `unlabelled` shows how much is unknown. Nothing is guessed: a finding gone in a later round is not read as fixed. A median is over the non-null lane values, rounded to two decimals, and null when there are none. `missing` maps each cohort number printed as null because nothing records its input (by its cohort name; the lane fields of the same rows are null for the same reason) to what it needs: `lanes_with_commits_after_handoff` always, the three token numbers of row 1 when no lane in the cohort has a parent `input_total` (`lanes_peak_over_500k` is then null, not 0), and every review number when no lane in the cohort has a recorded review (with one, a lane without a review counts as unreviewed, not unknown). `sources` counts the lanes per review check (`reviews`) and per ready point (`ready_point`).
 
-`pipeline current` (#106) prints `{id, hash, newer}`: the pipeline a new claim stamps by default, and in `newer` the `{id, hash}` of each embedded document newer than it that a first claim may opt into with `work claim --pipeline` (`v20`, `v21`). Skills read the version from here rather than naming one, so a lane's stamp and its skill cannot disagree.
+`pipeline current` (#106) prints `{id, hash, newer}`: the pipeline a new claim stamps by default (`v21`), and in `newer` the `{id, hash}` of each embedded document newer than it that a first claim may opt into with `work claim --pipeline` (none today). Skills read the version from here rather than naming one, so a lane's stamp and its skill cannot disagree.
 
 `pipeline limits` prints `{pipeline: {id, hash}, limits}`: the `[limits]` table of the lane's stamped pipeline with `--work` (a lane with no stamp this binary loads is `invalid_input`), else of `pipeline current`'s; `{}` when the table is empty.
 
@@ -293,11 +293,11 @@ Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_mer
 Lease: `--lease-secs` defaults to 900, minimum 30, maximum 86400. Claiming a `done` or
 `cancelled` item is `invalid_input`.
 
-`--pipeline <id>` opts a lane into an embedded pipeline newer than the default at its first
-claim (`v20` or `v21` while the default is `v19`, for a pilot lane before the M3 cutover; `pipelines/v21.toml` is v20's rules under the id `v21`, whose `stamp_ok` names `v21`): the claim
-stamps it in place of the default, recorded on `lane.claimed` as the default stamp is. An id
-that is not newer than the default (`v19`, `v17`) or not embedded is `invalid_input`, and so
-is `--pipeline` on a renewal, a takeover, or a claim of a lane already stamped. On a lane
+`--pipeline <id>` names the pipeline a lane's first claim stamps: the default (`v21`, the
+same as no flag) or an embedded one newer than it, for a pilot lane (none today): recorded on
+`lane.claimed` as the default stamp is. An older id (`v20`, `v19`) or one not embedded is
+`invalid_input`, and so is `--pipeline` on a renewal, a takeover, or a claim of a lane already
+stamped. `v19` and `v20` stay embedded only for the lanes already stamped with them. On a lane
 stamped `v20`, `check record` refuses `plan_check` and `merge_verdict` (events.md, producer):
 the harness runs them (`check run plan`, `check run verdict`); `check waive plan` and a smoke
 claim stay.
@@ -433,7 +433,7 @@ tested and recorded. A replay and `check run smoke` take no slot.
 same keys and rules as `[tests]`, recorded as check `smoke` with the harness producer (events.md).
 A profile with no `[smoke]` is refused (`invalid_input`, nothing written), never a pass: whether
 a lane needs a smoke is a gate's to say, not this command's. The lane's stamped pipeline must
-define the `verdict` check (v20 on); a lane on v17 to v19 is refused (`invalid_input`, nothing
+define the `verdict` check (v20 on); a lane on v19 is refused (`invalid_input`, nothing
 written, the message says the lane records smoke with `check record`), as a harness `smoke`
 would meet v19's `smoke_recorded` from the lane's own session. The lane's own account of its smoke stays a session's `check record
 --check smoke`, with its evidence files.
@@ -442,8 +442,8 @@ would meet v19's `smoke_recorded` from the lane's own session. The lane's own ac
 pipeline must name the review's checks, each with a runner (`[runners]`: the CLI, model,
 tools, budget, timeout and an optional `fallback`, another runner with none of its own) and a prompt file: `review_correctness`, `review_design_tests`,
 `review_intent` and `review_codex` (the lenses) and `review_verifier`; a Claude runner must
-name a model; and `[limits]` must hold `review_attempts`, 1 or more. v17 to v19 name none, so
-a lane on them is refused (`invalid_input`, nothing written) and keeps recording reviews with
+name a model; and `[limits]` must hold `review_attempts`, 1 or more. v19 names none, so
+a lane on it is refused (`invalid_input`, nothing written) and keeps recording reviews with
 `check record` and `reviews record`. Each `[[review.required]]` lens of the base profile
 (`name`, `when` globs, `prompt`, the repo's own question) whose `when` names a changed file is
 one more lens on the `review_correctness` runner, never skipped for size, its row in `lenses`
@@ -531,11 +531,12 @@ or run (only the merge base and `patch_id` are read first), with no session star
 
 `check run verdict` takes the same lock and reads the commit the same way. The lane's stamped
 pipeline must name a `verdict` check with a runner and a prompt file (a Claude runner naming a
-model); v17 to v19 do not, so a lane on them is refused (`invalid_input`, nothing written) and
+model); v19 does not, so a lane on it is refused (`invalid_input`, nothing written) and
 keeps recording verdicts with `check record`. `[limits]` must hold `verdict_attempts`, 1
 or more. The verdict runs only on a clean commit, so a NO can be neither bought nor caused by
-running it early: the commit must have a harness `diff`, a newest harness `tests` that passed, a
-newest harness `review` that is `complete` (carried counts; a newer incomplete one uncovers an
+running it early: the commit must have a harness `diff`, a newest harness `tests` that passed
+(only on a pipeline with a `tests_passed` gate, v20; from v21 the repo's CI runs tests, no local
+run is needed and the verdict is shown `tests: null`), a newest harness `review` that is `complete` (carried counts; a newer incomplete one uncovers an
 older complete one) under the key `check run review` derives from the base profile now (the
 pipeline's hash folded with the required lenses the change touches), so a review run while the
 clone's base ref named another profile, the ref since restored, is not one (a ref left forged
@@ -569,7 +570,7 @@ after it, or by changing the code, which is deliberate. It prints the `check.fin
 `check run plan --file <plan>` takes the same lock and reads the commit the same way. `--file` is
 required here and refused on every other check. The lane's stamped pipeline must name a `plan`
 check with a runner and a prompt, and `[limits]` must hold `plan_attempts`, 1 or more (none
-before v20, so a lane on v17 to v19 is refused and keeps `check record`). The commit must change
+before v20, so a lane on v19 is refused and keeps `check record`). The commit must change
 no code file against its base, as `diff` counts code (any file a `[diff] code` glob of the base
 branch's profile names, or not under `docs/` or ending in `.md`, with or without counted
 lines): the plan is attacked before code exists, so a commit with code is refused
@@ -592,7 +593,7 @@ the harness producer (events.md): `ran` with the findings, or `skipped` with `re
 
 `check waive plan` is the owner's way past the plan check for a lane that coded before its plan
 was attacked. The lane's stamped pipeline must name a `plan` check (else `invalid_input`: a lane
-on v17 to v19 records a skipped plan check with `check record`, and a waiver there would fail its
+on v19 records a skipped plan check with `check record`, and a waiver there would fail its
 gate). It reads the commit the lane is on as `check run` does and appends one `plan_check`
 `skipped` with `reason` `waived` and `note` the `--reason` (one non-blank line of at most 500
 characters, redacted at write), producer `session`: refused from any session that has held the
@@ -820,8 +821,7 @@ Each command is one transaction that appends one event (events.md, write rules).
 A gated command on a lane with no stamp (never claimed) is denied with gate `stamp_ok` and fact path `lane.pipeline_hash`. It is never ungated and never falls back to the latest pipeline. A gated command whose route has no matching transition is denied the same way, never passed.
 
 `handoff` is the M1 gated transition. Its requires list is per route in
-`pipelines/v19.toml` (#105; lanes stamped `v17.1` keep `pipelines/v17.1.toml`, #34, and
-lanes stamped `v17` keep `pipelines/v17.toml`, #12). A handoff with `ready: true` on
+`pipelines/v19.toml` (#105). A handoff with `ready: true` on
 `code_pr` or `direct` needs a `plan_check`, a `quality_gate`, a `merge_verdict` with
 decision `yes` on the handed-off sha, and from v19: on a `code` lane a `smoke` and a
 `kept_tests` check recorded (ran, or skipped with an allowed reason; denied as
@@ -831,7 +831,7 @@ done handoff below is unchanged, so they do not bind a lane that goes to done, n
 `no_pr` code lane, which has no ready row. No gate reads CI. The handed-off sha is
 `handoff.commit`, or for `update --status done` the commit of the lane's latest
 handoff. The two shas match when the shorter, at least 7 hex characters, is a prefix of
-the longer, whichever side it is on (v17: the verdict's sha must be the prefix). A
+the longer, whichever side it is on. A
 handoff to `done` or `update --status done`, on every route, needs the plan check and
 quality gate (a lane that changes no code may skip them with an allowed reason), and on
 a `code` lane the same YES verdict on the handed-off sha; a `docs`, `measure` or
@@ -848,8 +848,7 @@ missing fact fails closed. The route comes from `work create`'s `--kind` and `--
 denial exits 1 with `gate_denied`, names the failing gate id on stderr, and leaves the
 lane where it was.
 
-**Pipeline v20** (`pipelines/v20.toml`, a lane opts in with `work claim --pipeline v20`
-until the cutover) gates the same two `handoff` rows on harness facts only (events.md,
+**Pipeline v20** (`pipelines/v20.toml`, for lanes already stamped with it) gates the same two `handoff` rows on harness facts only (events.md,
 facts for pipeline v20), each about the handed-off commit. It has no other transition:
 the write runs only `handoff`, so v19's other 20 rows could never run. The ready row's
 gates, in the order a denial names the first that fails:
