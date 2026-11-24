@@ -6,7 +6,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-/// Each lane prints its own pipeline's table: v20's pilot, v19's default.
+/// Each lane prints its own pipeline's table: a v20 lane's, a v19 lane's.
 #[test]
 fn limits_are_the_lanes_pipelines() {
     let dir = tempfile::tempdir().unwrap();
