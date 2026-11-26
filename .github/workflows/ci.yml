@@ -134,6 +134,21 @@ jobs:
           done
           exit $bad
 
+  # #320, report only: what it prints is for the reviewer, nothing here fails.
+  # HEAD is the PR's merge commit, so HEAD^1 is the base it merges into.
+  report:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - uses: Swatinem/rust-cache@v2
+      - name: added comments with no link, and doc comments on items that are not pub
+        run: python3 .github/scripts/added_comments.py HEAD^1
+      - name: unwraps outside tests against .github/unwrap-count
+        run: .github/scripts/unwrap_count.sh
+
   deny:
     runs-on: ubuntu-latest
     steps:

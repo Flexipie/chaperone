@@ -123,7 +123,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `spec update` | `<spec> --file <path\|-> --reason <r> [--expected-version <n>]` | write |
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
-| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]... [--run <script>]` | write |
+| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round\|size_waiver --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]... [--run <script>]` (a `size_waiver` is refused here, having no `--lines`: `check waive size` records it) | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan\|smoke --work <id> [--file <plan>]` | write |
 | `check waive` | `plan --work <id> --reason <r>`, `size --work <id> --lines <n> --reason <r>` | write |
 | `check prune` | | read, removes directories |
@@ -174,7 +174,9 @@ payload}`.
 `attention record` is new (#59). `/orchestrate` and the owner run it for each intervention on
 a lane, from any session (it skips the holder rule and leaves `updated_at` alone). It appends
 one `attention.recorded` (events.md, Attention). It refuses (`invalid_input`, nothing written)
-an `asked` without `--reason`, a `--reason` on another type, a `sent_back` without `--round` of
+an `asked` without `--reason` (one of `question.done_ambiguous`, `question.scope`, `question.one_way`,
+`question.recorded_decision`, `question.size`, `question.investigation`, `question.verdict_no`,
+`question.product`, `question.seam_reject` and `question.overlap`), a `--reason` on another type, a `sent_back` without `--round` of
 1 or more, an `answered` without `--answers` and `--note` or whose `--answers` is not a question
 asked on that item, `--answers` or `--round` on another type, and a note that is blank, has a line break or is
 over 500 characters. `--idempotency-key` is trimmed (blank is no key, over 200 characters is refused, as for

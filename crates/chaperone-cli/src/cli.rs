@@ -962,3 +962,70 @@ pub enum EvidenceCmd {
         reference: String,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use clap::{Command, CommandFactory};
+
+    use super::Cli;
+    use crate::output::CliError;
+
+    fn names(block: &str, path: &str) -> bool {
+        block.contains(&format!("`{path}`")) || block.contains(&format!("`{path} "))
+    }
+
+    fn missing(c: &Command, path: &str, blocks: &[String], out: &mut Vec<String>) {
+        let word = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.');
+        let named = |b: &str, v: &str| {
+            b.match_indices(v)
+                .any(|(i, _)| !b[..i].ends_with(word) && !b[i + v.len()..].starts_with(word))
+        };
+        for a in c.get_arguments().filter(|a| a.get_action().takes_values()) {
+            for v in a.get_possible_values() {
+                let v = v.get_name();
+                if !blocks
+                    .iter()
+                    .any(|b| (path.is_empty() || names(b, path)) && named(b, v))
+                {
+                    out.push(format!("{path} --{}: {v}", a.get_id()));
+                }
+            }
+        }
+        for s in c.get_subcommands() {
+            let p = format!("{path} {}", s.get_name()).trim_start().to_string();
+            if !blocks.iter().any(|b| names(b, &p)) {
+                out.push(p.clone());
+            }
+            missing(s, &p, blocks, out);
+        }
+    }
+
+    #[test]
+    fn cli_contract_names_every_command_and_value() {
+        let path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/cli-contract.md"
+        ));
+        let doc = std::fs::read_to_string(&path).unwrap();
+        let mut blocks = vec![String::new()];
+        for line in doc.lines() {
+            if line.trim().is_empty() || line.starts_with('|') {
+                blocks.push(String::new());
+            }
+            blocks.last_mut().unwrap().push_str(line);
+            blocks.last_mut().unwrap().push('\n');
+        }
+        let mut out = Vec::new();
+        missing(&Cli::command(), "", &blocks, &mut out);
+        assert!(out.is_empty(), "the doc does not name: {out:#?}");
+        if let Err(CliError::Drift(found)) = crate::doctor::run(&[path], None) {
+            let found: Vec<_> = found
+                .into_iter()
+                .filter(|f| f["kind"] != "pipeline_version")
+                .collect();
+            assert!(found.is_empty(), "the binary lacks: {found:#?}");
+        }
+    }
+}
