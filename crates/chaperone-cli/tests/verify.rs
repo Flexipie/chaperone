@@ -774,6 +774,101 @@ fn a_clean_merge_from_main_carries_the_review() {
     }
 }
 
+/// On v21 a rebase onto a newer main that keeps the lane's patch-id
+/// carries the review and the verdict, `carried_by` `patch_id` on each
+/// step, and starts no session; `merge --head` takes the rebased head. A
+/// one-line change to the patch runs a fresh review and verdict.
+#[test]
+fn a_rebase_that_keeps_the_patch_carries_the_review_and_verdict() {
+    let lane = claimed_in("v21", claude(json!({"findings": []}), json!([])), "");
+    lane.plan("1. do it\n");
+    lane.commit();
+    lane.answer("lane", "accept");
+    lane.smoke();
+    let first = lane.verify();
+    assert_eq!(first["stopped"], Value::Null, "{first}");
+    let sessions = lane.sessions();
+
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    git(&lane.wt, &["add", "other.rs"], &[("other.rs", b"x\n")]);
+    git(&lane.wt, &["commit", "-qm", "main moves"], &[]);
+    let main = git(&lane.wt, &["rev-parse", "HEAD"], &[]);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", &main],
+        &[],
+    );
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+    git(&lane.wt, &["rebase", "-q", &main], &[]);
+    lane.smoke();
+    let second = lane.verify();
+    assert_eq!(second["stopped"], Value::Null, "{second}");
+    assert_eq!(lane.sessions(), sessions);
+    let steps = second["steps"].as_array().unwrap();
+    for (step, check) in steps[1..].iter().zip(["review", "verdict"]) {
+        let first = first["steps"].as_array().unwrap().iter();
+        let mut from = first
+            .filter(|s| s["check"] == check)
+            .map(|s| &s["event_id"]);
+        assert_eq!(
+            (
+                &step["check"],
+                &step["carried_by"],
+                Some(&step["carried_from"])
+            ),
+            (&json!(check), &json!("patch_id"), from.next_back()),
+        );
+    }
+
+    let rebased = lane.head();
+    let bin = lane.dir.path().join("bin");
+    let view = bin.join("view.json");
+    let pr = json!({"state": "OPEN", "headRefOid": rebased,
+        "mergeCommit": {"oid": "e".repeat(40)}, "mergedAt": "2026-11-09T10:00:00Z"});
+    std::fs::write(&view, pr.to_string()).unwrap();
+    let merged = pr.to_string().replace("OPEN", "MERGED");
+    std::fs::write(bin.join("merged.json"), merged).unwrap();
+    let gh = format!(
+        "#!/bin/sh\necho \"$*\" >> {log:?}\ncase $2 in view) cat {view:?};; \
+         merge) cp {merged:?} {view:?};; esac\n",
+        log = bin.join("gh.log"),
+        merged = bin.join("merged.json"),
+    );
+    for (cli, body) in [("gh", gh.as_str()), ("herdr", "#!/bin/sh\n")] {
+        std::fs::write(bin.join(cli), body).unwrap();
+        let chmod = Command::new("chmod").arg("+x").arg(bin.join(cli)).status();
+        assert!(chmod.unwrap().success());
+    }
+    let file = lane.dir.path().join("handoff.json");
+    let ready = json!({"summary": "s", "status": "review", "ready": true, "commit": rebased,
+        "pull_request": "o/r#1"});
+    std::fs::write(&file, ready.to_string()).unwrap();
+    let (code, out) = lane.run("lane", &["work", "handoff", "1", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    let (code, out) = lane.run("owner", &["merge", "--work", "1", "--head", &rebased]);
+    assert_eq!(code, 0, "{out}");
+    let log = std::fs::read_to_string(bin.join("gh.log")).unwrap();
+    assert!(
+        log.contains(&format!("--match-head-commit {rebased}")),
+        "{log}"
+    );
+
+    git(
+        &lane.wt,
+        &["commit", "-qam", "one line"],
+        &[("lib.rs", b"a\nb\nc\n")],
+    );
+    lane.smoke();
+    let fresh = lane.verify();
+    let steps = fresh["steps"].as_array().unwrap();
+    assert!(
+        steps.iter().all(|s| s.get("carried_by").is_none()),
+        "{fresh}"
+    );
+    assert_eq!(fresh["stopped"], Value::Null, "{fresh}");
+    assert_eq!(lane.sessions(), sessions + 4, "{fresh}");
+}
+
 /// A lane diff git cannot give is refused before any review, and writes
 /// nothing.
 #[test]

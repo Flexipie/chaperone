@@ -507,7 +507,7 @@ impl Ledger {
     }
 
     /// The lane's newest harness `input.check` that ran on `input.tree`, or
-    /// on a diff with `input`'s `patch_id` (only a review has one), by
+    /// on a diff with `input`'s `patch_id` (a review's and a verdict's), by
     /// `input.profile`, with `filter`'s field equal to its value when there
     /// is one (`complete`, or the digest of a plan), replayed: a check that
     /// holds for a tree whatever the commit (`check run review`, `verdict`,

@@ -18,7 +18,7 @@ use std::path::Path;
 
 use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::checks::{BODY_CHARS, NOTE_CHARS, Recorded, RunInput, session_of};
@@ -309,11 +309,13 @@ pub fn said(output: Value) -> Result<Said, String> {
 /// The start of `check run verdict`, before anything is run: `input` keyed
 /// for a verdict by the pipeline `hash`, then the verdict that stands for
 /// the tree. A verdict that ran, yes or no, stands for (lane, tree,
-/// pipeline): on this commit it replays; on another (an amend that kept
-/// the tree) it is carried, a new event on this commit with the same
-/// decision, this commit's `facts` and `carried_from`, so a gate comparing
-/// the verdict's commit with the head reads this one, and no session
-/// starts. What the harness shows the verdict does not reopen it: the
+/// pipeline), and for a diff with `input`'s `patch_id`: on this commit it
+/// replays; on another (an amend that kept the tree, or a rebase that kept
+/// the patch whose review is the one the verdict read) it is carried, a new
+/// event on this commit with the same decision, this commit's `facts` and
+/// `carried_from` (`carried_by` `patch_id` for a rebase), so a gate
+/// comparing the verdict's commit with the head reads this one, and no
+/// session starts. What the harness shows the verdict does not reopen it: the
 /// lane's clone can move the base and its profile. A NO is reopened only
 /// by [`reopened`]; then, or with no verdict yet, a tree whose sessions
 /// gave no answer `attempts` times is refused: the owner decides.
@@ -328,11 +330,22 @@ pub fn replay(
     input.profile = Some(hash.into());
     if let Some((newest, here)) = ledger.tree_stand(input, &None)? {
         let no = newest.payload.rest.get("decision") == Some(&json!("no"));
-        if !(no && reopened(ledger, input.work, &newest)?) {
+        // By patch id only when the head's review is the one it read: a
+        // fresh review on the rebased head gets a fresh verdict.
+        let by_patch = newest.payload.rest.get("tree") != Some(&json!(input.tree));
+        let read = |facts: Option<&Value>| facts.and_then(|f| f["review"].as_i64());
+        let same = !by_patch || {
+            let had = review_session(ledger, read(newest.payload.rest.get("facts")))?;
+            had.is_some() && had == review_session(ledger, read(Some(&harness.read)))?
+        };
+        if same && !(no && reopened(ledger, input.work, &newest)?) {
             if let Some(here) = here {
                 return Ok(Ok(Some(here)));
             }
-            input.fields = Map::from_iter([("facts".into(), harness.read.clone())]);
+            input.fields.insert("facts".into(), harness.read.clone());
+            if by_patch {
+                input.fields.insert("carried_by".into(), json!("patch_id"));
+            }
             return Ok(ledger.carry(actor, input, newest)?.map(Some));
         }
     }
@@ -345,6 +358,16 @@ pub fn replay(
         ))));
     }
     Ok(Ok(None))
+}
+
+/// The session of review event `id`: its `carried_from`, else itself.
+fn review_session(ledger: &Ledger, id: Option<i64>) -> Result<Option<i64>, LedgerError> {
+    let sql = "SELECT coalesce(json_extract(payload_json, '$.carried_from'), id) FROM events
+                 WHERE id = ?1 AND kind = 'check.finished'";
+    Ok(ledger
+        .conn()
+        .query_row(sql, [id], |r| r.get(0))
+        .optional()?)
 }
 
 /// Whether a NO, `newest` on its tree, is reopened: a finding of the lane
@@ -387,7 +410,8 @@ pub fn record(
     if let Err(r) = review::usage(ledger, actor, input.work, "verdict", &session)? {
         return Ok(Err(r));
     }
-    input.fields = Map::from_iter([
+    // Over the `patch_id` `check run verdict` read, which a rebase carries by.
+    input.fields.extend([
         ("base".into(), json!(facts.base)),
         ("diff_cut".into(), json!(diff_cut)),
         ("facts".into(), harness.read.clone()),
@@ -676,6 +700,54 @@ mod tests {
         let yes = ledger.finish_run(&me(), &input, true, &k).unwrap().unwrap();
         let stands = replay_on("abc1234", "p", 2, &facts).1.unwrap().unwrap();
         assert_eq!(stands.event_id, yes.event_id);
+    }
+
+    /// A verdict is carried to another tree with its `patch_id` only when
+    /// the head's review is the one it read: a fresh review there (main
+    /// added a required lens) gets a fresh verdict.
+    #[test]
+    fn a_verdict_carries_by_patch_id_only_with_its_review() {
+        let (dir, ledger) = lane();
+        let store = Evidence::beside(&dir.path().join("ledger.db"));
+        all(&ledger, "abc1234");
+        let facts = harness(&ledger, &store, 1, "abc1234", "p", false, true)
+            .unwrap()
+            .unwrap();
+        let patch = json!({"patch_id": "f".repeat(64)});
+        let mut input = run(EVENT_CHECK, "abc1234", patch.clone());
+        input.fields.extend([
+            ("decision".into(), json!("yes")),
+            ("facts".into(), facts.read.clone()),
+        ]);
+        let k = ledger.tree_key(&input, &facts.sha256).unwrap();
+        let yes = ledger.finish_run(&me(), &input, true, &k).unwrap().unwrap();
+        let replay_on = |facts: &Harness| {
+            let mut input = run("", "fed4321", patch.clone());
+            input.tree = "0ther".into();
+            replay(&ledger, &me(), &mut input, ("p", 2), facts)
+                .unwrap()
+                .unwrap()
+        };
+        measured(&ledger, "review", "fed4321", json!({"complete": true}));
+        let mut fresh = Harness {
+            sha256: facts.sha256.clone(),
+            shown: Value::Null,
+            read: facts.read.clone(),
+        };
+        let sql = "SELECT max(id) FROM events WHERE payload_json->>'check' = 'review'";
+        let review: i64 = ledger.conn().query_row(sql, [], |r| r.get(0)).unwrap();
+        assert!(review > yes.event_id);
+        fresh.read["review"] = json!(review);
+        assert!(replay_on(&fresh).is_none());
+        let carried = replay_on(&facts).unwrap().payload.rest;
+        assert_eq!(
+            (
+                &carried["carried_from"],
+                &carried["carried_by"],
+                &carried["decision"]
+            ),
+            (&json!(yes.event_id), &json!("patch_id"), &json!("yes"))
+        );
     }
 
     /// A session's smoke claim is shown with the end of each file it
