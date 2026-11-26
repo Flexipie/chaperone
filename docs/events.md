@@ -489,6 +489,7 @@ it carries a `run`, `run.exit` 0.
 on the commit, complete (a newer one that is not, as when a required lens did not run, uncovers
 an older one), or a carried one (`carried_from`), read as the review it names, whose
 `plan_answers` are the digest of the plan findings and answers that stand now.
+`review.event_id` is that review's event (the original of a carried one), absent without one.
 `findings.open_blocking` counts the findings of every complete harness review on the lane
 that still block, as `blocking_findings` reads them (open, verified or disputed, and not
 `nit`, `improvement`, `question` or `convention`), so another tree's blocker blocks until it

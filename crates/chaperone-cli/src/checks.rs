@@ -571,9 +571,28 @@ fn pr_body(
         true => "left to CI".into(),
         false => format!("passed on {head}: {}", commands.join(", ")),
     };
+    let covering = match facts.get("review.event_id") {
+        Fact::Int(id) => Some(*id),
+        _ => None,
+    };
+    let mut open = String::new();
+    for f in ledger.lane_findings(item.id)? {
+        let unsettled = ["open", "verified", "disputed"].contains(&f.status.as_str());
+        if Some(f.check_event_id) != covering || f.blocks || !unsettled {
+            continue;
+        }
+        let at = f.path.map_or_else(String::new, |p| match f.line {
+            Some(n) => format!(" `{p}:{n}`"),
+            None => format!(" `{p}`"),
+        });
+        open += &format!("- {}: {}{at}\n", f.severity, f.title);
+    }
+    if !open.is_empty() {
+        open = format!("\nOpen findings, not blocking:\n{open}");
+    }
     body += &format!(
         "- Size: {} code lines added{removed} and {} test lines in {} files{assets}\n\
-         - Tests: {tests}\n- Plan check: {plan}\n- Smoke: {}\n\n\
+         - Tests: {tests}\n- Plan check: {plan}\n- Smoke: {}\n{open}\n\
          Made by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],
         diff["test_lines"],

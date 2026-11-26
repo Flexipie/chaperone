@@ -235,7 +235,8 @@ pub(crate) fn project(
         });
         f.set("smoke.claimed", claimed);
         f.set("review.complete", covering.is_some());
-        if covering.is_some() {
+        if let Some(review) = covering {
+            f.set("review.event_id", review);
             // Every complete harness review's, so a blocker that a later
             // tree's review does not raise again still blocks until settled.
             let mut stmt = conn.prepare(&format!(
