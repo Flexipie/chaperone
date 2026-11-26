@@ -76,15 +76,20 @@ jobs:
   # the job (plain match arms are regions, not branches). LEDGER_GATED files
   # (the write path): the same, counted across the unit and integration test
   # builds, with the `?` of a SQLite call exempt (.github/scripts/coverage_gate.py).
+  # The gates read chaperone-core's tests alone; the report (coverage_report.py,
+  # never fails) adds the other crates' tests, which reach code through the
+  # spawned binary, and lists the PR's added src lines that no test ran.
   coverage:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       NIGHTLY: nightly-2026-10-20
       GATED: crates/chaperone-core/src/pipeline/eval.rs
       LEDGER_GATED: crates/chaperone-core/src/ledger/write.rs crates/chaperone-core/src/ledger/fold.rs crates/chaperone-core/src/ledger/redact.rs
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
       - run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
@@ -92,7 +97,14 @@ jobs:
           tool: cargo-llvm-cov,nextest
       # Crash and concurrency tests gate nothing here, and instrumentation
       # eats the 50 writers' headroom under the 5 s busy limit.
-      - run: cargo +"$NIGHTLY" llvm-cov nextest -p chaperone-core --locked --branch --json --output-path cov.json -E 'not (binary(crash) | binary(concurrency))'
+      - run: cargo +"$NIGHTLY" llvm-cov nextest -p chaperone-core --locked --branch --no-report -E 'not (binary(crash) | binary(concurrency))'
+      - run: cargo +"$NIGHTLY" llvm-cov report --branch --json --output-path cov.json
+      - run: cargo +"$NIGHTLY" llvm-cov nextest --workspace --exclude chaperone-core --locked --branch --no-report
+      - run: cargo +"$NIGHTLY" llvm-cov report --branch --json --output-path all.json
+      # HEAD is the PR's merge commit, so HEAD^1 is the base it merges into.
+      - name: added src lines no test reaches (report only)
+        if: github.event_name == 'pull_request'
+        run: python3 .github/scripts/coverage_report.py all.json HEAD^1
       - name: no missed branch or region in a gated file
         run: |
           for f in $GATED; do

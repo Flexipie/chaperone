@@ -13,19 +13,11 @@ import json
 import sys
 from collections import defaultdict
 
-data = json.load(open(sys.argv[1]))["data"][0]
-failed = False
-for path in sys.argv[2:]:
+
+def missed(data, path):
+    """The branches with a side never taken and the regions never run in
+    `path`, as (kind, line, col, end_line, end_col), a `?`-only region exempt."""
     src = open(path).read().split("\n")
-    file = next((f for f in data["files"] if f["filename"].endswith("/" + path)), None)
-    if file is None or not file["branches"]:
-        print(f"{path}: no branch data")
-        failed = True
-        continue
-    missed = []
-    funcs = file["summary"]["functions"]
-    if funcs["covered"] != funcs["count"]:
-        missed.append(f"{funcs['count'] - funcs['covered']} functions never called")
     # Keyed by function, span and position among same-span records, so the
     # copies rustc makes of a guard on an or-pattern stay apart.
     taken = defaultdict(lambda: [0, 0])
@@ -42,14 +34,36 @@ for path in sys.argv[2:]:
             seen[(kind, span)] += 1
             taken[key][0] += r[4]
             taken[key][1] += other
+    out = []
     for (kind, _, (line, col, end_line, end_col), _), (hits, other) in sorted(taken.items()):
         if kind == "branch" and (hits == 0 or other == 0):
-            missed.append(f"branch {line}:{col}")
+            out.append((kind, line, col, end_line, end_col))
         elif kind == "region" and hits == 0:
             text = src[line - 1][col - 1 : end_col - 1] if line == end_line else ""
             if text != "?":
-                missed.append(f"region {line}:{col}-{end_line}:{end_col}")
-    if missed:
-        print(f"{path}: {missed}")
-        failed = True
-sys.exit(1 if failed else 0)
+                out.append((kind, line, col, end_line, end_col))
+    return out
+
+
+if __name__ == "__main__":
+    data = json.load(open(sys.argv[1]))["data"][0]
+    failed = False
+    for path in sys.argv[2:]:
+        file = next((f for f in data["files"] if f["filename"].endswith("/" + path)), None)
+        if file is None or not file["branches"]:
+            print(f"{path}: no branch data")
+            failed = True
+            continue
+        found = []
+        funcs = file["summary"]["functions"]
+        if funcs["covered"] != funcs["count"]:
+            found.append(f"{funcs['count'] - funcs['covered']} functions never called")
+        for kind, line, col, end_line, end_col in missed(data, path):
+            if kind == "branch":
+                found.append(f"branch {line}:{col}")
+            else:
+                found.append(f"region {line}:{col}-{end_line}:{end_col}")
+        if found:
+            print(f"{path}: {found}")
+            failed = True
+    sys.exit(1 if failed else 0)
