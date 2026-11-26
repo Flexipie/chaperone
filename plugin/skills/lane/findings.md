@@ -1,10 +1,10 @@
 # Findings
 
-## What blocks
+## The bar
 
-A finding of severity `blocker` or `risk`, status `open`, `verified` or `disputed`, from a
-complete review of any commit of the lane. `question`, `convention`, `nit` and
-`improvement` never block; plan check findings never block.
+Only a finding with `blocks` (a proven `blocker` or `risk`, not settled) or a check failing
+on this head holds a lane; no other finding, gate or round does. One that does not block is
+never fixed alone and never earns a verify: `pr open` lists it in the PR body as open.
 
 ## Read them
 
@@ -25,7 +25,7 @@ Weigh it (`judgement.md` beside this file, "Weighing a finding"), then one of:
   A dispute still blocks until the owner waives it or an independent session refutes it,
   so then Needs you, naming the finding. Never argue in prose, the PR or the handoff.
 
-Fix several findings at once, then back to step 5 (smoke) and verify once. A third verify
+Fix every blocking finding at once, then back to step 5 (smoke) and verify once. A third verify
 on this lane that stops at `review` or `verdict`: Needs you. A big fix round
 goes to a fresh subagent given the worktree, `lane-state.md` and the findings, so this
 session keeps a short report, not the whole fix.

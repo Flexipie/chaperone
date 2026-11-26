@@ -571,9 +571,32 @@ fn pr_body(
         true => "left to CI".into(),
         false => format!("passed on {head}: {}", commands.join(", ")),
     };
+    // The newest review of the head reads the whole diff: what it left
+    // unsettled that does not block is not fixed and earns no round, so it
+    // is listed. An older round's nit never settles, so it is not.
+    let found = ledger.lane_findings(item.id)?.into_iter();
+    let found: Vec<_> = found
+        .filter(|f| f.check == "review" && f.head_sha.as_deref() == Some(head))
+        .collect();
+    let newest = found.iter().map(|f| f.check_event_id).max();
+    let mut open = String::new();
+    for f in found {
+        let unsettled = ["open", "verified", "disputed"].contains(&f.status.as_str());
+        if Some(f.check_event_id) != newest || f.blocks || !unsettled {
+            continue;
+        }
+        let at = f.path.map_or_else(String::new, |p| match f.line {
+            Some(n) => format!(" `{p}:{n}`"),
+            None => format!(" `{p}`"),
+        });
+        open += &format!("- {}: {}{at}\n", f.severity, f.title);
+    }
+    if !open.is_empty() {
+        open = format!("\nOpen findings, not blocking:\n{open}");
+    }
     body += &format!(
         "- Size: {} code lines added{removed} and {} test lines in {} files{assets}\n\
-         - Tests: {tests}\n- Plan check: {plan}\n- Smoke: {}\n\n\
+         - Tests: {tests}\n- Plan check: {plan}\n- Smoke: {}\n{open}\n\
          Made by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],
         diff["test_lines"],

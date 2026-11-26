@@ -8,6 +8,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use chaperone_core::ledger::{Actor, EventKind, Ledger, Mutation};
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_chaperone");
@@ -306,6 +307,57 @@ fn pr_open_on_v21_counts_added_lines_and_refuses_no_size() {
             .contains("1 uncounted (binary) files"),
         "{err}"
     );
+}
+
+/// Two complete harness reviews of lane 1: the first on an older commit
+/// raises a blocking risk and a nit, the second on `head` an improvement
+/// and the question an unproven risk is written as. The body lists the
+/// second's as open; the first round's nit never settles, so it is not.
+#[test]
+fn pr_open_lists_the_findings_that_do_not_block() {
+    let lane = lane_on("v21", &[], "");
+    let head = git(&lane.wt, &["rev-parse", "HEAD"], &[]);
+    let ledger = Ledger::open(&lane.db).unwrap();
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    let rounds = [
+        (
+            "abc1234",
+            json!([["risk", "r", "lib.rs", 1], ["nit", "n", null, null]]),
+        ),
+        (
+            &*head,
+            json!([
+                ["improvement", "i", "lib.rs", 2],
+                ["question", "q", null, null]
+            ]),
+        ),
+    ];
+    for (sha, found) in rounds {
+        let found = found.as_array().unwrap().iter().map(|f| {
+            json!({"finding_key": f[1], "severity": f[0], "title": f[1], "body": "b",
+                   "path": f[2], "line": f[3]})
+        });
+        let p = json!({"check": "review", "outcome": "ran", "head_sha": sha, "complete": true,
+                       "producer": harness, "findings": found.collect::<Vec<_>>()});
+        let m = Mutation::Event {
+            kind: EventKind::CheckFinished,
+            lane_id: Some(1),
+            spec_id: None,
+            payload: serde_json::from_value(p).unwrap(),
+        };
+        let actor = Actor {
+            agent: Some("h".into()),
+            session: Some("h".into()),
+        };
+        ledger
+            .apply(&actor, None, "2026-11-27T00:00:00.000Z", m)
+            .unwrap();
+    }
+    assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 1);
+    let open = "- Smoke: none\n\nOpen findings, not blocking:\n\
+                - improvement: i `lib.rs:2`\n- question: q\n\nMade by";
+    let body = lane.file("body.md");
+    assert!(body.contains(open), "{body}");
 }
 
 /// A GitHub lane's body closes its issue: by its full key before the PR
