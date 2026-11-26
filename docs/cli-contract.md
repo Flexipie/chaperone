@@ -547,7 +547,11 @@ through the verdict is #262), and, when the base profile declares
 is refused, naming what is missing or failed, and nothing is written. Blocking findings do not
 stop it: they are shown, and the verdict may say no. A verdict that ran, yes or no, stands for
 (lane, tree, pipeline): on this commit it replays, on another commit with this tree it is
-carried with this commit's fact ids (events.md, the key), and nothing runs. A NO is reopened
+carried with this commit's fact ids (events.md, the key), and nothing runs. It also stands for
+its diff's `patch_id` (read in the worktree as `check run review` reads it, refused the same
+way): on a commit of another tree whose diff has it (a rebase onto a newer base that kept the
+lane's patch), it is carried the same way, `carried_by` `patch_id`, when the commit's complete
+review is the one the verdict read or a carry of it; a fresh review there means a fresh verdict. A NO is reopened
 only by a waive or a refutation recorded after it, or by changing the code; nothing else the
 harness shows reopens it, as the base and its profile come from the lane's own clone. Else a
 tree whose verdict sessions gave no answer `verdict_attempts` times by this pipeline is refused
@@ -631,7 +635,9 @@ Plan and smoke are not steps: the plan check runs before code, and the smoke is 
 or the profile's `check run smoke`. Like `usage report` it appends more than one event, each
 step's in its own transactions, and none of its own. It prints `{work_id, steps, stopped}`:
 `steps` is `{check, head, event_id, replayed, passed}` per step that wrote or replayed (`head`
-the commit it ran on), and `stopped` is null when all four passed, else `{check, why}`: the
+the commit it ran on), plus `carried_from` and `carried_by` when the step's event carried
+another commit's result (`carried_by` `patch_id` for a rebase that kept the patch; absent for
+an amend that kept the tree), which say why no session ran, and `stopped` is null when all four passed, else `{check, why}`: the
 refusal's message, why the step did not pass, or `the lane moved from <sha> to <sha>`.
 
 `pr open --work <id>` opens the lane's PR under the lane's run lock (a second run is

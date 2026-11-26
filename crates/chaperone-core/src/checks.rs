@@ -507,7 +507,7 @@ impl Ledger {
     }
 
     /// The lane's newest harness `input.check` that ran on `input.tree`, or
-    /// on a diff with `input`'s `patch_id` (only a review has one), by
+    /// on a diff with `input`'s `patch_id` (a review's and a verdict's), by
     /// `input.profile`, with `filter`'s field equal to its value when there
     /// is one (`complete`, or the digest of a plan), replayed: a check that
     /// holds for a tree whatever the commit (`check run review`, `verdict`,
@@ -588,8 +588,9 @@ impl Ledger {
     /// `stored`, a [`Ledger::tree_run`] result on another commit, as this
     /// commit's (`input.head`): its fields with `input.fields` over them
     /// and without its findings, which stay the original's (a reader
-    /// follows `carried_from` for them), plus `carried_from`, the event
-    /// whose session ran. No session starts.
+    /// follows `carried_from` for them), or its `carried_by`, which the
+    /// caller sets for this carry, plus `carried_from`, the event whose
+    /// session ran. No session starts.
     pub(crate) fn carry(
         &self,
         actor: &Actor,
@@ -598,7 +599,7 @@ impl Ledger {
     ) -> Checked<Recorded> {
         let from = session_of(&stored);
         let mut fields = stored.payload.rest;
-        for k in ["tree", "profile", "producer", "redactions"] {
+        for k in ["tree", "profile", "producer", "redactions", "carried_by"] {
             fields.remove(k);
         }
         fields.insert("carried_from".into(), json!(from));

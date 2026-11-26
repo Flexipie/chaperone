@@ -259,16 +259,24 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
             "verdict" if p["decision"] != "yes" => "the verdict is not yes".into(),
             _ => String::new(),
         };
-        steps.push(
-            json!({"check": check, "head": head, "event_id": recorded["event_id"],
-            "replayed": recorded["replayed"], "passed": why.is_empty()}),
-        );
+        steps.push(step_row(check, head, &recorded, why.is_empty()));
         if !why.is_empty() {
             stopped = json!({"check": check, "why": why});
             break;
         }
     }
     one(json!({"work_id": work, "steps": steps, "stopped": stopped}))
+}
+
+fn step_row(check: &str, head: &str, rec: &Value, passed: bool) -> Value {
+    let mut row = json!({"check": check, "head": head, "event_id": rec["event_id"],
+        "replayed": rec["replayed"], "passed": passed});
+    for k in ["carried_from", "carried_by"] {
+        if let Some(v) = rec["payload"].get(k) {
+            row[k] = v.clone();
+        }
+    }
+    row
 }
 
 /// `pr open`: under the lane's run lock, on a clean worktree at the tip of
@@ -358,10 +366,7 @@ pub fn pr_open(
     let mut steps = Vec::new();
     let mut step = |check: &str, ran: Result<Outcome, CliError>| match ran? {
         Outcome::One(rec) if rec["payload"]["head_sha"] == head => {
-            steps.push(
-                json!({"check": check, "head": head, "event_id": rec["event_id"],
-                "replayed": rec["replayed"], "passed": true}),
-            );
+            steps.push(step_row(check, &head, &rec, true));
             Ok(rec["payload"].clone())
         }
         _ => Err(refuse(format!("the lane moved from {head}; run again"))),
@@ -1037,20 +1042,7 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
     let required = review::required(pipeline, &required_lenses(&wt, &files)?).map_err(refuse)?;
     plan.require(pipeline, &required);
-    let base = merge_base(&wt, &base, &input.head)?;
-    let deadline = Instant::now() + RUN_TIMEOUT;
-    let patch_id = git::patch_id(
-        Path::new("git"),
-        &wt,
-        &base,
-        &input.head,
-        deadline,
-        DIFF_BYTES,
-    );
-    let patch_id = patch_id.map_err(|_| refuse(format!("could not diff {base} {}", input.head)))?;
-    if let Some(id) = patch_id {
-        input.fields.insert("patch_id".into(), json!(id));
-    }
+    insert_patch_id(&wt, &base, &mut input)?;
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
         return one(stored);
     }
@@ -1085,11 +1077,31 @@ pub(crate) fn required_lenses(
     Ok(rules.filter(hit).map(|r| (r.name, r.prompt)).collect())
 }
 
+fn insert_patch_id(wt: &Path, base: &str, input: &mut RunInput) -> Result<(), CliError> {
+    let base = merge_base(wt, base, &input.head)?;
+    let deadline = Instant::now() + RUN_TIMEOUT;
+    let id = git::patch_id(
+        Path::new("git"),
+        wt,
+        &base,
+        &input.head,
+        deadline,
+        DIFF_BYTES,
+    );
+    let id = id.map_err(|_| refuse(format!("could not diff {base} {}", input.head)))?;
+    if let Some(id) = id {
+        input.fields.insert("patch_id".into(), json!(id));
+    }
+    Ok(())
+}
+
 /// `check run verdict`: one fresh session on the lane's pipeline's
 /// `verdict` check (`verdict::record`) in the harness's checkout, given the
 /// change as the review is, the lane's goal and the harness's own results
-/// on the commit. A verdict on the same tree, pipeline and results replays
-/// (`verdict::replay`), carried to an amended commit, and starts nothing.
+/// on the commit. A verdict on the same tree, or the same diff's patch-id
+/// (read in the worktree, as the review's), and pipeline replays
+/// (`verdict::replay`), carried to an amended or rebased commit, and starts
+/// nothing.
 /// A lane whose pipeline has no `verdict` (v19), and a commit without a
 /// harness `diff`, a `tests` result (where the pipeline gates on tests) and
 /// a complete `review`, write nothing.
@@ -1106,7 +1118,7 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         ))
     })?;
     let (head, store) = (input.head.clone(), Evidence::beside(db));
-    let (_, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
+    let (base, files) = changed(&wt, item.base_sha.as_deref(), &head)?;
     let required = review::required(pipeline, &required_lenses(&wt, &files)?).map_err(refuse)?;
     let mut lenses = review::plan(pipeline).map_err(refuse)?;
     lenses.require(pipeline, &required);
@@ -1121,6 +1133,7 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         ))
     })?;
     let key = (&*pipeline.hash, attempts);
+    insert_patch_id(&wt, &base, &mut input)?;
     if let Some(stored) = verdict::replay(ledger, actor, &mut input, key, &harness)?? {
         return one(stored);
     }
