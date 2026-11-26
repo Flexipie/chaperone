@@ -328,20 +328,26 @@ pub fn replay(
 ) -> Checked<Option<Recorded>> {
     input.check = EVENT_CHECK.into();
     input.profile = Some(hash.into());
-    if let Some((newest, here)) = ledger.tree_stand(input, &None)? {
+    let other_tree = |r: &Recorded| r.payload.rest.get("tree") != Some(&json!(input.tree));
+    let mut stand = ledger.tree_stand(input, &None)?;
+    if let Some((newest, _)) = &stand
+        && other_tree(newest)
+        && !same_review(ledger, newest, harness)?
+    {
+        let patch_id = input.fields.remove("patch_id");
+        stand = ledger.tree_stand(input, &None)?;
+        input
+            .fields
+            .extend(patch_id.map(|p| ("patch_id".into(), p)));
+    }
+    if let Some((newest, here)) = stand {
         let no = newest.payload.rest.get("decision") == Some(&json!("no"));
-        let by_patch = newest.payload.rest.get("tree") != Some(&json!(input.tree));
-        let read = |facts: Option<&Value>| facts.and_then(|f| f["review"].as_i64());
-        let same_review = !by_patch || {
-            let had = review_session(ledger, read(newest.payload.rest.get("facts")))?;
-            had.is_some() && had == review_session(ledger, read(Some(&harness.read)))?
-        };
-        if same_review && !(no && reopened(ledger, input.work, &newest)?) {
+        if !(no && reopened(ledger, input.work, &newest)?) {
             if let Some(here) = here {
                 return Ok(Ok(Some(here)));
             }
             input.fields.insert("facts".into(), harness.read.clone());
-            if by_patch {
+            if other_tree(&newest) {
                 input.fields.insert("carried_by".into(), json!("patch_id"));
             }
             return Ok(ledger.carry(actor, input, newest)?.map(Some));
@@ -358,14 +364,18 @@ pub fn replay(
     Ok(Ok(None))
 }
 
-/// The session of review event `id`: its `carried_from`, else itself.
-fn review_session(ledger: &Ledger, id: Option<i64>) -> Result<Option<i64>, LedgerError> {
-    let sql = "SELECT coalesce(json_extract(payload_json, '$.carried_from'), id) FROM events
-                 WHERE id = ?1 AND kind = 'check.finished'";
-    Ok(ledger
-        .conn()
-        .query_row(sql, [id], |r| r.get(0))
-        .optional()?)
+fn same_review(ledger: &Ledger, verdict: &Recorded, head: &Harness) -> Result<bool, LedgerError> {
+    let session = |facts: Option<&Value>| -> Result<Option<i64>, LedgerError> {
+        let sql = "SELECT coalesce(json_extract(payload_json, '$.carried_from'), id) FROM events
+                     WHERE id = ?1 AND kind = 'check.finished'";
+        let id = facts.and_then(|f| f["review"].as_i64());
+        Ok(ledger
+            .conn()
+            .query_row(sql, [id], |r| r.get(0))
+            .optional()?)
+    };
+    let read = session(verdict.payload.rest.get("facts"))?;
+    Ok(read.is_some() && read == session(Some(&head.read))?)
 }
 
 /// Whether a NO, `newest` on its tree, is reopened: a finding of the lane
@@ -744,6 +754,47 @@ mod tests {
                 &carried["decision"]
             ),
             (&json!(yes.event_id), &json!("patch_id"), &json!("yes"))
+        );
+    }
+
+    /// A NO on this tree stands though a newer verdict with its `patch_id`
+    /// read another review: going back to the tree starts no session.
+    #[test]
+    fn a_no_on_the_tree_stands_past_a_patch_verdict_of_another_review() {
+        let (dir, ledger) = lane();
+        let store = Evidence::beside(&dir.path().join("ledger.db"));
+        all(&ledger, "abc1234");
+        let facts = harness(&ledger, &store, 1, "abc1234", "p", false, true)
+            .unwrap()
+            .unwrap();
+        let verdict = |head: &str, tree: &str, decision: &str, read: &Value| {
+            let fields = json!({"patch_id": "f".repeat(64), "decision": decision, "facts": read});
+            let mut input = run(EVENT_CHECK, head, fields);
+            input.tree = tree.into();
+            let k = ledger.tree_key(&input, "d").unwrap();
+            ledger.finish_run(&me(), &input, true, &k).unwrap().unwrap()
+        };
+        let no = verdict("abc1234", TREE, "no", &facts.read);
+        measured(&ledger, "review", "fed4321", json!({"complete": true}));
+        let sql = "SELECT max(id) FROM events WHERE payload_json->>'check' = 'review'";
+        let mut read = facts.read.clone();
+        read["review"] = json!(
+            ledger
+                .conn()
+                .query_row(sql, [], |r| r.get::<_, i64>(0))
+                .unwrap()
+        );
+        verdict("fed4321", "0ther", "yes", &read);
+        let mut input = run("", "abc9999", json!({"patch_id": "f".repeat(64)}));
+        let back = replay(&ledger, &me(), &mut input, ("p", 2), &facts);
+        let back = back.unwrap().unwrap().unwrap().payload.rest;
+        assert_eq!(
+            (
+                &back["decision"],
+                &back["carried_from"],
+                back.get("carried_by")
+            ),
+            (&json!("no"), &json!(no.event_id), None)
         );
     }
 

@@ -268,9 +268,6 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     one(json!({"work_id": work, "steps": steps, "stopped": stopped}))
 }
 
-/// One step of `verify` or `pr open`: `rec`, the event it wrote or
-/// replayed on `head`, with `carried_from` and `carried_by` when it was
-/// carried from another commit, which say why no session ran.
 fn step_row(check: &str, head: &str, rec: &Value, passed: bool) -> Value {
     let mut row = json!({"check": check, "head": head, "event_id": rec["event_id"],
         "replayed": rec["replayed"], "passed": passed});
@@ -1026,7 +1023,7 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     let (base, files) = changed(&wt, item.base_sha.as_deref(), &input.head)?;
     let required = review::required(pipeline, &required_lenses(&wt, &files)?).map_err(refuse)?;
     plan.require(pipeline, &required);
-    patch_id(&wt, &base, &mut input)?;
+    insert_patch_id(&wt, &base, &mut input)?;
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
         return one(stored);
     }
@@ -1061,10 +1058,7 @@ pub(crate) fn required_lenses(
     Ok(rules.filter(hit).map(|r| (r.name, r.prompt)).collect())
 }
 
-/// `input.fields`' `patch_id`: that of the lane's diff from its merge base
-/// with `base` (none for an empty diff or one past 16 MiB), read in the
-/// worktree; a diff git cannot give is refused.
-fn patch_id(wt: &Path, base: &str, input: &mut RunInput) -> Result<(), CliError> {
+fn insert_patch_id(wt: &Path, base: &str, input: &mut RunInput) -> Result<(), CliError> {
     let base = merge_base(wt, base, &input.head)?;
     let deadline = Instant::now() + RUN_TIMEOUT;
     let id = git::patch_id(
@@ -1120,7 +1114,7 @@ fn run_verdict(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<O
         ))
     })?;
     let key = (&*pipeline.hash, attempts);
-    patch_id(&wt, &base, &mut input)?;
+    insert_patch_id(&wt, &base, &mut input)?;
     if let Some(stored) = verdict::replay(ledger, actor, &mut input, key, &harness)?? {
         return one(stored);
     }
