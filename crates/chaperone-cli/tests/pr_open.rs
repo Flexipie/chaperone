@@ -8,7 +8,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use chaperone_core::ledger::{Actor, EventKind, Ledger, Mutation};
+use chaperone_core::ledger::{Actor, Applied, EventKind, Ledger, Mutation};
 use serde_json::{Value, json};
 
 const BIN: &str = env!("CARGO_BIN_EXE_chaperone");
@@ -311,8 +311,9 @@ fn pr_open_on_v21_counts_added_lines_and_refuses_no_size() {
 
 /// Two complete harness reviews of lane 1: the first on an older commit
 /// raises a blocking risk and a nit, the second on `head` an improvement
-/// and the question an unproven risk is written as. The body lists the
-/// second's as open; the first round's nit never settles, so it is not.
+/// and the question an unproven risk is written as, a risk, and a nit the
+/// owner waives. The body lists the second's open findings that do not
+/// block; the first round's nit never settles, so it is not.
 #[test]
 fn pr_open_lists_the_findings_that_do_not_block() {
     let lane = lane_on("v21", &[], "");
@@ -328,10 +329,13 @@ fn pr_open_lists_the_findings_that_do_not_block() {
             &*head,
             json!([
                 ["improvement", "i", "lib.rs", 2],
-                ["question", "q", null, null]
+                ["question", "q", null, null],
+                ["risk", "r2", null, null],
+                ["nit", "w", null, null]
             ]),
         ),
     ];
+    let mut covering = String::new();
     for (sha, found) in rounds {
         let found = found.as_array().unwrap().iter().map(|f| {
             json!({"finding_key": f[1], "severity": f[0], "title": f[1], "body": "b",
@@ -349,10 +353,18 @@ fn pr_open_lists_the_findings_that_do_not_block() {
             agent: Some("h".into()),
             session: Some("h".into()),
         };
-        ledger
-            .apply(&actor, None, "2026-11-27T00:00:00.000Z", m)
-            .unwrap();
+        let at = "2026-11-27T00:00:00.000Z";
+        let Applied::Committed(e) = ledger.apply(&actor, None, at, m).unwrap() else {
+            panic!("not committed");
+        };
+        covering = e.id.to_string();
     }
+    let waive = "--reason r --kind disproved --ref t.rs:1".split(' ');
+    let waive: Vec<_> = ["finding", "waive", &covering, "w"]
+        .into_iter()
+        .chain(waive)
+        .collect();
+    assert_eq!(lane.run("owner", &waive).0, 0);
     assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 1);
     let open = "- Smoke: none\n\nOpen findings, not blocking:\n\
                 - improvement: i `lib.rs:2`\n- question: q\n\nMade by";
