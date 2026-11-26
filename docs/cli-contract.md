@@ -650,8 +650,8 @@ goal or the title, the tracker key, for a GitHub lane (`source_id` `owner/repo#N
 #N` when the PR is in the issue's repo, else (another repo, or no PR yet) `Closes
 owner/repo#N`, the diff's code lines and files (and how many are assets, when any), the test commands that
 passed on the head, the plan check's outcome, the head's smoke (the harness's result, a
-session's claim and its evidence file count), and the findings of the newest complete review of
-the head that are open, verified or disputed and do not block, as open (severity, title, path
+session's claim and its evidence file count), and the findings of the complete review covering
+the head (`review.event_id`) that are open, verified or disputed and do not block, as open (severity, title, path
 and line). A PR new to the lane is `pr.opened` with
 `head_sha` the head, as `work update --pr` records it. A gh failure is `internal`. It prints
 `{work_id, pr, head, created, steps}`, `steps` as `verify`'s.

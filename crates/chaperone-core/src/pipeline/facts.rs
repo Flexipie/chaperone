@@ -30,6 +30,7 @@ pub const FACTS: &[&str] = &[
     "review.local_head",
     "review.local_rounds",
     "review.complete",
+    "review.event_id",
     "review.previous_round_closed",
     "smoke.claimed",
     "smoke.passed",
