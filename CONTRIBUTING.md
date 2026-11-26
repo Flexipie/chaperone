@@ -37,7 +37,7 @@ Each rule names what checks it. A lens is a review session (`pipelines/prompts/`
 
 | Rule | Enforced by |
 | --- | --- |
-| **Comments.** Only these stay: a license header; behavior forced by something outside our control (platform, vendor, protocol); public API docs; an issue link for a constraint the code cannot express. A surprise in our own code gets a rename or a reshape, not a comment. No comment restates the code. | The `design_tests` lens. |
+| **Comments.** Only these stay: a license header; behavior forced by something outside our control (platform, vendor, protocol); public API docs; an issue link for a constraint the code cannot express. A surprise in our own code gets a rename or a reshape, not a comment. No comment restates the code. | The `design_tests` lens. The `report` CI job lists each added `//` line with no issue, URL or doc link and each added `///` on an item that is not `pub`. |
 | **Tests.** Each test fails when the behavior breaks and keeps passing when only internals change. A new refusal or branch has a test that fails without it. | The `design_tests` lens. The `coverage` CI job for the files it gates (CI plan, below). |
 | **Size.** The smallest complete change: the least code that fully meets the goal, with no speculative options, fallbacks or layers and no unrelated cleanup. At most 400 added code lines per PR (`code_lines` in the pipeline); removed lines (`removed_code`) and test files (`[size] tests` in the profile, `test_lines`) are never capped. Past the cap, each part that could be cut or split into its own PR, tests this table does not ask for included, is a blocking finding. Never reach the cap by compressing code, removing checks or dropping behavior: cut what the goal does not need or split a piece that stands alone. | From v21 the review's `design_tests` lens is asked, past the cap, what could be cut or split; each `cut:` finding blocks like any other, and `chaperone stats` counts `lanes_over_cap` and `lanes_with_cut_finding`. On v20, `chaperone pr open` refuses past 400 lines and the `code_lines_at_most` gate blocks ready unless the owner ran `chaperone check waive size` (`size_waiver` in stats). |
 
@@ -92,6 +92,7 @@ its bench dependency (#56); the other jobs run now.
 | `coverage` | llvm-cov. A missed branch or region in `eval`, ledger `write` or `fold` fails the job. In `write` and `fold` a region that is only a `?` is exempt: most propagate a SQLite error no test reaches without fault injection, and the rest propagate a refusal whose own check is gated. |
 | `doc` | `cargo doc -p chaperone-core --no-deps` with warnings denied. |
 | `deny` | `cargo deny check` (licenses, advisories, bans, sources). |
+| `report` | Report only, never fails on what it finds: the comments the PR adds that the Comments rule names, and the `clippy::unwrap_used` count outside test code against `.github/unwrap-count`, warned when it goes up. Not required. |
 | `budgets` | Release build. Coarse ceilings: `--version` p50 ≤ 100 ms, open-and-exit p50 ≤ 150 ms, 1,000 full-sync commits ≤ 10 s, one-shot RSS ≤ 32 MiB, on Ubuntu and macOS (`budgets (linux)`, `budgets (macos)`). Follower p99 ≤ 50 ms joins when the follower exists. Timeout 20 min. |
 | `regress` | Linux instruction counts, ≤ +10% against the base branch, on the pipeline hash, `to_ready`, and 100 in-memory appends. |
 
