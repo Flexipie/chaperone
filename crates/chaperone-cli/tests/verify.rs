@@ -776,7 +776,8 @@ fn a_clean_merge_from_main_carries_the_review() {
 
 /// On v21 a rebase onto a newer main that keeps the lane's patch-id
 /// carries the review and the verdict, `carried_by` `patch_id` on each
-/// step, and starts no session; `merge --head` takes the rebased head. A
+/// step, and starts no session, nor does an amend after it (no `carried_by`
+/// then); `merge --head` takes the rebased head. A
 /// one-line change to the patch runs a fresh review and verdict.
 #[test]
 fn a_rebase_that_keeps_the_patch_carries_the_review_and_verdict() {
@@ -818,6 +819,20 @@ fn a_rebase_that_keeps_the_patch_carries_the_review_and_verdict() {
             ),
             (&json!(check), &json!("patch_id"), from.next_back()),
         );
+    }
+
+    git(
+        &lane.wt,
+        &["commit", "-q", "--amend", "-m", "same tree"],
+        &[],
+    );
+    lane.smoke();
+    let amend = lane.verify();
+    assert_eq!(lane.sessions(), sessions);
+    let steps = amend["steps"].as_array().unwrap();
+    for step in &steps[1..] {
+        let carried = (step.get("carried_from").is_some(), step.get("carried_by"));
+        assert_eq!(carried, (true, None), "{amend}");
     }
 
     let rebased = lane.head();

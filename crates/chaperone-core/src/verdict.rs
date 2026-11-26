@@ -330,15 +330,13 @@ pub fn replay(
     input.profile = Some(hash.into());
     if let Some((newest, here)) = ledger.tree_stand(input, &None)? {
         let no = newest.payload.rest.get("decision") == Some(&json!("no"));
-        // By patch id only when the head's review is the one it read: a
-        // fresh review on the rebased head gets a fresh verdict.
         let by_patch = newest.payload.rest.get("tree") != Some(&json!(input.tree));
         let read = |facts: Option<&Value>| facts.and_then(|f| f["review"].as_i64());
-        let same = !by_patch || {
+        let same_review = !by_patch || {
             let had = review_session(ledger, read(newest.payload.rest.get("facts")))?;
             had.is_some() && had == review_session(ledger, read(Some(&harness.read)))?
         };
-        if same && !(no && reopened(ledger, input.work, &newest)?) {
+        if same_review && !(no && reopened(ledger, input.work, &newest)?) {
             if let Some(here) = here {
                 return Ok(Ok(Some(here)));
             }
@@ -410,7 +408,6 @@ pub fn record(
     if let Err(r) = review::usage(ledger, actor, input.work, "verdict", &session)? {
         return Ok(Err(r));
     }
-    // Over the `patch_id` `check run verdict` read, which a rebase carries by.
     input.fields.extend([
         ("base".into(), json!(facts.base)),
         ("diff_cut".into(), json!(diff_cut)),
