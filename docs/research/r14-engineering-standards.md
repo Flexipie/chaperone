@@ -167,7 +167,7 @@ Required on every pull request. `fail-fast` is off so a fmt failure does not hid
 | `fmt` | `ubuntu-latest` | `cargo fmt --all -- --check` on the pinned stable | Yes |
 | `clippy` | `ubuntu-latest` | `cargo clippy --workspace --all-targets -- -D warnings` | Yes |
 | `test` | `ubuntu-latest`, `macos-latest` | `cargo nextest run --workspace` | Yes. Timeout 10 min. Expected under 3 min. |
-| `coverage` | `ubuntu-latest` | llvm-cov, fail on a missed branch in `write` and `eval` | Yes |
+| `coverage` | `ubuntu-latest` | llvm-cov, fail on a missed branch in `write` and `eval`; print the PR's added src lines no test reaches, report-only | Yes |
 | `doc` | `ubuntu-latest` | `RUSTDOCFLAGS="-D warnings" cargo doc -p chaperone-core --no-deps` | Yes |
 | `deny` | `ubuntu-latest` | `cargo deny check` | Yes |
 | `budgets` | `ubuntu-latest`, `macos-latest` | release build, the CI column of the budget table | Yes. Timeout 20 min. |

@@ -105,6 +105,8 @@ fn an_answer_is_read_from_a_fresh_session() {
         .unwrap()
         .iter()
         .map(|k| k.as_str().unwrap())
+        // Set by llvm's profile runtime in the fake itself under the coverage job.
+        .filter(|k| *k != "__LLVM_PROFILE_RT_INIT_ONCE")
         .collect();
     env.sort();
     assert_eq!(env, ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "PATH"]);
