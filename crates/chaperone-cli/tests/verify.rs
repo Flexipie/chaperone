@@ -456,9 +456,10 @@ fn claude_down_refuses_the_review() {
 }
 
 /// The plugin's stop hook on a ready lane: nothing while the branch is at
-/// the handoff, a block once it moves on, never with `stop_hook_active`.
+/// the handoff, a block once it moves on, never with `stop_hook_active`,
+/// and nothing once the lane hands off active to work again.
 #[test]
-fn stop_blocks_once_when_the_head_moved_past_a_ready_handoff() {
+fn stop_blocks_a_moved_head_until_the_lane_hands_off_active() {
     let lane = lane(claude(json!({"findings": []}), json!([])));
     lane.answer("lane", "accept");
     lane.smoke();
@@ -489,6 +490,12 @@ fn stop_blocks_once_when_the_head_moved_past_a_ready_handoff() {
     let reason = out["reason"].as_str().unwrap();
     assert!(reason.contains("chaperone verify --work 1"), "{reason}");
     assert_eq!(stop(true), "");
+    let file = lane.dir.path().join("active.json");
+    let json = json!({"summary": "s", "status": "active", "next_action": "fix the red check"});
+    std::fs::write(&file, json.to_string()).unwrap();
+    let handoff = ["work", "handoff", "1", file.to_str().unwrap()];
+    assert_eq!(lane.run("lane", &handoff).0, 0);
+    assert_eq!(stop(false), "");
 }
 
 /// A blocker the verifier verifies stops verify after the review: no
