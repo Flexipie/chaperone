@@ -52,8 +52,6 @@ const TESTS_TIMEOUT: Duration = Duration::from_secs(1800);
 pub(crate) const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `pr open`'s push and each of its gh calls.
 const FORGE_TIMEOUT: Duration = Duration::from_secs(120);
-/// `pr open`'s `git status`, which reads every file in the worktree: a
-/// large repo under load passed 10 s; the push's limit still fails a hung git.
 const STATUS_TIMEOUT: Duration = FORGE_TIMEOUT;
 /// Of each test command's stdout and stderr, the end kept as evidence.
 const TAIL_BYTES: usize = 16 * 1024;
@@ -475,12 +473,6 @@ pub fn pr_open(
     one(json!({"work_id": work, "pr": pr, "head": head, "created": created, "steps": steps}))
 }
 
-/// The base profile's `[pr] reviewers` requested on `pr` (`owner/repo#N`)
-/// at the ready handoff, not when the PR is created, but the PR's author and
-/// anyone GitHub has requested (a team by `org/team` or its slug) or has a
-/// review from (any case): GitHub's
-/// own record, so a repeat handoff asks no one twice. Who was requested,
-/// or why the request failed.
 pub(crate) fn request_reviewers(wt: &Path, pr: &str) -> Result<Vec<String>, String> {
     let rules = pr_rules(Path::new("git"), wt, Instant::now() + RUN_TIMEOUT);
     let mut reviewers = match rules {
@@ -498,18 +490,24 @@ pub(crate) fn request_reviewers(wt: &Path, pr: &str) -> Result<Vec<String>, Stri
     let v: Value = serde_json::from_str(&out).map_err(|e| format!("gh pr view: {e}"))?;
     let requested = v["reviewRequests"].as_array().into_iter().flatten();
     let reviewed = v["latestReviews"].as_array().into_iter().flatten();
-    let asked: Vec<&str> = (requested.flat_map(|r| [&r["login"], &r["slug"]]))
+    let (teams, users): (Vec<_>, Vec<_>) = requested.partition(|r| r["__typename"] == "Team");
+    let teams: Vec<&str> = (teams.iter().flat_map(|r| [&r["login"], &r["slug"]]))
+        .filter_map(Value::as_str)
+        .collect();
+    let asked: Vec<&str> = (users.iter().map(|r| &r["login"]))
         .chain(reviewed.map(|r| &r["author"]["login"]))
         .chain([&v["author"]["login"]])
         .filter_map(Value::as_str)
         .collect();
     // A team is `org/team` to `--add-reviewer`; gh may list it by its slug alone.
-    let named = |r: &str, a: &str| {
-        a.eq_ignore_ascii_case(r)
+    let team = |r: &str, t: &&str| {
+        t.eq_ignore_ascii_case(r)
             || r.rsplit_once('/')
-                .is_some_and(|(_, t)| a.eq_ignore_ascii_case(t))
+                .is_some_and(|(_, s)| t.eq_ignore_ascii_case(s))
     };
-    reviewers.retain(|r| !asked.iter().any(|a| named(r, a)));
+    reviewers.retain(|r| {
+        !asked.iter().any(|a| a.eq_ignore_ascii_case(r)) && !teams.iter().any(|t| team(r, t))
+    });
     if !reviewers.is_empty() {
         gh(&[
             "pr",

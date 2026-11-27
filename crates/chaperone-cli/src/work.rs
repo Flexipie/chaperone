@@ -181,8 +181,6 @@ pub fn run(
             if !input.enters_ready() || dry_run {
                 return one(written);
             }
-            // After the write, so a gh failure never loses the handoff; the
-            // same handoff again retries.
             let item = ledger.work_get(id, &ledger.now()?)??;
             let wt = item.worktree_path.as_deref().map(Path::new);
             let (Some(pr), Some(wt)) = (item.pr_ref, wt.filter(|wt| wt.is_absolute())) else {

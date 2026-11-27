@@ -383,18 +383,20 @@ fn a_v21_lane_gets_a_verdict_with_no_local_test_run() {
 /// reviewed: a failed request still records the handoff and says why, the
 /// same handoff again asks them, and once GitHub lists them nobody is asked.
 /// A handoff that does not enter ready, or a dry run, asks no one; a team
-/// named `o/core` is not asked while GitHub lists it by its slug.
+/// named `o/core` is not asked while GitHub lists it by its slug, and the
+/// team `o/me` is asked though the author's login is `me`.
 #[test]
 fn a_ready_handoff_requests_the_reviewers_once() {
-    let rules = "[pr]\nreviewers = [\"ana\", \"bo\", \"Me\", \"o/core\"]\n";
+    let rules = "[pr]\nreviewers = [\"ana\", \"bo\", \"Me\", \"o/core\", \"o/me\"]\n";
     let lane = claimed_in("v21", claude(json!({"findings": []}), json!([])), rules);
     let (bin, gh) = (lane.dir.path().join("bin"), lane.dir.path().join("bin/gh"));
-    let view = |requested: &str| {
-        let v = json!({"author": {"login": "me"}, "reviewRequests": [{"login": requested}, {"slug": "core"}],
+    let view = |mut requested: Vec<Value>| {
+        requested.push(json!({"__typename": "Team", "slug": "core"}));
+        let v = json!({"author": {"login": "me"}, "reviewRequests": requested,
             "latestReviews": [{"author": {"login": "BO"}}]});
         std::fs::write(bin.join("view.json"), v.to_string()).unwrap();
     };
-    view("team");
+    view(vec![json!({"login": "core"})]);
     let script = format!(
         "#!/bin/sh\necho \"$*\" >> {log:?}\ncase $2 in\nview) cat {view:?};;\n\
          edit) test ! -e {fail:?} || {{ echo down >&2; exit 1; }};;\nesac\n",
@@ -427,12 +429,15 @@ fn a_ready_handoff_requests_the_reviewers_once() {
     assert_eq!(handoff_as("review", true, &["--dry-run"]), Value::Null);
     assert_eq!(log(), "");
     let view_call = "pr view 7 --repo o/r --json author,reviewRequests,latestReviews\n";
-    let edit = "pr edit 7 --repo o/r --add-reviewer ana\n";
+    let edit = "pr edit 7 --repo o/r --add-reviewer ana,o/me\n";
     assert_eq!(handoff(), json!({"error": "gh pr edit: down"}));
     assert_eq!(lane.events("kind = 'phase.entered'"), 1);
     std::fs::remove_file(bin.join("FAIL_GH")).unwrap();
-    assert_eq!(handoff(), json!({"requested": ["ana"]}));
-    view("Ana");
+    assert_eq!(handoff(), json!({"requested": ["ana", "o/me"]}));
+    view(vec![
+        json!({"login": "Ana"}),
+        json!({"__typename": "Team", "login": "ME"}),
+    ]);
     assert_eq!(handoff(), json!({"requested": []}));
     assert_eq!(
         log(),
