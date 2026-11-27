@@ -284,9 +284,6 @@ impl Ledger {
     }
 }
 
-/// The four token counts every cost report shows: fresh input, cache
-/// write, cache read and output. A count the CLI did not report is null,
-/// never 0.
 /// A `usage.reported` payload's fresh input in SQL: Codex events recorded
 /// before #217 hold the cache in `uncached_input`, so where the input
 /// includes the cache it is the total less the cache read.
@@ -294,6 +291,9 @@ pub(crate) const FRESH: &str = "CASE WHEN json_extract(payload_json, '$.input_in
     THEN json_extract(payload_json, '$.input_total') - json_extract(payload_json, '$.cache_read') \
     ELSE json_extract(payload_json, '$.uncached_input') END";
 
+/// The four token counts every cost report shows: fresh input, cache
+/// write, cache read and output. A count the CLI did not report is null,
+/// never 0.
 pub const SPLIT: [&str; 4] = ["uncached_input", "cache_write", "cache_read", "output"];
 
 /// R11's token fields of a harness session's usage: Codex's, else
