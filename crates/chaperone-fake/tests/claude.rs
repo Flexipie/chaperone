@@ -246,8 +246,9 @@ fn a_session_past_its_tokens_is_stopped() {
         "usage": usage(23)}});
     let stream = [
         init,
-        message("a", 100),
+        // A later line with less is partial: each kind keeps its largest.
         message("a", 400),
+        message("a", 100),
         begin,
         message("b", 580),
         delta,
