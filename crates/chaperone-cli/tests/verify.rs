@@ -361,20 +361,36 @@ fn a_v21_lane_gets_a_verdict_with_no_local_test_run() {
         "{out}"
     );
     assert!(!log.exists());
+    // A base profile that does not load is reported, the handoff kept.
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", b"[pr]\nreviewer = 1\n")];
+    git(&lane.wt, &["commit", "-qam", "bad"], files);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+    let (code, out) = lane.run("lane", &["work", "handoff", "1", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    let error = out["reviewers"]["error"].as_str().unwrap_or_default();
+    assert!(error.contains("unknown field"), "{out}");
+    assert!(!log.exists());
 }
 
 /// The ready handoff asks the base profile's reviewers on the PR it names
 /// (as the v21 `gh pr create` fallback does), but the author and those who
 /// reviewed: a failed request still records the handoff and says why, the
 /// same handoff again asks them, and once GitHub lists them nobody is asked.
-/// A handoff that does not enter ready, or a dry run, asks no one.
+/// A handoff that does not enter ready, or a dry run, asks no one; a team
+/// named `o/core` is not asked while GitHub lists it by its slug.
 #[test]
 fn a_ready_handoff_requests_the_reviewers_once() {
-    let rules = "[pr]\nreviewers = [\"ana\", \"bo\", \"Me\"]\n";
+    let rules = "[pr]\nreviewers = [\"ana\", \"bo\", \"Me\", \"o/core\"]\n";
     let lane = claimed_in("v21", claude(json!({"findings": []}), json!([])), rules);
     let (bin, gh) = (lane.dir.path().join("bin"), lane.dir.path().join("bin/gh"));
     let view = |requested: &str| {
-        let v = json!({"author": {"login": "me"}, "reviewRequests": [{"login": requested}],
+        let v = json!({"author": {"login": "me"}, "reviewRequests": [{"login": requested}, {"slug": "core"}],
             "latestReviews": [{"author": {"login": "BO"}}]});
         std::fs::write(bin.join("view.json"), v.to_string()).unwrap();
     };

@@ -477,7 +477,8 @@ pub fn pr_open(
 
 /// The base profile's `[pr] reviewers` requested on `pr` (`owner/repo#N`)
 /// at the ready handoff, not when the PR is created, but the PR's author and
-/// anyone GitHub has requested or has a review from (any case): GitHub's
+/// anyone GitHub has requested (a team by `org/team` or its slug) or has a
+/// review from (any case): GitHub's
 /// own record, so a repeat handoff asks no one twice. Who was requested,
 /// or why the request failed.
 pub(crate) fn request_reviewers(wt: &Path, pr: &str) -> Result<Vec<String>, String> {
@@ -497,12 +498,18 @@ pub(crate) fn request_reviewers(wt: &Path, pr: &str) -> Result<Vec<String>, Stri
     let v: Value = serde_json::from_str(&out).map_err(|e| format!("gh pr view: {e}"))?;
     let requested = v["reviewRequests"].as_array().into_iter().flatten();
     let reviewed = v["latestReviews"].as_array().into_iter().flatten();
-    let asked: Vec<&str> = (requested.map(|r| r.get("login").unwrap_or(&r["slug"])))
+    let asked: Vec<&str> = (requested.flat_map(|r| [&r["login"], &r["slug"]]))
         .chain(reviewed.map(|r| &r["author"]["login"]))
         .chain([&v["author"]["login"]])
         .filter_map(Value::as_str)
         .collect();
-    reviewers.retain(|r| !asked.iter().any(|a| a.eq_ignore_ascii_case(r)));
+    // A team is `org/team` to `--add-reviewer`; gh may list it by its slug alone.
+    let named = |r: &str, a: &str| {
+        a.eq_ignore_ascii_case(r)
+            || r.rsplit_once('/')
+                .is_some_and(|(_, t)| a.eq_ignore_ascii_case(t))
+    };
+    reviewers.retain(|r| !asked.iter().any(|a| named(r, a)));
     if !reviewers.is_empty() {
         gh(&[
             "pr",
