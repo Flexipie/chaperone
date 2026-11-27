@@ -4,9 +4,8 @@
 
 Only a finding with `blocks` (a proven `blocker` or `risk`, not settled) or a check failing
 on this head holds a lane; no other finding, gate or round does. One that does not block is
-never fixed alone and never earns a verify: `pr open` lists it in the PR body as open.
-Delete a comment one, or cut it to what is still true, in a commit you make anyway; never
-dispute it. Only those left: hand off.
+never fixed alone and never earns a verify: `pr open` lists it in the PR body as open. A
+comment one you delete or shorten in a commit you make anyway, never disputing it.
 
 ## Read them
 
@@ -14,7 +13,8 @@ dispute it. Only those left: hand off.
   of the lane, any commit's: `check_event_id`, `finding_key`, `severity`, `title`, `body`,
   `path`, `line`, `head_sha` (the commit it was raised on), `status`, and `blocks`, true for
   exactly the ones verify's "N finding(s) still block" counts. Work the ones with `blocks`.
-- Verdict: `chaperone check run verdict --work <N>` replays it: `decision`, `why`, `not_proven`.
+- Verdict: `chaperone check run verdict --work <N>` replays it: `decision`, `why`,
+  `not_proven`.
 
 ## Each blocking finding
 
@@ -26,9 +26,10 @@ Weigh it (`judgement.md` beside this file, "Weighing a finding"), then one of:
   A dispute still blocks until the owner waives it or an independent session refutes it,
   so then Needs you, naming the finding. Never argue in prose, the PR or the handoff.
 
-Fix every blocking finding at once, then back to step 5 (smoke) and verify once. A third
-verify on this lane that stops at `review` or `verdict`: Needs you. A big fix round goes to a
-fresh subagent given the worktree, `lane-state.md` and the findings; keep its short report.
+Fix every blocking finding at once, then back to step 5 (smoke) and verify once. A third verify
+on this lane that stops at `review` or `verdict`: Needs you. A big fix round
+goes to a fresh subagent given the worktree, `lane-state.md` and the findings, so this
+session keeps a short report, not the whole fix.
 
 ## Review not complete
 

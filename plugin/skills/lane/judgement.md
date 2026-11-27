@@ -19,8 +19,7 @@
   shared function every caller goes through beats a guard in each caller.
 - Fix the same fault next to it inside the slice; report the ones outside it.
 - No speculative code: no options, fallbacks or layers no caller needs. Reuse the repo's
-  helpers before writing new ones. No unrelated cleanup, and no comment but a kind the repo's
-  rules keep (a license header, behaviour forced from outside); code you touch loses the rest.
+  helpers before writing new ones. No unrelated cleanup.
 - A result disproved the guess behind a change: revert it before the next try. Two fixes on
   the same premise failed: test the premise before a third.
 - Before the smoke, read the whole diff and delete what the done-when does not need.

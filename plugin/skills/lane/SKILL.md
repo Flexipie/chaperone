@@ -82,7 +82,7 @@ what the base profile's `[diff] code` names.
 
 The smallest complete change. A bug whose cause is not plain: invoke `chaperone:diagnose`
 with the symptom, the failing command and `--fix`. Commit with short plain messages; leave
-the tree clean. Then:
+the tree clean. Write no comment the repo's rules do not keep, and cut those you touch. Then:
 - `chaperone check run diff --work $2`: `uncounted_files` over 0 will not pass (a binary an
   `[assets]` glob of the base profile names is `asset_files` instead, and passes).
   `code_lines` counts added lines; removed lines (`removed_code`) and test files
