@@ -183,7 +183,9 @@ pub fn run(
             }
             let item = ledger.work_get(id, &ledger.now()?)??;
             let wt = item.worktree_path.as_deref().map(Path::new);
-            let (Some(pr), Some(wt)) = (item.pr_ref, wt.filter(|wt| wt.is_absolute())) else {
+            let url = input.pull_request.as_deref().and_then(crate::checks::pr_of);
+            let (Some(pr), Some(wt)) = (item.pr_ref.or(url), wt.filter(|wt| wt.is_absolute()))
+            else {
                 return one(written);
             };
             let reviewers = match crate::checks::request_reviewers(wt, &pr) {

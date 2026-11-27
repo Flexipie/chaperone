@@ -411,13 +411,6 @@ pub fn pr_open(
             tests["evidence_ref"]
         )));
     }
-    // gh names a PR by its URL: https://github.com/<owner>/<repo>/pull/<n>.
-    let pr_of = |url: &str| {
-        let (repo, n) = url.trim().split_once("/pull/")?;
-        let mut parts = repo.rsplit('/');
-        let (name, owner) = (parts.next()?, parts.next()?);
-        Some(format!("{owner}/{name}#{n}"))
-    };
     // One a run opened and never recorded.
     let listed = match item.pr_ref {
         Some(_) => None,
@@ -471,6 +464,14 @@ pub fn pr_open(
     }
     let created = item.pr_ref.is_none() && listed.is_none();
     one(json!({"work_id": work, "pr": pr, "head": head, "created": created, "steps": steps}))
+}
+
+// gh names a PR by its URL: https://github.com/<owner>/<repo>/pull/<n>.
+pub(crate) fn pr_of(url: &str) -> Option<String> {
+    let (repo, n) = url.trim().split_once("/pull/")?;
+    let mut parts = repo.rsplit('/');
+    let (name, owner) = (parts.next()?, parts.next()?);
+    Some(format!("{owner}/{name}#{n}"))
 }
 
 pub(crate) fn request_reviewers(wt: &Path, pr: &str) -> Result<Vec<String>, String> {

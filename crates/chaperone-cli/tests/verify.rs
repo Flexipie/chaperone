@@ -379,7 +379,7 @@ fn a_v21_lane_gets_a_verdict_with_no_local_test_run() {
 }
 
 /// The ready handoff asks the base profile's reviewers on the PR it names
-/// (as the v21 `gh pr create` fallback does), but the author and those who
+/// (as the v21 `gh pr create` fallback does, as a URL or `owner/repo#N`), but the author and those who
 /// reviewed: a failed request still records the handoff and says why, the
 /// same handoff again asks them, and once GitHub lists them nobody is asked.
 /// A handoff that does not enter ready, or a dry run, asks no one; a team
@@ -413,24 +413,26 @@ fn a_ready_handoff_requests_the_reviewers_once() {
     lane.answer("lane", "accept");
     lane.smoke();
     assert_eq!(lane.verify()["stopped"], Value::Null);
-    let handoff_as = |status: &str, ready: bool, dry: &[&str]| {
+    let handoff_as = |status: &str, ready: bool, dry: &[&str], pr: &str| {
         let file = lane.dir.path().join("handoff.json");
         let json = json!({"summary": "s", "status": status, "ready": ready,
-            "commit": lane.head(), "pull_request": "o/r#7"});
+            "commit": lane.head(), "pull_request": pr});
         std::fs::write(&file, json.to_string()).unwrap();
         let args = [&["work", "handoff", "1", file.to_str().unwrap()][..], dry].concat();
         let (code, out) = lane.run("lane", &args);
         assert_eq!(code, 0, "{out}");
         out["reviewers"].clone()
     };
-    let handoff = || handoff_as("review", true, &[]);
+    let url = "https://github.com/o/r/pull/7";
+    let handoff = || handoff_as("review", true, &[], "o/r#7");
     let log = || std::fs::read_to_string(bin.join("gh.log")).unwrap_or_default();
-    assert_eq!(handoff_as("active", false, &[]), Value::Null);
-    assert_eq!(handoff_as("review", true, &["--dry-run"]), Value::Null);
+    assert_eq!(handoff_as("active", false, &[], url), Value::Null);
+    assert_eq!(handoff_as("review", true, &["--dry-run"], url), Value::Null);
     assert_eq!(log(), "");
     let view_call = "pr view 7 --repo o/r --json author,reviewRequests,latestReviews\n";
     let edit = "pr edit 7 --repo o/r --add-reviewer ana,o/me\n";
-    assert_eq!(handoff(), json!({"error": "gh pr edit: down"}));
+    let failed = json!({"error": "gh pr edit: down"});
+    assert_eq!(handoff_as("review", true, &[], url), failed);
     assert_eq!(lane.events("kind = 'phase.entered'"), 1);
     std::fs::remove_file(bin.join("FAIL_GH")).unwrap();
     assert_eq!(handoff(), json!({"requested": ["ana", "o/me"]}));
