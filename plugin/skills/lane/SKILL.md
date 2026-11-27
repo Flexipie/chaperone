@@ -131,7 +131,7 @@ Not while an open question is unanswered (Needs you).
 - Any other `why` is a refusal that says why: fix the cause or Needs you. Exit 4: another
   run holds the lane; wait for it, never start a second.
 
-## 7. Open the PR
+## 7. Open the PR, then watch it
 
 `chaperone pr open --work $2` pushes and opens or updates the PR, its body from the ledger.
 When the base profile's `[pr]` has a `title` (`git show origin/<base>:.chaperone/profile.toml`),
@@ -142,6 +142,24 @@ once, then Needs you. Note `pr`.
 On v21, when `pr open` keeps refusing a finished change for a reason outside the lane, push the
 branch and open or edit the PR with `gh pr create` / `gh pr edit` (the hook allows them there),
 then name it in the ready handoff's `pull_request`, which records it as the lane's.
+
+Then the PR's CI and review threads are yours; CI is no chaperone check. `gh pr checks <n>
+--watch --fail-fast` with `run_in_background: true`, then end the turn; never a poll loop.
+Read its output, not its exit (red and none both exit 1):
+- "no checks reported" right after a push may be CI not queued yet: watch once more as
+  `sleep 60; gh pr checks <n> --watch --fail-fast`. Still none, or checks that never start:
+  say so in the ready handoff's `summary`.
+- Red: a known flake (`pipeline-profile --section "Known flakes"`; none listed, every failure
+  is real) gets one rerun (`gh run rerun <run> --failed`) and its citation in the `summary`.
+  Else read `gh run view <run> --log-failed`, fix, commit, then 5, 6, `pr open` again (it
+  pushes), and watch again.
+- When the watch ends, threads and reviews from people or bots (`gh pr view <n> --json
+  reviews,comments`, `gh api repos/<owner>/<repo>/pulls/<n>/comments`): one a user or
+  production would meet is fixed the same way, or answered in its thread; list the
+  non-blocking ones in the `summary`, unchased. One landing after step 8 is a step 9 prompt.
+- Fix rounds since `pr open` share one count for checks and threads (a flake rerun is not
+  one); keep it in `lane-state.md`. Two and still red or open: Needs you, with the check
+  name and its log's tail. Else green: go to 8.
 
 ## 8. Ready handoff
 
@@ -162,8 +180,9 @@ on this commit (a missing diff reads as `no_uncounted_files`): back to 5.
 
 ## 9. Wait, then done
 
-End the turn. Do not commit after the ready handoff (the stop hook blocks once if you do).
-The owner merges. If the owner asks for changes: hand off `active`, change, then 5 to 8.
+End the turn. The owner merges. Prompted after the ready handoff (the owner asks for changes,
+a red check, a new thread, a merge queue ejection): hand off `active` before you commit (the
+stop hook blocks once while the newest handoff is ready on another commit), then 5 to 8.
 
 After the merge: `chaperone work get $2`. `status` `done` (the merge handed it off): stop.
 Else, when the merge is not recorded (the owner merged outside `chaperone merge`), record it.
