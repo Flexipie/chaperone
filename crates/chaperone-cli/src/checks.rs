@@ -1103,7 +1103,8 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         return one(stored);
     }
     let (checkout, mut facts) = change(ledger, db, &wt, &item, &input.head)?;
-    facts.since = since(ledger, &checkout.dir, &plan, work, &input.head)?;
+    let commits = (facts.base.as_str(), input.head.as_str());
+    facts.since = since(ledger, &checkout.dir, &plan, work, commits)?;
     let started = agents(plan.sessions(facts.code_lines))?;
     let agents = Agents::of(&started);
     let store = Evidence::beside(db);
@@ -1121,27 +1122,31 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
 
 /// Under a [`review::ROUNDS`] limit, the lane's last reviewed commit and
 /// the diff from it to `head` in the checkout `dir`, when it is an ancestor
-/// of `head` there; none for a first review, or after a rebase, which
-/// shows the whole change again.
+/// of `head` there and the merge base `base` is one of it; none for a first
+/// review, after a rebase or after a merge of the base branch (whose diff
+/// since would be the base's changes too), which show the whole change.
 fn since(
     ledger: &Ledger,
     dir: &Path,
     plan: &review::Plan<'_>,
     work: i64,
-    head: &str,
+    (base, head): (&str, &str),
 ) -> Result<Option<(String, String)>, CliError> {
     let Some(last) = plan.rounds.and(review::fresh(ledger, work)?.1) else {
         return Ok(None);
     };
-    let args = ["merge-base", "--is-ancestor", &last, head];
-    let ancestor = git::git(
-        Path::new("git"),
-        dir,
-        &args,
-        Instant::now() + RUN_TIMEOUT,
-        4096,
-    );
-    if last == head || ancestor.is_err() {
+    let ancestor = |a: &str, b: &str| {
+        let args = ["merge-base", "--is-ancestor", a, b];
+        git::git(
+            Path::new("git"),
+            dir,
+            &args,
+            Instant::now() + RUN_TIMEOUT,
+            4096,
+        )
+        .is_ok()
+    };
+    if last == head || !ancestor(&last, head) || !ancestor(base, &last) {
         return Ok(None);
     }
     Ok(Some((last.clone(), diff(dir, &last, head)?)))
