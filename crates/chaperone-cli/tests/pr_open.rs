@@ -396,10 +396,10 @@ const RULES: &str = "[pr]\nflow = \"pr\"\ntitle = \"{type}({key}): {text}\"\n\
     assignee = \"@me\"\nreviewers = [\"ana\", \"Me\"]\n";
 
 /// With the base profile's `[pr]` rules, a missing or off-template title is
-/// refused before any gh call or push; the create sets the assignee and the
-/// reviewers but the gh login, and so does the first recorded edit of a PR
-/// the create left unrecorded. A later edit keeps the PR's own title when it
-/// fits and sets neither again; the head line leads every body.
+/// refused before any gh call or push; the create sets the assignee and no
+/// reviewer (the ready handoff asks them), and so does the first recorded
+/// edit of a PR the create left unrecorded. A later edit keeps the PR's own
+/// title when it fits and sets no assignee again; the head line leads every body.
 #[test]
 fn pr_open_follows_the_base_profiles_pr_rules() {
     let lane = lane(&["--source", "linear", "--source-id", "CORE-12"], RULES);
@@ -426,22 +426,17 @@ fn pr_open_follows_the_base_profiles_pr_rules() {
     let (code, err) = run(&["--title", title]);
     assert_eq!((code, &err["code"]), (1, &json!("internal")), "{err}");
     let list = "pr list --head feat --json url --jq .[0].url\n";
-    let me = "api user --jq .login\n";
-    let create = format!(
-        "pr create --base main --head feat --title {title} --assignee @me --reviewer ana \
-         --body-file -\n"
-    );
-    assert_eq!(lane.file("gh.log"), [list, me, &create].concat());
+    let create =
+        format!("pr create --base main --head feat --title {title} --assignee @me --body-file -\n");
+    assert_eq!(lane.file("gh.log"), [list, &create].concat());
     assert_eq!(run(&["--title", title]).0, 0);
-    let recovered = format!(
-        "pr edit 7 --repo o/r --title {title} --add-assignee @me --add-reviewer ana \
-         --body-file -\n"
-    );
+    let recovered =
+        format!("pr edit 7 --repo o/r --title {title} --add-assignee @me --body-file -\n");
     std::fs::write(lane.dir.path().join("title"), format!("{title}\n")).unwrap();
     assert_eq!(run(&[]).0, 0);
     let view = "pr view 7 --repo o/r --json title --jq .title\n";
     let edit = "pr edit 7 --repo o/r --body-file -\n";
-    let log = [list, me, &create, list, me, &recovered, view, edit].concat();
+    let log = [list, &create, list, &recovered, view, edit].concat();
     assert_eq!(lane.file("gh.log"), log);
     let led = "linear: [CORE-12](https://l/CORE-12)\n\nt\n\nTracker: CORE-12\n\n- Size";
     assert!(

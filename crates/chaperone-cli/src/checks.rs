@@ -52,6 +52,7 @@ const TESTS_TIMEOUT: Duration = Duration::from_secs(1800);
 pub(crate) const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `pr open`'s push and each of its gh calls.
 const FORGE_TIMEOUT: Duration = Duration::from_secs(120);
+const STATUS_TIMEOUT: Duration = FORGE_TIMEOUT;
 /// Of each test command's stdout and stderr, the end kept as evidence.
 const TAIL_BYTES: usize = 16 * 1024;
 /// A plan file: a document a person reads, far above any real one.
@@ -288,7 +289,8 @@ fn step_row(check: &str, head: &str, rec: &Value, passed: bool) -> Value {
 /// lane holds or gh lists for the branch, with [`pr_body`]; a PR new to the
 /// ledger is `pr.opened` on the commit. The base profile's [`chaperone_graph::PrRules`]
 /// hold: a title that fits, the head lines first in the body, and the
-/// assignee and reviewers set when the PR is first recorded.
+/// assignee set when the PR is first recorded. Reviewers wait for the
+/// ready handoff ([`request_reviewers`]).
 pub fn pr_open(
     ledger: &Ledger,
     db: &Path,
@@ -304,7 +306,7 @@ pub fn pr_open(
     // `start_run` reads HEAD when the branch is gone.
     let tip = format!("refs/heads/{branch}");
     let tip = git::commit(Path::new("git"), &wt, &tip, Instant::now() + RUN_TIMEOUT);
-    let found = tree_after(&wt, &head, Instant::now() + RUN_TIMEOUT)?;
+    let found = tree_after(&wt, &head, Instant::now() + STATUS_TIMEOUT)?;
     if tip.map_err(refuse)?.is_none() || found.dirty || found.head_moved || found.cut {
         return Err(refuse(format!(
             "pr open needs the worktree {} clean at the tip of the lane's branch ({branch}, \
@@ -409,13 +411,6 @@ pub fn pr_open(
             tests["evidence_ref"]
         )));
     }
-    // gh names a PR by its URL: https://github.com/<owner>/<repo>/pull/<n>.
-    let pr_of = |url: &str| {
-        let (repo, n) = url.trim().split_once("/pull/")?;
-        let mut parts = repo.rsplit('/');
-        let (name, owner) = (parts.next()?, parts.next()?);
-        Some(format!("{owner}/{name}#{n}"))
-    };
     // One a run opened and never recorded.
     let listed = match item.pr_ref {
         Some(_) => None,
@@ -427,13 +422,6 @@ pub fn pr_open(
         )?),
     };
     let held = item.pr_ref.clone().or(listed.clone());
-    // Requesting a review notifies: only when the PR is first recorded.
-    let mut reviewers = rules.reviewers.clone();
-    if item.pr_ref.is_none() && !reviewers.is_empty() {
-        let me = gh(&["api", "user", "--jq", ".login"], None)?;
-        reviewers.retain(|r| !r.eq_ignore_ascii_case(me.trim()));
-    }
-    let reviewers = reviewers.join(",");
     let body =
         rules.head(&key) + &pr_body(ledger, db, &item, held.as_deref(), &head, &diff, &tests)?;
     let push = format!("{head}:refs/heads/{branch}");
@@ -450,17 +438,13 @@ pub fn pr_open(
     if let Some(title) = &title {
         args.extend(["--title", title]);
     }
-    if item.pr_ref.is_none() {
-        let (assign, review) = match listed {
-            Some(_) => ("--add-assignee", "--add-reviewer"),
-            None => ("--assignee", "--reviewer"),
+    if let (None, Some(assignee)) = (&item.pr_ref, &rules.assignee) {
+        let assign = if listed.is_some() {
+            "--add-assignee"
+        } else {
+            "--assignee"
         };
-        if let Some(assignee) = &rules.assignee {
-            args.extend([assign, assignee]);
-        }
-        if !reviewers.is_empty() {
-            args.extend([review, &reviewers]);
-        }
+        args.extend([assign, assignee]);
     }
     args.extend(["--body-file", "-"]);
     args.extend((draft && held.is_none()).then_some("--draft"));
@@ -480,6 +464,63 @@ pub fn pr_open(
     }
     let created = item.pr_ref.is_none() && listed.is_none();
     one(json!({"work_id": work, "pr": pr, "head": head, "created": created, "steps": steps}))
+}
+
+// gh names a PR by its URL: https://github.com/<owner>/<repo>/pull/<n>.
+pub(crate) fn pr_of(url: &str) -> Option<String> {
+    let (repo, n) = url.trim().split_once("/pull/")?;
+    let mut parts = repo.rsplit('/');
+    let (name, owner) = (parts.next()?, parts.next()?);
+    Some(format!("{owner}/{name}#{n}"))
+}
+
+pub(crate) fn request_reviewers(wt: &Path, pr: &str) -> Result<Vec<String>, String> {
+    let rules = pr_rules(Path::new("git"), wt, Instant::now() + RUN_TIMEOUT);
+    let mut reviewers = match rules {
+        Ok(rules) => rules.reviewers,
+        Err(chaperone_graph::Error::Invalid(e) | chaperone_graph::Error::Internal(e)) => {
+            return Err(e);
+        }
+    };
+    let Some((repo, n)) = pr.rsplit_once('#').filter(|_| !reviewers.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let gh = |args: &[&str]| child::cli("gh", OsStr::new("gh"), args, FORGE_TIMEOUT, "");
+    let fields = "author,reviewRequests,latestReviews";
+    let out = gh(&["pr", "view", n, "--repo", repo, "--json", fields])?;
+    let v: Value = serde_json::from_str(&out).map_err(|e| format!("gh pr view: {e}"))?;
+    let requested = v["reviewRequests"].as_array().into_iter().flatten();
+    let reviewed = v["latestReviews"].as_array().into_iter().flatten();
+    let (teams, users): (Vec<_>, Vec<_>) = requested.partition(|r| r["__typename"] == "Team");
+    let teams: Vec<&str> = (teams.iter().flat_map(|r| [&r["login"], &r["slug"]]))
+        .filter_map(Value::as_str)
+        .collect();
+    let asked: Vec<&str> = (users.iter().map(|r| &r["login"]))
+        .chain(reviewed.map(|r| &r["author"]["login"]))
+        .chain([&v["author"]["login"]])
+        .filter_map(Value::as_str)
+        .collect();
+    // A team is `org/team` to `--add-reviewer`; gh may list it by its slug alone.
+    let team = |r: &str, t: &&str| {
+        t.eq_ignore_ascii_case(r)
+            || r.rsplit_once('/')
+                .is_some_and(|(_, s)| t.eq_ignore_ascii_case(s))
+    };
+    reviewers.retain(|r| {
+        !asked.iter().any(|a| a.eq_ignore_ascii_case(r)) && !teams.iter().any(|t| team(r, t))
+    });
+    if !reviewers.is_empty() {
+        gh(&[
+            "pr",
+            "edit",
+            n,
+            "--repo",
+            repo,
+            "--add-reviewer",
+            &reviewers.join(","),
+        ])?;
+    }
+    Ok(reviewers)
 }
 
 /// `merge`: [`merge::merge`] of the lane's PR.

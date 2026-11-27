@@ -344,6 +344,107 @@ fn a_v21_lane_gets_a_verdict_with_no_local_test_run() {
     );
     assert_eq!(lane.events("payload_json->>'check' = 'tests'"), 0);
     assert_eq!(lane.handoff().0, 0);
+    // A profile with no reviewers asks gh nothing.
+    let log = lane.dir.path().join("gh.log");
+    let gh = lane.dir.path().join("bin/gh");
+    std::fs::write(&gh, format!("#!/bin/sh\necho \"$*\" >> {log:?}\n")).unwrap();
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&gh, mode).unwrap();
+    let file = lane.dir.path().join("handoff.json");
+    let json = json!({"summary": "s", "status": "review", "ready": true,
+        "commit": lane.head(), "pull_request": "o/r#7"});
+    std::fs::write(&file, json.to_string()).unwrap();
+    let (code, out) = lane.run("lane", &["work", "handoff", "1", file.to_str().unwrap()]);
+    assert_eq!(
+        (code, &out["reviewers"]),
+        (0, &json!({"requested": []})),
+        "{out}"
+    );
+    assert!(!log.exists());
+    // A base profile that does not load is reported, the handoff kept.
+    git(&lane.wt, &["checkout", "-q", "main"], &[]);
+    let files: &[(&str, &[u8])] = &[(".chaperone/profile.toml", b"[pr]\nreviewer = 1\n")];
+    git(&lane.wt, &["commit", "-qam", "bad"], files);
+    git(
+        &lane.wt,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        &[],
+    );
+    git(&lane.wt, &["checkout", "-q", "feat"], &[]);
+    let (code, out) = lane.run("lane", &["work", "handoff", "1", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    let error = out["reviewers"]["error"].as_str().unwrap_or_default();
+    assert!(error.contains("unknown field"), "{out}");
+    assert!(!log.exists());
+}
+
+/// The ready handoff asks the base profile's reviewers on the PR it names
+/// (as the v21 `gh pr create` fallback does, as a URL or `owner/repo#N`), but the author and those who
+/// reviewed: a failed request still records the handoff and says why, the
+/// same handoff again asks them, and once GitHub lists them nobody is asked.
+/// A handoff that does not enter ready, or a dry run, asks no one; a team
+/// named `o/core` is not asked while GitHub lists it by its slug, and the
+/// team `o/me` is asked though the author's login is `me`.
+#[test]
+fn a_ready_handoff_requests_the_reviewers_once() {
+    let rules = "[pr]\nreviewers = [\"ana\", \"bo\", \"Me\", \"o/core\", \"o/me\"]\n";
+    let lane = claimed_in("v21", claude(json!({"findings": []}), json!([])), rules);
+    let (bin, gh) = (lane.dir.path().join("bin"), lane.dir.path().join("bin/gh"));
+    let view = |mut requested: Vec<Value>| {
+        requested.push(json!({"__typename": "Team", "slug": "core"}));
+        let v = json!({"author": {"login": "me"}, "reviewRequests": requested,
+            "latestReviews": [{"author": {"login": "BO"}}]});
+        std::fs::write(bin.join("view.json"), v.to_string()).unwrap();
+    };
+    view(vec![json!({"login": "core"})]);
+    let script = format!(
+        "#!/bin/sh\necho \"$*\" >> {log:?}\ncase $2 in\nview) cat {view:?};;\n\
+         edit) test ! -e {fail:?} || {{ echo down >&2; exit 1; }};;\nesac\n",
+        log = bin.join("gh.log"),
+        view = bin.join("view.json"),
+        fail = bin.join("FAIL_GH"),
+    );
+    std::fs::write(&gh, script).unwrap();
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&gh, mode).unwrap();
+    std::fs::write(bin.join("FAIL_GH"), "").unwrap();
+    lane.plan("1. do it\n");
+    lane.commit();
+    lane.answer("lane", "accept");
+    lane.smoke();
+    assert_eq!(lane.verify()["stopped"], Value::Null);
+    let handoff_as = |status: &str, ready: bool, dry: &[&str], pr: &str| {
+        let file = lane.dir.path().join("handoff.json");
+        let json = json!({"summary": "s", "status": status, "ready": ready,
+            "commit": lane.head(), "pull_request": pr});
+        std::fs::write(&file, json.to_string()).unwrap();
+        let args = [&["work", "handoff", "1", file.to_str().unwrap()][..], dry].concat();
+        let (code, out) = lane.run("lane", &args);
+        assert_eq!(code, 0, "{out}");
+        out["reviewers"].clone()
+    };
+    let url = "https://github.com/o/r/pull/7";
+    let handoff = || handoff_as("review", true, &[], "o/r#7");
+    let log = || std::fs::read_to_string(bin.join("gh.log")).unwrap_or_default();
+    assert_eq!(handoff_as("active", false, &[], url), Value::Null);
+    assert_eq!(handoff_as("review", true, &["--dry-run"], url), Value::Null);
+    assert_eq!(log(), "");
+    let view_call = "pr view 7 --repo o/r --json author,reviewRequests,latestReviews\n";
+    let edit = "pr edit 7 --repo o/r --add-reviewer ana,o/me\n";
+    let failed = json!({"error": "gh pr edit: down"});
+    assert_eq!(handoff_as("review", true, &[], url), failed);
+    assert_eq!(lane.events("kind = 'phase.entered'"), 1);
+    std::fs::remove_file(bin.join("FAIL_GH")).unwrap();
+    assert_eq!(handoff(), json!({"requested": ["ana", "o/me"]}));
+    view(vec![
+        json!({"login": "Ana"}),
+        json!({"__typename": "Team", "login": "ME"}),
+    ]);
+    assert_eq!(handoff(), json!({"requested": []}));
+    assert_eq!(
+        log(),
+        [view_call, edit, view_call, edit, view_call].concat()
+    );
 }
 
 /// The Codex lens skips on the lane's measure, added, removed and test
