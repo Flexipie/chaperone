@@ -277,3 +277,28 @@ fn a_session_past_its_tokens_is_stopped() {
         "cacheCreationInputTokens": 4, "outputTokens": 6}});
     assert_eq!(run.model_usage, usage);
 }
+
+#[test]
+fn a_line_without_end_is_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = "#!/bin/sh\n[ \"$1\" = --version ] && { echo '1 (sh)'; exit 0; }\n\
+                  cat > /dev/null\nhead -c 17000000 /dev/zero | tr '\\0' a\nsleep 30\n";
+    let bin = dir.path().join("claude");
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap();
+    let agent = Agent::probe(bin, [("PATH".into(), path)], soon()).unwrap();
+    let start = Instant::now();
+    let schema = json!({});
+    let err = agent
+        .claude(&ask("go", &schema, dir.path()), soon())
+        .unwrap_err();
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "waited for its end"
+    );
+    assert!(
+        matches!(&err, RunError::Output(m) if m.contains("past")),
+        "{err}"
+    );
+}

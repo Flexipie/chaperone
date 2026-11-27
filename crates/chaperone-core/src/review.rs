@@ -1550,6 +1550,12 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
         let no_model = pipeline(&PIPELINE.replace(r#"model = "opus", "#, ""));
         let e = lenses(&no_model).unwrap_err();
         assert_eq!(e, "check review_correctness: runner lens names no model");
+        let no_tokens = pipeline(&PIPELINE.replace(r#"tokens_limit = "tokens", "#, ""));
+        let e = lenses(&no_tokens).unwrap_err();
+        assert_eq!(
+            e,
+            "check review_correctness: runner lens names no tokens_limit"
+        );
         let all = plan(&p).unwrap();
         assert_eq!((all.attempts, all.verifier.lens), (3, "verifier"));
         assert!(needs(all.sessions(None), Cli::Claude).is_some());

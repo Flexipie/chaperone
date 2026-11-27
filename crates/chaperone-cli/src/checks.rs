@@ -24,6 +24,7 @@ use chaperone_core::pipeline::{self, Cli, Fact, Pipeline};
 use chaperone_core::plan;
 use chaperone_core::review::{self, Agents, Facts, Planned};
 use chaperone_core::runner::{Agent, session_var};
+use chaperone_core::stats::Cohort;
 use chaperone_core::usage::Roots;
 use chaperone_core::verdict;
 use chaperone_core::work::{UpdateInput, WorkItem, is_terminal};
@@ -651,9 +652,27 @@ fn pr_body(
     if !open.is_empty() {
         open = format!("\nOpen findings, not blocking:\n{open}");
     }
+    let stats = ledger.stats(&Cohort::Work(vec![item.id]))??;
+    let total = &stats["lanes"][0]["tokens"]["total"];
+    let n = |k: &str| {
+        total[k]
+            .as_i64()
+            .map_or("unknown".into(), |n| n.to_string())
+    };
+    let tokens = match total.is_null() {
+        true => "none recorded".into(),
+        false => format!(
+            "{} fresh input, {} cache write, {} cache read, {} output, in {} sessions",
+            n("uncached_input"),
+            n("cache_write"),
+            n("cache_read"),
+            n("output"),
+            n("sessions")
+        ),
+    };
     body += &format!(
         "- Size: {} code lines added{removed} and {} test lines in {} files{assets}\n\
-         - Tests: {tests}\n- Plan check: {plan}\n- Smoke: {}\n{open}\n\
+         - Tests: {tests}\n- Plan check: {plan}\n- Smoke: {}\n- Tokens: {tokens}\n{open}\n\
          Made by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],
         diff["test_lines"],

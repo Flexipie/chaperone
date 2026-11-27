@@ -70,14 +70,22 @@ pub fn run_input(
 pub type Watch = Box<dyn FnMut(&[u8]) -> bool + Send>;
 
 /// [`run_input`] that hands each stdout line to `watch` and keeps none of
-/// stdout.
+/// stdout. A line past `line_cap` bytes stops the child, with `cut`.
 pub fn run_watched(
     cmd: &mut Command,
     input: Option<&[u8]>,
     deadline: Instant,
     watch: Watch,
+    line_cap: usize,
 ) -> Result<Done, Failed> {
-    start(cmd, input, true, deadline, Keep::Head(0), Some(watch))
+    start(
+        cmd,
+        input,
+        true,
+        deadline,
+        Keep::Head(line_cap),
+        Some(watch),
+    )
 }
 
 /// [`run_input`] with stdin empty that keeps only the last `tail` bytes of
@@ -182,13 +190,22 @@ fn start(
                         Err(_) => break,
                     };
                     if let Some(watch) = watch.as_mut() {
+                        let mut from = line.len();
                         line.extend_from_slice(&chunk[..n]);
-                        while let Some(end) = line.iter().position(|&b| b == b'\n') {
+                        while let Some(at) = line[from..].iter().position(|&b| b == b'\n') {
+                            let end = from + at;
                             if !halt.load(Ordering::Relaxed) && !watch(&line[..end]) {
                                 halt.store(true, Ordering::Relaxed);
                             }
                             line.drain(..=end);
+                            from = 0;
                         }
+                        if matches!(keep, Keep::Head(cap) if line.len() > cap) {
+                            halt.store(true, Ordering::Relaxed);
+                            lock(&shared).1 = true;
+                            line.clear();
+                        }
+                        continue;
                     }
                     let (buf, cut) = &mut *lock(&shared);
                     match keep {

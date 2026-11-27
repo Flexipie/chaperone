@@ -365,8 +365,11 @@ impl Agent {
             seen.line(line, cap)
         });
         let prompt = Some(ask.prompt.as_bytes());
-        let done = child::run_watched(&mut cmd, prompt, deadline, watch);
+        let done = child::run_watched(&mut cmd, prompt, deadline, watch, OUT_BYTES);
         let done = done.map_err(|e| self.failed(e))?;
+        if done.cut {
+            return Err(RunError::Output(format!("a line past {OUT_BYTES} bytes")));
+        }
         let stream = std::mem::take(&mut *stream.lock().unwrap_or_else(PoisonError::into_inner));
         if let Some(used) = stream.over {
             let run = Run {

@@ -181,7 +181,7 @@ fn pr_open_creates_the_pr_from_ledger_facts() {
     assert_eq!(lane.file("gh.log"), [list, create, list, edit].concat());
     let body = format!(
         "t\n\n- Size: 1 code lines added, 0 removed, and 0 test lines in 1 files\n- Tests: passed on {head}: `test ! -e FAIL`\n\
-         - Plan check: skipped (waived)\n- Smoke: none\n\nMade by `chaperone pr open` from the ledger.\n"
+         - Plan check: skipped (waived)\n- Smoke: none\n- Tokens: none recorded\n\nMade by `chaperone pr open` from the ledger.\n"
     );
     assert_eq!(lane.file("body.md"), body);
     assert_eq!(lane.opened(), std::slice::from_ref(&head));
@@ -365,6 +365,22 @@ fn pr_open_lists_the_findings_that_do_not_block() {
         };
         covering = e.id.to_string();
     }
+    // A Codex message: no cache write reported.
+    let p = json!({"source": "parent", "message_id": "m1", "session_id": "s1",
+                   "uncached_input": 5, "cache_read": 7, "cache_write": null, "output": 3,
+                   "input_total": 12, "output_total": 3});
+    let m = Mutation::Event {
+        kind: EventKind::UsageReported,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: serde_json::from_value(p).unwrap(),
+    };
+    let actor = Actor {
+        agent: Some("lane".into()),
+        session: Some("lane".into()),
+    };
+    let at = "2026-11-27T00:00:00.000Z";
+    ledger.apply(&actor, Some("usage:1:m1"), at, m).unwrap();
     let waive = "--reason r --kind disproved --ref t.rs:1".split(' ');
     let waive: Vec<_> = ["finding", "waive", &covering, "w"]
         .into_iter()
@@ -372,7 +388,8 @@ fn pr_open_lists_the_findings_that_do_not_block() {
         .collect();
     assert_eq!(lane.run("owner", &waive).0, 0);
     assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 1);
-    let open = "- Smoke: none\n\nOpen findings, not blocking:\n\
+    let open = "- Smoke: none\n- Tokens: 5 fresh input, unknown cache write, 7 cache read, \
+                3 output, in 1 sessions\n\nOpen findings, not blocking:\n\
                 - improvement: i `lib.rs:2`\n- question: q\n\nMade by";
     let body = lane.file("body.md");
     assert!(body.contains(open), "{body}");
