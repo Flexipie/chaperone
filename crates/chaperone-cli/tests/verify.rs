@@ -1294,7 +1294,8 @@ fn review_rounds_cap_a_lane_and_rereview_only_the_diff_since() {
 }
 
 /// The lenses get the whole diff again when the last reviewed commit is
-/// not an ancestor (an amend or rebase), or when the lane merged its base
+/// the head (a changed plan answer reviews it again), is not an ancestor
+/// (an amend or rebase), or when the lane merged its base
 /// branch since, whose diff since would show the base's changes as its own.
 #[test]
 fn a_rebase_or_a_merge_of_main_rereviews_the_whole_change() {
@@ -1321,8 +1322,12 @@ fn a_rebase_or_a_merge_of_main_rereviews_the_whole_change() {
         &["commit", "-qam", "c"],
         &[("lib.rs", b"a\nKEEP\n1\n")],
     );
-    lane.answer("lane", "accept");
+    lane.answer("lane", "dispute");
     assert_eq!(review().0, 0);
+    lane.answer("owner", "waive");
+    let (code, out) = review();
+    assert!(code == 0 && out["replayed"] == false, "{out}");
+    assert!(!lens().contains(since), "the same head");
     git(
         &lane.wt,
         &["commit", "-q", "--amend", "-am", "c"],
