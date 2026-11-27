@@ -137,8 +137,9 @@ pub struct PrRules {
     pub types: Vec<String>,
     /// The body's first lines, `{key}` filled.
     pub head: Vec<String>,
-    /// Set with the reviewers when the PR is first recorded.
+    /// Set when the PR is first recorded.
     pub assignee: Option<String>,
+    /// Requested at the lane's ready handoff.
     pub reviewers: Vec<String>,
 }
 

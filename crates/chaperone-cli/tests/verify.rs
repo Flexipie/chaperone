@@ -346,6 +346,61 @@ fn a_v21_lane_gets_a_verdict_with_no_local_test_run() {
     assert_eq!(lane.handoff().0, 0);
 }
 
+/// The ready handoff asks the base profile's reviewers on the PR it names
+/// (as the v21 `gh pr create` fallback does), but the author and those who
+/// reviewed: a failed request still records the handoff and says why, the
+/// same handoff again asks them, and once GitHub lists them nobody is asked.
+#[test]
+fn a_ready_handoff_requests_the_reviewers_once() {
+    let rules = "[pr]\nreviewers = [\"ana\", \"bo\", \"Me\"]\n";
+    let lane = claimed_in("v21", claude(json!({"findings": []}), json!([])), rules);
+    let (bin, gh) = (lane.dir.path().join("bin"), lane.dir.path().join("bin/gh"));
+    let view = |requested: &str| {
+        let v = json!({"author": {"login": "me"}, "reviewRequests": [{"login": requested}],
+            "latestReviews": [{"author": {"login": "BO"}}]});
+        std::fs::write(bin.join("view.json"), v.to_string()).unwrap();
+    };
+    view("team");
+    let script = format!(
+        "#!/bin/sh\necho \"$*\" >> {log:?}\ncase $2 in\nview) cat {view:?};;\n\
+         edit) test ! -e {fail:?} || {{ echo down >&2; exit 1; }};;\nesac\n",
+        log = bin.join("gh.log"),
+        view = bin.join("view.json"),
+        fail = bin.join("FAIL_GH"),
+    );
+    std::fs::write(&gh, script).unwrap();
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&gh, mode).unwrap();
+    std::fs::write(bin.join("FAIL_GH"), "").unwrap();
+    lane.plan("1. do it\n");
+    lane.commit();
+    lane.answer("lane", "accept");
+    lane.smoke();
+    assert_eq!(lane.verify()["stopped"], Value::Null);
+    let handoff = || {
+        let file = lane.dir.path().join("handoff.json");
+        let json = json!({"summary": "s", "status": "review", "ready": true,
+            "commit": lane.head(), "pull_request": "o/r#7"});
+        std::fs::write(&file, json.to_string()).unwrap();
+        let (code, out) = lane.run("lane", &["work", "handoff", "1", file.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        out["reviewers"].clone()
+    };
+    let log = || std::fs::read_to_string(bin.join("gh.log")).unwrap();
+    let view_call = "pr view 7 --repo o/r --json author,reviewRequests,latestReviews\n";
+    let edit = "pr edit 7 --repo o/r --add-reviewer ana\n";
+    assert_eq!(handoff(), json!({"error": "gh pr edit: down"}));
+    assert_eq!(lane.events("kind = 'phase.entered'"), 1);
+    std::fs::remove_file(bin.join("FAIL_GH")).unwrap();
+    assert_eq!(handoff(), json!({"requested": ["ana"]}));
+    view("Ana");
+    assert_eq!(handoff(), json!({"requested": []}));
+    assert_eq!(
+        log(),
+        [view_call, edit, view_call, edit, view_call].concat()
+    );
+}
+
 /// The Codex lens skips on the lane's measure, added, removed and test
 /// lines together: a diff recorded before `removed_code` skips on its
 /// `code_lines`, which held them, and a named asset counts none; a file

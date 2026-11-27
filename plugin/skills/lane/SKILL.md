@@ -177,6 +177,7 @@ On the commit verify passed (`git rev-parse HEAD` is its `head`):
 A `gate_denied` names the first gate that fails. `smoke_or_no_code`: step 5.
 `plan_or_no_code`: Needs you. `code_lines_at_most` (v20 only): step 4. Any other: verify has not passed
 on this commit (a missing diff reads as `no_uncounted_files`): back to 5.
+A `reviewers` `error` in its output: hand off the same JSON again once, then Needs you.
 
 ## 9. Wait, then done
 
