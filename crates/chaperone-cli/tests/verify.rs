@@ -344,12 +344,30 @@ fn a_v21_lane_gets_a_verdict_with_no_local_test_run() {
     );
     assert_eq!(lane.events("payload_json->>'check' = 'tests'"), 0);
     assert_eq!(lane.handoff().0, 0);
+    // A profile with no reviewers asks gh nothing.
+    let log = lane.dir.path().join("gh.log");
+    let gh = lane.dir.path().join("bin/gh");
+    std::fs::write(&gh, format!("#!/bin/sh\necho \"$*\" >> {log:?}\n")).unwrap();
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(&gh, mode).unwrap();
+    let file = lane.dir.path().join("handoff.json");
+    let json = json!({"summary": "s", "status": "review", "ready": true,
+        "commit": lane.head(), "pull_request": "o/r#7"});
+    std::fs::write(&file, json.to_string()).unwrap();
+    let (code, out) = lane.run("lane", &["work", "handoff", "1", file.to_str().unwrap()]);
+    assert_eq!(
+        (code, &out["reviewers"]),
+        (0, &json!({"requested": []})),
+        "{out}"
+    );
+    assert!(!log.exists());
 }
 
 /// The ready handoff asks the base profile's reviewers on the PR it names
 /// (as the v21 `gh pr create` fallback does), but the author and those who
 /// reviewed: a failed request still records the handoff and says why, the
 /// same handoff again asks them, and once GitHub lists them nobody is asked.
+/// A handoff that does not enter ready, or a dry run, asks no one.
 #[test]
 fn a_ready_handoff_requests_the_reviewers_once() {
     let rules = "[pr]\nreviewers = [\"ana\", \"bo\", \"Me\"]\n";
@@ -377,16 +395,21 @@ fn a_ready_handoff_requests_the_reviewers_once() {
     lane.answer("lane", "accept");
     lane.smoke();
     assert_eq!(lane.verify()["stopped"], Value::Null);
-    let handoff = || {
+    let handoff_as = |status: &str, ready: bool, dry: &[&str]| {
         let file = lane.dir.path().join("handoff.json");
-        let json = json!({"summary": "s", "status": "review", "ready": true,
+        let json = json!({"summary": "s", "status": status, "ready": ready,
             "commit": lane.head(), "pull_request": "o/r#7"});
         std::fs::write(&file, json.to_string()).unwrap();
-        let (code, out) = lane.run("lane", &["work", "handoff", "1", file.to_str().unwrap()]);
+        let args = [&["work", "handoff", "1", file.to_str().unwrap()][..], dry].concat();
+        let (code, out) = lane.run("lane", &args);
         assert_eq!(code, 0, "{out}");
         out["reviewers"].clone()
     };
-    let log = || std::fs::read_to_string(bin.join("gh.log")).unwrap();
+    let handoff = || handoff_as("review", true, &[]);
+    let log = || std::fs::read_to_string(bin.join("gh.log")).unwrap_or_default();
+    assert_eq!(handoff_as("active", false, &[]), Value::Null);
+    assert_eq!(handoff_as("review", true, &["--dry-run"]), Value::Null);
+    assert_eq!(log(), "");
     let view_call = "pr view 7 --repo o/r --json author,reviewRequests,latestReviews\n";
     let edit = "pr edit 7 --repo o/r --add-reviewer ana\n";
     assert_eq!(handoff(), json!({"error": "gh pr edit: down"}));
