@@ -309,7 +309,7 @@ fn the_verifier_rules_by_key() {
     let line = format!(r#""key":"{a}","lens":"correctness","line":null,"path":"src/a.rs""#);
     assert!(prompt.contains(&line), "{prompt}");
     // The schema names the keys it may rule on, and no other.
-    let schema: Value = serde_json::from_str(call["args"][5].as_str().unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(call["args"][6].as_str().unwrap()).unwrap();
     let mut keys = [a, b];
     keys.sort();
     assert_eq!(
@@ -860,7 +860,7 @@ fn the_verifier_rules_an_earlier_finding_fixed() {
         .map(|l| serde_json::from_str(l).unwrap())
         .rfind(|c: &Value| c["prompt"].as_str().unwrap().starts_with("LENS verifier"))
         .unwrap();
-    let schema: Value = serde_json::from_str(call["args"][5].as_str().unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(call["args"][6].as_str().unwrap()).unwrap();
     let mut shown = [earlier(0), earlier(2)];
     shown.sort();
     let rulings = &schema["properties"]["rulings"]["items"]["properties"];
@@ -932,7 +932,7 @@ fn a_repeat_of_a_waived_finding_is_marked_same_and_does_not_block() {
     // Only c, open from the first review, still blocks.
     assert_eq!(blocking(&ledger), [("c".to_string(), "open".to_string())]);
     let call = last("LENS verifier");
-    let schema: Value = serde_json::from_str(call["args"][5].as_str().unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(call["args"][6].as_str().unwrap()).unwrap();
     let ruling = &schema["properties"]["rulings"]["items"]["properties"];
     let c = &ledger.blocking_findings(1).unwrap()[0].finding_key;
     let mut settled = [earlier(&a.finding_key), earlier(c)];
@@ -1046,7 +1046,7 @@ fn a_repeat_of_an_unproven_finding_is_ruled_on_its_own() {
         .map(|l| serde_json::from_str(l).unwrap())
         .rfind(|c: &Value| c["prompt"].as_str().unwrap().starts_with("LENS verifier"))
         .unwrap();
-    let schema: Value = serde_json::from_str(call["args"][5].as_str().unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(call["args"][6].as_str().unwrap()).unwrap();
     let ruling = &schema["properties"]["rulings"]["items"]["properties"];
     assert!(
         ruling["verdict"]["enum"]

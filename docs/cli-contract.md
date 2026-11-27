@@ -520,8 +520,10 @@ blank, or `unproven` on a `blocker` or `risk` with no proof (a run or a cited li
 review writes as a non-blocking `question` with `raised_as` and the why, and no `finding.updated`: one session for all, as the findings share the facts and the checkout, bounded like a
 lens by its runner's timeout and, for a Claude runner, its tokens (Codex reports its tokens
 only when its turn ends, so the timeout is its only bound). A Claude session runs with
-`--output-format stream-json`; the harness sums each API message's input, cache read, cache
-write and output tokens as the stream reports them (output as far as streamed), and once the
+`--output-format stream-json --verbose --include-partial-messages`; the harness sums each API
+message's input, cache read, cache write and output tokens, the largest the stream reports for it
+(an `assistant` line's output is partial, the message's `message_delta` has the final count;
+on a real session the four sums equal the result's `modelUsage`), and once the
 sum passes the runner's `tokens_limit` it stops the session as at its deadline: the run failed
 `max_tokens` ("used N tokens, past its cap of M"), and its usage row has the tokens counted. It is also shown every earlier finding of the lane's complete
 harness reviews, keyed `<review event id>/<finding_key>`, with its status and the reason of its

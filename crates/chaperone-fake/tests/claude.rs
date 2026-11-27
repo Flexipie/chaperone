@@ -114,6 +114,7 @@ fn an_answer_is_read_from_a_fresh_session() {
         "--output-format",
         "stream-json",
         "--verbose",
+        "--include-partial-messages",
         "--json-schema",
         r#"{"type":"object"}"#,
         "--model",
@@ -234,11 +235,22 @@ fn a_session_past_its_tokens_is_stopped() {
             "cache_creation_input_tokens": 2, "output_tokens": 3}}})
     };
     let init = json!({"type": "system", "subtype": "init", "session_id": "s1"});
+    // b's start is under the cap; its delta's final output passes it.
+    let usage = |output: u64| {
+        json!({"input_tokens": 1, "cache_read_input_tokens": 580,
+            "cache_creation_input_tokens": 2, "output_tokens": output})
+    };
+    let begin = json!({"type": "stream_event", "event": {"type": "message_start",
+        "message": {"id": "b", "model": "m", "usage": usage(0)}}});
+    let delta = json!({"type": "stream_event", "event": {"type": "message_delta",
+        "usage": usage(23)}});
     let stream = [
         init,
         message("a", 100),
         message("a", 400),
-        message("b", 600),
+        begin,
+        message("b", 580),
+        delta,
     ];
     let lines: Vec<String> = stream.iter().map(Value::to_string).collect();
     let script = format!(
@@ -273,8 +285,8 @@ fn a_session_past_its_tokens_is_stopped() {
         ("max_tokens", "used 1012 tokens, past its cap of 1000")
     );
     assert_eq!(run.session_id.as_deref(), Some("s1"));
-    let usage = json!({"m": {"inputTokens": 2, "cacheReadInputTokens": 1000,
-        "cacheCreationInputTokens": 4, "outputTokens": 6}});
+    let usage = json!({"m": {"inputTokens": 2, "cacheReadInputTokens": 980,
+        "cacheCreationInputTokens": 4, "outputTokens": 26}});
     assert_eq!(run.model_usage, usage);
 }
 

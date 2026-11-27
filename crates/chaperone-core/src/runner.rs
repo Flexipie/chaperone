@@ -155,12 +155,17 @@ struct ClaudeResult {
 
 /// What a Claude session's stream said so far: its result line, its
 /// session, and per API message its model and its input, cache read, cache
-/// write and output tokens as last reported.
+/// write and output tokens, the largest reported. An `assistant` line's
+/// output is partial; the message's `message_delta` (with
+/// `--include-partial-messages`, after the `message_start` that names it)
+/// has the final count.
 #[derive(Default)]
 struct Stream {
     result: Option<String>,
     session_id: Option<String>,
     messages: BTreeMap<String, (String, [u64; 4])>,
+    /// The message `message_start` began, which a `message_delta` counts to.
+    current: Option<String>,
     /// The tokens used when they passed the cap.
     over: Option<u64>,
 }
@@ -184,30 +189,49 @@ impl Stream {
             Some("system") if self.session_id.is_none() => {
                 self.session_id = event["session_id"].as_str().map(String::from);
             }
-            Some("assistant") => {
-                let message = &event["message"];
-                let Some(id) = message["id"].as_str() else {
-                    return true;
-                };
-                let usage = &message["usage"];
-                let n = |k: &str| usage[k].as_u64().unwrap_or(0);
-                let counts = [
-                    n("input_tokens"),
-                    n("cache_read_input_tokens"),
-                    n("cache_creation_input_tokens"),
-                    n("output_tokens"),
-                ];
-                let model = message["model"].as_str().unwrap_or_default().to_string();
-                self.messages.insert(id.into(), (model, counts));
-                let used = self.messages.values().flat_map(|(_, c)| c).sum();
-                if used > cap {
-                    self.over = Some(used);
-                    return false;
+            Some("assistant") => self.count(&event["message"], &event["message"]["usage"]),
+            Some("stream_event") => match event["event"]["type"].as_str() {
+                Some("message_start") => {
+                    let message = &event["event"]["message"];
+                    self.current = message["id"].as_str().map(String::from);
+                    self.count(message, &message["usage"]);
                 }
-            }
-            _ => {}
+                Some("message_delta") => self.count(&Value::Null, &event["event"]["usage"]),
+                _ => return true,
+            },
+            _ => return true,
+        }
+        let used = self.messages.values().flat_map(|(_, c)| c).sum();
+        if used > cap {
+            self.over = Some(used);
+            return false;
         }
         true
+    }
+
+    /// Counts `usage` to `message`'s id, else to the current message.
+    fn count(&mut self, message: &Value, usage: &Value) {
+        let Some(id) = message["id"]
+            .as_str()
+            .map(String::from)
+            .or(self.current.clone())
+        else {
+            return;
+        };
+        let n = |k: &str| usage[k].as_u64().unwrap_or(0);
+        let counts = [
+            n("input_tokens"),
+            n("cache_read_input_tokens"),
+            n("cache_creation_input_tokens"),
+            n("output_tokens"),
+        ];
+        let (model, kept) = self.messages.entry(id).or_default();
+        if let Some(m) = message["model"].as_str() {
+            *model = m.into();
+        }
+        for (k, n) in kept.iter_mut().zip(counts) {
+            *k = (*k).max(n);
+        }
     }
 
     /// The messages' counts per model, as a result's `modelUsage`: what a
@@ -349,6 +373,7 @@ impl Agent {
             "--output-format",
             "stream-json",
             "--verbose",
+            "--include-partial-messages",
             "--json-schema",
         ])
         .arg(ask.schema.to_string())
