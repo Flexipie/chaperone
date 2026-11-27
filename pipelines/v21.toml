@@ -15,6 +15,10 @@
 #   (`pr.merged`) can hand off done without a verdict on that head (`pr_merged` in
 #   `done_verdict`), and that `phase.entered` says `merged_without_verdict`. After an owner
 #   merge no verdict could be recorded, so the lane could never close.
+# - Review rounds are capped (#269): a lane gets `review_rounds` fresh reviews (complete,
+#   not carried; two fix rounds), then `check run review` refuses until the owner raises it
+#   for that lane (`check waive rounds`). Big lanes took 9 to 10. From the second, the lenses
+#   are shown the diff since the last reviewed commit and raise findings only on it.
 # - A finding about a comment never blocks (#332): the design_tests and codex lenses rate it a
 #   `nit` (`review_design_tests.v21.md`, `review_codex.v21.md`). Two lanes in a day lost a round
 #   to a comment rated a blocking `risk`, which no user can hit.
@@ -39,6 +43,7 @@ code_lines = 400
 sha_min = 7
 sha_max = 40
 review_attempts = 2
+review_rounds = 3
 verdict_attempts = 2
 plan_attempts = 2
 lens_budget = 400

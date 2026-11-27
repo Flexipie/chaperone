@@ -231,9 +231,15 @@ fn pr_open_refuses_what_cannot_pass() {
         "check", "waive", "plan", "--work", "1", "--lines", "5", "--reason", "r",
     ];
     let two_lines = [&waive[..8], &["a\nb"]].concat();
+    let no_rounds = ["check", "waive", "rounds", "--work", "1", "--reason", "r"];
+    let plan_rounds = [
+        "check", "waive", "plan", "--work", "1", "--rounds", "2", "--reason", "r",
+    ];
     for (args, says) in [
         (&no_lines[..], "needs --lines"),
         (&plan_lines[..], "--lines goes with size only"),
+        (&no_rounds[..], "check waive rounds needs --rounds"),
+        (&plan_rounds[..], "--rounds goes with rounds only"),
         (&two_lines[..], "one non-blank line"),
     ] {
         let message = lane.run("owner", args).1["message"].to_string();

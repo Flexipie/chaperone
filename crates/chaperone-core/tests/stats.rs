@@ -5,7 +5,7 @@ mod common;
 
 use std::time::Duration;
 
-use chaperone_core::checks::{AttentionInput, CheckInput, FindingMove, MergedInput};
+use chaperone_core::checks::{AttentionInput, CheckInput, FindingMove, MergedInput, SIZE_WAIVER};
 use chaperone_core::ledger::{EventKind, Ledger, Mutation, Payload, Refusal};
 use chaperone_core::stats::Cohort;
 use chaperone_core::work::{ClaimInput, CreateInput, HandoffInput, UpdateInput};
@@ -129,7 +129,7 @@ fn a_lane_folds_from_its_events() {
     check(&ledger, id, "plan_check", None, Some(2));
     check(&ledger, id, "quality_gate", None, Some(0));
     check(&ledger, id, "merge_verdict", Some("yes"), None);
-    let waived = ledger.size_waive(&actor("owner"), id, HEAD, 500, "one piece");
+    let waived = ledger.limit_waive(&actor("owner"), id, HEAD, SIZE_WAIVER, 500, "one piece");
     waived.unwrap().unwrap();
     for (kind, round) in [
         ("nudged", None),

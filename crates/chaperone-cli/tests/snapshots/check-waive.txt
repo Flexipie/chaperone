@@ -5,8 +5,9 @@ Usage: chaperone check waive [OPTIONS] --work <WORK> --reason <REASON> <KIND>
 Arguments:
   <KIND>
           Possible values:
-          - plan: The plan check, on the commit the lane is on (none before v20)
-          - size: The `code_lines` cap, raised to --lines for this lane alone (v20's gate reads it)
+          - plan:   The plan check, on the commit the lane is on (none before v20)
+          - size:   The `code_lines` cap, raised to --lines for this lane alone (v20's gate reads it)
+          - rounds: The `review_rounds` cap on fresh reviews, raised to --rounds for this lane alone (v21 on)
 
 Options:
       --db <DB>
@@ -23,6 +24,9 @@ Options:
 
       --lines <LINES>
           For size only, and required there: the lane's raised `code_lines` limit
+
+      --rounds <ROUNDS>
+          For rounds only, and required there: the lane's raised `review_rounds` limit
 
       --reason <REASON>
           Why; one line, kept on the event and redacted at write
