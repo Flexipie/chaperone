@@ -113,7 +113,12 @@ rm smoke-$2.sh
 A run that exits non-zero is recorded and claims nothing: fix, commit, run it again. The
 ledger keeps a copy; `pr open` refuses untracked files. A code change with no smoke that ran cannot be ready: after a real attempt, Needs you.
 
+The smoke stops every server, watcher and background job it starts (`trap 'kill $pid' EXIT`)
+and prints what it stopped, so the record shows it. Then stop any the lane started earlier.
+
 ## 6. Verify
+
+Not while an open question is unanswered (Needs you).
 
 `chaperone verify --work $2` with `run_in_background: true`, then end the turn (it can take
 45 minutes). Never commit while it runs. Its `stopped`, by `check` and `why`:
@@ -175,7 +180,14 @@ prod data, a user's files, money); the plan departs from a recorded decision; th
 passes `code_lines`; a check you cannot pass after a real attempt; a finding you disputed;
 or a refusal only the owner can lift.
 
-Hand off `status` `blocked`, or `active` when the lane is in `review` (review cannot move to
-blocked), `blockers` and `open_questions` one line each, `next_action` `needs you: <what to
-decide>`; end the turn. Answered: add it to `brief.decisions`, hand off `active` with
+A question names the part of the done-when it blocks. While some part is not blocked, hand
+off `active`: `open_questions` one line each, `<question> (blocks: <part>)`; `blockers` one
+line per part, `blocked on the answer: <part>` or `parked: <part>, <why it waits>` for one you
+set aside; `next_action` `needs you: <what to decide>; meanwhile: <what you build>`. Keep
+building the rest, and carry the same lines in every handoff until the answer comes (each
+handoff replaces the last).
+
+When nothing left is unblocked: hand off `status` `blocked`, or `active` when the lane is in
+`review` (review cannot move to blocked), with the same lines and `next_action` `needs you:
+<what to decide>`; end the turn. Answered: add it to `brief.decisions`, hand off `active` with
 `next_action` `resolved: <answer>; <next step>`, go on.
