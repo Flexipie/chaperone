@@ -1187,7 +1187,7 @@ fn a_review_under_a_forged_base_ref_gets_no_verdict() {
 }
 
 /// v21 caps a lane at `review_rounds` (3) fresh reviews; one from before
-/// the cap (no `round`) counts for nothing. From the second review the
+/// the cap (no `round`) counts for nothing, nor does a carried one. From the second review the
 /// lenses are shown only the diff since the last reviewed commit, the
 /// verifier still the whole change. At the cap a blocking finding is
 /// needs-you, a new commit's review is refused until the owner raises the
@@ -1247,9 +1247,20 @@ fn review_rounds_cap_a_lane_and_rereview_only_the_diff_since() {
         (&p["round"], &p["reviewed_since"]),
         (&json!(1), &json!(first))
     );
+    git(
+        &lane.wt,
+        &["commit", "-q", "--amend", "-m", "same tree"],
+        &[],
+    );
+    let (code, carried) = review();
+    assert!(
+        code == 0 && carried["payload"]["carried_from"].is_number(),
+        "{carried}"
+    );
 
     commit("a\nKEEP\n3\n");
     assert_eq!(review().0, 0);
+    assert_eq!(lane.review()["round"], json!(2));
     let third = commit("a\nKEEP\nBLOCK\n");
     let out = lane.verify();
     let why = "3 finding(s) still block; the lane is at its review_rounds limit of 3 fresh \
