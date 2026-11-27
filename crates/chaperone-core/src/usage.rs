@@ -138,8 +138,8 @@ impl Ledger {
     }
 
     /// One `usage.reported` (source and origin `harness`) for a session
-    /// the harness ran: `labels` say what ran it, then the session's id,
-    /// cost and counts, and R11's token fields (Codex's when `labels` say
+    /// the harness ran: `labels` say what ran it, then the session's id
+    /// and counts, and R11's token fields (Codex's when `labels` say
     /// `cli` `codex`, else Claude's). Its message is `run:<session id>`,
     /// so a retry appends nothing. A session that left no id wrote nothing
     /// to count.
@@ -159,29 +159,9 @@ impl Ledger {
             ("message_id".into(), json!(message_id)),
             ("origin".into(), json!("harness")),
             ("session_id".into(), json!(session)),
-            ("cost_usd".into(), json!(run.cost_usd)),
             ("raw".into(), scan::counts(&run.model_usage)),
         ]);
-        let u = &run.model_usage;
-        let tokens = if labels.get("cli") == Some(&json!("codex")) {
-            scan::codex_tokens(u)
-        } else {
-            // Claude's `modelUsage` counts per model: summed, and unknown
-            // when any model lacks the count.
-            let models = u.as_object().filter(|m| !m.is_empty());
-            let sum = |k: &str| {
-                models?
-                    .values()
-                    .map(|m| m.get(k).and_then(Value::as_u64))
-                    .sum()
-            };
-            scan::claude_tokens([
-                sum("inputTokens"),
-                sum("cacheReadInputTokens"),
-                sum("cacheCreationInputTokens"),
-                sum("outputTokens"),
-            ])
-        };
+        let tokens = tokens(labels.get("cli") == Some(&json!("codex")), &run.model_usage);
         labels.extend(tokens.as_object().cloned().unwrap_or_default());
         let payload = Payload {
             source: Some("harness".into()),
@@ -235,8 +215,7 @@ impl Ledger {
             }));
         }
         // The totals' fields, then what names a transcript row.
-        // `cost_usd` is the CLI's own figure, which only harness rows carry.
-        const SUMS: [&str; 8] = [
+        const SUMS: [&str; 7] = [
             "uncached_input",
             "cache_read",
             "cache_write",
@@ -244,10 +223,12 @@ impl Ledger {
             "reasoning",
             "input_total",
             "output_total",
-            "cost_usd",
         ];
         const NAMES: [&str; 4] = ["source", "cli", "session_id", "agent_id"];
-        let f = |k: &str| format!("json_extract(payload_json, '$.{k}')");
+        let f = |k: &str| match k {
+            "uncached_input" => FRESH.into(),
+            _ => format!("json_extract(payload_json, '$.{k}')"),
+        };
         let rows = |group: &[&str], extra: &[(&str, String)]| {
             let mut cols = vec![
                 ("messages".to_string(), "count(*)".to_string()),
@@ -290,10 +271,6 @@ impl Ledger {
         )?;
         let mut totals = Map::new();
         for mut row in rows(&NAMES[..1], &[])? {
-            // Codex events recorded before #214 hold the cache in
-            // uncached_input, so the sum across CLIs means nothing; rows keep
-            // it per CLI.
-            row.remove("uncached_input");
             let source = row.remove("source");
             let source = source.as_ref().and_then(Value::as_str).unwrap_or_default();
             totals.insert(source.into(), row.into());
@@ -305,6 +282,49 @@ impl Ledger {
             "sources": sources,
         })))
     }
+}
+
+/// The four token counts every cost report shows: fresh input, cache
+/// write, cache read and output. A count the CLI did not report is null,
+/// never 0.
+/// A `usage.reported` payload's fresh input in SQL: Codex events recorded
+/// before #217 hold the cache in `uncached_input`, so where the input
+/// includes the cache it is the total less the cache read.
+pub(crate) const FRESH: &str = "CASE WHEN json_extract(payload_json, '$.input_includes_cache') \
+    THEN json_extract(payload_json, '$.input_total') - json_extract(payload_json, '$.cache_read') \
+    ELSE json_extract(payload_json, '$.uncached_input') END";
+
+pub const SPLIT: [&str; 4] = ["uncached_input", "cache_write", "cache_read", "output"];
+
+/// R11's token fields of a harness session's usage: Codex's, else
+/// Claude's `modelUsage` summed over models, unknown when any model lacks
+/// the count.
+pub fn tokens(codex: bool, usage: &Value) -> Value {
+    if codex {
+        return scan::codex_tokens(usage);
+    }
+    let models = usage.as_object().filter(|m| !m.is_empty());
+    let sum = |k: &str| {
+        models?
+            .values()
+            .map(|m| m.get(k).and_then(Value::as_u64))
+            .sum()
+    };
+    scan::claude_tokens([
+        sum("inputTokens"),
+        sum("cacheReadInputTokens"),
+        sum("cacheCreationInputTokens"),
+        sum("outputTokens"),
+    ])
+}
+
+/// The [`SPLIT`] of a harness session's usage.
+pub fn split(codex: bool, usage: &Value) -> Map<String, Value> {
+    let all = tokens(codex, usage);
+    SPLIT
+        .iter()
+        .map(|k| (k.to_string(), all[k].clone()))
+        .collect()
 }
 
 fn sql_json(v: rusqlite::types::Value) -> Value {

@@ -10,11 +10,12 @@ use std::time::Instant;
 use chaperone_core::checks::NON_BLOCKING_SEVERITIES;
 use chaperone_core::git;
 use chaperone_core::ledger::{Evidence, Finding};
-use chaperone_core::pipeline::{self, Pipeline};
-use chaperone_core::review::{self, Agents, Facts};
+use chaperone_core::pipeline::{self, Cli, Pipeline};
+use chaperone_core::review::{self, Agents, Facts, Lens};
+use chaperone_core::usage::{SPLIT, split};
 use chaperone_graph::code_globs;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::checks::{
     CHECKOUT_TIMEOUT, Checkout, agents, changed, code, diff, refuse, required_lenses,
@@ -124,7 +125,7 @@ pub fn run(
     let mut totals = BTreeMap::from(OUTCOMES.map(|o| (o, 0)));
     totals.insert("fallbacks", 0);
     let (mut entries, mut per_entry, mut reviewed) = (Vec::new(), BTreeMap::new(), 0);
-    let mut unused_known = Vec::new();
+    let (mut unused_known, mut tokens) = (Vec::new(), Map::new());
     for e in &set.entry {
         let clone = repos.join(e.repo.rsplit('/').next().unwrap_or_default());
         let why = missing(&clone, e);
@@ -152,6 +153,9 @@ pub fn run(
                 *totals.entry("fallbacks").or_default() += fallbacks;
                 *counts.entry("fallbacks").or_default() += fallbacks;
             }
+            if let Some(spent) = row["tokens"].as_object() {
+                add(&mut tokens, spent);
+            }
             let known = row["known"].as_array().into_iter().flatten();
             matched.extend(known.filter_map(|f| f["known"].as_str().map(String::from)));
             row["name"] = json!(e.name);
@@ -172,6 +176,7 @@ pub fn run(
         "entries": entries,
         "per_entry": per_entry,
         "totals": totals,
+        "tokens": tokens,
         "score": format!("{good}/{scored}"),
         "mean": mean(good, scored, reviewed),
         "unused_known": unused_known,
@@ -187,6 +192,34 @@ fn mean(good: i64, scored: i64, entries: i64) -> f64 {
     }
     let mean = (good * entries) as f64 / scored as f64;
     (mean * 100.0).round() / 100.0
+}
+
+/// Adds each count of `part` to `total`'s, skipping a null: a count no
+/// session reported stays unknown, never 0.
+fn add(total: &mut Map<String, Value>, part: &Map<String, Value>) {
+    for (k, n) in part {
+        let sum = total.entry(k.clone()).or_insert(Value::Null);
+        if let Some(n) = n.as_i64() {
+            *sum = json!(sum.as_i64().unwrap_or(0) + n);
+        }
+    }
+}
+
+/// The [`SPLIT`] the sessions of `lenses` used, and how many there were,
+/// a fallback's down first engine included.
+fn spent<'a, T: 'a>(lenses: impl IntoIterator<Item = &'a Lens<T>>) -> Map<String, Value> {
+    let mut out: Map<String, Value> = SPLIT.iter().map(|k| (k.to_string(), Value::Null)).collect();
+    out.insert("sessions".into(), json!(0));
+    for l in lenses {
+        let first = l.fallback.as_ref().map(|f| (f.cli, &f.run));
+        for (cli, run) in first.into_iter().chain([(l.cli, &l.run)]) {
+            let Some(run) = run else { continue };
+            let mut one = split(cli == Cli::Codex, &run.model_usage);
+            one.insert("sessions".into(), json!(1));
+            add(&mut out, &one);
+        }
+    }
+    out
 }
 
 /// Why `e` cannot run on this machine: no clone, or a commit it lacks.
@@ -253,9 +286,14 @@ fn review_one(
         .filter(|l| l.fallback.is_some())
         .count()
         + verifier.iter().filter(|v| v.fallback.is_some()).count();
+    let mut tokens = spent(&review.lenses);
+    add(&mut tokens, &spent(&verifier));
     if let Some((lens, Some(why))) = ran.find(|s| s.1.is_some()) {
         let why = format!("{lens} did not run: {why}");
-        return Ok(("error", json!({ "why": why, "fallbacks": fallbacks })));
+        return Ok((
+            "error",
+            json!({ "why": why, "fallbacks": fallbacks, "tokens": tokens }),
+        ));
     }
     let rulings = verifier
         .iter()
@@ -287,7 +325,7 @@ fn review_one(
     let bug = e.bug.as_ref().map(|b| &b.what);
     Ok((
         outcome,
-        json!({ "findings": findings, "known": known, "bug": bug, "fallbacks": fallbacks }),
+        json!({ "findings": findings, "known": known, "bug": bug, "fallbacks": fallbacks, "tokens": tokens }),
     ))
 }
 

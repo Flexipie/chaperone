@@ -29,6 +29,7 @@ use crate::ledger::{
 };
 use crate::pipeline::{Check, Cli, Pipeline, Runner};
 use crate::runner::{Agent, Answer, Ask, CodexAsk, Run, RunError};
+use crate::usage;
 use crate::work::WorkItem;
 
 /// The lenses, each the pipeline's check `review_<lens>`.
@@ -330,6 +331,9 @@ pub(crate) fn planned<'a>(
     {
         if r.cli == Cli::Claude && r.model.is_none() {
             return Err(format!("check {name}: runner {by} names no model"));
+        }
+        if r.cli == Cli::Claude && r.max_tokens.is_none() {
+            return Err(format!("check {name}: runner {by} names no tokens_limit"));
         }
     }
     Ok(Planned {
@@ -738,11 +742,11 @@ fn ask(
             let ask = Ask {
                 prompt,
                 schema,
-                // `planned` refused a Claude runner with none.
+                // `planned` refused a Claude runner with none of either.
                 model: model.unwrap_or_default(),
                 tools: &tools,
                 dir,
-                budget_cents: u32::try_from(r.budget_cents).unwrap_or(u32::MAX),
+                max_tokens: r.max_tokens.unwrap_or_default().unsigned_abs(),
             };
             agent.claude(&ask, deadline)
         }
@@ -803,8 +807,8 @@ impl<T> Lens<T> {
             row["fallback_error"] = json!(cut(&f.error, NOTE_CHARS));
             row["fallback_answer_ref"] = json!(f.answer_ref);
         }
-        if let Some(cost) = self.run.as_ref().and_then(|r| r.cost_usd) {
-            row["cost_usd"] = json!(cost);
+        if let Some(run) = &self.run {
+            row["tokens"] = usage::split(self.cli == Cli::Codex, &run.model_usage).into();
         }
         row
     }
@@ -1482,9 +1486,9 @@ mod tests {
     const PIPELINE: &str = r#"
 schema = 2
 id = "t"
-limits = { budget = 150, timeout = 20, review_attempts = 3, codex_min_code_lines = 200 }
-runners.lens = { cli = "claude", model = "opus", budget_limit = "budget", timeout_limit = "timeout" }
-runners.second = { cli = "codex", budget_limit = "budget", timeout_limit = "timeout" }
+limits = { tokens = 150, timeout = 20, review_attempts = 3, codex_min_code_lines = 200 }
+runners.lens = { cli = "claude", model = "opus", tokens_limit = "tokens", timeout_limit = "timeout" }
+runners.second = { cli = "codex", timeout_limit = "timeout" }
 checks.review_correctness = { runner = "lens", prompt = "p.md" }
 checks.review_design_tests = { runner = "lens", prompt = "p.md" }
 checks.review_intent = { runner = "lens", prompt = "intent.md" }

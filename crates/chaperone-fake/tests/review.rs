@@ -18,9 +18,9 @@ use serde_json::{Value, json};
 const PIPELINE: &str = r#"
 schema = 2
 id = "review-test"
-limits = { budget = 150, timeout = 20, review_attempts = 2, verdict_attempts = 9, plan_attempts = 2 }
-runners.lens = { cli = "claude", model = "opus", tools = ["Read", "Grep"], budget_limit = "budget", timeout_limit = "timeout" }
-runners.second = { cli = "codex", model = "gpt-5.5", budget_limit = "budget", timeout_limit = "timeout" }
+limits = { tokens = 150, timeout = 20, review_attempts = 2, verdict_attempts = 9, plan_attempts = 2 }
+runners.lens = { cli = "claude", model = "opus", tools = ["Read", "Grep"], tokens_limit = "tokens", timeout_limit = "timeout" }
+runners.second = { cli = "codex", model = "gpt-5.5", tokens_limit = "tokens", timeout_limit = "timeout" }
 checks.review_correctness = { runner = "lens", prompt = "correctness.md" }
 checks.review_design_tests = { runner = "lens", prompt = "design_tests.md" }
 checks.review_intent = { runner = "lens", prompt = "intent.md" }
@@ -48,7 +48,9 @@ fn result(structured: Value) -> String {
 
 fn session(id: &str, structured: Value) -> String {
     json!({"type": "result", "subtype": "success", "is_error": false,
-        "structured_output": structured, "total_cost_usd": 0.25, "session_id": id})
+        "structured_output": structured, "session_id": id,
+        "modelUsage": {"m": {"inputTokens": 1, "cacheCreationInputTokens": 2,
+            "cacheReadInputTokens": 3, "outputTokens": 4}}})
     .to_string()
 }
 
@@ -186,8 +188,11 @@ fn every_lens_reviews_the_same_facts() {
     let design = review.lenses[1].outcome.as_ref().unwrap();
     assert_eq!((&*design[1].severity, &*design[1].title), ("blocker", "b"));
     assert_eq!(
-        (&rows[0]["cost_usd"], &rows[3]["model"]),
-        (&json!(0.25), &json!("gpt-5.5"))
+        (&rows[0]["tokens"], &rows[3]["model"]),
+        (
+            &json!({"uncached_input": 1, "cache_write": 2, "cache_read": 3, "output": 4}),
+            &json!("gpt-5.5")
+        )
     );
     assert!(review.diff_cut && review.diff_bytes > 2 * PROMPT_DIFF_BYTES - 3);
 
@@ -214,7 +219,7 @@ fn every_lens_reviews_the_same_facts() {
         assert!(args.contains(flags), "{args}");
         assert_eq!(
             cli == "claude",
-            args.contains(r#""--max-budget-usd","1.50""#)
+            args.contains(r#""--output-format","stream-json""#)
         );
         let stored = |field: &str| env.store.get(rows[i][field].as_str().unwrap()).unwrap();
         assert_eq!(stored("prompt_ref"), prompt);
@@ -229,16 +234,17 @@ fn every_lens_reviews_the_same_facts() {
     }
 }
 
-/// A lens that exits non-zero, hits its budget, or answers in prose or
+/// A lens that exits non-zero, hits a limit, or answers in prose or
 /// with a severity the ledger does not know did not run, and says why; a
 /// stop still says what it cost; the lens that ran keeps every finding.
 #[test]
 fn a_lens_with_no_answer_did_not_run() {
-    let budget = json!({"type": "result", "subtype": "error_max_budget_usd", "is_error": true,
-        "total_cost_usd": 1.52, "errors": ["Reached maximum budget ($1.5)"]});
+    let stopped = json!({"type": "result", "subtype": "error_max_turns", "is_error": true,
+        "errors": ["Reached maximum turns (3)"],
+        "modelUsage": {"m": {"inputTokens": 1, "outputTokens": 2}}});
     let claude = json!([
         {"when": "LENS correctness", "stderr": "boom", "exit": 3},
-        {"when": "LENS design_tests", "stdout": budget.to_string(), "exit": 1},
+        {"when": "LENS design_tests", "stdout": stopped.to_string(), "exit": 1},
         {"when": "LENS intent", "stdout": result(json!({"findings": [found("critical", "c")]}))},
     ]);
     let said = json!({"findings": [found("risk", "a"), found("risk", "a"), found("nit", "b")]});
@@ -246,17 +252,17 @@ fn a_lens_with_no_answer_did_not_run() {
     let (_dir, review, _) = run(claude.clone(), codex, 10);
     let rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
     let ran: Vec<_> = rows.iter().map(|r| json!([r["ran"], r["error"]])).collect();
-    let budget = "the session failed (error_max_budget_usd): Reached maximum budget ($1.5)";
+    let stopped = "the session failed (error_max_turns): Reached maximum turns (3)";
     let want = [
         json!([false, "exit Some(3): boom"]),
-        json!([false, budget]),
+        json!([false, stopped]),
         json!([false, r#"unknown severity "critical""#]),
         json!([true, null]),
     ];
     assert_eq!(ran, want);
     assert_eq!(
-        (&rows[1]["cost_usd"], &rows[0]["findings"]),
-        (&json!(1.52), &json!(0))
+        (&rows[1]["tokens"]["output"], &rows[0]["findings"]),
+        (&json!(2), &json!(0))
     );
     assert!(!review.diff_cut);
     let codex = review.lenses[3].outcome.as_ref().unwrap();
@@ -303,7 +309,7 @@ fn the_verifier_rules_by_key() {
     let line = format!(r#""key":"{a}","lens":"correctness","line":null,"path":"src/a.rs""#);
     assert!(prompt.contains(&line), "{prompt}");
     // The schema names the keys it may rule on, and no other.
-    let schema: Value = serde_json::from_str(call["args"][4].as_str().unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(call["args"][5].as_str().unwrap()).unwrap();
     let mut keys = [a, b];
     keys.sort();
     assert_eq!(
@@ -551,15 +557,16 @@ fn a_verifier_that_fails_leaves_findings_open() {
     assert_eq!(calls(&env), before);
 }
 
-/// One lens that stops on its budget makes the review not complete, and
+/// One lens that stops on a limit makes the review not complete, and
 /// the other lenses' findings are all in the event, ruled on; the stopped
 /// session's cost is still a usage row.
 #[test]
 fn one_lens_failing_keeps_the_others_findings() {
     let (mut claude, codex) = scripts(rules);
-    let budget = json!({"type": "result", "subtype": "error_max_budget_usd", "is_error": true,
-        "total_cost_usd": 1.52, "session_id": "d", "errors": ["Reached maximum budget ($1.5)"]});
-    claude[1] = json!({"when": "LENS design_tests", "stdout": budget.to_string(), "exit": 1});
+    let stopped = json!({"type": "result", "subtype": "error_max_turns", "is_error": true,
+        "session_id": "d", "errors": ["Reached maximum turns (3)"],
+        "modelUsage": {"m": {"outputTokens": 4}}});
+    claude[1] = json!({"when": "LENS design_tests", "stdout": stopped.to_string(), "exit": 1});
     let env = env(claude, codex, 10);
     let ledger = ledger(&env);
     let p = record(&env, &ledger).unwrap().payload;
@@ -576,7 +583,7 @@ fn one_lens_failing_keeps_the_others_findings() {
         .unwrap()
         .iter()
         .find(|s| s["session_id"] == "d");
-    assert_eq!(stopped.unwrap()["cost_usd"], 1.52);
+    assert_eq!(stopped.unwrap()["output"], 4);
 }
 
 /// A review where no lens found anything starts no verifier session and
@@ -605,10 +612,10 @@ fn falls_back(timeout: &str) -> Pipeline {
 
 /// [`falls_back`]'s document.
 fn fallback_src(timeout: &str) -> String {
-    let second = r#"runners.second = { cli = "codex", model = "gpt-5.5", budget_limit = "budget", timeout_limit = "timeout" }"#;
+    let second = r#"runners.second = { cli = "codex", model = "gpt-5.5", tokens_limit = "tokens", timeout_limit = "timeout" }"#;
     let to = format!(
         "{}, fallback = \"backup\" }}\nrunners.backup = {{ cli = \"claude\", model = \"sonnet\", \
-         budget_limit = \"budget\", timeout_limit = \"timeout\" }}",
+         tokens_limit = \"tokens\", timeout_limit = \"timeout\" }}",
         second.replace(r#""timeout" }"#, &format!("{timeout:?}"))
     );
     let src = PIPELINE.replace(second, &to);
@@ -853,7 +860,7 @@ fn the_verifier_rules_an_earlier_finding_fixed() {
         .map(|l| serde_json::from_str(l).unwrap())
         .rfind(|c: &Value| c["prompt"].as_str().unwrap().starts_with("LENS verifier"))
         .unwrap();
-    let schema: Value = serde_json::from_str(call["args"][4].as_str().unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(call["args"][5].as_str().unwrap()).unwrap();
     let mut shown = [earlier(0), earlier(2)];
     shown.sort();
     let rulings = &schema["properties"]["rulings"]["items"]["properties"];
@@ -925,7 +932,7 @@ fn a_repeat_of_a_waived_finding_is_marked_same_and_does_not_block() {
     // Only c, open from the first review, still blocks.
     assert_eq!(blocking(&ledger), [("c".to_string(), "open".to_string())]);
     let call = last("LENS verifier");
-    let schema: Value = serde_json::from_str(call["args"][4].as_str().unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(call["args"][5].as_str().unwrap()).unwrap();
     let ruling = &schema["properties"]["rulings"]["items"]["properties"];
     let c = &ledger.blocking_findings(1).unwrap()[0].finding_key;
     let mut settled = [earlier(&a.finding_key), earlier(c)];
@@ -1039,7 +1046,7 @@ fn a_repeat_of_an_unproven_finding_is_ruled_on_its_own() {
         .map(|l| serde_json::from_str(l).unwrap())
         .rfind(|c: &Value| c["prompt"].as_str().unwrap().starts_with("LENS verifier"))
         .unwrap();
-    let schema: Value = serde_json::from_str(call["args"][4].as_str().unwrap()).unwrap();
+    let schema: Value = serde_json::from_str(call["args"][5].as_str().unwrap()).unwrap();
     let ruling = &schema["properties"]["rulings"]["items"]["properties"];
     assert!(
         ruling["verdict"]["enum"]

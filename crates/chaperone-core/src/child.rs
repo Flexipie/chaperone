@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -39,7 +40,7 @@ pub enum Failed {
 /// A process the child left behind that still holds a pipe at the
 /// deadline makes the run [`Failed::TimedOut`], even after a clean exit.
 pub fn run(cmd: &mut Command, deadline: Instant, cap: usize) -> Result<Done, Failed> {
-    start(cmd, None, false, deadline, Keep::Head(cap))
+    start(cmd, None, false, deadline, Keep::Head(cap), None)
 }
 
 /// [`run`] for an agent session, with `input` written to the child's
@@ -60,7 +61,23 @@ pub fn run_input(
     deadline: Instant,
     cap: usize,
 ) -> Result<Done, Failed> {
-    start(cmd, input, true, deadline, Keep::Head(cap))
+    start(cmd, input, true, deadline, Keep::Head(cap), None)
+}
+
+/// Each line of stdout, as it is printed. One that answers false
+/// stops the child as the deadline does, and the run ends as if it had
+/// exited.
+pub type Watch = Box<dyn FnMut(&[u8]) -> bool + Send>;
+
+/// [`run_input`] that hands each stdout line to `watch` and keeps none of
+/// stdout.
+pub fn run_watched(
+    cmd: &mut Command,
+    input: Option<&[u8]>,
+    deadline: Instant,
+    watch: Watch,
+) -> Result<Done, Failed> {
+    start(cmd, input, true, deadline, Keep::Head(0), Some(watch))
 }
 
 /// [`run_input`] with stdin empty that keeps only the last `tail` bytes of
@@ -71,7 +88,7 @@ pub fn run_input(
 /// group and holds a pipe past the deadline, or past the grace after the
 /// stop, ends the wait the same way: what was read so far, also `cut`.
 pub fn run_tail(cmd: &mut Command, deadline: Instant, tail: usize) -> Result<Done, Failed> {
-    start(cmd, None, true, deadline, Keep::Tail(tail))
+    start(cmd, None, true, deadline, Keep::Tail(tail), None)
 }
 
 /// The `name` CLI at `cmd` with `args`: its stdout, else its stderr. Run
@@ -118,6 +135,7 @@ fn start(
     group: bool,
     deadline: Instant,
     keep: Keep,
+    watch: Option<Watch>,
 ) -> Result<Done, Failed> {
     if Instant::now() >= deadline {
         return Err(Failed::TimedOut);
@@ -140,20 +158,38 @@ fn start(
     if let (Some(mut pipe), Some(input)) = (child.stdin.take(), input.map(<[u8]>::to_vec)) {
         std::thread::spawn(move || sent.send(pipe.write_all(&input)));
     }
-    let drain = |pipe: Option<Box<dyn Read + Send>>, keep: Keep| {
+    let halt = Arc::new(AtomicBool::new(false));
+    let drain = |pipe: Option<Box<dyn Read + Send>>, keep: Keep, mut watch: Option<Watch>| {
         let (tx, rx) = std::sync::mpsc::channel();
         let kept = Arc::new(Mutex::new((Vec::new(), false)));
         let shared = Arc::clone(&kept);
+        let halt = Arc::clone(&halt);
         std::thread::spawn(move || {
             if let Some(mut pipe) = pipe {
                 let mut chunk = [0u8; 8192];
+                let mut line = Vec::new();
                 loop {
                     let n = match pipe.read(&mut chunk) {
-                        Ok(0) => break,
+                        Ok(0) => {
+                            // The last line may end without a newline.
+                            if let Some(watch) = watch.as_mut().filter(|_| !line.is_empty()) {
+                                watch(&line);
+                            }
+                            break;
+                        }
                         Ok(n) => n,
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break,
                     };
+                    if let Some(watch) = watch.as_mut() {
+                        line.extend_from_slice(&chunk[..n]);
+                        while let Some(end) = line.iter().position(|&b| b == b'\n') {
+                            if !halt.load(Ordering::Relaxed) && !watch(&line[..end]) {
+                                halt.store(true, Ordering::Relaxed);
+                            }
+                            line.drain(..=end);
+                        }
+                    }
                     let (buf, cut) = &mut *lock(&shared);
                     match keep {
                         Keep::Head(cap) => {
@@ -178,16 +214,26 @@ fn start(
         Keep::Head(_) => Keep::Head(usize::MAX),
         tail => tail,
     };
-    let out = drain(child.stdout.take().map(|p| Box::new(p) as _), keep);
-    let err = drain(child.stderr.take().map(|p| Box::new(p) as _), err_keep);
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _), keep, watch);
+    let err = drain(
+        child.stderr.take().map(|p| Box::new(p) as _),
+        err_keep,
+        None,
+    );
+    let halted = || halt.load(Ordering::Relaxed);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
+            Ok(None) if Instant::now() < deadline && !halted() => {
+                std::thread::sleep(Duration::from_millis(2))
+            }
             Ok(None) => {
                 let stopped = if group { stop(&mut child) } else { Ok(()) };
                 let _ = child.kill();
                 let status = child.wait();
+                if let (true, Ok(()), Ok(status)) = (halted(), &stopped, &status) {
+                    break *status;
+                }
                 if let Err(e) = stopped {
                     return Err(Failed::Wait(std::io::Error::other(format!(
                         "timed out, and its process group was not killed: {e}"
@@ -216,7 +262,7 @@ fn start(
     // An answer to half the input is none. The write has ended unless
     // something the child started still holds the pipe; then the deadline
     // ends the wait.
-    if input.is_some() {
+    if input.is_some() && !halted() {
         let left = deadline.saturating_duration_since(Instant::now());
         match written.recv_timeout(left) {
             Ok(Ok(())) => {}

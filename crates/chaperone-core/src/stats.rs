@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::checks::ATTENTION_TYPES;
 use crate::ledger::{Checked, Ledger, LedgerError, Refusal, canonical_at, check_schema};
 use crate::pipeline::{self, Fact, sha_prefix_eq};
+use crate::usage::{FRESH, SPLIT};
 use crate::work::IS_HANDOFF;
 
 /// Which lanes `stats` reads.
@@ -30,7 +31,6 @@ pub const TOO_FEW_LANES: usize = 25;
 pub const OVER_ESTIMATE: f64 = 1.5;
 /// R11's `lanes_peak_over_500k`.
 pub const PEAK_OVER: i64 = 500_000;
-const TOKENS: [&str; 4] = ["input_total", "cache_read", "cache_write", "output_total"];
 /// What a review number needs when the cohort has no recorded review.
 const NO_REVIEW: &str = "check.finished review, local_review or pr_review";
 /// What a token number needs when no lane in the cohort has usage.
@@ -105,8 +105,11 @@ struct Lane {
     first_pr_event: Option<i64>,
     /// PR (lowercased) to its merged head, `merged_at` and julian day.
     merged: BTreeMap<String, (String, String, f64)>,
-    /// Per source, the null-skipping sums of `TOKENS`.
-    tokens: BTreeMap<String, [Option<i64>; 4]>,
+    /// Per step, its tokens and sessions, each session once.
+    steps: BTreeMap<String, Spent>,
+    sessions: BTreeSet<(String, String)>,
+    /// The sum and the largest of the parent's `input_total`.
+    context: Option<i64>,
     peak: Option<i64>,
     attention: BTreeMap<String, i64>,
     waivers: BTreeMap<String, i64>,
@@ -160,13 +163,43 @@ fn median(mut v: Vec<f64>) -> Value {
     json!((m * 100.0).round() / 100.0)
 }
 
-fn token_fields(sums: &[Option<i64>; 4]) -> Value {
-    let fields: Map<String, Value> = TOKENS
-        .iter()
-        .zip(sums)
-        .map(|(k, v)| (k.to_string(), json!(v)))
-        .collect();
-    fields.into()
+/// A step's null-skipping sums of [`SPLIT`] and its session count.
+#[derive(Clone, Copy, Default)]
+struct Spent {
+    sums: [Option<i64>; 4],
+    sessions: i64,
+}
+
+impl Spent {
+    fn add(&mut self, other: &Spent) {
+        for (sum, n) in self.sums.iter_mut().zip(other.sums) {
+            add(sum, n);
+        }
+        self.sessions += other.sessions;
+    }
+
+    fn json(&self) -> Value {
+        let mut fields: Map<String, Value> = SPLIT
+            .iter()
+            .zip(self.sums)
+            .map(|(k, v)| (k.to_string(), json!(v)))
+            .collect();
+        fields.insert("sessions".into(), self.sessions.into());
+        fields.into()
+    }
+}
+
+/// `{total, steps}` of `steps`, or null when there is none.
+fn spent_json(steps: &BTreeMap<String, Spent>) -> Value {
+    if steps.is_empty() {
+        return Value::Null;
+    }
+    let mut total = Spent::default();
+    for step in steps.values() {
+        total.add(step);
+    }
+    let steps: Map<String, Value> = steps.iter().map(|(k, s)| (k.clone(), s.json())).collect();
+    json!({"total": total.json(), "steps": steps})
 }
 
 fn hours(days: f64) -> f64 {
@@ -297,7 +330,7 @@ impl Lane {
             with_pr,
             merged,
             claim_to_merge_h,
-            context_tokens: self.tokens.get("parent").and_then(|t| t[0]),
+            context_tokens: self.context,
             verdict_on_head,
             head_reviewed,
             flat_rounds,
@@ -350,14 +383,6 @@ impl Lane {
     }
 
     fn json(&self, row: &Row, reviews_known: bool) -> Value {
-        let tokens = (!self.tokens.is_empty()).then(|| {
-            let out: Map<String, Value> = self
-                .tokens
-                .iter()
-                .map(|(source, sums)| (source.clone(), token_fields(sums)))
-                .collect();
-            out
-        });
         let known = |v: Value| if reviews_known { v } else { Value::Null };
         json!({
             "id": self.id,
@@ -369,7 +394,7 @@ impl Lane {
             "claim_to_merge_h": row.claim_to_merge_h,
             "with_pr": row.with_pr,
             "merged": row.merged,
-            "tokens": tokens,
+            "tokens": spent_json(&self.steps),
             "peak_context": self.peak,
             "attention": self.attention,
             "waivers": self.waivers,
@@ -428,13 +453,19 @@ impl Lane {
                 self.claimed = Some((e.at.clone(), e.day));
             }
             "usage.reported" => {
-                let source = e.source.clone().unwrap_or_default();
-                let sums = self.tokens.entry(source.clone()).or_default();
-                for (sum, n) in sums.iter_mut().zip(e.tokens) {
+                let step = e.step.clone().unwrap_or_default();
+                let spent = self.steps.entry(step.clone()).or_default();
+                for (sum, n) in spent.sums.iter_mut().zip(e.tokens) {
                     add(sum, n);
                 }
-                if source == "parent" && e.tokens[0].is_some() {
-                    self.peak = self.peak.max(e.tokens[0]);
+                if let Some(session) = &e.session
+                    && self.sessions.insert((step, session.clone()))
+                {
+                    spent.sessions += 1;
+                }
+                if e.step.as_deref() == Some("parent") {
+                    add(&mut self.context, e.input_total);
+                    self.peak = self.peak.max(e.input_total);
                 }
             }
             "attention.recorded" => {
@@ -607,11 +638,15 @@ struct Ev {
     at: String,
     /// The julian day of `at`, or of `merged_at` on a `pr.merged`.
     day: f64,
-    /// Parsed for every kind but `usage.reported`, which reads `tokens`.
+    /// Parsed for every kind but `usage.reported`, which reads the rest:
+    /// its step (the source, or a harness session's lens), session (a
+    /// subagent's id, else the session's), [`SPLIT`] and `input_total`.
     payload: Value,
     handoff: bool,
-    source: Option<String>,
+    step: Option<String>,
+    session: Option<String>,
     tokens: [Option<i64>; 4],
+    input_total: Option<i64>,
 }
 
 impl Ledger {
@@ -656,23 +691,30 @@ impl Ledger {
         let tok = |k: &str| format!("json_extract(payload_json, '$.{k}')");
         let sql = format!(
             "SELECT l.id, l.title, l.kind, l.pipeline_id, e.id, e.kind, e.at, e.day,
-                    e.payload, e.handoff, e.source, e.t0, e.t1, e.t2, e.t3
+                    e.payload, e.handoff, e.step, e.session, e.t0, e.t1, e.t2, e.t3, e.input_total
              FROM lanes l JOIN (
                  SELECT lane_id, id, kind, at,
                         julianday(CASE kind WHEN 'pr.merged'
                                   THEN json_extract(payload_json, '$.merged_at') ELSE at END) AS day,
                         CASE kind WHEN 'usage.reported' THEN NULL ELSE payload_json END AS payload,
                         {IS_HANDOFF} AS handoff,
-                        {} AS source, {} AS t0, {} AS t1, {} AS t2, {} AS t3
+                        CASE {source} WHEN 'harness' THEN coalesce({lens}, 'harness')
+                             ELSE {source} END AS step,
+                        coalesce({agent}, {session}) AS session,
+                        {FRESH} AS t0, {t1} AS t1, {t2} AS t2, {t3} AS t3,
+                        {input_total} AS input_total
                  FROM events
              ) e ON e.lane_id = l.id
              WHERE l.id IN ({filter})
              ORDER BY l.id, e.id",
-            tok("source"),
-            tok(TOKENS[0]),
-            tok(TOKENS[1]),
-            tok(TOKENS[2]),
-            tok(TOKENS[3]),
+            source = tok("source"),
+            lens = tok("lens"),
+            agent = tok("agent_id"),
+            session = tok("session_id"),
+            t1 = tok(SPLIT[1]),
+            t2 = tok(SPLIT[2]),
+            t3 = tok(SPLIT[3]),
+            input_total = tok("input_total"),
         );
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query([arg])?;
@@ -705,12 +747,14 @@ impl Ledger {
                     .transpose()?
                     .unwrap_or(Value::Null),
                 handoff: r.get(9)?,
-                source: if usage { r.get(10)? } else { None },
+                step: if usage { r.get(10)? } else { None },
+                session: if usage { r.get(11)? } else { None },
                 tokens: if usage {
-                    [r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?]
+                    [r.get(12)?, r.get(13)?, r.get(14)?, r.get(15)?]
                 } else {
                     [None; 4]
                 },
+                input_total: if usage { r.get(16)? } else { None },
             };
             if let Some(lane) = lanes.last_mut() {
                 lane.fold(&ev);
@@ -740,7 +784,7 @@ fn summarize(lanes: &[Lane]) -> Value {
         }
         by
     };
-    let mut tokens: BTreeMap<&str, [Option<i64>; 4]> = BTreeMap::new();
+    let mut steps: BTreeMap<String, Spent> = BTreeMap::new();
     let mut attention: BTreeMap<&str, i64> = BTreeMap::new();
     let mut waivers: BTreeMap<&str, i64> = BTreeMap::new();
     let mut accepted_without_ref = Vec::new();
@@ -751,11 +795,8 @@ fn summarize(lanes: &[Lane]) -> Value {
         for f in &l.accepted_without_ref {
             accepted_without_ref.push(json!({"work_id": l.id, "finding": f}));
         }
-        for (source, sums) in &l.tokens {
-            let total = tokens.entry(source).or_default();
-            for (t, n) in total.iter_mut().zip(sums) {
-                add(t, *n);
-            }
+        for (step, spent) in &l.steps {
+            steps.entry(step.clone()).or_default().add(spent);
         }
         for (kind, n) in &l.attention {
             *attention.entry(kind).or_default() += n;
@@ -794,10 +835,6 @@ fn summarize(lanes: &[Lane]) -> Value {
             *ready_points.entry(point).or_default() += 1;
         }
     }
-    let tokens: Map<String, Value> = tokens
-        .into_iter()
-        .map(|(source, sums)| (source.to_string(), token_fields(&sums)))
-        .collect();
     let per_pr: Vec<f64> = lanes
         .iter()
         .zip(&rows)
@@ -832,7 +869,7 @@ fn summarize(lanes: &[Lane]) -> Value {
         "merged": count(&|_, r| r.merged),
         "too_few_lanes": lanes.len() < TOO_FEW_LANES,
         "claim_to_merge_h_median": median(rows.iter().filter_map(|r| r.claim_to_merge_h).collect()),
-        "tokens": tokens,
+        "tokens": spent_json(&steps),
         "attention": attention,
         "waivers": waivers,
         "accepted_without_ref": accepted_without_ref,

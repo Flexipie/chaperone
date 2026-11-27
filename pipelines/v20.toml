@@ -35,10 +35,9 @@
 # the Codex lens runs on Codex's default model. Claude sessions get only the read tools
 # (Read, Grep, Glob): the runner starts them with `--permission-mode dontAsk` and a
 # sandbox, under which a Bash call that is not allow-listed is denied, so listing Bash would
-# be a control that does nothing. The budgets (US cents) and timeouts (seconds) are
-# placeholders to tune once the pilot measures real cost: one Claude session spent $0.26
-# answering a one-word prompt. Codex takes no spending cap, so the Codex lens's budget is
-# recorded but only its timeout bounds it.
+# be a control that does nothing. Each Claude session's tokens (the four kinds summed,
+# counted by the harness as the session streams them, #337) and timeouts (seconds) bound it.
+# Codex reports tokens only when its turn ends, so only its timeout bounds the Codex lens.
 #
 # The Codex lens falls back (#266) to `codex_fallback`, Claude on Sonnet (another model than the
 # other lenses), when `codex` cannot start, exits non-zero or reports a failed turn; never on a timeout.
@@ -81,14 +80,14 @@ sha_max = 40
 review_attempts = 2
 verdict_attempts = 2
 plan_attempts = 2
-lens_budget = 400
+lens_tokens = 2_100_000
 lens_timeout = 900
 codex_min_code_lines = 200
-verifier_budget = 400
+verifier_tokens = 1_400_000
 verifier_timeout = 900
-verdict_budget = 400
+verdict_tokens = 1_500_000
 verdict_timeout = 900
-plan_budget = 300
+plan_tokens = 2_100_000
 plan_timeout = 600
 
 # --- runners and checks ----------------------------------------------------
@@ -97,12 +96,11 @@ plan_timeout = 600
 cli = "claude"
 model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "lens_budget"
+tokens_limit = "lens_tokens"
 timeout_limit = "lens_timeout"
 
 [runners.codex_lens]
 cli = "codex"
-budget_limit = "lens_budget"
 timeout_limit = "lens_timeout"
 fallback = "codex_fallback"
 
@@ -110,28 +108,28 @@ fallback = "codex_fallback"
 cli = "claude"
 model = "claude-sonnet-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "lens_budget"
+tokens_limit = "lens_tokens"
 timeout_limit = "lens_timeout"
 
 [runners.verifier]
 cli = "claude"
 model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "verifier_budget"
+tokens_limit = "verifier_tokens"
 timeout_limit = "verifier_timeout"
 
 [runners.verdict]
 cli = "claude"
 model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "verdict_budget"
+tokens_limit = "verdict_tokens"
 timeout_limit = "verdict_timeout"
 
 [runners.plan]
 cli = "claude"
 model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "plan_budget"
+tokens_limit = "plan_tokens"
 timeout_limit = "plan_timeout"
 
 [checks.review_correctness]
