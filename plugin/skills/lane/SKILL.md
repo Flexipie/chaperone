@@ -149,8 +149,8 @@ Read its output, not its exit (red and none both exit 1):
 - "no checks reported" right after a push may be CI not queued yet: watch once more as
   `sleep 60; gh pr checks <n> --watch --fail-fast`. Still none, or checks that never start:
   say so in the ready handoff's `summary`.
-- Red: a known flake (`pipeline-profile --section "Known flakes"`; none listed, every failure
-  is real) gets one rerun (`gh run rerun <run> --failed`) and its citation in the `summary`.
+- Red: a known flake (`pipeline-profile --section "Known flakes"`; none listed or no such
+  command, every failure is real) gets one rerun (`gh run rerun <run> --failed`) and its citation in the `summary`.
   Else read `gh run view <run> --log-failed`, fix, commit, then 5, 6, `pr open` again (it
   pushes), and watch again.
 - When the watch ends, threads and reviews from people or bots (`gh pr view <n> --json
