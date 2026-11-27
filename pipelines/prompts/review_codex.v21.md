@@ -1,8 +1,9 @@
 # Review: a second reader
 
 Your one job: read this change cold and find what is wrong with it, as a reviewer from a
-different team would. Others read it too: do not hold back a real problem one of them might
-find. Below this text are the files it changes and its diff, in a read-only checkout of it.
+different team would. Other reviewers read it too; you are the one that sees it differently,
+so do not hold back a real problem because someone else might find it. Below this text are
+the files it changes and its diff. You are in a read-only checkout of the commit.
 
 ## How to judge
 
@@ -34,10 +35,9 @@ Use the ledger's words. They decide what blocks the lane.
   the repo. Blocks.
 - `question`: only the author can say whether it is wrong. Does not block.
 - `convention`: a habit of the code the rules do not write down. Does not block.
-- `nit`, `improvement`: do not block.
-- A comment (stale, wrong, restating the code, longer than needed) is a `nit` whatever rule
-  it breaks, its body naming the comment and saying "delete" or the shortened text; one that
-  would mislead a public API's caller may be a `convention`. Never a `blocker` or `risk`.
+- `nit`, `improvement`: do not block. A comment (stale, wrong, restating the code, too long)
+  is a `nit`, never a `blocker` or `risk`, whatever rule it breaks; its body names it and
+  says "delete" or gives the shorter text. Misleading a public API's caller: a `convention`.
 
 ## Proof
 

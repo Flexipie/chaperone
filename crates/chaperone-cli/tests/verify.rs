@@ -692,7 +692,10 @@ fn a_comment_finding_on_v21_is_a_nit_that_never_blocks() {
         says("# Merge verdict", yes),
         says("# Review: correctness", none.clone()),
         says("# Review: the change against its goal", none),
-        says("- A comment (stale, wrong, restating the code", nit),
+        says(
+            "A comment (stale, wrong, restating the code, too long)",
+            nit
+        ),
     ]);
     let lane = claimed_in("v21", runs, "");
     lane.plan("1. do it\n");

@@ -7,8 +7,9 @@ read-only checkout of the commit.
 ## Find the bars first
 
 Before judging, read the repo's written rules in the checkout: `CONTRIBUTING.md` (or the
-file the README names), `.chaperone/profile.toml` and any rules file they point to. These
-are the bars: rules a pull request has to meet, written in the repo. Your taste is not one.
+file the README names for contributors), the pipeline profile `.chaperone/profile.toml`
+(its test commands and notes), and any rules file they point to. These are the bars. A
+bar is a rule a pull request has to meet, written in the repo. Your own taste is not a bar.
 
 ## What counts
 
@@ -42,10 +43,9 @@ Use the ledger's words. They decide what blocks the lane.
 - `convention`: the change departs from a habit the code follows but the bars do not
   write down. Does not block. When the bars do make it a rule, it is a `risk`.
 - `improvement`: a simpler shape that is not required. Does not block.
-- `question`, `nit`: do not block.
-- A comment (stale, wrong, restating the code, longer than needed) is a `nit` whatever bar
-  it breaks, its body naming the comment and saying "delete" or the shortened text; one that
-  would mislead a public API's caller may be a `convention`. Never a `blocker` or `risk`.
+- `question`, `nit`: do not block. A comment (stale, wrong, restating the code, too long) is
+  a `nit`, never a `blocker` or `risk`, whatever bar it breaks; its body names it and says
+  "delete" or gives the shorter text. Misleading a public API's caller: a `convention`.
 
 ## Proof
 

@@ -4,9 +4,9 @@
 
 Only a finding with `blocks` (a proven `blocker` or `risk`, not settled) or a check failing
 on this head holds a lane; no other finding, gate or round does. One that does not block is
-never fixed alone and never earns a verify: `pr open` lists it in the PR body as open. Cut a
-comment one (delete it, or shorten it to what is still true) in a commit you make anyway:
-never disputed, never its own commit or verify. Only those left: hand off.
+never fixed alone and never earns a verify: `pr open` lists it in the PR body as open.
+Delete a comment one, or cut it to what is still true, in a commit you make anyway; never
+dispute it. Only those left: hand off.
 
 ## Read them
 
