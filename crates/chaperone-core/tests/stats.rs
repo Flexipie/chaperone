@@ -76,16 +76,19 @@ fn merged(ledger: &Ledger, work: i64, merged_at: &str) {
     ledger.work_merged(&actor("9"), &input).unwrap().unwrap();
 }
 
-fn usage(ledger: &Ledger, work: i64, id: &str, source: &str, input_total: i64) {
+fn usage(ledger: &Ledger, work: i64, id: &str, source: &str, input_total: i64, extra: Value) {
+    let mut rest = json!({
+        "message_id": id, "input_total": input_total, "cache_read": input_total - 10,
+        "cache_write": 5, "output_total": 3, "uncached_input": 5, "output": 3,
+        "session_id": format!("s-{source}"),
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    rest.extend(extra.as_object().unwrap().clone());
     let payload = Payload {
         source: Some(source.into()),
-        rest: json!({
-            "message_id": id, "input_total": input_total, "cache_read": input_total - 10,
-            "cache_write": 5, "output_total": 3,
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
+        rest,
         ..Payload::default()
     };
     let event = Mutation::Event {
@@ -123,9 +126,30 @@ fn a_lane_folds_from_its_events() {
     let (_dir, path, ledger) = common::ledger();
     let id = lane(&ledger);
     common::restamp(&path, id, "v19", None);
-    usage(&ledger, id, "m1", "parent", 100);
-    usage(&ledger, id, "m2", "parent", 300);
-    usage(&ledger, id, "m3", "subagent", 900);
+    usage(&ledger, id, "m1", "parent", 100, json!({}));
+    usage(&ledger, id, "m2", "parent", 300, json!({}));
+    usage(
+        &ledger,
+        id,
+        "m3",
+        "subagent",
+        900,
+        json!({"agent_id": "a1"}),
+    );
+    usage(&ledger, id, "m4", "subagent", 50, json!({"agent_id": "a2"}));
+    // A Codex lens row recorded before #217: its uncached_input holds the
+    // cache, so fresh input is the total less the cache read.
+    let codex = json!({"lens": "codex", "session_id": "t1", "uncached_input": 50,
+        "input_includes_cache": true, "cache_write": null});
+    usage(&ledger, id, "r1", "harness", 50, codex);
+    usage(
+        &ledger,
+        id,
+        "r2",
+        "harness",
+        20,
+        json!({"lens": "verdict", "session_id": "v1"}),
+    );
     check(&ledger, id, "plan_check", None, Some(2));
     check(&ledger, id, "quality_gate", None, Some(0));
     check(&ledger, id, "merge_verdict", Some("yes"), None);
@@ -174,11 +198,20 @@ fn a_lane_folds_from_its_events() {
     );
     assert_eq!(lane["merged"], true);
     assert!(lane["claim_to_merge_h"].as_f64().unwrap() > 0.0);
-    assert_eq!(
-        lane["tokens"]["parent"],
-        json!({"input_total": 400, "cache_read": 380, "cache_write": 10, "output_total": 6})
-    );
-    assert_eq!(lane["tokens"]["subagent"]["input_total"], 900);
+    let spent = |fresh: i64, write: Value, read: i64, output: i64, sessions: i64| {
+        json!({"uncached_input": fresh, "cache_write": write, "cache_read": read,
+            "output": output, "sessions": sessions})
+    };
+    let want = json!({
+        "total": spent(35, json!(25), 1360, 18, 5),
+        "steps": {
+            "parent": spent(10, json!(10), 380, 6, 1),
+            "subagent": spent(10, json!(10), 930, 6, 2),
+            "codex": spent(10, Value::Null, 40, 3, 1),
+            "verdict": spent(5, json!(5), 10, 3, 1),
+        },
+    });
+    assert_eq!(lane["tokens"], want);
     // The subagent's 900 does not raise the parent peak.
     assert_eq!(lane["peak_context"], 300);
     assert_eq!(lane["attention"], json!({"nudged": 1, "sent_back": 2}));
@@ -199,6 +232,7 @@ fn a_lane_folds_from_its_events() {
     let cohort = &out["cohort"];
     assert_eq!(cohort["lanes"], 1);
     assert_eq!(cohort["too_few_lanes"], true);
+    assert_eq!(cohort["tokens"], want);
     assert_eq!(cohort["peak_context_median"], 300.0);
     assert_eq!(cohort["context_tokens_per_merged_pr_median"], 400.0);
     assert_eq!(cohort["lanes_plan_checked"], 1);

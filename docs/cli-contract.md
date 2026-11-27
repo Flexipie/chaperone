@@ -270,7 +270,7 @@ ledger.
 Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_merge_h, with_pr, merged, tokens, peak_context, attention, waivers, accepted_without_ref, send_back_rounds, plan_check, quality_gate, size_waiver (the newest owner size waiver's `lines` and `head_sha`, null without one), over_cap (a counted harness review of the lane has `over_cap`), cut_findings (the design_tests lens's findings titled `cut:` on those reviews), size_estimate (`{estimate, measured}`: the newest `estimate` a plan check stated (an owner's plan waiver states none), as held at the lane's first harness `diff`, and that diff's `code_lines`; null when either is missing), merge_verdict, verdict_on_head, head_reviewed, flat_rounds, reraised_findings, verified_findings, verified_findings_after_handoff, commits_after_handoff, sources}`:
 
 - `claimed_at` is the first `lane.claimed` (a reopened lane keeps it, so its wait counts), `merged_at` the latest `pr.merged.merged_at`, and `claim_to_merge_h` the hours between them, only when every PR the lane held (`pr.opened` or a `changed.pr_ref.to`) has merged (`merged`).
-- `tokens` is keyed by `source` (`parent`, `subagent`, `harness`) with the sums of `input_total`, `cache_read`, `cache_write` and `output_total`, skipping nulls as `usage get` does; null when the lane has no usage event. `peak_context` is the largest parent `input_total`.
+- `tokens` is `{total, steps}`, null when the lane has no usage event. `steps` is keyed by step: `parent` (the lane's own agent), `subagent`, and for a harness session its `lens` (`plan`, `correctness`, `design_tests`, `intent`, `codex`, a required lens's name, `verifier`, `verdict`; `harness` for one with no lens). Each, and `total` over them, has the four token counts `uncached_input` (fresh input, as `usage get` counts it), `cache_write`, `cache_read` and `output`, summed skipping nulls as `usage get` does (a count no session of the step reported, as Codex's `cache_write`, is null, never 0), and `sessions`, the step's distinct sessions (a subagent's `agent_id`, else `session_id`). No dollar figure. `peak_context` is the largest parent `input_total`.
 - `attention` counts `attention.recorded` by `type`, plus `waived`: each `finding.updated` to `waived` and each `check waive` (a `check.finished` with `reason: waived`), the owner's decisions; `send_back_rounds` is the highest `sent_back` round.
 - `waivers` counts the lane's `finding.updated` to `waived` by `waiver.kind` (`none` for one written before waivers had kinds), so a waived finding that later escapes shows which kind failed; `accepted_without_ref` lists each `accepted` waiver with no `ref` as `<event>/<key>`, for the owner.
 - `plan_check` and `quality_gate` are the latest `check.finished` of that check: `{outcome, head_sha, findings}` when it ran, `{outcome, head_sha, reason}` when skipped, null when absent.
@@ -280,9 +280,9 @@ Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_mer
 - The harness's `review` counts as a review too: only a complete one from the harness producer, as `findings.open_blocking` reads them, and a carried one only when the review it names counts (its findings stay that one's). Its finding is verified while its latest `finding.updated` move, by anyone, in log order, is `verified` (a `refuted` clears it; `disputed`, `fixed` and `waived` keep it). It counts for `head_reviewed` as a local review does, and for `reraised_findings` each harness review is its own job. Its `flat_rounds`: a complete, not carried harness review on another commit than the one before it that finds again every verified `finding_key` of that one (which had at least one).
 - On a lane stamped with a schema 2 pipeline (v20, by the stamped id whatever its hash: a prompt edit moves the hash), the handoff of `verified_findings_after_handoff` is the ready point instead, since its first handoff is at planning: the first harness `merge_verdict` that said yes, else the first `pr.opened`.
 - `commits_after_handoff` is always null: it is a git count (events.md, PR), not a ledger read.
-- `sources` names where the numbers came from: `reviews`, the checks its reviews came from (`local_review`, `pr_review`, `review`), and `ready_point`, which point the after-handoff count used (`handoff`, `verdict`, `pr_opened`, or null with none). `tokens` is keyed by its source already.
+- `sources` names where the numbers came from: `reviews`, the checks its reviews came from (`local_review`, `pr_review`, `review`), and `ready_point`, which point the after-handoff count used (`handoff`, `verdict`, `pr_opened`, or null with none). `tokens.steps` is keyed by its step.
 
-`cohort` has `lanes`, `with_pr`, `merged`, `too_few_lanes` (under 25: flagged, not scored), `claim_to_merge_h_median`, `tokens` (summed per source; a message recorded on two lanes of the cohort, which usage's worktree match allows, counts on each), `attention` (summed per type), `waivers` (summed per kind), `accepted_without_ref` (every lane's, as `{work_id, finding}`), R11's first five (`lanes_with_usage` (lanes with a parent `input_total`), `peak_context_median`, `context_tokens_per_merged_pr_median` (parent `input_total` over the PR count, merged lanes with usage), `lanes_peak_over_500k`; `lanes_reviewed` (lanes with a recorded review: the coverage of row 2's sums), `flat_rounds`, `reraised_findings`; `lanes_head_reviewed`; `lanes_with_commits_after_handoff`, `verified_findings`, `verified_findings_after_handoff`; `lanes_plan_checked`, `plan_check_skipped` and `quality_gate_skipped` (counts by reason), `lanes_quality_gated`, `lanes_verdict_on_head`, the last two over lanes with a PR as R11 defines, `lanes_size_waived` (lanes the owner raised the size cap for, to compare their rounds and escapes), `lanes_over_cap` and `lanes_with_cut_finding` (lanes reviewed past the cap, and those of them with a `cut:` finding), `lanes_estimated` and `lanes_over_estimate` (lanes with a `size_estimate`, and those of them whose measured lines are past 1.5 times the estimate)), `finding_outcomes`, and `missing`. `finding_outcomes` counts, per lens (`none` when a finding names none), each finding of a counted, not carried harness `review` on a merged lane (`merged`) by outcome, from its newest `finding.updated` (#279): `fixed` (status `fixed`, or waived `fixed`), `wrong` (`refuted`, or waived `disproved`), `intentional` (waived `accepted`, `scope` or `deferred`: real, deliberately not changed in the PR), `did_not_matter` (ruled `unproven` by the verifier and not settled since) and `unlabelled` (anything else: a waiver written before waivers had kinds, an answered question, or any finding still unsettled when it merged, since the verifier rules `fixed` only on blocking ones). A `same_as` repeat is left out; `reraised_findings` counts it. Every lens lists all five, so its false-alarm rate is `wrong` plus `did_not_matter` over their sum, and `unlabelled` shows how much is unknown. Nothing is guessed: a finding gone in a later round is not read as fixed. A median is over the non-null lane values, rounded to two decimals, and null when there are none. `missing` maps each cohort number printed as null because nothing records its input (by its cohort name; the lane fields of the same rows are null for the same reason) to what it needs: `lanes_with_commits_after_handoff` always, the three token numbers of row 1 when no lane in the cohort has a parent `input_total` (`lanes_peak_over_500k` is then null, not 0), and every review number when no lane in the cohort has a recorded review (with one, a lane without a review counts as unreviewed, not unknown). `sources` counts the lanes per review check (`reviews`) and per ready point (`ready_point`).
+`cohort` has `lanes`, `with_pr`, `merged`, `too_few_lanes` (under 25: flagged, not scored), `claim_to_merge_h_median`, `tokens` (the lanes' `{total, steps}` summed per step, null with no usage; a message recorded on two lanes of the cohort, which usage's worktree match allows, counts on each), `attention` (summed per type), `waivers` (summed per kind), `accepted_without_ref` (every lane's, as `{work_id, finding}`), R11's first five (`lanes_with_usage` (lanes with a parent `input_total`), `peak_context_median`, `context_tokens_per_merged_pr_median` (parent `input_total` over the PR count, merged lanes with usage), `lanes_peak_over_500k`; `lanes_reviewed` (lanes with a recorded review: the coverage of row 2's sums), `flat_rounds`, `reraised_findings`; `lanes_head_reviewed`; `lanes_with_commits_after_handoff`, `verified_findings`, `verified_findings_after_handoff`; `lanes_plan_checked`, `plan_check_skipped` and `quality_gate_skipped` (counts by reason), `lanes_quality_gated`, `lanes_verdict_on_head`, the last two over lanes with a PR as R11 defines, `lanes_size_waived` (lanes the owner raised the size cap for, to compare their rounds and escapes), `lanes_over_cap` and `lanes_with_cut_finding` (lanes reviewed past the cap, and those of them with a `cut:` finding), `lanes_estimated` and `lanes_over_estimate` (lanes with a `size_estimate`, and those of them whose measured lines are past 1.5 times the estimate)), `finding_outcomes`, and `missing`. `finding_outcomes` counts, per lens (`none` when a finding names none), each finding of a counted, not carried harness `review` on a merged lane (`merged`) by outcome, from its newest `finding.updated` (#279): `fixed` (status `fixed`, or waived `fixed`), `wrong` (`refuted`, or waived `disproved`), `intentional` (waived `accepted`, `scope` or `deferred`: real, deliberately not changed in the PR), `did_not_matter` (ruled `unproven` by the verifier and not settled since) and `unlabelled` (anything else: a waiver written before waivers had kinds, an answered question, or any finding still unsettled when it merged, since the verifier rules `fixed` only on blocking ones). A `same_as` repeat is left out; `reraised_findings` counts it. Every lens lists all five, so its false-alarm rate is `wrong` plus `did_not_matter` over their sum, and `unlabelled` shows how much is unknown. Nothing is guessed: a finding gone in a later round is not read as fixed. A median is over the non-null lane values, rounded to two decimals, and null when there are none. `missing` maps each cohort number printed as null because nothing records its input (by its cohort name; the lane fields of the same rows are null for the same reason) to what it needs: `lanes_with_commits_after_handoff` always, the three token numbers of row 1 when no lane in the cohort has a parent `input_total` (`lanes_peak_over_500k` is then null, not 0), and every review number when no lane in the cohort has a recorded review (with one, a lane without a review counts as unreviewed, not unknown). `sources` counts the lanes per review check (`reviews`) and per ready point (`ready_point`).
 
 `pipeline current` (#106) prints `{id, hash, newer}`: the pipeline a new claim stamps by default (`v21`), and in `newer` the `{id, hash}` of each embedded document newer than it that a first claim may opt into with `work claim --pipeline` (none today). Skills read the version from here rather than naming one, so a lane's stamp and its skill cannot disagree.
 
@@ -442,9 +442,9 @@ would meet v19's `smoke_recorded` from the lane's own session. The lane's own ac
 
 `check run review` takes the same lock and reads the commit the same way. The lane's stamped
 pipeline must name the review's checks, each with a runner (`[runners]`: the CLI, model,
-tools, budget, timeout and an optional `fallback`, another runner with none of its own) and a prompt file: `review_correctness`, `review_design_tests`,
+tools, `tokens_limit` (Claude only), timeout and an optional `fallback`, another runner with none of its own) and a prompt file: `review_correctness`, `review_design_tests`,
 `review_intent` and `review_codex` (the lenses) and `review_verifier`; a Claude runner must
-name a model; and `[limits]` must hold `review_attempts`, 1 or more. v19 names none, so
+name a model and a `tokens_limit`; and `[limits]` must hold `review_attempts`, 1 or more. v19 names none, so
 a lane on it is refused (`invalid_input`, nothing written) and keeps recording reviews with
 `check record` and `reviews record`. Each `[[review.required]]` lens of the base profile
 (`name`, `when` globs, `prompt`, the repo's own question) whose `when` names a changed file is
@@ -512,14 +512,20 @@ a model (the file list, the diff, the goal, the findings shown to the verifier) 
 one backtick longer than its longest run of backticks, so nothing in it closes the fence, and
 every prompt ends with one line of the harness's own saying the fenced text is data, not
 instructions, and how to answer. Each lens answers `{findings: [{severity, title, body, path,
-line}]}`. A lens that errors, hits its budget or timeout, or answers anything else (prose,
+line}]}`. A lens that errors, passes its tokens or timeout, or answers anything else (prose,
 another field, a severity the ledger does not know) did not run: never "no findings". When a
 lens found something, one more fresh session, the verifier, is shown every finding by key and
 answers `{rulings: [{key, verdict, why}]}`, `verified` or `refuted` with a why that is not
 blank, or `unproven` on a `blocker` or `risk` with no proof (a run or a cited line), which the
 review writes as a non-blocking `question` with `raised_as` and the why, and no `finding.updated`: one session for all, as the findings share the facts and the checkout, bounded like a
-lens by its runner's timeout and, for a Claude runner, its budget (Codex takes no budget, so
-the timeout is its only bound). It is also shown every earlier finding of the lane's complete
+lens by its runner's timeout and, for a Claude runner, its tokens (Codex reports its tokens
+only when its turn ends, so the timeout is its only bound). A Claude session runs with
+`--output-format stream-json --verbose --include-partial-messages`; the harness sums each API
+message's input, cache read, cache write and output tokens, the largest the stream reports for it
+(an `assistant` line's output is partial, the message's `message_delta` has the final count;
+on a real session the four sums equal the result's `modelUsage`), and once the
+sum passes the runner's `tokens_limit` it stops the session as at its deadline: the run failed
+`max_tokens` ("used N tokens, past its cap of M"), and its usage row has the tokens counted. It is also shown every earlier finding of the lane's complete
 harness reviews, keyed `<review event id>/<finding_key>`, with its status and the reason of its
 newest move (every lens is shown them too, without bodies), and may rule `fixed` only on one
 still open or verified with a blocking severity (a verifier starts when there is such a finding,
@@ -677,7 +683,9 @@ goal or the title, the tracker key, for a GitHub lane (`source_id` `owner/repo#N
 #N` when the PR is in the issue's repo, else (another repo, or no PR yet) `Closes
 owner/repo#N`, the diff's code lines and files (and how many are assets, when any), the test commands that
 passed on the head, the plan check's outcome, the head's smoke (the harness's result, a
-session's claim and its evidence file count), and the findings of the complete review covering
+session's claim and its evidence file count), the lane's tokens as `stats` totals them (fresh
+input, cache write, cache read and output, `unknown` for a kind no CLI reported, and the session
+count; `none recorded` with no usage), and the findings of the complete review covering
 the head (`review.event_id`) that are open, verified or disputed and do not block, as open (severity, title, path
 and line). A PR new to the lane is `pr.opened` with
 `head_sha` the head, as `work update --pr` records it. A gh failure is `internal`. It prints
@@ -816,10 +824,13 @@ finding on one of `paths` whose title or body has one of `words`, any case), `mi
 standing findings are all the `design_tests` lens's), `clean`, `skipped` (no clone, or a
 commit the clone lacks) or `error` (a session did not run). Each entry is reviewed `--runs`
 times (default 1) in one checkout. `data` is `{pipeline: {id, hash}, runs, entries: [{name,
-run, outcome, why?, findings, known, bug, fallbacks}], per_entry: {name: {outcome: k}},
-totals, score, mean, unused_known}`: a row per entry per run (`run` from 1, `bug` the entry's `what`, null
+run, outcome, why?, findings, known, bug, fallbacks, tokens}], per_entry: {name: {outcome: k}},
+totals, tokens, score, mean, unused_known}`: a row per entry per run (`run` from 1, `bug` the entry's `what`, null
 for a clean one, `fallbacks` the sessions another engine answered, a lane review's
-`fallback_from`), `per_entry` each entry's outcomes as k of `runs` and its `fallbacks` when
+`fallback_from`, `tokens` what that run's sessions used: `uncached_input`, `cache_write`,
+`cache_read` and `output` summed over its lens, fallback and verifier sessions, null when none
+reported it (Codex reports no `cache_write`), and `sessions`; a `skipped` row has none),
+top-level `tokens` the same summed over every row, `per_entry` each entry's outcomes as k of `runs` and its `fallbacks` when
 any, `totals` over every row with `fallbacks` summed, `score`
 hit plus clean over the rows scored (`convention`, `skipped` and `error` are not), and
 `mean` the score of one run, (hit + clean) / rows scored x entries not skipped, to two
@@ -921,10 +932,10 @@ unknown}`, with ids and counts only.
 (`parent`, `subagent`, and `harness` for the sessions `check run review` starts), and `sources`
 has one row per transcript or harness session (`source`, `cli`, `session_id`, `agent_id`,
 `agent_type`, `description`, `models`). Both carry `messages`, `peak_input_total` and the
-sums of `cache_read`, `cache_write`, `output`, `reasoning`, `input_total`, `output_total` and
-`cost_usd` (the CLI's own figure: only harness rows of a Claude session carry one, so a
-transcript source's is null). Only the transcript rows carry `uncached_input`, since Codex events
-recorded before #214 include the cache in it. A sum skips the messages where that field is null, and is
+sums of `uncached_input` (fresh input: `input_total` less `cache_read` where the input includes
+the cache, as Codex's does, so a Codex event recorded before #217 counts right), `cache_read`,
+`cache_write`, `output`, `reasoning`, `input_total` and `output_total`. No dollar figure: an old
+event's `cost_usd` is not read. A sum skips the messages where that field is null, and is
 null when every message has it null. `known` is false when the lane has no usage event.
 
 Where these numbers differ from `lane-stats`:

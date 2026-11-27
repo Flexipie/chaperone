@@ -169,7 +169,7 @@ impl Lane {
 /// A Claude session's answer to the prompt that starts with `header`.
 fn says(header: &str, answer: Value) -> Value {
     let result = json!({"type": "result", "subtype": "success", "is_error": false,
-        "structured_output": answer, "total_cost_usd": 0.01, "session_id": header});
+        "structured_output": answer, "session_id": header});
     json!({"when": header, "stdout": result.to_string()})
 }
 

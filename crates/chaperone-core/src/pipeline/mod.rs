@@ -52,7 +52,7 @@ pub struct Pipeline {
 }
 
 /// How one kind of headless session is started. Its numbers are `[limits]`
-/// entries (`budget_limit` in US cents, `timeout_limit` in seconds),
+/// entries (`tokens_limit` in tokens, `timeout_limit` in seconds),
 /// resolved here.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Runner {
@@ -61,7 +61,10 @@ pub struct Runner {
     pub model: Option<String>,
     /// The built-in tools the session may use, sorted, each once.
     pub tools: Vec<String>,
-    pub budget_cents: i64,
+    /// The tokens a session may use, its four kinds summed; Codex reports
+    /// them only once its turn ends, so a Codex runner has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i64>,
     pub timeout_secs: i64,
     /// The runner that answers when this one's CLI cannot start or its
     /// session fails, never when it times out. Hashed only when set.
@@ -350,9 +353,9 @@ mod tests {
     const V19: &str = include_str!("../../../../pipelines/v19.toml");
     const V19_HASH: &str = "d45442e63a1b77001987bb5d82e987d730c26ddf4ba7c2941b6c09622287f5ea";
     const V20: &str = include_str!("../../../../pipelines/v20.toml");
-    const V20_HASH: &str = "6a3f7d2164708a23e8203889cd4d864b77327e50dc0d6a4b8c6741658ac0e5f0";
+    const V20_HASH: &str = "f69ffa9de3ec4daa17b448c793f596a774afbf15612dc977d9863721f9234c77";
     const V21: &str = include_str!("../../../../pipelines/v21.toml");
-    const V21_HASH: &str = "18e75a12a61350c5baed17d3097100f33a6df3f303d8a0a792d4e9444db7bec8";
+    const V21_HASH: &str = "199eda74860712a78fa24d948387fbbdb030aef21ebac2de945382f8c4e39dad";
 
     const MINI: &str = r#"
 schema = 1
@@ -640,19 +643,18 @@ schema = 2
 id = "t2"
 
 [limits]
-budget = 200
+tokens = 200
 timeout = 900
 
 [runners.lens]
 cli = "claude"
 model = "opus"
 tools = ["Read", "Grep"]
-budget_limit = "budget"
+tokens_limit = "tokens"
 timeout_limit = "timeout"
 
 [runners.second]
 cli = "codex"
-budget_limit = "budget"
 timeout_limit = "timeout"
 
 [checks.review]
@@ -685,7 +687,7 @@ requires = ["a"]
             cli: Cli::Claude,
             model: Some("opus".into()),
             tools: vec!["Grep".into(), "Read".into()],
-            budget_cents: 200,
+            max_tokens: Some(200),
             timeout_secs: 900,
             fallback: None,
         };
@@ -714,7 +716,7 @@ requires = ["a"]
         let edited = Pipeline::load_with_prompts(MINI2, &[("review.md", "Review it.")]);
         assert_ne!(edited.unwrap().hash, base);
         assert_ne!(load2("opus", "haiku").unwrap().hash, base);
-        assert_ne!(load2("budget = 200", "budget = 300").unwrap().hash, base);
+        assert_ne!(load2("tokens = 200", "tokens = 300").unwrap().hash, base);
         assert_eq!(
             load2("id = \"t2\"", "id = \"t2\" # note").unwrap().hash,
             base
@@ -726,7 +728,7 @@ requires = ["a"]
         // would restamp every schema 2 lane.
         assert_eq!(
             base,
-            "7bb88d804e9c9a831e0336800695bd466804fe55eece5eb17b2253260b633e40"
+            "f6cbeff245faeaf26053b828ea9fb0192e7009ab749225cc122f09e216be171f"
         );
     }
 
@@ -738,7 +740,7 @@ requires = ["a"]
 args = { field = "verdict.decision", value = "yes" }"#;
             load2(old, &format!("fn = \"{func}\"\nargs = {{ {args} }}"))
         };
-        let limits = r#"min_limit = "budget", max_limit = "timeout""#;
+        let limits = r#"min_limit = "tokens", max_limit = "timeout""#;
         for (func, good, bad) in [
             (
                 "present",
@@ -824,7 +826,7 @@ args = { field = "verdict.decision", value = "yes" }"#;
             "check review names prompt verdict.md, which this binary does not carry"
         );
         assert_eq!(
-            err(r#"budget_limit = "budget""#, r#"budget_limit = "cash""#),
+            err(r#"tokens_limit = "tokens""#, r#"tokens_limit = "cash""#),
             "runner lens: unknown limit cash"
         );
         assert_eq!(

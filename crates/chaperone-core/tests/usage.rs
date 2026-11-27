@@ -341,7 +341,6 @@ fn a_harness_session_is_one_row() {
         "cacheCreationInputTokens": 5, "outputTokens": 4}});
     let run = Run {
         raw: "not stored".into(),
-        cost_usd: Some(0.5),
         model_usage: usage,
         session_id: Some("sess".into()),
     };
@@ -351,13 +350,11 @@ fn a_harness_session_is_one_row() {
     ]);
     let codex = Run {
         raw: String::new(),
-        cost_usd: None,
         model_usage: json!({"input_tokens": 50, "cached_input_tokens": 40, "output_tokens": 6}),
         session_id: Some("thread".into()),
     };
     let no_id = Run {
         raw: String::new(),
-        cost_usd: Some(1.0),
         model_usage: Value::Null,
         session_id: None,
     };
@@ -382,9 +379,11 @@ fn a_harness_session_is_one_row() {
         serde_json::from_str(&text).unwrap()
     };
     let mut raw = run.model_usage.clone();
-    raw["claude-x"].as_object_mut().unwrap().remove("note");
+    let x = raw["claude-x"].as_object_mut().unwrap();
+    x.remove("note");
+    x.remove("costUSD");
     let want = json!({"source": "harness", "phase": "review", "cli": "claude",
-        "message_id": "run:sess", "origin": "harness", "session_id": "sess", "cost_usd": 0.5,
+        "message_id": "run:sess", "origin": "harness", "session_id": "sess",
         "raw": raw, "uncached_input": 4, "cache_read": 100, "cache_write": 15, "output": 6,
         "reasoning": null, "input_includes_cache": false, "output_includes_reasoning": true,
         "input_total": 119, "output_total": 6});
@@ -406,9 +405,9 @@ fn a_harness_session_is_one_row() {
     assert_eq!(
         (
             &harness["messages"],
-            &harness["cost_usd"],
+            &harness["uncached_input"],
             &harness["input_total"]
         ),
-        (&json!(2), &json!(0.5), &json!(169))
+        (&json!(2), &json!(14), &json!(169))
     );
 }

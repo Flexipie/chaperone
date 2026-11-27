@@ -60,7 +60,7 @@ fn ask<'a>(prompt: &'a str, schema: &'a Value, dir: &'a Path) -> Ask<'a> {
         model: "opus",
         tools: &["Read", "Grep"],
         dir,
-        budget_cents: 150,
+        max_tokens: 1000,
     }
 }
 
@@ -86,7 +86,6 @@ fn an_answer_is_read_from_a_fresh_session() {
         .claude(&ask(&long, &schema, dir.path()), soon())
         .unwrap();
     assert_eq!(answer.output, found);
-    assert_eq!(answer.run.cost_usd, Some(0.0015));
     assert_eq!(
         answer.run.model_usage["claude-haiku-5-5"]["outputTokens"],
         74
@@ -113,7 +112,9 @@ fn an_answer_is_read_from_a_fresh_session() {
     let args = [
         "-p",
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
         "--json-schema",
         r#"{"type":"object"}"#,
         "--model",
@@ -129,8 +130,6 @@ fn an_answer_is_read_from_a_fresh_session() {
         "--strict-mcp-config",
         "--disable-slash-commands",
         "--no-session-persistence",
-        "--max-budget-usd",
-        "1.50",
     ];
     assert_eq!(call["args"], json!(args));
 }
@@ -139,14 +138,13 @@ fn an_answer_is_read_from_a_fresh_session() {
 /// empty answer, and a failure the CLI reports keeps what it cost.
 #[test]
 fn a_run_with_no_answer_says_why() {
-    let stopped = json!({"type": "result", "subtype": "error_max_budget_usd", "is_error": true,
-        "structured_output": null, "total_cost_usd": 1.52, "session_id": "s",
-        "errors": ["Reached maximum budget ($1.5)"]});
+    let stopped = json!({"type": "result", "subtype": "error_max_turns", "is_error": true,
+        "structured_output": null, "session_id": "s", "errors": ["Reached maximum turns (3)"]});
     let api = json!({"type": "result", "subtype": "success", "is_error": true,
         "result": "Invalid API key", "errors": null});
     let no_output = json!({"type": "result", "subtype": "success", "is_error": false});
     let (dir, agent) = agent(json!([
-        {"when": "budget", "stdout": stopped.to_string(), "exit": 1},
+        {"when": "turns", "stdout": stopped.to_string(), "exit": 1},
         {"when": "api", "stdout": api.to_string(), "exit": 1},
         {"when": "crash", "stderr": "boom\n", "exit": 3},
         {"when": "prose", "stdout": "Here is my review."},
@@ -163,16 +161,13 @@ fn a_run_with_no_answer_says_why() {
         subtype,
         message,
         run: spent,
-    } = run("budget", soon())
+    } = run("turns", soon())
     else {
-        panic!("a budget stop was not the CLI's failure");
+        panic!("a turns stop was not the CLI's failure");
     };
-    assert_eq!(subtype, "error_max_budget_usd");
-    assert_eq!(message, "Reached maximum budget ($1.5)");
-    assert_eq!(
-        (spent.cost_usd, spent.raw),
-        (Some(1.52), stopped.to_string())
-    );
+    assert_eq!(subtype, "error_max_turns");
+    assert_eq!(message, "Reached maximum turns (3)");
+    assert_eq!(spent.raw, stopped.to_string());
     let said = "the session failed (success): Invalid API key";
     assert_eq!(run("api", soon()).to_string(), said);
     let crash = RunError::Exit {
@@ -227,4 +222,96 @@ fn a_broken_cli_is_refused() {
         .claude(&ask(&long, &json!({}), dir.path()), soon())
         .unwrap_err();
     assert!(matches!(err, RunError::Io(_)), "{err:?}");
+}
+
+/// A session past its tokens is stopped where it is, not at its end, and
+/// what it used so far is kept, each message counted once.
+#[test]
+fn a_session_past_its_tokens_is_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let message = |id: &str, read: u64| {
+        json!({"type": "assistant", "message": {"id": id, "model": "m", "usage": {
+            "input_tokens": 1, "cache_read_input_tokens": read,
+            "cache_creation_input_tokens": 2, "output_tokens": 3}}})
+    };
+    let init = json!({"type": "system", "subtype": "init", "session_id": "s1"});
+    // b's start is under the cap; its delta's final output passes it.
+    let usage = |output: u64| {
+        json!({"input_tokens": 1, "cache_read_input_tokens": 580,
+            "cache_creation_input_tokens": 2, "output_tokens": output})
+    };
+    let begin = json!({"type": "stream_event", "event": {"type": "message_start",
+        "message": {"id": "b", "model": "m", "usage": usage(0)}}});
+    let delta = json!({"type": "stream_event", "event": {"type": "message_delta",
+        "usage": usage(23)}});
+    let stream = [
+        init,
+        // A later line with less is partial: each kind keeps its largest.
+        message("a", 400),
+        message("a", 100),
+        begin,
+        message("b", 580),
+        delta,
+    ];
+    let lines: Vec<String> = stream.iter().map(Value::to_string).collect();
+    let script = format!(
+        "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo '1 (sh)'; exit 0; }}\n\
+         cat > /dev/null\ncat <<'EOF'\n{}\nEOF\nsleep 30\n",
+        lines.join("\n")
+    );
+    let bin = dir.path().join("claude");
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap();
+    let agent = Agent::probe(bin, [("PATH".into(), path)], soon()).unwrap();
+    let start = Instant::now();
+    let schema = json!({});
+    let err = agent
+        .claude(&ask("go", &schema, dir.path()), soon())
+        .unwrap_err();
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "waited for its end"
+    );
+    let RunError::Failed {
+        subtype,
+        message,
+        run,
+    } = err
+    else {
+        panic!("{err}");
+    };
+    assert_eq!(
+        (subtype.as_str(), message.as_str()),
+        ("max_tokens", "used 1012 tokens, past its cap of 1000")
+    );
+    assert_eq!(run.session_id.as_deref(), Some("s1"));
+    let usage = json!({"m": {"inputTokens": 2, "cacheReadInputTokens": 980,
+        "cacheCreationInputTokens": 4, "outputTokens": 26}});
+    assert_eq!(run.model_usage, usage);
+}
+
+#[test]
+fn a_line_without_end_is_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = "#!/bin/sh\n[ \"$1\" = --version ] && { echo '1 (sh)'; exit 0; }\n\
+                  cat > /dev/null\nhead -c 17000000 /dev/zero | tr '\\0' a\nsleep 30\n";
+    let bin = dir.path().join("claude");
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap();
+    let agent = Agent::probe(bin, [("PATH".into(), path)], soon()).unwrap();
+    let start = Instant::now();
+    let schema = json!({});
+    let err = agent
+        .claude(&ask("go", &schema, dir.path()), soon())
+        .unwrap_err();
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "waited for its end"
+    );
+    assert!(
+        matches!(&err, RunError::Output(m) if m.contains("past")),
+        "{err}"
+    );
 }

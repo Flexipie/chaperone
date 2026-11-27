@@ -315,7 +315,6 @@ fn push(
     let mut f = base.as_object().cloned().unwrap_or_default();
     f.insert("origin".into(), json!("transcript"));
     f.insert("message_id".into(), json!(id));
-    f.insert("cost_usd".into(), Value::Null);
     f.extend(fields.as_object().cloned().unwrap_or_default());
     session.messages += 1;
     scan.usage.push(Usage {
@@ -327,12 +326,12 @@ fn push(
 
 /// R13's allowlist for `raw`: the usage object's counts, and objects of
 /// counts (Claude's `cache_creation`, `server_tool_use`). Strings are
-/// dropped, so no text rides along.
+/// dropped, so no text rides along, and so is `costUSD`: cost is tokens.
 pub(crate) fn counts(u: &Value) -> Value {
     match u {
         Value::Object(m) => Value::Object(
             m.iter()
-                .filter(|(_, v)| v.is_number() || v.is_object())
+                .filter(|(k, v)| *k != "costUSD" && (v.is_number() || v.is_object()))
                 .map(|(k, v)| (k.clone(), counts(v)))
                 .collect(),
         ),

@@ -22,8 +22,14 @@
 # - A finding about a comment never blocks (#332): the design_tests and codex lenses rate it a
 #   `nit` (`review_design_tests.v21.md`, `review_codex.v21.md`). Two lanes in a day lost a round
 #   to a comment rated a blocking `risk`, which no user can hit.
+# - Cost is tokens (#337): the `*_tokens` limits cap a Claude session's tokens, its four kinds
+#   summed, counted by the harness from the session's stream; they were US cents for the CLI's
+#   `--max-budget-usd`, which priced tokens at API rates nobody on a subscription pays. Each is
+#   the old cap at the tokens per dollar its sessions used (lens 533k, plan 698k, verdict 364k,
+#   verifier 344k, over 900 sessions), above every session's peak (1.18M, 0.75M, 0.34M,
+#   0.67M). v20 moved with it, as both load through one runner shape.
 #
-# From v21 on, v20 is not edited, and v21 is the id edited in place (#244's rule, moved from
+# From v21 on, v20 is not edited (but #337), and v21 is the id edited in place (#244's rule, moved from
 # v20): a lane stamped with an older v21 hash still loads this document by id. v21 names
 # v20's other prompt files; a prompt that changes for v21 becomes a new file in
 # pipelines/prompts/ that only v21 names, so v20's prompt digests, and its hash, never move.
@@ -46,14 +52,14 @@ review_attempts = 2
 review_rounds = 3
 verdict_attempts = 2
 plan_attempts = 2
-lens_budget = 400
+lens_tokens = 2_100_000
 lens_timeout = 900
 codex_min_code_lines = 200
-verifier_budget = 400
+verifier_tokens = 1_400_000
 verifier_timeout = 900
-verdict_budget = 400
+verdict_tokens = 1_500_000
 verdict_timeout = 900
-plan_budget = 300
+plan_tokens = 2_100_000
 plan_timeout = 600
 
 # --- runners and checks ----------------------------------------------------
@@ -62,12 +68,11 @@ plan_timeout = 600
 cli = "claude"
 model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "lens_budget"
+tokens_limit = "lens_tokens"
 timeout_limit = "lens_timeout"
 
 [runners.codex_lens]
 cli = "codex"
-budget_limit = "lens_budget"
 timeout_limit = "lens_timeout"
 fallback = "codex_fallback"
 
@@ -75,28 +80,28 @@ fallback = "codex_fallback"
 cli = "claude"
 model = "claude-sonnet-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "lens_budget"
+tokens_limit = "lens_tokens"
 timeout_limit = "lens_timeout"
 
 [runners.verifier]
 cli = "claude"
 model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "verifier_budget"
+tokens_limit = "verifier_tokens"
 timeout_limit = "verifier_timeout"
 
 [runners.verdict]
 cli = "claude"
 model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "verdict_budget"
+tokens_limit = "verdict_tokens"
 timeout_limit = "verdict_timeout"
 
 [runners.plan]
 cli = "claude"
 model = "claude-opus-5-5"
 tools = ["Read", "Grep", "Glob"]
-budget_limit = "plan_budget"
+tokens_limit = "plan_tokens"
 timeout_limit = "plan_timeout"
 
 [checks.review_correctness]

@@ -40,7 +40,7 @@ struct RawRunner {
     model: Option<String>,
     #[serde(default)]
     tools: Vec<String>,
-    budget_limit: String,
+    tokens_limit: Option<String>,
     timeout_limit: String,
     fallback: Option<String>,
 }
@@ -174,7 +174,7 @@ fn runners(
             cli: r.cli,
             model: r.model,
             tools,
-            budget_cents: limit(&r.budget_limit)?,
+            max_tokens: r.tokens_limit.as_deref().map(limit).transpose()?,
             timeout_secs: limit(&r.timeout_limit)?,
             fallback: r.fallback,
         };

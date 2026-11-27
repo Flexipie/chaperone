@@ -30,7 +30,8 @@ The hash is SHA-256, lowercase hex, of this JSON:
 
 Amended for schema 2 (2026-11-10): a schema 2 document also hashes `"schema": 2`,
 `"runners"` (each with its two limits resolved to numbers, `budget_cents` and
-`timeout_secs`, and its tools sorted with repeats dropped) and `"checks"` (each with
+`timeout_secs`, and its tools sorted with repeats dropped; from #337 `max_tokens`, absent
+on a runner with none, replaces `budget_cents`) and `"checks"` (each with
 `prompt_sha256`, the SHA-256 of its prompt file's text). A changed prompt or model is
 then a new stamp, so cohorts stay comparable. Schema 1 hashes are unchanged, and a
 schema 1 document that carries `[runners]` or `[checks]` does not load.
@@ -45,6 +46,10 @@ Amended for v21 (2026-11-22): the id edited in place moves from v20 to v21. v20 
 longer edited, so its hash is fixed. v21 starts as v20's rules and names v20's prompt
 files; a prompt that changes for v21 is a new file that only v21 names, so a shared file
 never changes under v20.
+
+Amended for token limits (2026-11-27, #337): the runner limit changed from US cents to
+tokens, a change to the runner shape both documents load through, so v20 was edited once
+more with v21 and both hashes moved. Lanes in flight on either id keep their older stamp.
 
 ## Alternatives considered
 

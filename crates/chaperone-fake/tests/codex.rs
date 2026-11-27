@@ -77,7 +77,6 @@ fn an_answer_is_read_from_the_last_message() {
     let thread = "01a1c4b6-2b33-7652-a401-1da736a13067";
     assert_eq!(answer.run.session_id.as_deref(), Some(thread));
     assert_eq!(answer.run.model_usage["input_tokens"], 21098);
-    assert_eq!(answer.run.cost_usd, None);
 
     let call = calls(dir.path()).pop().unwrap();
     assert_eq!(call["prompt"], "review this");

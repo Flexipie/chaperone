@@ -12,16 +12,18 @@
 //! A session runs in a process group of its own ([`child::run_input`]), so
 //! a Ctrl-C on chaperone does not reach it: it runs on to its own end.
 
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 use crate::child::{self, Failed};
 
@@ -78,10 +80,11 @@ pub struct Ask<'a> {
     pub model: &'a str,
     pub tools: &'a [&'a str],
     pub dir: &'a Path,
-    pub budget_cents: u32,
+    /// The tokens the session may use, its four kinds summed.
+    pub max_tokens: u64,
 }
 
-/// One question for Codex, which takes no tool list and no budget: the
+/// One question for Codex, which takes no tool list and no token cap: the
 /// deadline is its only bound. With no `model`, Codex picks its default.
 pub struct CodexAsk<'a> {
     pub prompt: &'a str,
@@ -95,8 +98,7 @@ pub struct CodexAsk<'a> {
 pub struct Run {
     /// The CLI's whole result, for the evidence store.
     pub raw: String,
-    pub cost_usd: Option<f64>,
-    /// Claude's `modelUsage` (tokens and cost per model), or the `usage`
+    /// Claude's `modelUsage` (tokens per model), or the `usage`
     /// of Codex's turn (tokens only).
     pub model_usage: Value,
     pub session_id: Option<String>,
@@ -121,8 +123,9 @@ pub enum RunError {
     #[error("{0}")]
     Io(String),
     /// The CLI's own result says it failed: `subtype` is its word
-    /// (`error_max_budget_usd`, `error_max_turns`, or `success` on an API
-    /// error; Codex's `turn.failed`), `message` what it gave as the reason.
+    /// (`error_max_turns`, or `success` on an API error; Codex's
+    /// `turn.failed`), `message` what it gave as the reason. Or the harness
+    /// stopped it past its tokens: `max_tokens`.
     #[error("the session failed ({subtype}): {message}")]
     Failed {
         subtype: String,
@@ -135,7 +138,8 @@ pub enum RunError {
     Output(String),
 }
 
-/// The fields read of `claude -p --output-format json`.
+/// The fields read of the result line of `claude -p --output-format
+/// stream-json`.
 #[derive(Deserialize)]
 struct ClaudeResult {
     #[serde(default)]
@@ -144,10 +148,104 @@ struct ClaudeResult {
     errors: Option<Vec<Value>>,
     result: Option<String>,
     structured_output: Option<Value>,
-    total_cost_usd: Option<f64>,
     #[serde(default, rename = "modelUsage")]
     model_usage: Value,
     session_id: Option<String>,
+}
+
+/// What a Claude session's stream said so far: its result line, its
+/// session, and per API message its model and its input, cache read, cache
+/// write and output tokens, the largest reported. An `assistant` line's
+/// output is partial; the message's `message_delta` (with
+/// `--include-partial-messages`, after the `message_start` that names it)
+/// has the final count.
+#[derive(Default)]
+struct Stream {
+    result: Option<String>,
+    session_id: Option<String>,
+    messages: BTreeMap<String, (String, [u64; 4])>,
+    /// The message `message_start` began, which a `message_delta` counts to.
+    current: Option<String>,
+    /// The tokens used when they passed the cap.
+    over: Option<u64>,
+}
+
+/// Claude's `modelUsage` keys, in [`Stream`]'s order.
+const MODEL_USAGE: [&str; 4] = [
+    "inputTokens",
+    "cacheReadInputTokens",
+    "cacheCreationInputTokens",
+    "outputTokens",
+];
+
+impl Stream {
+    /// Reads one line of the stream; false once its tokens pass `cap`.
+    fn line(&mut self, line: &[u8], cap: u64) -> bool {
+        let Ok(event) = serde_json::from_slice::<Value>(line) else {
+            return true;
+        };
+        match event["type"].as_str() {
+            Some("result") => self.result = Some(String::from_utf8_lossy(line).into_owned()),
+            Some("system") if self.session_id.is_none() => {
+                self.session_id = event["session_id"].as_str().map(String::from);
+            }
+            Some("assistant") => self.count(&event["message"], &event["message"]["usage"]),
+            Some("stream_event") => match event["event"]["type"].as_str() {
+                Some("message_start") => {
+                    let message = &event["event"]["message"];
+                    self.current = message["id"].as_str().map(String::from);
+                    self.count(message, &message["usage"]);
+                }
+                Some("message_delta") => self.count(&Value::Null, &event["event"]["usage"]),
+                _ => return true,
+            },
+            _ => return true,
+        }
+        let used = self.messages.values().flat_map(|(_, c)| c).sum();
+        if used > cap {
+            self.over = Some(used);
+            return false;
+        }
+        true
+    }
+
+    /// Counts `usage` to `message`'s id, else to the current message.
+    fn count(&mut self, message: &Value, usage: &Value) {
+        let Some(id) = message["id"]
+            .as_str()
+            .map(String::from)
+            .or(self.current.clone())
+        else {
+            return;
+        };
+        let n = |k: &str| usage[k].as_u64().unwrap_or(0);
+        let counts = [
+            n("input_tokens"),
+            n("cache_read_input_tokens"),
+            n("cache_creation_input_tokens"),
+            n("output_tokens"),
+        ];
+        let (model, kept) = self.messages.entry(id).or_default();
+        if let Some(m) = message["model"].as_str() {
+            *model = m.into();
+        }
+        for (k, n) in kept.iter_mut().zip(counts) {
+            *k = (*k).max(n);
+        }
+    }
+
+    /// The messages' counts per model, as a result's `modelUsage`: what a
+    /// session stopped before its result used.
+    fn model_usage(&self) -> Value {
+        let mut out = Map::new();
+        for (model, counts) in self.messages.values() {
+            let row = out.entry(model.clone()).or_insert_with(|| json!({}));
+            for (k, n) in MODEL_USAGE.iter().zip(counts) {
+                row[*k] = json!(row[*k].as_u64().unwrap_or(0) + n);
+            }
+        }
+        out.into()
+    }
 }
 
 /// The events read of `codex exec --json`, one JSON object a line.
@@ -242,9 +340,15 @@ impl Agent {
         match child::run_input(cmd, input, deadline, OUT_BYTES) {
             Ok(done) if done.cut => Err(RunError::Output(format!("past {OUT_BYTES} bytes"))),
             Ok(done) => Ok(done),
-            Err(Failed::TimedOut) => Err(RunError::TimedOut),
-            Err(Failed::Spawn(e)) => Err(RunError::Spawn(format!("{}: {e}", self.bin.display()))),
-            Err(Failed::Wait(e)) => Err(RunError::Io(e.to_string())),
+            Err(e) => Err(self.failed(e)),
+        }
+    }
+
+    fn failed(&self, e: Failed) -> RunError {
+        match e {
+            Failed::TimedOut => RunError::TimedOut,
+            Failed::Spawn(e) => RunError::Spawn(format!("{}: {e}", self.bin.display())),
+            Failed::Wait(e) => RunError::Io(e.to_string()),
         }
     }
 
@@ -259,21 +363,54 @@ impl Agent {
     /// writable paths (the directory, a temp directory) are the user
     /// settings', as lists merge and cannot be emptied here. A CLI too old
     /// for a sandbox key drops it without a word in `-p` mode, and nothing
-    /// here checks the version yet.
+    /// here checks the version yet. Its tokens are counted from each
+    /// message's usage as it streams (output as far as reported), and past
+    /// `max_tokens` the session is stopped.
     pub fn claude(&self, ask: &Ask<'_>, deadline: Instant) -> Result<Answer, RunError> {
-        let budget = format!("{}.{:02}", ask.budget_cents / 100, ask.budget_cents % 100);
         let mut cmd = self.command(ask.dir);
-        cmd.args(["-p", "--output-format", "json", "--json-schema"])
-            .arg(ask.schema.to_string())
-            .args(["--model", ask.model, "--tools", &ask.tools.join(",")])
-            .args(["--permission-mode", "dontAsk", "--setting-sources", "user"])
-            .args(["--settings", SANDBOX])
-            .args(["--strict-mcp-config", "--disable-slash-commands"])
-            .args(["--no-session-persistence", "--max-budget-usd", &budget]);
-        let done = self.run(&mut cmd, Some(ask.prompt.as_bytes()), deadline)?;
-        let raw = String::from_utf8_lossy(&done.out).into_owned();
-        // A failure (the budget, the turns, the API) exits 1 and its
-        // result still says why, and what it cost.
+        cmd.args([
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--json-schema",
+        ])
+        .arg(ask.schema.to_string())
+        .args(["--model", ask.model, "--tools", &ask.tools.join(",")])
+        .args(["--permission-mode", "dontAsk", "--setting-sources", "user"])
+        .args(["--settings", SANDBOX])
+        .args(["--strict-mcp-config", "--disable-slash-commands"])
+        .arg("--no-session-persistence");
+        let stream = Arc::new(Mutex::new(Stream::default()));
+        let seen = Arc::clone(&stream);
+        let cap = ask.max_tokens;
+        let watch: child::Watch = Box::new(move |line| {
+            let mut seen = seen.lock().unwrap_or_else(PoisonError::into_inner);
+            seen.line(line, cap)
+        });
+        let prompt = Some(ask.prompt.as_bytes());
+        let done = child::run_watched(&mut cmd, prompt, deadline, watch, OUT_BYTES);
+        let done = done.map_err(|e| self.failed(e))?;
+        if done.cut {
+            return Err(RunError::Output(format!("a line past {OUT_BYTES} bytes")));
+        }
+        let stream = std::mem::take(&mut *stream.lock().unwrap_or_else(PoisonError::into_inner));
+        if let Some(used) = stream.over {
+            let run = Run {
+                raw: String::new(),
+                model_usage: stream.model_usage(),
+                session_id: stream.session_id,
+            };
+            return Err(RunError::Failed {
+                subtype: "max_tokens".into(),
+                message: format!("used {used} tokens, past its cap of {cap}"),
+                run: Box::new(run),
+            });
+        }
+        let raw = stream.result.unwrap_or_default();
+        // A failure (the turns, the API) exits 1 and its
+        // result still says why, and its tokens.
         let Ok(result) = serde_json::from_str::<ClaudeResult>(&raw) else {
             return Err(match done.status.success() {
                 true => RunError::Output("not the CLI's JSON result".into()),
@@ -285,7 +422,6 @@ impl Agent {
         };
         let run = Run {
             raw,
-            cost_usd: result.total_cost_usd,
             model_usage: result.model_usage,
             session_id: result.session_id,
         };
@@ -319,7 +455,7 @@ impl Agent {
     /// user's `config.toml` (its MCP servers run outside the sandbox), any
     /// `.rules` file, nor the `AGENTS.md` of the directory it runs in (the
     /// commit under review would steer its own reviewer); the login still
-    /// comes from `CODEX_HOME`. It reports no cost.
+    /// comes from `CODEX_HOME`. It reports no cache writes.
     pub fn codex(&self, ask: &CodexAsk<'_>, deadline: Instant) -> Result<Answer, RunError> {
         let dir = scratch().map_err(|e| RunError::Io(e.to_string()))?;
         let answer = self.codex_in(&dir, ask, deadline);
@@ -366,7 +502,6 @@ impl Agent {
         }
         let run = Run {
             raw,
-            cost_usd: None,
             model_usage,
             session_id,
         };

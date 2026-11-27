@@ -25,7 +25,9 @@ fn git(wt: &Path, args: &[&str]) -> String {
 /// A Claude session's answer to the prompt that has `when` in it.
 fn says(when: &str, answer: Value) -> Value {
     let result = json!({"type": "result", "subtype": "success", "is_error": false,
-        "structured_output": answer, "total_cost_usd": 0.01, "session_id": when});
+        "structured_output": answer, "session_id": when,
+        "modelUsage": {"m": {"inputTokens": 1, "cacheCreationInputTokens": 2,
+            "cacheReadInputTokens": 3, "outputTokens": 4}}});
     json!({"when": when, "stdout": result.to_string()})
 }
 
@@ -170,6 +172,13 @@ fn each_outcome_is_scored() {
     let (_, only) = eval("set.toml", &["--only", "hit"]);
     assert_eq!(only["entries"].as_array().unwrap().len(), 1);
     assert_eq!(only["score"], "1/1");
+    // Three Claude lenses and the verifier; the Codex lens is skipped for size.
+    let spent = json!({"uncached_input": 4, "cache_write": 8, "cache_read": 12, "output": 16,
+        "sessions": 4});
+    assert_eq!(
+        (&only["tokens"], &only["entries"][0]["tokens"]),
+        (&spent, &spent)
+    );
     let (_, twice) = eval("set.toml", &["--runs", "2"]);
     assert_eq!(twice["entries"].as_array().unwrap().len(), 18);
     assert_eq!(twice["entries"][1]["run"], 2);
