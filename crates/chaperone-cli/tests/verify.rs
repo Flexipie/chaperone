@@ -676,6 +676,41 @@ fn an_over_cap_diff_on_v21_reaches_review_and_a_cut_blocks() {
     }
 }
 
+/// On v21 the design and tests lens is told a comment finding is a `nit`;
+/// one that says so does not block, and verify passes to the verdict.
+#[test]
+fn a_comment_finding_on_v21_is_a_nit_that_never_blocks() {
+    let nit = json!({"findings": [{"severity": "nit", "title": "comment restates the code",
+        "body": "lib.rs:2 `// b`: delete", "path": "lib.rs", "line": 2}]});
+    let none = json!({"findings": []});
+    let yes = json!({"decision": "yes", "why": "w", "proven": ["p"], "not_proven": []});
+    let risk = json!({"findings": [{"severity": "risk", "title": "r", "body": "why",
+        "path": "lib.rs", "line": null}]});
+    let runs = json!([
+        says("# Plan check", risk),
+        says("# Verify the review's findings", json!({"rulings": []})),
+        says("# Merge verdict", yes),
+        says("# Review: correctness", none.clone()),
+        says("# Review: the change against its goal", none),
+        says("- A comment (stale, wrong, restating the code", nit),
+    ]);
+    let lane = claimed_in("v21", runs, "");
+    lane.plan("1. do it\n");
+    lane.commit();
+    lane.answer("lane", "accept");
+    lane.smoke();
+    let out = lane.verify();
+    let passed = ["diff", "review", "verdict"].map(|c| (c.into(), true, false));
+    assert_eq!(
+        (steps(&out), &out["stopped"]),
+        (passed.into(), &Value::Null)
+    );
+    let findings = lane.findings();
+    let comment = findings.iter().find(|f| f["severity"] == "nit").unwrap();
+    assert_eq!(comment["blocks"], false);
+    assert_eq!(lane.handoff().0, 0);
+}
+
 /// While another run holds the lane's lock, verify is a conflict and
 /// writes nothing; a lane that does not exist is not_found, as for
 /// `check run`.

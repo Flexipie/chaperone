@@ -15,10 +15,13 @@
 #   (`pr.merged`) can hand off done without a verdict on that head (`pr_merged` in
 #   `done_verdict`), and that `phase.entered` says `merged_without_verdict`. After an owner
 #   merge no verdict could be recorded, so the lane could never close.
+# - A finding about a comment never blocks (#332): the design_tests and codex lenses rate it a
+#   `nit` (`review_design_tests.v21.md`, `review_codex.v21.md`). Two lanes in a day lost a round
+#   to a comment rated a blocking `risk`, which no user can hit.
 #
 # From v21 on, v20 is not edited, and v21 is the id edited in place (#244's rule, moved from
 # v20): a lane stamped with an older v21 hash still loads this document by id. v21 names
-# v20's prompt files today; a prompt that changes for v21 becomes a new file in
+# v20's other prompt files; a prompt that changes for v21 becomes a new file in
 # pipelines/prompts/ that only v21 names, so v20's prompt digests, and its hash, never move.
 # The semantic hash covers the schema, [limits], [runners], [checks] with each prompt's
 # sha256, the gates and the transitions. Comments, key order, `published` and [cohort] do
@@ -97,7 +100,7 @@ prompt = "review_correctness.md"
 
 [checks.review_design_tests]
 runner = "lens"
-prompt = "review_design_tests.md"
+prompt = "review_design_tests.v21.md"
 
 [checks.review_intent]
 runner = "lens"
@@ -105,7 +108,7 @@ prompt = "review_intent.md"
 
 [checks.review_codex]
 runner = "codex_lens"
-prompt = "review_codex.md"
+prompt = "review_codex.v21.md"
 
 [checks.review_verifier]
 runner = "verifier"

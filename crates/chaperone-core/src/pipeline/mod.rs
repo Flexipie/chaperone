@@ -251,12 +251,20 @@ const PROMPT_FILES: &[(&str, &str)] = &[
         include_str!("../../../../pipelines/prompts/review_codex.md"),
     ),
     (
+        "review_codex.v21.md",
+        include_str!("../../../../pipelines/prompts/review_codex.v21.md"),
+    ),
+    (
         "review_correctness.md",
         include_str!("../../../../pipelines/prompts/review_correctness.md"),
     ),
     (
         "review_design_tests.md",
         include_str!("../../../../pipelines/prompts/review_design_tests.md"),
+    ),
+    (
+        "review_design_tests.v21.md",
+        include_str!("../../../../pipelines/prompts/review_design_tests.v21.md"),
     ),
     (
         "review_intent.md",
@@ -344,7 +352,7 @@ mod tests {
     const V20: &str = include_str!("../../../../pipelines/v20.toml");
     const V20_HASH: &str = "6a3f7d2164708a23e8203889cd4d864b77327e50dc0d6a4b8c6741658ac0e5f0";
     const V21: &str = include_str!("../../../../pipelines/v21.toml");
-    const V21_HASH: &str = "a22ac5759e6ad2443b5ca0b00fde71a7a5969a86d843b4e6188e95ad01b09c5b";
+    const V21_HASH: &str = "e6c72b503c931c2161905e77d907932068de25291eca50fcafa2a4df3ee70f18";
 
     const MINI: &str = r#"
 schema = 1
@@ -403,12 +411,17 @@ requires = ["a"]
                 let file = PROMPT_FILES.iter().find(|(f, _)| *f == check.prompt);
                 assert_eq!(check.text, file.unwrap().1, "{name}");
             }
-            // Every prompt file is a check's.
-            assert_eq!(p.checks.len(), PROMPT_FILES.len());
             // Only the gated handoff runs, so there is no other row.
             assert!(p.transitions.iter().all(|t| t.id == "handoff"));
             assert_eq!(by_id(id).unwrap().hash, hash);
         }
+        // Every prompt file is a check's.
+        let named: std::collections::BTreeSet<_> = KNOWN
+            .iter()
+            .flat_map(|p| p.checks.values())
+            .map(|c| c.prompt.as_str())
+            .collect();
+        assert_eq!(named.len(), PROMPT_FILES.len());
     }
 
     #[test]
