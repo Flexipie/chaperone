@@ -1185,3 +1185,99 @@ fn a_review_under_a_forged_base_ref_gets_no_verdict() {
     assert!(err["message"].as_str().unwrap().contains(why), "{err}");
     assert_eq!(lane.events("1 = 1"), before);
 }
+
+/// v21 caps a lane at `review_rounds` (3) fresh reviews; one from before
+/// the cap (no `round`) counts for nothing. From the second review the
+/// lenses are shown only the diff since the last reviewed commit, the
+/// verifier still the whole change. At the cap a blocking finding is
+/// needs-you, a new commit's review is refused until the owner raises the
+/// limit, and a replay is never refused.
+#[test]
+fn review_rounds_cap_a_lane_and_rereview_only_the_diff_since() {
+    let nit = json!({"findings": [{"severity": "nit", "title": "n", "body": "b",
+        "path": "lib.rs", "line": null}]});
+    let blocker = json!({"findings": [{"severity": "blocker", "title": "x", "body": "b",
+        "path": "lib.rs", "line": null}]});
+    let mut runs = claude(nit, json!([]));
+    runs.as_array_mut()
+        .unwrap()
+        .insert(3, says("+BLOCK", blocker));
+    let lane = claimed_in("v21", runs, "");
+    lane.plan("1. do it\n");
+    let review = || lane.run("lane", &["check", "run", "review", "--work", "1"]);
+    let commit = |body: &str| {
+        git(
+            &lane.wt,
+            &["commit", "-qam", "c"],
+            &[("lib.rs", body.as_bytes())],
+        );
+        lane.head()
+    };
+    let prompt = |header: &str| -> String {
+        let log = std::fs::read_to_string(lane.dir.path().join("bin/claude.log")).unwrap();
+        let calls = log
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap());
+        let mut call = calls.filter(|c| c["prompt"].as_str().unwrap().starts_with(header));
+        call.next_back().unwrap()["prompt"].as_str().unwrap().into()
+    };
+    let (lens, verifier) = ("# Review: correctness", "# Verify the review's findings");
+    let since = "## The diff since the last review";
+
+    let first = commit("a\nKEEP\n1\n");
+    lane.answer("lane", "accept");
+    assert_eq!(review().0, 0);
+    assert!(!prompt(lens).contains(since));
+    let conn = rusqlite::Connection::open(&lane.db).unwrap();
+    let old = "UPDATE events SET payload_json = json_remove(payload_json, '$.round')
+        WHERE payload_json->>'check' = 'review'";
+    conn.execute(old, []).unwrap();
+
+    commit("a\nKEEP\n2\n");
+    assert_eq!(review().0, 0);
+    let shown = prompt(lens);
+    assert!(shown.contains(since) && shown.contains(&first), "{shown}");
+    assert!(
+        shown.contains("-1\n+2") && !shown.contains("+KEEP"),
+        "{shown}"
+    );
+    assert!(prompt(verifier).contains("+KEEP"));
+    let p = lane.review();
+    assert_eq!(
+        (&p["round"], &p["reviewed_since"]),
+        (&json!(1), &json!(first))
+    );
+
+    commit("a\nKEEP\n3\n");
+    assert_eq!(review().0, 0);
+    let third = commit("a\nKEEP\nBLOCK\n");
+    let out = lane.verify();
+    let why = "3 finding(s) still block; the lane is at its review_rounds limit of 3 fresh \
+               reviews: needs you";
+    assert_eq!(
+        out["stopped"],
+        json!({"check": "review", "why": why}),
+        "{out}"
+    );
+
+    commit("a\nKEEP\nfixed\n");
+    let (code, err) = review();
+    assert_eq!((code, &err["code"]), (1, &json!("invalid_input")), "{err}");
+    let message = err["message"].as_str().unwrap();
+    assert!(message.starts_with("lane 1 has had 3 fresh reviews, its limit review_rounds 3"));
+    assert!(message.contains("`chaperone check waive rounds --work 1 --rounds <n>`"));
+    let raise = [
+        "check", "waive", "rounds", "--work", "1", "--rounds", "4", "--reason", "r",
+    ];
+    let (code, err) = lane.run("lane", &raise);
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(lane.run("owner", &raise).0, 0);
+    let (code, out) = review();
+    assert_eq!(
+        (code, &out["payload"]["reviewed_since"]),
+        (0, &json!(third)),
+        "{out}"
+    );
+    let (code, again) = review();
+    assert_eq!((code, &again["replayed"]), (0, &json!(true)), "{again}");
+}

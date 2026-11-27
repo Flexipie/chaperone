@@ -5,7 +5,7 @@
 
 mod gated;
 
-use chaperone_core::checks::{Attached, CheckInput};
+use chaperone_core::checks::{Attached, CheckInput, ROUNDS_WAIVER, SIZE_WAIVER};
 use chaperone_core::ledger::{Actor, Applied};
 use chaperone_core::pipeline::{self, Fact};
 use chaperone_core::review;
@@ -232,7 +232,10 @@ fn the_cap_counts_code_and_only_the_owner_raises_it() {
         &["commit.code_lines", "commit.size_waived"],
     );
     assert_eq!(v.ready(OTHER), over);
-    let waive = |who: &Actor, lines| v.ledger.size_waive(who, 1, OTHER, lines, "one piece");
+    let waive = |who: &Actor, lines| {
+        v.ledger
+            .limit_waive(who, 1, OTHER, SIZE_WAIVER, lines, "one piece")
+    };
     refused(waive(&v.lane, 500).unwrap(), "has held lane 1");
     refused(waive(&v.owner, 0).unwrap(), "lines, an integer above 0");
     refused(
@@ -253,6 +256,28 @@ fn the_cap_counts_code_and_only_the_owner_raises_it() {
     raw(&v.ledger, 2, "diff", "harness", diff).unwrap();
     let facts = v.ledger.project(2, Some(HEAD)).unwrap();
     assert_eq!(facts.get("commit.size_waived"), &Fact::Bool(false));
+}
+
+/// The owner's `rounds_waiver` is written with `rounds` above 0 only, and
+/// never from a session that has held the lane.
+#[test]
+fn only_the_owner_raises_the_review_rounds() {
+    let v = Gated::new("code");
+    let waive = |who: &Actor, n| {
+        v.ledger
+            .limit_waive(who, 1, HEAD, ROUNDS_WAIVER, n, "rethought")
+    };
+    refused(waive(&v.lane, 4).unwrap(), "has held lane 1");
+    refused(waive(&v.owner, 0).unwrap(), "rounds, an integer above 0");
+    refused(
+        raw(&v.ledger, 1, "rounds_waiver", "session", json!({})),
+        "above 0",
+    );
+    let p = waive(&v.owner, 4).unwrap().unwrap().payload;
+    assert_eq!(
+        (p.check.as_deref(), &p.rest["rounds"]),
+        (Some("rounds_waiver"), &json!(4))
+    );
 }
 
 /// An amend with the same tree: the review and the verdict carried to it

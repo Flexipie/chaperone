@@ -123,9 +123,9 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `spec update` | `<spec> --file <path\|-> --reason <r> [--expected-version <n>]` | write |
 | `spec approve` | `<spec>` | write |
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
-| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round\|size_waiver --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]... [--run <script>]` (a `size_waiver` is refused here, having no `--lines`: `check waive size` records it) | write |
+| `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round\|size_waiver\|rounds_waiver --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]... [--run <script>]` (a `size_waiver` or `rounds_waiver` is refused here, having no `--lines` or `--rounds`: `check waive size` and `check waive rounds` record them) | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan\|smoke --work <id> [--file <plan>]` | write |
-| `check waive` | `plan --work <id> --reason <r>`, `size --work <id> --lines <n> --reason <r>` | write |
+| `check waive` | `plan --work <id> --reason <r>`, `size --work <id> --lines <n> --reason <r>`, `rounds --work <id> --rounds <n> --reason <r>` | write |
 | `check prune` | | read, removes directories |
 | `verify` | `--work <id>` | write |
 | `pr open` | `--work <id> [--title <t>] [--draft]` | write, pushes, calls gh |
@@ -465,7 +465,15 @@ worktree before anything runs (a diff or patch-id git cannot give is refused, `i
 nothing written), three lines of context and submodule pointer changes shown whatever its diff
 config or `GIT_DIFF_OPTS`, and any change to the lane's diff, whitespace or a file mode
 included, gives a new one. A commit that already has it
-replays it, so flipping between commits of a tree appends nothing after the first carry. Else a tree that already has
+replays it, so flipping between commits of a tree appends nothing after the first carry. Else,
+on a pipeline whose `[limits]` holds `review_rounds` (v21: 3, 1 or more), a lane that already
+has that many fresh reviews (complete harness reviews numbered `round`, not carried; one from
+before the limit has no `round` and does not count; an incomplete one never counts, as it
+leaves nothing to fix and `review_attempts` bounds it), or the newest owner `rounds_waiver`'s
+`rounds`, is refused (`invalid_input`, naming the limit, "needs you", and `check waive
+rounds`): two fix rounds, then the owner decides. `verify` stopping on findings that still
+block at that limit adds "the lane is at its review_rounds limit of <n> fresh reviews: needs
+you". Else a tree that already has
 `review_attempts` reviews by this pipeline, complete or not, is refused (`invalid_input`,
 naming the limit): a lens that fails every time would otherwise make each rerun pay for the
 others again, so the owner waives the findings or the lane pushes a commit that changes the
@@ -490,7 +498,12 @@ The lenses run at once, each a fresh headless session in the checkout (no lane
 variables, Claude Code's sandbox; Codex read-only, without the user's config, `.rules` files
 or the checkout's `AGENTS.md`), given its prompt file and then the facts: the commit, the merge
 base, the changed files with their counts and the diff, cut after 128 KiB at a line with a
-note saying where the rest is. Only `intent` is also told what the lane is for: the work
+note saying where the rest is. From a lane's second review under `review_rounds`, when the
+commit of its newest complete harness review (carried or not) is an ancestor of this one, the
+lenses are shown the files of the whole change but only `git diff <that commit> <commit>`, told
+to raise findings only on what it changes and that the rest was reviewed (`reviewed_since` on
+the review); after a rebase it is not an ancestor and they get the whole diff. The verifier
+and the verdict always get the whole diff. Only `intent` is also told what the lane is for: the work
 item's title, its slice of the spec, and the `goal` of its newest handoff's brief; and, when
 there is one, the newest smoke on the commit as the verdict is shown it, the session's claim
 labelled as one. No lens is
@@ -615,6 +628,12 @@ and refused with `plan` (`invalid_input`). It raises that lane's limit alone, fo
 `code_lines_at_most` and `pr open` read it as `commit.size_waived`. Uncounted files still refuse.
 A pipeline with no `code_lines_at_most` gate (v21 on) needs none: past the cap its review asks
 what to cut (`over_cap` on the review, docs/events.md).
+
+`check waive rounds --rounds <n>` is the owner's raise of the cap on fresh reviews
+(`review_rounds`, v21: 3) for one lane, after reconsidering its approach. It appends one
+`rounds_waiver` the same way (`rounds` `<n>`, above 0), refused from any session that has held
+the lane; the newest one is that lane's limit, in place of the pipeline's. `--rounds` is
+required with `rounds` and refused with `plan` and `size`, as `--lines` is refused with `rounds`.
 
 On v21 `done_verdict` is also met by `pr_merged`: the lane's current PR has a `pr.merged`
 (`pr.merged`), so after an owner merge with no verdict on the head the lane still hands off done.

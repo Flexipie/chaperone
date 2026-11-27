@@ -202,6 +202,10 @@ pub struct FindingMove {
 /// the rest are countersigned: written by a session fresh to the lane.
 pub const WAIVER_KINDS: &[&str] = &["fixed", "disproved", "scope", "deferred", "accepted"];
 
+/// [`Ledger::limit_waive`]'s waivers: the check and the field it sets.
+pub const SIZE_WAIVER: (&str, &str) = ("size_waiver", "lines");
+pub const ROUNDS_WAIVER: (&str, &str) = ("rounds_waiver", "rounds");
+
 /// The severities that do not block. Nothing checks the severity a review
 /// writes, so the rest block, a misspelt or unknown one included: a read
 /// that fails closed. `convention` may block under a stricter profile.
@@ -375,15 +379,18 @@ impl Ledger {
         self.session_check(actor, work, payload, false)
     }
 
-    /// The owner's size waiver (`check waive size`): lane `work`'s
-    /// `code_lines` limit raised to `lines`, on the commit it is on. The
-    /// write refuses it from a session that has held the lane.
-    pub fn size_waive(
+    /// The owner's raise of one of lane `work`'s limits, on the commit it is
+    /// on: `size_waiver` (`check waive size`) sets `lines`, its `code_lines`;
+    /// `rounds_waiver` (`check waive rounds`) sets `rounds`, its
+    /// `review_rounds`. The write refuses it from a session that has held
+    /// the lane.
+    pub fn limit_waive(
         &self,
         actor: &Actor,
         work: i64,
         head: &str,
-        lines: i64,
+        (check, field): (&str, &str),
+        to: i64,
         note: &str,
     ) -> Checked<Recorded> {
         if !one_line(note) {
@@ -392,14 +399,14 @@ impl Ledger {
             ));
         }
         let mut payload = Payload {
-            check: Some("size_waiver".into()),
+            check: Some(check.into()),
             outcome: Some("ran".into()),
             head_sha: Some(head.into()),
             ..Payload::default()
         };
         payload
             .rest
-            .extend([("lines".into(), json!(lines)), ("note".into(), json!(note))]);
+            .extend([(field.into(), json!(to)), ("note".into(), json!(note))]);
         self.session_check(actor, work, payload, false)
     }
 

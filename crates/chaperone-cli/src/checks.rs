@@ -13,7 +13,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use chaperone_core::checks::{
-    Attached, AttentionInput, CheckInput, FindingMove, RunInput, evidence_ok,
+    Attached, AttentionInput, CheckInput, FindingMove, ROUNDS_WAIVER, RunInput, SIZE_WAIVER,
+    evidence_ok,
 };
 use chaperone_core::child;
 use chaperone_core::git::{self, ChangedFile};
@@ -144,51 +145,47 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             }
         }
         CheckCmd::Waive {
-            kind: WaiveKind::Size,
+            kind,
             work,
-            lines: Some(lines),
+            lines,
+            rounds,
             reason,
             actor,
         } => {
+            let limit = match (kind, lines, rounds) {
+                (WaiveKind::Size, Some(n), None) => Some((SIZE_WAIVER, n)),
+                (WaiveKind::Rounds, None, Some(n)) => Some((ROUNDS_WAIVER, n)),
+                (WaiveKind::Plan, None, None) => None,
+                (WaiveKind::Size, None, _) => {
+                    return Err(refuse("check waive size needs --lines".into()));
+                }
+                (WaiveKind::Rounds, _, None) => {
+                    return Err(refuse("check waive rounds needs --rounds".into()));
+                }
+                (_, Some(_), _) => return Err(refuse("--lines goes with size only".into())),
+                (_, _, Some(_)) => return Err(refuse("--rounds goes with rounds only".into())),
+            };
             let item = ledger.work_get(work, &ledger.now()?)??;
+            if limit.is_none() {
+                plan::plan(lane_pipeline(&item)?).map_err(|e| {
+                    refuse(format!(
+                        "{e}; a lane on it records a skipped plan check with `check record`"
+                    ))
+                })?;
+            }
             let head = observed_head(item.worktree_path.as_deref(), item.branch.as_deref())?;
             let head = head.ok_or_else(|| {
                 refuse(format!(
                     "work item {work} has no worktree to read its commit in"
                 ))
             })?;
-            one(ledger.size_waive(&actor.resolve(), work, &head, lines, &reason)??)
-        }
-        CheckCmd::Waive {
-            kind: WaiveKind::Size,
-            lines: None,
-            ..
-        } => Err(refuse("check waive size needs --lines".into())),
-        CheckCmd::Waive {
-            kind: WaiveKind::Plan,
-            lines: Some(_),
-            ..
-        } => Err(refuse("--lines goes with size only".into())),
-        CheckCmd::Waive {
-            kind: WaiveKind::Plan,
-            work,
-            lines: None,
-            reason,
-            actor,
-        } => {
-            let item = ledger.work_get(work, &ledger.now()?)??;
-            plan::plan(lane_pipeline(&item)?).map_err(|e| {
-                refuse(format!(
-                    "{e}; a lane on it records a skipped plan check with `check record`"
-                ))
-            })?;
-            let head = observed_head(item.worktree_path.as_deref(), item.branch.as_deref())?;
-            let head = head.ok_or_else(|| {
-                refuse(format!(
-                    "work item {work} has no worktree to read its commit in"
-                ))
-            })?;
-            one(ledger.plan_waive(&actor.resolve(), work, &head, &reason)??)
+            let actor = actor.resolve();
+            match limit {
+                Some((waiver, n)) => {
+                    one(ledger.limit_waive(&actor, work, &head, waiver, n, &reason)??)
+                }
+                None => one(ledger.plan_waive(&actor, work, &head, &reason)??),
+            }
         }
         CheckCmd::Prune => one(sweep(ledger, db)?),
     }
@@ -254,7 +251,9 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
                 .get("findings.open_blocking")
             {
                 Fact::Int(0) => String::new(),
-                Fact::Int(n) => format!("{n} finding(s) still block"),
+                Fact::Int(n) => {
+                    format!("{n} finding(s) still block{}", at_cap(ledger, &item, work)?)
+                }
                 _ => "review not complete".into(),
             },
             "verdict" if p["decision"] != "yes" => "the verdict is not yes".into(),
@@ -267,6 +266,22 @@ pub fn verify(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         }
     }
     one(json!({"work_id": work, "steps": steps, "stopped": stopped}))
+}
+
+/// What verify adds to a review that leaves findings blocking when the lane
+/// is at its limit on fresh reviews: no fix round is left.
+fn at_cap(ledger: &Ledger, item: &WorkItem, work: i64) -> Result<String, CliError> {
+    let Ok(plan) = review::plan(lane_pipeline(item)?) else {
+        return Ok(String::new());
+    };
+    let (reviews, _) = review::fresh(ledger, work)?;
+    Ok(match review::cap(ledger, work, &plan)? {
+        Some(cap) if reviews >= cap => format!(
+            "; the lane is at its {} limit of {cap} fresh reviews: needs you",
+            review::ROUNDS
+        ),
+        _ => String::new(),
+    })
 }
 
 fn step_row(check: &str, head: &str, rec: &Value, passed: bool) -> Value {
@@ -1087,7 +1102,8 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
         return one(stored);
     }
-    let (checkout, facts) = change(ledger, db, &wt, &item, &input.head)?;
+    let (checkout, mut facts) = change(ledger, db, &wt, &item, &input.head)?;
+    facts.since = since(ledger, &checkout.dir, &plan, work, &input.head)?;
     let started = agents(plan.sessions(facts.code_lines))?;
     let agents = Agents::of(&started);
     let store = Evidence::beside(db);
@@ -1101,6 +1117,34 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
         &facts,
         &store,
     )??)
+}
+
+/// Under a [`review::ROUNDS`] limit, the lane's last reviewed commit and
+/// the diff from it to `head` in the checkout `dir`, when it is an ancestor
+/// of `head` there; none for a first review, or after a rebase, which
+/// shows the whole change again.
+fn since(
+    ledger: &Ledger,
+    dir: &Path,
+    plan: &review::Plan<'_>,
+    work: i64,
+    head: &str,
+) -> Result<Option<(String, String)>, CliError> {
+    let Some(last) = plan.rounds.and(review::fresh(ledger, work)?.1) else {
+        return Ok(None);
+    };
+    let args = ["merge-base", "--is-ancestor", &last, head];
+    let ancestor = git::git(
+        Path::new("git"),
+        dir,
+        &args,
+        Instant::now() + RUN_TIMEOUT,
+        4096,
+    );
+    if last == head || ancestor.is_err() {
+        return Ok(None);
+    }
+    Ok(Some((last.clone(), diff(dir, &last, head)?)))
 }
 
 /// The base profile's `[[review.required]]` lenses whose `when` names one
@@ -1476,6 +1520,7 @@ fn change(
         code_lines: added.map(|n| n + removed + tests),
         assets,
         over_cap: added.zip(cap).filter(|(n, cap)| n > cap),
+        since: None,
     };
     Ok((checkout, facts))
 }

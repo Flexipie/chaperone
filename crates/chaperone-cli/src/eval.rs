@@ -235,6 +235,7 @@ fn review_one(
         code_lines: counted.then_some(lines as i64),
         assets: Vec::new(),
         over_cap: None,
+        since: None,
     };
     let io = |e: std::io::Error| CliError::Internal(e.to_string());
     let review = review::run(&plan.lenses, agents, dir, &facts, store).map_err(io)?;

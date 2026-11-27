@@ -38,6 +38,7 @@ pub const SESSION_CHECKS: &[&str] = &[
     "kept_tests",
     "review_round",
     "size_waiver",
+    "rounds_waiver",
 ];
 
 /// The checks the harness runs under a schema 2 pipeline (`check run`),
@@ -726,6 +727,10 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             let lines = p.rest.get("lines").and_then(Value::as_i64);
             if check == "size_waiver" && lines.is_none_or(|n| n <= 0) {
                 refuse!(invalid("a size_waiver needs lines, an integer above 0"));
+            }
+            let rounds = p.rest.get("rounds").and_then(Value::as_i64);
+            if check == "rounds_waiver" && rounds.is_none_or(|n| n <= 0) {
+                refuse!(invalid("a rounds_waiver needs rounds, an integer above 0"));
             }
             if !matches!(p.outcome.as_deref(), Some("ran" | "skipped")) {
                 refuse!(invalid("check.finished outcome is ran or skipped"));

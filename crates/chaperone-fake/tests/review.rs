@@ -96,6 +96,7 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
         code_lines: None,
         assets: Vec::new(),
         over_cap: None,
+        since: None,
     };
     let store = Evidence::beside(&dir.path().join("ledger.db"));
     Env {
@@ -1150,6 +1151,7 @@ fn judge_with(env: &Env, ledger: &Ledger, head: &str, tree: &str, smoke: bool) -
         code_lines: None,
         assets: Vec::new(),
         over_cap: None,
+        since: None,
     };
     let (dir, agents) = (env.checkout(), env.agents());
     let got = verdict::record(
