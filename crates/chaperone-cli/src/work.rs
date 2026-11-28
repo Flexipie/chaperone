@@ -382,17 +382,15 @@ pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
 
 /// A github lane's issue as `gh` reads it now (`{title, body}`), or why it
 /// cannot (`{error}`): a lane starts either way, and its review is told
-/// which. None for a lane of another source.
+/// which. None for a lane of another source; `work create` refuses a
+/// github one whose `source_id` is not `owner/repo#N`.
 fn source_text(item: &WorkItem) -> Option<Value> {
-    if item.source != "github" {
-        return None;
-    }
-    let id = item.source_id.as_deref().unwrap_or_default();
+    let (repo, n) = item
+        .source_id
+        .as_deref()
+        .filter(|_| item.source == "github")?
+        .rsplit_once('#')?;
     let read = || {
-        let (repo, n) = id
-            .rsplit_once('#')
-            .filter(|_| work::pr_ref_ok(id))
-            .ok_or(format!("source_id must be owner/repo#N, got {id}"))?;
         let args = ["issue", "view", n, "-R", repo, "--json", "title,body"];
         let out = child::cli("gh", OsStr::new("gh"), &args, FORGE_TIMEOUT, "")?;
         let v: Value = serde_json::from_str(&out).map_err(|e| format!("gh issue view: {e}"))?;

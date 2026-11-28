@@ -1454,6 +1454,8 @@ fn the_plan_check_attacks_the_plan() {
     assert!(found[0].finding_key.starts_with("plan-"));
     let stored = env.store.get(p.rest["plan_ref"].as_str().unwrap()).unwrap();
     assert_eq!(stored, "PLAN step one [redacted:github_token]");
+    let shown = review::plan_text(&ledger, &env.store, 1).unwrap();
+    assert_eq!(shown.as_deref(), Some(&*stored));
     let call = call(env.dir.path(), "claude", "plan");
     let prompt = call["prompt"].as_str().unwrap();
     for said in [
@@ -1487,6 +1489,9 @@ fn the_plan_check_attacks_the_plan() {
         &failed.findings,
     );
     assert_eq!(got, (Some("skipped"), &json!("no_answer"), &None));
+    // The newest plan the lane recorded is the one a review is shown.
+    let shown = review::plan_text(&ledger, &env.store, 1).unwrap();
+    assert_eq!(shown.as_deref(), Some("PLAN step two"));
     assert_eq!(calls(&env), 2);
     let facts = ledger.project(1, None).unwrap();
     assert_eq!(

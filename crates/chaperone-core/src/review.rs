@@ -390,15 +390,16 @@ fn lens_change(facts: &Facts) -> (String, bool) {
     with_diff(facts, last, &title, diff)
 }
 
-/// On a lane's first review, what to read before judging, and the plan the
-/// lane recorded; nothing on a later one.
+/// On a review of the whole change (a lane's first, and any not shown only
+/// the diff since the last), what to read before judging and the plan the
+/// lane recorded; nothing on one shown only the diff since the last.
 fn first(facts: &Facts) -> String {
     if facts.since.is_some() {
         return String::new();
     }
-    let mut text = "\n## Before you judge\n\nThis is the change's first review. Read the code \
-        around each change, its callers and its tests in the checkout before you judge it: \
-        the diff alone does not show what a change breaks elsewhere.\n"
+    let mut text = "\n## Before you judge\n\nRead the code around each change, its callers \
+        and its tests in the checkout before you judge it: the diff alone does not show what \
+        a change breaks elsewhere.\n"
         .to_string();
     if let Some(plan) = &facts.plan_text {
         text += &format!(
@@ -1982,6 +1983,19 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
         );
     }
 
+    /// The whole change gets what to read first and the plan, fenced; a
+    /// review shown only the diff since the last gets neither.
+    #[test]
+    fn only_a_review_of_the_whole_change_gets_the_plan() {
+        let mut facts = facts("+a\n".into());
+        facts.plan_text = Some("PLAN".into());
+        let whole = first(&facts);
+        assert!(whole.contains("## Before you judge"), "{whole}");
+        assert!(whole.ends_with("```markdown\nPLAN\n```\n"), "{whole}");
+        facts.since = Some(("c".repeat(40), "+b\n".into()));
+        assert_eq!(first(&facts), "");
+    }
+
     /// Text from the change cannot close its fence: a Markdown file's own
     /// fence in the diff, or a longer run in the goal, gets a longer fence
     /// around it, and the trailer comes after all of it.
@@ -2112,6 +2126,17 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
             let done = ledger.work_handoff(&me, item.id, &handoff, None, None, false);
             done.unwrap().unwrap();
         }
+        // A later claim keeps the first claim's text.
+        ledger
+            .work_release(&me, item.id, None, false)
+            .unwrap()
+            .unwrap();
+        let later = ClaimInput {
+            source_text: Some(json!({"title": "LATER", "body": "b"})),
+            ..ClaimInput::default()
+        };
+        let claimed = ledger.work_claim(&me, item.id, &later, None, false);
+        claimed.unwrap().unwrap();
         let got = goal(&ledger, &item).unwrap();
         for said in [
             "TITLE",
@@ -2123,8 +2148,24 @@ transition = [{ id = "handoff", routes = ["code_pr"], to = "done", requires = ["
         ] {
             assert!(got.contains(said), "{said}: {got}");
         }
-        for unsaid in ["OLD", "SUMMARY", "MERGE", "LOOK", &token] {
+        for unsaid in ["OLD", "SUMMARY", "MERGE", "LOOK", "LATER", &token] {
             assert!(!got.contains(unsaid), "{unsaid}: {got}");
         }
+        let input = CreateInput {
+            spec: None,
+            lane_key: None,
+            ..input
+        };
+        let other = ledger.work_create(&me, &input, None, false);
+        let other = other.unwrap().unwrap();
+        let failed = ClaimInput {
+            source_text: Some(json!({"error": "gh down"})),
+            ..ClaimInput::default()
+        };
+        let claimed = ledger.work_claim(&me, other.id, &failed, None, false);
+        claimed.unwrap().unwrap();
+        let got = goal(&ledger, &other).unwrap();
+        let want = "The issue's own text could not be read when the lane was claimed: gh down";
+        assert!(got.contains(want), "{got}");
     }
 }
