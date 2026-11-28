@@ -493,7 +493,7 @@ replays it, so flipping between commits of a tree appends nothing after the firs
 on a pipeline whose `[limits]` holds `review_rounds` (v21: 3, 1 or more), a lane that already
 has that many fresh reviews (complete harness reviews numbered `round`, not carried; one from
 before the limit has no `round` and does not count; an incomplete one never counts, as it
-leaves nothing to fix and `review_attempts` bounds it), or the newest owner `rounds_waiver`'s
+leaves nothing to fix and `review_attempts` bounds it), or the newest `rounds_waiver`'s (the owner's or the harness's below)
 `rounds`, is refused (`invalid_input`, naming the limit, "needs you", and `check waive
 rounds`): two fix rounds, then the owner decides. Once per lane the harness grants one fresh
 review more by itself instead (#341), when the fresh review before the newest raised a blocking
