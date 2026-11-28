@@ -1218,7 +1218,7 @@ pub fn replay(
     if let Some(cap) = cap(ledger, input.work, plan)?
         && reviews >= cap
     {
-        match extra(ledger, input.work, plan)? {
+        match extra(ledger, input.work)? {
             Some(note) => grant = Some((cap + 1, note)),
             None => {
                 return Ok(Err(Refusal::InvalidInput(format!(
@@ -1320,17 +1320,21 @@ pub fn cap(ledger: &Ledger, work: i64, plan: &Plan<'_>) -> Result<Option<i64>, L
 }
 
 /// The one fresh review lane `work` gets past its [`cap`] by itself (#341),
-/// as the note its `rounds_waiver` carries: none once it has had one or
-/// when its fresh reviews are not exactly at the cap (an owner who lowered
-/// the limit stopped it), else only when the fresh review before its
-/// newest raised a blocking finding and none of that review's findings
-/// still blocks.
-pub fn extra(ledger: &Ledger, work: i64, plan: &Plan<'_>) -> Result<Option<String>, LedgerError> {
-    let (reviews, _) = fresh(ledger, work)?;
-    if cap(ledger, work, plan)? != Some(reviews) || granted(ledger, work)?.is_some() {
+/// as the note its `rounds_waiver` carries: only past the pipeline's own
+/// limit (none once a `rounds_waiver`, the owner's or this one, sets it),
+/// and only when the fresh review before its newest raised a blocking
+/// finding and none of that review's findings still blocks.
+pub fn extra(ledger: &Ledger, work: i64) -> Result<Option<String>, LedgerError> {
+    let conn = ledger.conn();
+    let waived: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+           AND json_extract(payload_json, '$.check') = 'rounds_waiver')",
+        [work],
+        |r| r.get(0),
+    )?;
+    if waived {
         return Ok(None);
     }
-    let conn = ledger.conn();
     let prev: Option<(i64, i64)> = conn
         .query_row(
             &format!(

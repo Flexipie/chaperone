@@ -1331,12 +1331,55 @@ fn review_rounds_cap_a_lane_and_rereview_only_the_diff_since() {
     assert_eq!((code, &again["replayed"]), (0, &json!(true)), "{again}");
 }
 
-/// At the cap a lane gets one fresh review more by itself when its newest
-/// review left no blocking finding of the one before still blocking (#341):
-/// a harness `rounds_waiver`, once, written only when nothing else refuses
-/// the run, and never past a limit the owner lowered.
-#[test]
-fn review_rounds_grant_one_extra_round_on_progress() {
+/// `lib.rs` as `body` committed on lane `l`: the new head.
+fn commit_lib(l: &Lane, body: &str) -> String {
+    git(
+        &l.wt,
+        &["commit", "-qam", "c"],
+        &[("lib.rs", body.as_bytes())],
+    );
+    l.head()
+}
+
+/// Lane `l` defers every finding raised on `head` that still blocks.
+fn defer(l: &Lane, head: &str) {
+    for f in l.findings() {
+        if f["head_sha"] == head && f["blocks"] == true {
+            let (event, key) = (f["check_event_id"].to_string(), f["finding_key"].as_str());
+            let args = [
+                "finding",
+                "waive",
+                &event,
+                key.unwrap(),
+                "--kind",
+                "deferred",
+            ];
+            let args = [&args[..], &["--ref", "#9", "--reason", "outside the slice"]].concat();
+            assert_eq!(l.run("lane", &args).0, 0);
+        }
+    }
+}
+
+/// Lane `l`'s `check run review`.
+fn review_of(l: &Lane) -> (i32, Value) {
+    l.run("lane", &["check", "run", "review", "--work", "1"])
+}
+
+/// Lane `l`'s harness `rounds_waiver`s.
+fn grants(l: &Lane) -> i64 {
+    l.events(
+        "payload_json->>'check' = 'rounds_waiver' AND payload_json->>'$.producer.kind' = 'harness'",
+    )
+}
+
+const AT_CAP: &str =
+    "finding(s) still block; the lane is at its review_rounds limit of 3 fresh reviews";
+
+/// A v21 lane at its cap of 3 whose round 3 is due an extra round (#341):
+/// round 2's blockers were open at round 3's verify (needs you), then
+/// deferred. A tree between them used its review_attempts (its lenses
+/// fail). The lane and round 3's head.
+fn due_an_extra_round() -> (Lane, String) {
     let mut runs = claude(json!({"findings": []}), json!([]));
     let runs_ = runs.as_array_mut().unwrap();
     runs_.insert(3, json!({"when": "+FLAKY", "exit": 2}));
@@ -1348,90 +1391,45 @@ fn review_rounds_grant_one_extra_round_on_progress() {
     let lane = claimed_in("v21", runs, "");
     lane.plan("1. do it\n");
     lane.answer("lane", "accept");
-    let review = || lane.run("lane", &["check", "run", "review", "--work", "1"]);
-    let commit = |body: &str| {
-        git(
-            &lane.wt,
-            &["commit", "-qam", "c"],
-            &[("lib.rs", body.as_bytes())],
-        );
-        lane.head()
-    };
-    let defer = |head: &str| {
-        for f in lane.findings() {
-            if f["head_sha"] == head && f["blocks"] == true {
-                let (event, key) = (f["check_event_id"].to_string(), f["finding_key"].as_str());
-                let args = [
-                    "finding",
-                    "waive",
-                    &event,
-                    key.unwrap(),
-                    "--kind",
-                    "deferred",
-                ];
-                let args = [&args[..], &["--ref", "#9", "--reason", "outside the slice"]].concat();
-                assert_eq!(lane.run("lane", &args).0, 0);
-            }
-        }
-    };
-    let grants = || {
-        lane.events(
-            "payload_json->>'check' = 'rounds_waiver'
-        AND payload_json->>'$.producer.kind' = 'harness'",
-        )
-    };
-    let limit = |n: &str| {
-        let raise = [
-            "check", "waive", "rounds", "--work", "1", "--rounds", n, "--reason", "r",
-        ];
-        assert_eq!(lane.run("owner", &raise).0, 0);
-    };
-    let at_cap =
-        "finding(s) still block; the lane is at its review_rounds limit of 3 fresh reviews";
-
-    commit("a\n1\n");
-    assert_eq!(review().0, 0);
-    let second = commit("a\nBLOCK2\n");
-    assert_eq!(review().0, 0);
-    // A tree whose lenses fail uses its review_attempts.
-    commit("a\nFLAKY\n");
-    review();
-    review();
+    commit_lib(&lane, "a\n1\n");
+    assert_eq!(review_of(&lane).0, 0);
+    let second = commit_lib(&lane, "a\nBLOCK2\n");
+    assert_eq!(review_of(&lane).0, 0);
+    commit_lib(&lane, "a\nFLAKY\n");
+    review_of(&lane);
+    review_of(&lane);
     assert_eq!(lane.review()["complete"], json!(false));
-    let third = commit("a\nBLOCK3\n");
+    let third = commit_lib(&lane, "a\nBLOCK3\n");
     let out = lane.verify();
-    let why = format!("6 {at_cap}: needs you");
+    let why = format!("6 {AT_CAP}: needs you");
     assert_eq!(
         out["stopped"],
         json!({"check": "review", "why": why}),
         "{out}"
     );
-
-    defer(&second);
+    defer(&lane, &second);
     let out = lane.verify();
     let why = format!(
-        "3 {at_cap} and has one more by itself: round 3 settled every blocking finding of round 2"
+        "3 {AT_CAP} and has one more by itself: round 3 settled every blocking finding of round 2"
     );
     assert_eq!(
         out["stopped"],
         json!({"check": "review", "why": why}),
         "{out}"
     );
-    // An owner who lowered the limit stopped the lane: no grant.
-    limit("2");
-    commit("a\nlowered\n");
-    let (code, err) = review();
-    assert_eq!(code, 1, "{err}");
-    assert!(
-        err["message"]
-            .as_str()
-            .unwrap()
-            .contains("its limit review_rounds 2")
-    );
-    limit("3");
+    (lane, third)
+}
+
+/// At the cap a lane gets one fresh review more by itself when its newest
+/// review left no blocking finding of the one before still blocking (#341):
+/// a harness `rounds_waiver`, written only when nothing else refuses the
+/// run, and once.
+#[test]
+fn review_rounds_grant_one_extra_round_on_progress() {
+    let (lane, third) = due_an_extra_round();
     // The tree that used its attempts is refused, and the grant is not spent.
-    commit("a\nFLAKY\n");
-    let (code, err) = review();
+    commit_lib(&lane, "a\nFLAKY\n");
+    let (code, err) = review_of(&lane);
     assert!(
         err["message"]
             .as_str()
@@ -1439,17 +1437,16 @@ fn review_rounds_grant_one_extra_round_on_progress() {
             .contains("its limit review_attempts"),
         "{err}"
     );
-    assert_eq!((code, grants()), (1, 0));
+    assert_eq!((code, grants(&lane)), (1, 0));
 
-    commit("a\nfixed\n");
-    let (code, out) = review();
+    commit_lib(&lane, "a\nfixed\n");
+    let (code, out) = review_of(&lane);
     assert_eq!(code, 0, "{out}");
     assert_eq!(lane.review()["round"], json!(4));
     let conn = rusqlite::Connection::open(&lane.db).unwrap();
     let grant: String = conn
         .query_row(
-            "SELECT payload_json FROM events WHERE payload_json->>'check' = 'rounds_waiver'
-              ORDER BY id DESC LIMIT 1",
+            "SELECT payload_json FROM events WHERE payload_json->>'check' = 'rounds_waiver'",
             [],
             |r| r.get(0),
         )
@@ -1465,13 +1462,34 @@ fn review_rounds_grant_one_extra_round_on_progress() {
     );
 
     // Round 4 settled round 3's findings too, but the extra round is one.
-    defer(&third);
-    commit("a\nagain\n");
-    let (code, err) = review();
+    defer(&lane, &third);
+    commit_lib(&lane, "a\nagain\n");
+    let (code, err) = review_of(&lane);
     assert_eq!(code, 1, "{err}");
     let message = err["message"].as_str().unwrap();
     assert!(message.starts_with("lane 1 has had 4 fresh reviews, its limit review_rounds 4"));
-    assert_eq!(grants(), 1);
+    assert_eq!(grants(&lane), 1);
+}
+
+/// The owner's limit is theirs: one set at the lane's count stops it, with
+/// an extra round due by the pipeline's.
+#[test]
+fn review_rounds_grant_no_extra_round_past_the_owners_limit() {
+    let (lane, _) = due_an_extra_round();
+    let stop = [
+        "check", "waive", "rounds", "--work", "1", "--rounds", "3", "--reason", "r",
+    ];
+    assert_eq!(lane.run("owner", &stop).0, 0);
+    commit_lib(&lane, "a\nfixed\n");
+    let (code, err) = review_of(&lane);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("its limit review_rounds 3: needs you")
+    );
+    assert_eq!(grants(&lane), 0);
 }
 
 /// The lenses get the whole diff again when the last reviewed commit is
