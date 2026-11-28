@@ -81,6 +81,7 @@ pub fn run(
             dry_run,
             actor,
         } => {
+            let item = ledger.work_get(id, &ledger.now()?)??;
             let input = ClaimInput {
                 worktree_path: worktree,
                 branch,
@@ -88,6 +89,11 @@ pub fn run(
                 lease_secs,
                 takeover,
                 pipeline,
+                source_text: item
+                    .pipeline_id
+                    .is_none()
+                    .then(|| source_text(&item))
+                    .flatten(),
             };
             one(ledger.work_claim(&actor.resolve(), id, &input, None, dry(dry_run))??)
         }
@@ -372,6 +378,25 @@ pub(crate) fn value(v: impl Serialize) -> Result<Value, CliError> {
 
 pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
     Ok(Outcome::One(value(v)?))
+}
+
+/// A github lane's issue as `gh` reads it now (`{title, body}`), or why it
+/// cannot (`{error}`): a lane starts either way, and its review is told
+/// which. None for a lane of another source; `work create` refuses a
+/// github one whose `source_id` is not `owner/repo#N`.
+fn source_text(item: &WorkItem) -> Option<Value> {
+    let (repo, n) = item
+        .source_id
+        .as_deref()
+        .filter(|_| item.source == "github")?
+        .rsplit_once('#')?;
+    let read = || {
+        let args = ["issue", "view", n, "-R", repo, "--json", "title,body"];
+        let out = child::cli("gh", OsStr::new("gh"), &args, FORGE_TIMEOUT, "")?;
+        let v: Value = serde_json::from_str(&out).map_err(|e| format!("gh issue view: {e}"))?;
+        Ok(json!({"title": v["title"], "body": v["body"]}))
+    };
+    Some(read().unwrap_or_else(|e: String| json!({"error": e})))
 }
 
 /// A v21 lane's merge as GitHub shows it (#308): the PR must be in the

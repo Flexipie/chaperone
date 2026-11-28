@@ -189,6 +189,9 @@ pub struct ClaimInput {
     /// At the first claim, the default or an embedded pipeline newer than
     /// it to stamp ([`crate::pipeline::newer`]).
     pub pipeline: Option<String>,
+    /// At the first claim, the tracker's issue as the harness read it
+    /// (`{title, body}`), or why it could not (`{error}`).
+    pub source_text: Option<Value>,
 }
 
 /// What `update` may change; a field left None is kept.
@@ -333,6 +336,13 @@ impl Ledger {
                     ))));
                 }
                 p.pipeline_id = Some(pipeline.clone());
+            }
+            if let Some(text) = input
+                .source_text
+                .clone()
+                .filter(|_| item.pipeline_id.is_none())
+            {
+                p.rest.insert("source_text".into(), text);
             }
             if kind != LaneRenewed {
                 put(&mut p.changed, "agent", &item.agent, &actor.agent);

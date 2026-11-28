@@ -79,7 +79,11 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
         Agent::probe(bin, [], Instant::now() + Duration::from_secs(20)).unwrap()
     };
     let (claude, codex) = (agent("claude", claude), agent("codex", codex));
-    std::fs::create_dir(dir.path().join("checkout")).unwrap();
+    // `src/a.rs` is the change's; `src/b.rs` is code around it.
+    std::fs::create_dir_all(dir.path().join("checkout/src")).unwrap();
+    for f in ["a.rs", "b.rs"] {
+        std::fs::write(dir.path().join("checkout/src").join(f), "fn f() {}\n").unwrap();
+    }
     let file = ChangedFile {
         path: "src/a.rs".into(),
         added: Some(3),
@@ -92,6 +96,7 @@ fn env(claude: Value, codex: Value, diff_bytes: usize) -> Env {
         files: vec![file],
         diff: "+x\n".repeat(diff_bytes / 3),
         goal: "GOAL add a widget".into(),
+        plan_text: Some("PLAN step one".into()),
         smoke: json!({"harness": null, "lane_claim": {"outcome": "ran", "evidence_files": [
             {"path": "out.log", "end": "SMOKE SAW"}]}}),
         plan: String::new(),
@@ -154,12 +159,28 @@ fn call(dir: &Path, cli: &str, lens: &str) -> Value {
         .unwrap()
 }
 
-/// Every lens ran at once, in the checkout, with its runner's flags; only
-/// the intent lens got the goal; each prompt and answer is stored, and
+/// Every lens ran at once, in the checkout, with its runner's flags; each
+/// got the goal and, on this first review, the plan; each row counts the
+/// files read outside the diff; each prompt and answer is stored, and
 /// each row names the agent binary and its version.
 #[test]
 fn every_lens_reviews_the_same_facts() {
-    let ran = |lens: &str, said: Value| json!({"when": format!("LENS {lens}"), "sleep_ms": 800, "stdout": result(said)});
+    // Correctness reads the changed file, one around it twice, a directory
+    // and a file that is not there: one file outside the diff.
+    let tool = |name: &str, input: Value| json!({"type": "tool_use", "name": name, "input": input});
+    let read = json!({"type": "assistant", "message": {"id": "m", "content": [
+        tool("Read", json!({"file_path": "src/a.rs"})),
+        tool("Read", json!({"file_path": "src/b.rs"})),
+        tool("Grep", json!({"pattern": "f", "path": "./src/b.rs"})),
+        tool("Grep", json!({"pattern": "f", "path": "src"})),
+        tool("Read", json!({"file_path": "src/gone.rs"}))]}});
+    let ran = |lens: &str, said: Value| {
+        let lines = match lens {
+            "correctness" => format!("{read}\n{}", result(said)),
+            _ => result(said),
+        };
+        json!({"when": format!("LENS {lens}"), "sleep_ms": 800, "stdout": lines})
+    };
     let claude = json!([
         ran("correctness", json!({"findings": [found("risk", "r")]})),
         ran(
@@ -169,20 +190,30 @@ fn every_lens_reviews_the_same_facts() {
         ran("intent", json!({"findings": [found("question", "q")]})),
     ]);
     let said = json!({"findings": [found("improvement", "i")]}).to_string();
-    let codex = json!([{"when": "LENS codex", "sleep_ms": 800, "write": {"-o": said}}]);
+    let command = json!({"type": "item.completed",
+        "item": {"type": "command_execution", "command": "/bin/zsh -lc 'sed -n 1,9p src/b.rs'"}});
+    let codex = json!([{"when": "LENS codex", "sleep_ms": 800, "write": {"-o": said},
+        "stdout": format!("{command}\n")}]);
     let (env, review, took) = run(claude, codex, 2 * PROMPT_DIFF_BYTES);
     // Four sessions of 800 ms each: one after another would take 3.2 s.
     assert!(took < Duration::from_millis(2400), "{took:?}");
     let rows: Vec<_> = review.lenses.iter().map(|l| l.row()).collect();
     let counts: Vec<_> = rows
         .iter()
-        .map(|r| json!([r["lens"], r["ran"], r["findings"]]))
+        .map(|r| {
+            json!([
+                r["lens"],
+                r["ran"],
+                r["findings"],
+                r["files_read_outside_diff"]
+            ])
+        })
         .collect();
     let want = [
-        json!(["correctness", true, 1]),
-        json!(["design_tests", true, 2]),
-        json!(["intent", true, 1]),
-        json!(["codex", true, 1]),
+        json!(["correctness", true, 1, 1]),
+        json!(["design_tests", true, 2, 0]),
+        json!(["intent", true, 1, 0]),
+        json!(["codex", true, 1, 1]),
     ];
     assert_eq!(counts, want);
     let design = review.lenses[1].outcome.as_ref().unwrap();
@@ -205,11 +236,9 @@ fn every_lens_reviews_the_same_facts() {
         let call = call(env.dir.path(), cli, lens);
         let prompt = call["prompt"].as_str().unwrap();
         assert_eq!(Path::new(call["cwd"].as_str().unwrap()), checkout);
-        assert_eq!(
-            prompt.contains("GOAL add a widget"),
-            lens == "intent",
-            "{lens}"
-        );
+        assert!(prompt.contains("GOAL add a widget"), "{lens}");
+        assert!(prompt.contains("## Before you judge"), "{lens}");
+        assert!(prompt.contains("```markdown\nPLAN step one\n```"), "{lens}");
         assert_eq!(prompt.contains("SMOKE SAW"), lens == "intent", "{lens}");
         let args = call["args"].to_string();
         let flags = match cli {
@@ -1166,6 +1195,7 @@ fn judge_with(env: &Env, ledger: &Ledger, head: &str, tree: &str, smoke: bool) -
         files: vec![file],
         diff: "+x\n".into(),
         goal: review::goal(ledger, &item).unwrap(),
+        plan_text: None,
         smoke: Value::Null,
         plan: String::new(),
         code_lines: None,
@@ -1424,6 +1454,8 @@ fn the_plan_check_attacks_the_plan() {
     assert!(found[0].finding_key.starts_with("plan-"));
     let stored = env.store.get(p.rest["plan_ref"].as_str().unwrap()).unwrap();
     assert_eq!(stored, "PLAN step one [redacted:github_token]");
+    let shown = review::plan_text(&ledger, &env.store, 1).unwrap();
+    assert_eq!(shown.as_deref(), Some(&*stored));
     let call = call(env.dir.path(), "claude", "plan");
     let prompt = call["prompt"].as_str().unwrap();
     for said in [
@@ -1457,6 +1489,9 @@ fn the_plan_check_attacks_the_plan() {
         &failed.findings,
     );
     assert_eq!(got, (Some("skipped"), &json!("no_answer"), &None));
+    // The newest plan the lane recorded is the one a review is shown.
+    let shown = review::plan_text(&ledger, &env.store, 1).unwrap();
+    assert_eq!(shown.as_deref(), Some("PLAN step two"));
     assert_eq!(calls(&env), 2);
     let facts = ledger.project(1, None).unwrap();
     assert_eq!(

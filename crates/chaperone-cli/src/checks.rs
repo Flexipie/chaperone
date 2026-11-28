@@ -1638,6 +1638,7 @@ fn change(
         files,
         diff,
         goal: review::goal(ledger, item)?,
+        plan_text: review::plan_text(ledger, &Evidence::beside(db), item.id)?,
         smoke: verdict::smoke(ledger, &Evidence::beside(db), item.id, head)?,
         plan: review::plan_findings(ledger, item.id)?
             + &review::earlier_section(&review::earlier(ledger, item.id)?),
