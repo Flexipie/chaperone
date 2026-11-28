@@ -27,6 +27,8 @@ const ALLOWED: &[(&str, &str)] = &[
     ("verified", "disputed"),
     ("open", "accepted"),
     ("accepted", "waived"),
+    ("refuted", "verified"),
+    ("waived", "verified"),
 ];
 const STATUSES: [&str; 8] = [
     "open", "fixed", "answered", "verified", "refuted", "disputed", "waived", "accepted",
@@ -285,15 +287,24 @@ fn blocking_read_and_round() {
 /// A move carrying the harness's producer (`check run review`'s verifier)
 /// is made by the binary, so the lane's own session may write it; it
 /// makes the verifier's moves only, on a harness review's findings only.
-/// The same move without it, or on another check's finding, is refused.
+/// The same move without it, or on another check's finding, is refused,
+/// as is one out of `refuted` (an overturn is the owner's) and a ruling on
+/// an owner-held dispute: titled `owner:`, disputed twice, or verified by
+/// the owner.
 #[test]
 fn the_harness_rules_from_the_lanes_session() {
     let (_dir, path, ledger) = common::ledger();
     let (_, local) = review(&ledger, &["blocker:a"]);
     let at = "2099-01-01T00:00:00.000Z";
     let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
-    let found = ["b", "c", "d"]
-        .map(|k| json!({"finding_key": k, "severity": "blocker", "title": "t", "body": "b"}));
+    let found = ["b", "c", "d", "e", "g", "h"].map(|k| {
+        let title = if k == "e" {
+            "owner: drops a table"
+        } else {
+            "t"
+        };
+        json!({"finding_key": k, "severity": "blocker", "title": title, "body": "b"})
+    });
     let payload = json!({"check": "review", "outcome": "ran", "head_sha": "abc1234",
         "producer": harness, "findings": found});
     let event = |kind, payload: serde_json::Value| Mutation::Event {
@@ -323,6 +334,17 @@ fn the_harness_rules_from_the_lanes_session() {
     assert!(mv(&ledger, check, ("1", "b", "verified"), "", "").is_err());
     common::committed(rule(check, "b", "verified").unwrap());
     common::committed(rule(check, "d", "refuted").unwrap());
+    let refused = format!("{:?}", rule(check, "d", "verified").unwrap());
+    assert!(refused.contains("session s1 has held lane 1"), "{refused}");
+    walk(&ledger, check, "e", &["disputed"]);
+    walk(&ledger, check, "g", &["verified", "disputed"]);
+    walk(&ledger, check, "h", &["disputed"]);
+    common::committed(rule(check, "h", "verified").unwrap());
+    walk(&ledger, check, "h", &["disputed"]);
+    for key in ["e", "g", "h"] {
+        let refused = format!("{:?}", rule(check, key, "refuted").unwrap());
+        assert!(refused.contains("is the owner's"), "{key}: {refused}");
+    }
     for (check, key, to) in [(check, "c", "waived"), (local, "a", "verified")] {
         let refused = format!("{:?}", rule(check, key, to).unwrap());
         let said = format!("session s1 has held lane 1; a finding goes {to}");
@@ -333,7 +355,15 @@ fn the_harness_rules_from_the_lanes_session() {
         .iter()
         .map(|f| (&*f.finding_key, &*f.status))
         .collect();
-    assert_eq!(got, [("a", "open"), ("b", "verified"), ("c", "open")]);
+    let want = [
+        ("a", "open"),
+        ("b", "verified"),
+        ("c", "open"),
+        ("e", "disputed"),
+        ("g", "disputed"),
+        ("h", "disputed"),
+    ];
+    assert_eq!(got, want);
     common::assert_consistent(&path);
 }
 

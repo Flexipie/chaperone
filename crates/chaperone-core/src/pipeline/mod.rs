@@ -278,6 +278,10 @@ const PROMPT_FILES: &[(&str, &str)] = &[
         include_str!("../../../../pipelines/prompts/review_verifier.md"),
     ),
     (
+        "review_verifier.v21.md",
+        include_str!("../../../../pipelines/prompts/review_verifier.v21.md"),
+    ),
+    (
         "verdict.md",
         include_str!("../../../../pipelines/prompts/verdict.md"),
     ),
@@ -355,7 +359,7 @@ mod tests {
     const V20: &str = include_str!("../../../../pipelines/v20.toml");
     const V20_HASH: &str = "f69ffa9de3ec4daa17b448c793f596a774afbf15612dc977d9863721f9234c77";
     const V21: &str = include_str!("../../../../pipelines/v21.toml");
-    const V21_HASH: &str = "199eda74860712a78fa24d948387fbbdb030aef21ebac2de945382f8c4e39dad";
+    const V21_HASH: &str = "37878b8dbc6debbec8be35decc764ad1bd525ffb9c876682cf292601b33841ca";
 
     const MINI: &str = r#"
 schema = 1

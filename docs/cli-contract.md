@@ -142,6 +142,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `finding waive` | `<event> <key> --reason <r> --kind <kind> [--ref <ref>]` | write |
 | `finding accept` | `<event> <key> --reason <r>` | write |
 | `finding answer` | `<event> <key> --reason <r>` | write |
+| `finding overturn` | `<event> <key> --reason <r>` | write |
 | `evidence show` | `<sha256 or prefix>` | read, no ledger |
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 | `install` | | no ledger, writes the marketplace dir, calls claude |
@@ -199,7 +200,12 @@ no other path gets past it.
 `<event>` is the id of the `check.finished` that raised it (`work events`) and `<key>` its key
 there (its `id` in `reviews get`). `dispute` moves an `open` or `verified` finding to `disputed`
 and only a session that has held the lane may; it still blocks until a session that never has
-rules on it. `waive` moves an `open`, `verified` or `disputed` finding to `waived` and is the
+rules on it: on a pipeline with the limit `dispute_attempts` (v21 on; on v20 the owner
+waives it), the verifier at the next `check run review` (so `verify`, #339) rules it
+`refuted` (the dispute holds) or `verified` (it blocks again), inside a fresh review, or on a
+tree whose review replays as a harness `dispute_ruling` (events.md). Not one titled `owner:`
+(a one-way door or a gate that fails open, as the lenses title them), one the owner moved to
+`verified`, or one disputed again after its ruling: those are the owner's. `waive` moves an `open`, `verified` or `disputed` finding to `waived` and is the
 owner's: refused from any session that has held the lane, as `work ready` is. `--reason` is
 required, one non-blank line of at most 500 characters (as `attention record --note`), and
 redacted. A move the table does not allow, the wrong session or a bad reason is
@@ -234,12 +240,18 @@ check's question. While a finding of the lane's newest plan check (a replayed ol
 carried, so it is the newest again) is `open`, `check run
 diff` and `check run review` (so `verify`) are refused (events.md, plan findings).
 
+`finding overturn` is new (#339): the owner's answer to a stop the lane resolved without
+them. It moves a `refuted` or `waived` finding to `verified`, so it blocks again, refused from
+any session that has held the lane, and the verifier never rules on its dispute again. It
+prints as `dispute` does. `pr open` lists each dispute the verifier upheld under "Resolved
+without the owner", with the command that overturns it.
+
 `finding list` is new (#212). It prints, oldest first, every finding of the lane's complete
 harness reviews (`check.finished` `review` from the harness with `complete: true`), of any
 commit, and of its newest plan check (#221), as items `{check_event_id, check, finding_key,
-severity, title, body, path, line, head_sha, status, reason, waiver, blocks}`. `check` is `review` or
+severity, title, body, path, line, head_sha, status, reason, waiver, blocks, disputed}`. `check` is `review` or
 `plan_check`; `reason` is that of the finding's newest move, null when it has none, and `waiver`
-that move's waiver kind (#235), null when it has none; a plan
+that move's waiver kind (#235), null when it has none; `disputed` is whether the lane has ever disputed it (#339); a plan
 check's finding never `blocks`. `check_event_id` and `finding_key` address the finding for `finding dispute`
 and `finding waive`; `head_sha` is the commit the review read; `line` is the lens's, from the
 review's payload. `blocks` is the `no_blocking_findings` gate's rule: unsettled (`open`,
@@ -282,7 +294,7 @@ Each lane is `{id, title, kind, pipeline_id, claimed_at, merged_at, claim_to_mer
 - `commits_after_handoff` is always null: it is a git count (events.md, PR), not a ledger read.
 - `sources` names where the numbers came from: `reviews`, the checks its reviews came from (`local_review`, `pr_review`, `review`), and `ready_point`, which point the after-handoff count used (`handoff`, `verdict`, `pr_opened`, or null with none). `tokens.steps` is keyed by its step.
 
-`cohort` has `lanes`, `with_pr`, `merged`, `too_few_lanes` (under 25: flagged, not scored), `claim_to_merge_h_median`, `tokens` (the lanes' `{total, steps}` summed per step, null with no usage; a message recorded on two lanes of the cohort, which usage's worktree match allows, counts on each), `attention` (summed per type), `waivers` (summed per kind), `accepted_without_ref` (every lane's, as `{work_id, finding}`), R11's first five (`lanes_with_usage` (lanes with a parent `input_total`), `peak_context_median`, `context_tokens_per_merged_pr_median` (parent `input_total` over the PR count, merged lanes with usage), `lanes_peak_over_500k`; `lanes_reviewed` (lanes with a recorded review: the coverage of row 2's sums), `flat_rounds`, `reraised_findings`; `lanes_head_reviewed`; `lanes_with_commits_after_handoff`, `verified_findings`, `verified_findings_after_handoff`; `lanes_plan_checked`, `plan_check_skipped` and `quality_gate_skipped` (counts by reason), `lanes_quality_gated`, `lanes_verdict_on_head`, the last two over lanes with a PR as R11 defines, `lanes_size_waived` (lanes the owner raised the size cap for, to compare their rounds and escapes), `lanes_over_cap` and `lanes_with_cut_finding` (lanes reviewed past the cap, and those of them with a `cut:` finding), `lanes_estimated` and `lanes_over_estimate` (lanes with a `size_estimate`, and those of them whose measured lines are past 1.5 times the estimate)), `finding_outcomes`, and `missing`. `finding_outcomes` counts, per lens (`none` when a finding names none), each finding of a counted, not carried harness `review` on a merged lane (`merged`) by outcome, from its newest `finding.updated` (#279): `fixed` (status `fixed`, or waived `fixed`), `wrong` (`refuted`, or waived `disproved`), `intentional` (waived `accepted`, `scope` or `deferred`: real, deliberately not changed in the PR), `did_not_matter` (ruled `unproven` by the verifier and not settled since) and `unlabelled` (anything else: a waiver written before waivers had kinds, an answered question, or any finding still unsettled when it merged, since the verifier rules `fixed` only on blocking ones). A `same_as` repeat is left out; `reraised_findings` counts it. Every lens lists all five, so its false-alarm rate is `wrong` plus `did_not_matter` over their sum, and `unlabelled` shows how much is unknown. Nothing is guessed: a finding gone in a later round is not read as fixed. A median is over the non-null lane values, rounded to two decimals, and null when there are none. `missing` maps each cohort number printed as null because nothing records its input (by its cohort name; the lane fields of the same rows are null for the same reason) to what it needs: `lanes_with_commits_after_handoff` always, the three token numbers of row 1 when no lane in the cohort has a parent `input_total` (`lanes_peak_over_500k` is then null, not 0), and every review number when no lane in the cohort has a recorded review (with one, a lane without a review counts as unreviewed, not unknown). `sources` counts the lanes per review check (`reviews`) and per ready point (`ready_point`).
+`cohort` has `lanes`, `with_pr`, `merged`, `too_few_lanes` (under 25: flagged, not scored), `claim_to_merge_h_median`, `tokens` (the lanes' `{total, steps}` summed per step, null with no usage; a message recorded on two lanes of the cohort, which usage's worktree match allows, counts on each), `attention` (summed per type), `waivers` (summed per kind), `accepted_without_ref` (every lane's, as `{work_id, finding}`), R11's first five (`lanes_with_usage` (lanes with a parent `input_total`), `peak_context_median`, `context_tokens_per_merged_pr_median` (parent `input_total` over the PR count, merged lanes with usage), `lanes_peak_over_500k`; `lanes_reviewed` (lanes with a recorded review: the coverage of row 2's sums), `flat_rounds`, `reraised_findings`; `lanes_head_reviewed`; `lanes_with_commits_after_handoff`, `verified_findings`, `verified_findings_after_handoff`; `lanes_plan_checked`, `plan_check_skipped` and `quality_gate_skipped` (counts by reason), `lanes_quality_gated`, `lanes_verdict_on_head`, the last two over lanes with a PR as R11 defines, `lanes_size_waived` (lanes the owner raised the size cap for, to compare their rounds and escapes), `lanes_over_cap` and `lanes_with_cut_finding` (lanes reviewed past the cap, and those of them with a `cut:` finding), `lanes_estimated` and `lanes_over_estimate` (lanes with a `size_estimate`, and those of them whose measured lines are past 1.5 times the estimate)), `finding_outcomes`, and `missing`. `finding_outcomes` counts, per lens (`none` when a finding names none), each finding of a counted, not carried harness `review` on a merged lane (`merged`) by outcome, from its newest `finding.updated` (#279): `fixed` (status `fixed`, or waived `fixed`), `wrong` (`refuted`, a dispute the verifier upheld included (#339), or waived `disproved`), `intentional` (waived `accepted`, `scope` or `deferred`: real, deliberately not changed in the PR), `did_not_matter` (ruled `unproven` by the verifier and not settled since) and `unlabelled` (anything else: a waiver written before waivers had kinds, an answered question, or any finding still unsettled when it merged, since the verifier rules `fixed` only on blocking ones). A `same_as` repeat is left out; `reraised_findings` counts it. Every lens lists all five, so its false-alarm rate is `wrong` plus `did_not_matter` over their sum, and `unlabelled` shows how much is unknown. Nothing is guessed: a finding gone in a later round is not read as fixed. A median is over the non-null lane values, rounded to two decimals, and null when there are none. `missing` maps each cohort number printed as null because nothing records its input (by its cohort name; the lane fields of the same rows are null for the same reason) to what it needs: `lanes_with_commits_after_handoff` always, the three token numbers of row 1 when no lane in the cohort has a parent `input_total` (`lanes_peak_over_500k` is then null, not 0), and every review number when no lane in the cohort has a recorded review (with one, a lane without a review counts as unreviewed, not unknown). `sources` counts the lanes per review check (`reviews`) and per ready point (`ready_point`).
 
 `pipeline current` (#106) prints `{id, hash, newer}`: the pipeline a new claim stamps by default (`v21`), and in `newer` the `{id, hash}` of each embedded document newer than it that a first claim may opt into with `work claim --pipeline` (none today). Skills read the version from here rather than naming one, so a lane's stamp and its skill cannot disagree.
 
@@ -528,8 +540,11 @@ sum passes the runner's `tokens_limit` it stops the session as at its deadline: 
 `max_tokens` ("used N tokens, past its cap of M"), and its usage row has the tokens counted. It is also shown every earlier finding of the lane's complete
 harness reviews, keyed `<review event id>/<finding_key>`, with its status and the reason of its
 newest move (every lens is shown them too, without bodies), and may rule `fixed` only on one
-still open or verified with a blocking severity (a verifier starts when there is such a finding,
-even if no lens found anything). It may rule a finding of this review `same`, with
+still open or verified with a blocking severity, and `verified` or `refuted` only on a
+`disputed` one that is not the owner's (`owner_held` false: #339, `finding dispute`; on a
+pipeline with `dispute_attempts`, v21 on, whose lenses alone are told to title a one-way-door
+or fail-open finding `owner:`); a
+verifier starts when there is such a finding, even if no lens found anything. It may rule a finding of this review `same`, with
 `same_as` an earlier key that still blocks, as `findings.open_blocking` counts it (the
 verifier is shown which do), or one of a blocking severity the owner `waived`: the review writes it as a non-blocking `question` with
 `raised_as` and `same_as`, and no `finding.updated`, as the earlier finding keeps the point's
@@ -542,7 +557,9 @@ session's prompt and whole answer are stored first, as two evidence files.
 It then writes, in this order: one `usage.reported` per session that left a session id
 (events.md, Usage), one `check.finished` (check `review`: the lens table, the verifier,
 `complete`, the findings), and one `finding.updated` per ruling on a finding still open (for
-`fixed`, open or verified, with this commit as `head_sha`), carrying the review's harness producer, so the verifier rules whichever session started the
+`fixed`, open or verified, with this commit as `head_sha`; for a dispute, still disputed, with
+the verifier's why as `reason`; an earlier finding moved after the review's event is left for a
+new ruling), carrying the review's harness producer, so the verifier rules whichever session started the
 run (finding statuses). It is the second command that appends more than one event, after
 `usage report`, each event in its own transaction. A crash leaves whole events: usage rows
 without a review are what those sessions cost, and stay; a review whose rulings are missing
@@ -854,7 +871,7 @@ Each command is one transaction that appends one event (events.md, write rules).
 | `work update --status cancelled`, `work cancel` | ungated | `lane.cancelled` |
 | `work update`, any other change | ungated | `lane.updated`, or `pr.opened` when the PR goes from null to set |
 | `work claim`, `release`, `ready` | ungated | the matching `lane.*` kind |
-| `finding dispute`, `finding waive`, `finding accept`, `finding answer` | ungated | `finding.updated` |
+| `finding dispute`, `finding waive`, `finding accept`, `finding answer`, `finding overturn` | ungated | `finding.updated` |
 | `work heartbeat` | none | none |
 | `migrate` | none | none (schema only) |
 

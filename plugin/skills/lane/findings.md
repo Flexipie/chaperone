@@ -22,9 +22,15 @@ Weigh it (`judgement.md` beside this file, "Weighing a finding"), then one of:
 - It holds: fix it at the root and commit. Nothing to record: the next verify reviews the
   new tree, and its verifier rules an earlier finding `fixed` only when it can name the line
   that fixes it. One it cannot stays open and blocks.
-- It is wrong: `chaperone finding dispute <event_id> <finding_key> --reason "<file:line that answers it>"`.
-  A dispute still blocks until the owner waives it or an independent session refutes it,
-  so then Needs you, naming the finding. Never argue in prose, the PR or the handoff.
+- It is wrong: `chaperone finding dispute <event_id> <finding_key> --reason "<the reference that answers it>"`,
+  the reference a `file:line`, a repo rule or the task's text, which the verifier checks.
+  No commit is needed: the next verify's verifier rules on it. `refuted`, the dispute holds:
+  it stops blocking and the PR body lists it with the ruling, which the owner may overturn.
+  `verified`, it failed: fix it, or, if you still contest it, dispute again, which is the
+  owner's to rule, so Needs you. A finding titled `owner:` (a one-way door, a gate that fails
+  open) and one the owner overturned are the owner's too: dispute it and Needs you, naming
+  it and the command (`chaperone finding waive <event_id> <finding_key> --kind disproved
+  --ref <ref> --reason <why>`). Never argue in prose, the PR or the handoff.
 
 Fix every blocking finding at once, then back to step 5 (smoke) and verify once. A third verify
 on this lane that stops at `review` or `verdict`: Needs you. A big fix round

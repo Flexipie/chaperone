@@ -243,6 +243,8 @@ pub struct LaneFinding {
     pub waiver: Option<String>,
     /// Counted by the `no_blocking_findings` gate.
     pub blocks: bool,
+    /// The lane has disputed it.
+    pub disputed: bool,
 }
 
 /// The SQL condition on a `findings` row raised by a complete harness
@@ -1279,7 +1281,11 @@ pub(crate) fn findings_where(
                     (SELECT json_extract(payload_json, '$.reason') FROM events
                       WHERE id = f.event_id AND kind = 'finding.updated'),
                     (SELECT json_extract(payload_json, '$.waiver.kind') FROM events
-                      WHERE id = f.event_id AND kind = 'finding.updated')
+                      WHERE id = f.event_id AND kind = 'finding.updated'),
+                    EXISTS (SELECT 1 FROM events WHERE lane_id = ?1 AND kind = 'finding.updated'
+                      AND json_extract(payload_json, '$.check_event_id') = f.check_event_id
+                      AND json_extract(payload_json, '$.finding_key') = f.finding_key
+                      AND json_extract(payload_json, '$.status') = 'disputed')
                FROM findings f WHERE lane_id = ?1 AND ({raised}) ORDER BY id",
         blocking()
     ))?;
@@ -1298,6 +1304,7 @@ pub(crate) fn findings_where(
             check: r.get(10)?,
             reason: r.get(11)?,
             waiver: r.get(12)?,
+            disputed: r.get(13)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)

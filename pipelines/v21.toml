@@ -28,6 +28,15 @@
 #   the old cap at the tokens per dollar its sessions used (lens 533k, plan 698k, verdict 364k,
 #   verifier 344k, over 900 sessions), above every session's peak (1.18M, 0.75M, 0.34M,
 #   0.67M). v20 moved with it, as both load through one runner shape.
+# - A lane's dispute gets a ruling (#339): at the next verify the verifier rules each
+#   `disputed` finding `refuted` (the dispute holds, it stops blocking) or `verified` (it
+#   blocks again), inside a fresh review or, on a tree whose review replays, as a harness
+#   `dispute_ruling` (`review_verifier.v21.md`). Not one titled `owner:` (a one-way door, a
+#   gate that fails open; every lens titles one so), one the owner overturned to `verified`
+#   (`finding overturn`), or one disputed again after a ruling: those are the owner's. The
+#   limit `dispute_attempts` turns it on (v20 has none, so its disputes stay the owner's) and
+#   caps a commit's rulings with no answer. In a week 17 stops waited on an owner waiver, most
+#   for a dispute the lane had already argued.
 #
 # From v21 on, v20 is not edited (but #337), and v21 is the id edited in place (#244's rule, moved from
 # v20): a lane stamped with an older v21 hash still loads this document by id. v21 names
@@ -49,6 +58,7 @@ code_lines = 400
 sha_min = 7
 sha_max = 40
 review_attempts = 2
+dispute_attempts = 2
 review_rounds = 3
 verdict_attempts = 2
 plan_attempts = 2
@@ -122,7 +132,7 @@ prompt = "review_codex.v21.md"
 
 [checks.review_verifier]
 runner = "verifier"
-prompt = "review_verifier.md"
+prompt = "review_verifier.v21.md"
 
 [checks.verdict]
 runner = "verdict"
