@@ -1001,7 +1001,7 @@ fn fixable(f: &Finding) -> bool {
     blocks(f) && status(f) != "disputed"
 }
 
-/// A disputed one the verifier rules on: not the owner's ([`owner_held`]).
+/// A disputed one the verifier rules on: not the owner's (`owner_held`).
 pub fn disputable(f: &Finding) -> bool {
     status(f) == "disputed" && f.rest.get("owner_held") == Some(&Value::Bool(false))
 }
