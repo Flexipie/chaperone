@@ -1695,6 +1695,8 @@ mod tests {
         assert!(said(size.unwrap()).contains("newest size_waiver is no waiver to overturn"));
         assert!(said(overturn("lane").unwrap()).starts_with("session lane has held lane 1"));
         overturn("owner").unwrap().unwrap();
+        let twice = said(overturn("owner").unwrap());
+        assert!(twice.contains("newest plan_check is no waiver to overturn"));
         let facts = ledger.project(1, None).unwrap();
         assert_eq!(
             facts.get("plan_check.reason"),
