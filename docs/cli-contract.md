@@ -200,7 +200,8 @@ no other path gets past it.
 `<event>` is the id of the `check.finished` that raised it (`work events`) and `<key>` its key
 there (its `id` in `reviews get`). `dispute` moves an `open` or `verified` finding to `disputed`
 and only a session that has held the lane may; it still blocks until a session that never has
-rules on it: the verifier at the next `check run review` (so `verify`, #339) rules it
+rules on it: on a pipeline with the limit `dispute_attempts` (v21 on; on v20 the owner
+waives it), the verifier at the next `check run review` (so `verify`, #339) rules it
 `refuted` (the dispute holds) or `verified` (it blocks again), inside a fresh review, or on a
 tree whose review replays as a harness `dispute_ruling` (events.md). Not one titled `owner:`
 (a one-way door or a gate that fails open, as the lenses title them), one the owner moved to
@@ -540,7 +541,9 @@ sum passes the runner's `tokens_limit` it stops the session as at its deadline: 
 harness reviews, keyed `<review event id>/<finding_key>`, with its status and the reason of its
 newest move (every lens is shown them too, without bodies), and may rule `fixed` only on one
 still open or verified with a blocking severity, and `verified` or `refuted` only on a
-`disputed` one that is not the owner's (`owner_held` false: #339, `finding dispute`); a
+`disputed` one that is not the owner's (`owner_held` false: #339, `finding dispute`; on a
+pipeline with `dispute_attempts`, v21 on, whose lenses alone are told to title a one-way-door
+or fail-open finding `owner:`); a
 verifier starts when there is such a finding, even if no lens found anything. It may rule a finding of this review `same`, with
 `same_as` an earlier key that still blocks, as `findings.open_blocking` counts it (the
 verifier is shown which do), or one of a blocking severity the owner `waived`: the review writes it as a non-blocking `question` with

@@ -1133,7 +1133,7 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     plan.require(pipeline, &required);
     insert_patch_id(&wt, &base, &mut input)?;
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
-        let disputed = review::disputes(ledger, work)?;
+        let disputed = review::disputes(ledger, work, &plan)?;
         if !disputed.is_empty() {
             let (checkout, facts) = change(ledger, db, &wt, &item, &input.head)?;
             let started = agents(plan.sessions(facts.code_lines))?;

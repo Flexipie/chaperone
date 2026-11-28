@@ -271,7 +271,15 @@ fn review_one(
         since: None,
     };
     let io = |e: std::io::Error| CliError::Internal(e.to_string());
-    let review = review::run(&plan.lenses, agents, dir, &facts, store).map_err(io)?;
+    let review = review::run(
+        &plan.lenses,
+        plan.disputes.is_some(),
+        agents,
+        dir,
+        &facts,
+        store,
+    )
+    .map_err(io)?;
     let found: Vec<_> = review.found().cloned().collect();
     let verify = || review::verify(&plan.verifier, agents, dir, &facts, &found, &[], store);
     let verifier = (!found.is_empty()).then(verify).transpose().map_err(io)?;

@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 const PIPELINE: &str = r#"
 schema = 2
 id = "review-test"
-limits = { tokens = 150, timeout = 20, review_attempts = 2, verdict_attempts = 9, plan_attempts = 2 }
+limits = { tokens = 150, timeout = 20, review_attempts = 2, verdict_attempts = 9, plan_attempts = 2, dispute_attempts = 2 }
 runners.lens = { cli = "claude", model = "opus", tools = ["Read", "Grep"], tokens_limit = "tokens", timeout_limit = "timeout" }
 runners.second = { cli = "codex", model = "gpt-5.5", tokens_limit = "tokens", timeout_limit = "timeout" }
 checks.review_correctness = { runner = "lens", prompt = "correctness.md" }
@@ -135,7 +135,7 @@ fn run(claude: Value, codex: Value, diff_bytes: usize) -> (Env, Review, Duration
     let planned = review::lenses(&pipeline).unwrap();
     let started = Instant::now();
     let (dir, facts) = (env.checkout(), &env.facts);
-    let review = review::run(&planned, &env.agents(), &dir, facts, &env.store).unwrap();
+    let review = review::run(&planned, true, &env.agents(), &dir, facts, &env.store).unwrap();
     (env, review, started.elapsed())
 }
 
@@ -619,7 +619,10 @@ fn fallback_src(timeout: &str) -> String {
         second.replace(r#""timeout" }"#, &format!("{timeout:?}"))
     );
     let src = PIPELINE.replace(second, &to);
-    src.replace("plan_attempts = 2 }", "plan_attempts = 2, short = 1 }")
+    src.replace(
+        "dispute_attempts = 2 }",
+        "dispute_attempts = 2, short = 1 }",
+    )
 }
 
 /// A fallback is another runner with none of its own, and a Claude one
@@ -799,7 +802,7 @@ fn a_crash_before_the_rulings_is_finished_by_a_rerun() {
     let pipeline = pipeline();
     let plan = review::plan(&pipeline).unwrap();
     let (dir, agents, me) = (env.checkout(), env.agents(), lane_session());
-    let run = review::run(&plan.lenses, &agents, &dir, &env.facts, &env.store).unwrap();
+    let run = review::run(&plan.lenses, true, &agents, &dir, &env.facts, &env.store).unwrap();
     let found: Vec<_> = run.found().cloned().collect();
     let verified = review::verify(
         &plan.verifier,
@@ -1834,7 +1837,7 @@ fn the_verifier_rules_a_dispute_and_the_owner_can_overturn_it() {
 /// A dispute on a tree whose review replays is ruled by the verifier alone,
 /// recorded as a `dispute_ruling`; a rerun replays it and starts nothing.
 /// A finding titled `owner:` is never offered. A ruling with no answer
-/// is recorded incomplete, and past `review_attempts` the CLI is refused.
+/// is recorded incomplete, and past `dispute_attempts` the CLI is refused.
 #[test]
 fn a_dispute_on_a_replayed_tree_is_ruled_alone() {
     let said = json!({"findings": [found("risk", "a"), found("risk", "owner: drops a table")]});
@@ -1856,14 +1859,14 @@ fn a_dispute_on_a_replayed_tree_is_ruled_alone() {
     for f in ledger.blocking_findings(1).unwrap() {
         mv(&ledger, &lane_session(), &f, "disputed");
     }
-    let disputed = review::disputes(&ledger, 1).unwrap();
+    let pipeline = pipeline();
+    let plan = review::plan(&pipeline).unwrap();
+    let disputed = review::disputes(&ledger, 1, &plan).unwrap();
     let key = format!("{first}/{}", keys[0].finding_key);
     assert_eq!(
         disputed.iter().map(|f| &f.finding_key).collect::<Vec<_>>(),
         [&key]
     );
-    let pipeline = pipeline();
-    let plan = review::plan(&pipeline).unwrap();
     let (dir, agents) = (env.checkout(), env.agents());
     let mut input = input(&pipeline);
     assert!(
@@ -1911,4 +1914,44 @@ fn a_dispute_on_a_replayed_tree_is_ruled_alone() {
         .map(|(t, s)| format!("{t} {s}"))
         .collect();
     assert_eq!(statuses, ["a verified", "owner: drops a table disputed"]);
+}
+
+/// A pipeline with no `dispute_attempts` (v20) offers its verifier no
+/// dispute and tells no lens how to title an owner's finding.
+#[test]
+fn a_pipeline_without_dispute_attempts_leaves_disputes_to_the_owner() {
+    let (claude, codex) = scripts(rules);
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    record(&env, &ledger).unwrap();
+    let a = ledger.blocking_findings(1).unwrap().remove(0);
+    mv(&ledger, &lane_session(), &a, "disputed");
+    let src = PIPELINE.replace(", dispute_attempts = 2", "");
+    let v20 = Pipeline::load_with_prompts(&src, PROMPTS).unwrap();
+    let plan = review::plan(&v20).unwrap();
+    assert!(review::disputes(&ledger, 1, &plan).unwrap().is_empty());
+    let v21 = pipeline();
+    let with = review::plan(&v21).unwrap();
+    assert_eq!(review::disputes(&ledger, 1, &with).unwrap().len(), 1);
+    rule_only(&env, json!({"rulings": []}));
+    let (dir, agents) = (env.checkout(), env.agents());
+    review::run(&plan.lenses, false, &agents, &dir, &env.facts, &env.store).unwrap();
+    let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
+    let told: Vec<bool> = log
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|c| {
+            c["prompt"]
+                .as_str()
+                .unwrap()
+                .starts_with("LENS correctness")
+        })
+        .map(|c| {
+            c["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Findings only the owner settles")
+        })
+        .collect();
+    assert_eq!(told, [true, false]);
 }
