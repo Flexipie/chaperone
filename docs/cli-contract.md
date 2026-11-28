@@ -142,6 +142,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `finding waive` | `<event> <key> --reason <r> --kind <kind> [--ref <ref>]` | write |
 | `finding accept` | `<event> <key> --reason <r>` | write |
 | `finding answer` | `<event> <key> --reason <r>` | write |
+| `finding overturn` | `<event> <key> --reason <r>` | write |
 | `evidence show` | `<sha256 or prefix>` | read, no ledger |
 | `migrate` | (uses `--db`; no actor flags) | write, no event |
 | `install` | | no ledger, writes the marketplace dir, calls claude |
@@ -199,7 +200,11 @@ no other path gets past it.
 `<event>` is the id of the `check.finished` that raised it (`work events`) and `<key>` its key
 there (its `id` in `reviews get`). `dispute` moves an `open` or `verified` finding to `disputed`
 and only a session that has held the lane may; it still blocks until a session that never has
-rules on it. `waive` moves an `open`, `verified` or `disputed` finding to `waived` and is the
+rules on it: the verifier at the next `check run review` (so `verify`, #339) rules it
+`refuted` (the dispute holds) or `verified` (it blocks again), inside a fresh review, or on a
+tree whose review replays as a harness `dispute_ruling` (events.md). Not one titled `owner:`
+(a one-way door or a gate that fails open, as the lenses title them), one the owner moved to
+`verified`, or one disputed again after its ruling: those are the owner's. `waive` moves an `open`, `verified` or `disputed` finding to `waived` and is the
 owner's: refused from any session that has held the lane, as `work ready` is. `--reason` is
 required, one non-blank line of at most 500 characters (as `attention record --note`), and
 redacted. A move the table does not allow, the wrong session or a bad reason is
@@ -234,12 +239,18 @@ check's question. While a finding of the lane's newest plan check (a replayed ol
 carried, so it is the newest again) is `open`, `check run
 diff` and `check run review` (so `verify`) are refused (events.md, plan findings).
 
+`finding overturn` is new (#339): the owner's answer to a stop the lane resolved without
+them. It moves a `refuted` or `waived` finding to `verified`, so it blocks again, refused from
+any session that has held the lane, and the verifier never rules on its dispute again. It
+prints as `dispute` does. `pr open` lists each dispute the verifier upheld under "Resolved
+without the owner", with the command that overturns it.
+
 `finding list` is new (#212). It prints, oldest first, every finding of the lane's complete
 harness reviews (`check.finished` `review` from the harness with `complete: true`), of any
 commit, and of its newest plan check (#221), as items `{check_event_id, check, finding_key,
-severity, title, body, path, line, head_sha, status, reason, waiver, blocks}`. `check` is `review` or
+severity, title, body, path, line, head_sha, status, reason, waiver, blocks, disputed}`. `check` is `review` or
 `plan_check`; `reason` is that of the finding's newest move, null when it has none, and `waiver`
-that move's waiver kind (#235), null when it has none; a plan
+that move's waiver kind (#235), null when it has none; `disputed` is whether the lane has ever disputed it (#339); a plan
 check's finding never `blocks`. `check_event_id` and `finding_key` address the finding for `finding dispute`
 and `finding waive`; `head_sha` is the commit the review read; `line` is the lens's, from the
 review's payload. `blocks` is the `no_blocking_findings` gate's rule: unsettled (`open`,
@@ -854,7 +865,7 @@ Each command is one transaction that appends one event (events.md, write rules).
 | `work update --status cancelled`, `work cancel` | ungated | `lane.cancelled` |
 | `work update`, any other change | ungated | `lane.updated`, or `pr.opened` when the PR goes from null to set |
 | `work claim`, `release`, `ready` | ungated | the matching `lane.*` kind |
-| `finding dispute`, `finding waive`, `finding accept`, `finding answer` | ungated | `finding.updated` |
+| `finding dispute`, `finding waive`, `finding accept`, `finding answer`, `finding overturn` | ungated | `finding.updated` |
 | `work heartbeat` | none | none |
 | `migrate` | none | none (schema only) |
 

@@ -24,8 +24,8 @@ variable does not last between calls). The plan, handoff JSON and `lane-state.md
   the hook denies them. `chaperone pr open` opens the PR; the owner merges.
 - Push to the base branch, push the branch yourself (but step 7's v21 fallback), merge, `--no-verify`, amend or rebase
   after `pr open` (it pushes without force).
-- `check record` anything but the smoke claim; `finding waive` and `check waive` are the
-  owner's. Editing `.chaperone/profile.toml` changes nothing: checks read the base branch's.
+- `check record` anything but the smoke claim; `finding waive`, `finding overturn` and
+  `check waive` are the owner's. Editing `.chaperone/profile.toml` changes nothing: checks read the base branch's.
 
 ## Lane state
 
@@ -199,8 +199,9 @@ the lane's PR; a lane with no PR takes one merged from its branch. Off v21 also 
 Stop and ask only when: you cannot tell what done means, or two readings lead to different
 code; doing it properly needs work outside the done-when; a one-way door (schema, migration,
 prod data, a user's files, money); the plan departs from a recorded decision; the size
-passes `code_lines`; a check you cannot pass after a real attempt; a finding you disputed;
-or a refusal only the owner can lift.
+passes `code_lines`; a check you cannot pass after a real attempt; a dispute that is the
+owner's (`findings.md`); or a refusal only the owner can lift. A `next_action` that waits on
+the owner names the exact command they run.
 
 A question names the part of the done-when it blocks. While some part is not blocked, hand
 off `active`: `open_questions` one line each, `<question> (blocks: <part>)`; `blockers` one

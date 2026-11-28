@@ -1755,3 +1755,160 @@ fn flipping_between_commits_of_a_tree_appends_nothing() {
     // The first commit's four Claude sessions, Codex and the verdict.
     assert_eq!(calls(&env), 6);
 }
+
+/// The verifier's rulings script: the lenses find nothing, the verifier
+/// answers `rulings`.
+fn rule_only(env: &Env, rulings: Value) {
+    let none = json!({"findings": []});
+    let lens = |l: &str| json!({"when": format!("LENS {l}"), "stdout": session(l, none.clone())});
+    let verifier = json!({"when": "LENS verifier", "stdout": session("verifier", rulings)});
+    let runs = [
+        lens("correctness"),
+        lens("design_tests"),
+        lens("intent"),
+        verifier,
+    ];
+    rescript(env, "claude", json!(runs));
+    rescript(
+        env,
+        "codex",
+        json!([{"when": "LENS codex", "write": {"-o": none.to_string()}}]),
+    );
+}
+
+/// The keys the newest verifier call may rule on.
+fn offered(env: &Env) -> Value {
+    let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
+    let call: Value = log
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .rfind(|c: &Value| c["prompt"].as_str().unwrap().starts_with("LENS verifier"))
+        .unwrap();
+    let schema: Value = serde_json::from_str(call["args"][6].as_str().unwrap()).unwrap();
+    schema["properties"]["rulings"]["items"]["properties"]["key"]["enum"].clone()
+}
+
+/// A lane's dispute is ruled by the next review's verifier: upheld, it is
+/// refuted with the verifier's why and stops blocking. The owner's
+/// overturn makes it block again, and the lane's dispute of it then is
+/// the owner's: no verifier is offered it.
+#[test]
+fn the_verifier_rules_a_dispute_and_the_owner_can_overturn_it() {
+    let (claude, codex) = scripts(rules);
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let first = record(&env, &ledger).unwrap().event_id;
+    let a = ledger.blocking_findings(1).unwrap().remove(0);
+    assert_eq!((a.title.as_str(), a.status.as_str()), ("a", "verified"));
+    mv(&ledger, &lane_session(), &a, "disputed");
+    let key = format!("{first}/{}", a.finding_key);
+    let why = "src/a.rs:3 stops at the end\nas CONTRIBUTING.md says";
+    rule_only(
+        &env,
+        json!({"rulings": [{"key": key, "verdict": "refuted", "why": why}]}),
+    );
+    reviewed(&env, &ledger, &"4".repeat(40), &"5".repeat(40)).unwrap();
+    assert!(offered(&env).as_array().unwrap().contains(&json!(key)));
+    let a_now = |l: &Ledger| {
+        let all = l.lane_findings(1).unwrap();
+        let f = all
+            .into_iter()
+            .find(|f| f.finding_key == a.finding_key)
+            .unwrap();
+        (f.status, f.reason, f.disputed, f.blocks)
+    };
+    let upheld = "src/a.rs:3 stops at the end as CONTRIBUTING.md says";
+    assert_eq!(
+        a_now(&ledger),
+        ("refuted".into(), Some(upheld.into()), true, false)
+    );
+    mv(&ledger, &owner(), &a, "verified");
+    assert!(a_now(&ledger).3);
+    mv(&ledger, &lane_session(), &a, "disputed");
+    rule_only(&env, json!({"rulings": []}));
+    reviewed(&env, &ledger, &"6".repeat(40), &"7".repeat(40)).unwrap();
+    assert!(!offered(&env).as_array().unwrap().contains(&json!(key)));
+    assert_eq!(a_now(&ledger).0, "disputed");
+}
+
+/// A dispute on a tree whose review replays is ruled by the verifier alone,
+/// recorded as a `dispute_ruling`; a rerun replays it and starts nothing.
+/// A finding titled `owner:` is never offered. A ruling with no answer
+/// is recorded incomplete, and past `review_attempts` the CLI is refused.
+#[test]
+fn a_dispute_on_a_replayed_tree_is_ruled_alone() {
+    let said = json!({"findings": [found("risk", "a"), found("risk", "owner: drops a table")]});
+    let keys = review::findings("correctness", said.clone()).unwrap();
+    let none = json!({"findings": []});
+    let ran =
+        |l: &str, s: &Value| json!({"when": format!("LENS {l}"), "stdout": session(l, s.clone())});
+    let quiet = json!({"rulings": []});
+    let claude = json!([
+        ran("correctness", &said),
+        ran("design_tests", &none),
+        ran("intent", &none),
+        ran("verifier", &quiet)
+    ]);
+    let codex = json!([{"when": "LENS codex", "write": {"-o": none.to_string()}}]);
+    let env = env(claude, codex, 10);
+    let ledger = ledger(&env);
+    let first = record(&env, &ledger).unwrap().event_id;
+    for f in ledger.blocking_findings(1).unwrap() {
+        mv(&ledger, &lane_session(), &f, "disputed");
+    }
+    let disputed = review::disputes(&ledger, 1).unwrap();
+    let key = format!("{first}/{}", keys[0].finding_key);
+    assert_eq!(
+        disputed.iter().map(|f| &f.finding_key).collect::<Vec<_>>(),
+        [&key]
+    );
+    let pipeline = pipeline();
+    let plan = review::plan(&pipeline).unwrap();
+    let (dir, agents) = (env.checkout(), env.agents());
+    let mut input = input(&pipeline);
+    assert!(
+        review::replay(&ledger, &lane_session(), &mut input, &plan)
+            .unwrap()
+            .unwrap()
+            .is_some()
+    );
+    let rule = |input: &RunInput| {
+        review::rule_disputes(
+            &ledger,
+            &lane_session(),
+            input,
+            &plan,
+            &agents,
+            &dir,
+            &env.facts,
+            &disputed,
+            &env.store,
+        )
+        .unwrap()
+    };
+    rescript(
+        &env,
+        "claude",
+        json!([{"when": "LENS verifier", "stdout": "not json"}]),
+    );
+    for _ in 0..2 {
+        assert_eq!(rule(&input).unwrap().payload.rest["complete"], false);
+    }
+    assert!(format!("{:?}", rule(&input).unwrap_err()).contains("needs you, the owner rules"));
+    let ruled = json!({"rulings": [{"key": key, "verdict": "verified", "why": "no ref"}]});
+    rescript(&env, "claude", json!([ran("verifier", &ruled)]));
+    input.head = "8".repeat(40);
+    let recorded = rule(&input).unwrap();
+    assert_eq!(
+        recorded.payload.check.as_deref(),
+        Some(review::DISPUTE_RULING)
+    );
+    let before = calls(&env);
+    assert_eq!(rule(&input).unwrap().event_id, recorded.event_id);
+    assert_eq!(calls(&env), before);
+    let statuses: Vec<_> = blocking(&ledger)
+        .into_iter()
+        .map(|(t, s)| format!("{t} {s}"))
+        .collect();
+    assert_eq!(statuses, ["a verified", "owner: drops a table disputed"]);
+}

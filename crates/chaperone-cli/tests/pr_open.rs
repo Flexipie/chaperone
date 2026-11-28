@@ -387,10 +387,34 @@ fn pr_open_lists_the_findings_that_do_not_block() {
         .chain(waive)
         .collect();
     assert_eq!(lane.run("owner", &waive).0, 0);
+    let dispute = [
+        "finding",
+        "dispute",
+        &covering,
+        "r2",
+        "--reason",
+        "lib.rs:1 says so",
+    ];
+    assert_eq!(lane.run("lane", &dispute).0, 0);
+    let p = json!({"check_event_id": covering.parse::<i64>().unwrap(), "finding_key": "r2",
+                   "status": "refuted", "reason": "lib.rs:1 does say so", "producer": harness});
+    let m = Mutation::Event {
+        kind: EventKind::FindingUpdated,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: serde_json::from_value(p).unwrap(),
+    };
+    let at = "2026-11-27T00:00:01.000Z";
+    ledger.apply(&actor, None, at, m).unwrap();
     assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 1);
-    let open = "- Smoke: none\n- Tokens: 5 fresh input, unknown cache write, 7 cache read, \
-                3 output, in 1 sessions\n\nOpen findings, not blocking:\n\
-                - improvement: i `lib.rs:2`\n- question: q\n\nMade by";
+    let open = format!(
+        "- Smoke: none\n- Tokens: 5 fresh input, unknown cache write, 7 cache read, \
+         3 output, in 1 sessions\n\nOpen findings, not blocking:\n\
+         - improvement: i `lib.rs:2`\n- question: q\n\nResolved without the owner:\n\
+         - risk: r2: dispute upheld by the verifier: lib.rs:1 does say so \
+         (`chaperone finding overturn {covering} r2 --reason <why>` reopens it)\n\nMade by"
+    );
+    let open = open.as_str();
     let body = lane.file("body.md");
     assert!(body.contains(open), "{body}");
 }

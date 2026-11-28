@@ -27,6 +27,8 @@ const ALLOWED: &[(&str, &str)] = &[
     ("verified", "disputed"),
     ("open", "accepted"),
     ("accepted", "waived"),
+    ("refuted", "verified"),
+    ("waived", "verified"),
 ];
 const STATUSES: [&str; 8] = [
     "open", "fixed", "answered", "verified", "refuted", "disputed", "waived", "accepted",

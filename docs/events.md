@@ -223,15 +223,20 @@ the same value, a trailing slash aside, still writes.
 **Finding statuses.** A finding is folded `open`. Each `finding.updated` makes one of these
 moves, checked by the write; any other move, another status, or the same status again
 (`finding <event>/<key> is already <status>`) is `invalid_input`, an unknown finding is
-`not_found` with reference `<event>/<key>`, and nothing is written. `refuted`, `waived`,
-`fixed` and `answered` are final; `accepted` is final but for a `scope` waiver. "Lane" is a session that has held the lane (a
+`not_found` with reference `<event>/<key>`, and nothing is written. `fixed` and `answered`
+are final; `refuted` and `waived` are final but for the owner's overturn (#339); `accepted`
+is final but for a `scope` waiver. "Lane" is a session that has held the lane (a
 `lane.claimed` or `lane.taken_over`); "independent" is one that never has: the verifier,
 or the owner (the rule `work ready` uses). The lane disputes a finding, or accepts a harness
 plan check's (refused on any other check's finding), so it never settles a review's. A `finding.updated` whose `producer.kind` is `harness` is the
-verifier's ruling inside `check run review`: the binary ran the verifier, so it may make the
-`verified`, `refuted` and `fixed` moves whatever session started the run (usually the lane's
-own, in the background), and only on a finding whose `check.finished` is itself a harness
-`review`.
+verifier's ruling inside `check run review` (in a review, or a `dispute_ruling`): the binary
+ran the verifier, so it may make the `verified`, `refuted` and `fixed` moves whatever session
+started the run (usually the lane's own, in the background), never from `refuted` or
+`waived`, and only on a finding whose `check.finished` is itself a harness `review`. Its
+ruling on a dispute carries `reason`, its why on one line, cut to 500 characters. It is
+refused on a disputed finding that is the owner's: titled `owner:` (a one-way door or a gate
+that fails open, as every lens is told to title one), moved to `verified` by a non-harness
+session (an overturn), or disputed more than once.
 It makes no other move from a session that has held the lane, and none on another check's
 finding. Only that code path sets the producer; no command takes it as input.
 
@@ -244,6 +249,7 @@ finding. Only that code path sets the producer; no command takes it as input.
 | `open`, `verified`, `disputed` | `waived` | independent (the owner, or for `scope`, `deferred` and `accepted` a session fresh to the lane, `waiver` above) |
 | `open` | `accepted` | lane, and only on a finding of a harness `plan_check` |
 | `accepted` | `waived` | independent, and only with `waiver.kind` `scope` and a `ref` (the issue the work moved to) |
+| `refuted`, `waived` | `verified` | independent, never the harness (the owner's overturn, `finding overturn`: it blocks again) |
 
 There is no `disputed` to `fixed`: a lane that concedes a disputed finding fixes it and
 waits for the verifier to rule. `open`, `verified` and `disputed` are unsettled.
@@ -398,7 +404,7 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
   `+<commit>` when it was built in a git checkout. The session rule does not apply. Only
   `check run` writes this producer. On a lane stamped with a schema 2 pipeline (`v20`), the
   write refuses (`invalid_input`, nothing written) a `diff`, `tests`, `review`,
-  `merge_verdict` or `plan_check` from any other producer, so `check record` cannot write
+  `merge_verdict`, `plan_check` or `dispute_ruling` from any other producer, so `check record` cannot write
   them there; the one exception is the owner's plan waiver (`plan_check` `skipped`, `reason`
   `waived`). A session's `smoke` stays writable there as the lane's claim, told apart by its
   producer, and is refused when it carries `result`, the harness's field. `reviews record`
@@ -409,6 +415,7 @@ under another lane's, also counts those sessions. That is lane-stats' rule, kept
 
 | Check | Producer | Fields (after `check`, `outcome`, `head_sha`, `producer`) |
 | --- | --- | --- |
+| `dispute_ruling` | harness | `ran` only (#339). `check run review` on a commit whose review replays, when the lane has a disputed finding the verifier may rule (not the owner's, finding statuses): the verifier alone, shown the change as in a review and those findings as earlier ones. `tree`, `profile` (as the review's), `disputes` (the `<review event id>/<finding_key>` of each), `verifier` (the review's verifier row, its `rulings` `verified` or `refuted` on them) and `complete` (the verifier answered). Keyed as a review's run plus the disputed keys, so a rerun replays it and applies what a crash left; a commit gets `review_attempts` that are not complete, then `check run review` is refused for the owner to rule. Its rulings follow as `finding.updated`, and a ruling moves a finding only when nothing moved it after the ruling's event. |
 | `rounds_waiver` | session | `ran` only, through `check waive rounds` (the owner's, refused from any session that has held the lane): `rounds` (the lane's raised `review_rounds` limit on fresh reviews, an integer above 0, refused otherwise, so `check record` cannot write one) and `note`, the owner's one line, redacted. `head_sha` is the commit the lane was on; the newest waiver is the lane's limit for every commit. |
 | `size_waiver` | session | `ran` only, through `check waive size` (the owner's, refused from any session that has held the lane): `lines` (the lane's raised `code_lines` limit, an integer above 0, refused otherwise, so `check record` cannot write one) and `note`, the owner's one line, redacted. `head_sha` is the commit the lane was on; the newest waiver holds for every commit of the lane. |
 | `plan_check` | session | `ran`: `findings` (count). `skipped`: `reason` `measure`, `investigation`, `docs` or `tests`; or, through `check waive plan` (the owner's, refused from any session that has held the lane), `reason` `waived` with `note`, the owner's one line, redacted. |

@@ -43,7 +43,14 @@ pub const SESSION_CHECKS: &[&str] = &[
 
 /// The checks the harness runs under a schema 2 pipeline (`check run`),
 /// which only its producer writes on a lane stamped with one.
-const HARNESS_CHECKS: &[&str] = &["diff", "tests", "review", "merge_verdict", "plan_check"];
+const HARNESS_CHECKS: &[&str] = &[
+    "diff",
+    "tests",
+    "review",
+    "merge_verdict",
+    "plan_check",
+    "dispute_ruling",
+];
 
 /// Who may make a finding move (events.md, finding statuses). The lane
 /// disputes a finding, or accepts a plan check's, so it never settles a
@@ -74,6 +81,8 @@ const FINDING_MOVES: &[(&str, &str, By)] = &[
     ("verified", "disputed", By::Lane),
     ("open", "accepted", By::Lane),
     ("accepted", "waived", By::Independent),
+    ("refuted", "verified", By::Independent),
+    ("waived", "verified", By::Independent),
 ];
 
 pub const SOURCES: &[&str] = &["linear", "github", "note", "issue", "manual"];
@@ -840,7 +849,15 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // path sets this producer. Its moves only, on harness reviews'
             // findings only (`apply` takes any payload).
             let reviewed = raised_by.as_deref() == Some("review");
-            let ruled = harness && reviewed && matches!(to, "verified" | "refuted" | "fixed");
+            let ruled = harness
+                && reviewed
+                && matches!(to, "verified" | "refuted" | "fixed")
+                && !matches!(from.as_str(), "refuted" | "waived");
+            if harness && from == "disputed" && owner_held(tx, lane_id, check, key)? {
+                refuse!(invalid(&format!(
+                    "finding {check}/{key} is the owner's: its dispute is not the verifier's to rule"
+                )));
+            }
             match by {
                 By::Lane if !held => refuse!(invalid(&format!(
                     "only the lane disputes or accepts a finding; session {session} has never held lane {lane_id}"
@@ -974,6 +991,32 @@ fn stamped_schema(tx: &Transaction, lane_id: i64) -> Result<Option<i64>, LedgerE
         |r| r.get(0),
     )?;
     Ok(crate::pipeline::by_id(&id.unwrap_or_default()).map(|d| d.schema))
+}
+
+/// A finding only the owner settles: one titled `owner:` (a one-way door,
+/// or a gate that fails open), one the owner moved to `verified` (an
+/// overturn), or one disputed again after the verifier ruled its dispute.
+pub(crate) fn owner_held(
+    conn: &Connection,
+    lane_id: i64,
+    check: i64,
+    key: &str,
+) -> Result<bool, LedgerError> {
+    exists(
+        conn,
+        "SELECT 1 FROM findings f WHERE f.lane_id = ?1 AND f.check_event_id = ?2
+           AND f.finding_key = ?3 AND (f.title LIKE 'owner:%'
+             OR (SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'finding.updated'
+                   AND json_extract(payload_json, '$.check_event_id') = ?2
+                   AND json_extract(payload_json, '$.finding_key') = ?3
+                   AND json_extract(payload_json, '$.status') = 'disputed') > 1
+             OR EXISTS (SELECT 1 FROM events WHERE lane_id = ?1 AND kind = 'finding.updated'
+                   AND json_extract(payload_json, '$.check_event_id') = ?2
+                   AND json_extract(payload_json, '$.finding_key') = ?3
+                   AND json_extract(payload_json, '$.status') = 'verified'
+                   AND json_extract(payload_json, '$.producer.kind') IS NOT 'harness'))",
+        rusqlite::params![lane_id, check, key],
+    )
 }
 
 /// The session has held the lane: it wrote a `lane.claimed` or

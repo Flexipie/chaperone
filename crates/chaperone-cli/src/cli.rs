@@ -259,6 +259,7 @@ impl Cmd {
             Cmd::Finding(FindingCmd::Waive(_)) => Some("finding waive"),
             Cmd::Finding(FindingCmd::Accept(_)) => Some("finding accept"),
             Cmd::Finding(FindingCmd::Answer(_)) => Some("finding answer"),
+            Cmd::Finding(FindingCmd::Overturn(_)) => Some("finding overturn"),
             Cmd::Finding(FindingCmd::List { .. }) => None,
             Cmd::Evidence(EvidenceCmd::Show { .. }) => None,
             Cmd::Hook {
@@ -866,9 +867,11 @@ pub enum FindingCmd {
         #[arg(long)]
         work: i64,
     },
-    /// Say an open or verified finding is wrong. Only from a session that
-    /// has held the lane; it still blocks until a session that never has
-    /// rules on it
+    /// Say an open or verified finding is wrong, citing the file:line, repo
+    /// rule or task text that answers it. Only from a session that has held
+    /// the lane; it blocks until the verifier rules on it at the next
+    /// verify, or, for one titled owner:, overturned or disputed again, the
+    /// owner
     Dispute(FindingArgs),
     /// Stop an open, verified or disputed finding blocking, or (scope only)
     /// release an accepted plan finding. Refused from any session that has
@@ -880,6 +883,10 @@ pub enum FindingCmd {
     Accept(FindingArgs),
     /// Answer an open question finding, as anyone may
     Answer(FindingArgs),
+    /// Make a refuted or waived finding block again, as verified. Refused
+    /// from any session that has held the lane: the owner's. The verifier
+    /// never rules on its dispute again
+    Overturn(FindingArgs),
 }
 
 /// One finding, addressed as the ledger does, and why

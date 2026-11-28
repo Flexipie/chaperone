@@ -652,6 +652,20 @@ fn pr_body(
     if !open.is_empty() {
         open = format!("\nOpen findings, not blocking:\n{open}");
     }
+    let mut resolved = String::new();
+    for f in ledger.lane_findings(item.id)? {
+        if f.status != "refuted" || !f.disputed {
+            continue;
+        }
+        let why = f.reason.unwrap_or_default();
+        resolved += &format!(
+            "- {}: {}: dispute upheld by the verifier: {why} (`chaperone finding overturn {} {} --reason <why>` reopens it)\n",
+            f.severity, f.title, f.check_event_id, f.finding_key
+        );
+    }
+    if !resolved.is_empty() {
+        open += &format!("\nResolved without the owner:\n{resolved}");
+    }
     let stats = ledger.stats(&Cohort::Work(vec![item.id]))??;
     let total = &stats["lanes"][0]["tokens"]["total"];
     let n = |k: &str| {
@@ -1119,6 +1133,17 @@ fn run_review(ledger: &Ledger, db: &Path, work: i64, actor: &Actor) -> Result<Ou
     plan.require(pipeline, &required);
     insert_patch_id(&wt, &base, &mut input)?;
     if let Some(stored) = review::replay(ledger, actor, &mut input, &plan)?? {
+        let disputed = review::disputes(ledger, work)?;
+        if !disputed.is_empty() {
+            let (checkout, facts) = change(ledger, db, &wt, &item, &input.head)?;
+            let started = agents(plan.sessions(facts.code_lines))?;
+            let agents = Agents::of(&started);
+            let (dir, store) = (&checkout.dir, Evidence::beside(db));
+            let ruled = review::rule_disputes(
+                ledger, actor, &input, &plan, &agents, dir, &facts, &disputed, &store,
+            );
+            ruled??;
+        }
         return one(stored);
     }
     let (checkout, mut facts) = change(ledger, db, &wt, &item, &input.head)?;
@@ -1865,6 +1890,7 @@ pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outc
         FindingCmd::Waive(w) => ("waived", w.finding, Some((w.kind, w.reference))),
         FindingCmd::Accept(args) => ("accepted", args, None),
         FindingCmd::Answer(args) => ("answered", args, None),
+        FindingCmd::Overturn(args) => ("verified", args, None),
         FindingCmd::List { work } => return items(ledger.lane_findings(work)?),
     };
     let (waiver_kind, waiver_ref) = waiver.unzip();

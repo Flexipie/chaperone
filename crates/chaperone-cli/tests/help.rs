@@ -128,6 +128,10 @@ fn help_matches_snapshots() {
             &["finding", "answer"],
             include_str!("snapshots/finding-answer.txt"),
         ),
+        (
+            &["finding", "overturn"],
+            include_str!("snapshots/finding-overturn.txt"),
+        ),
         (&["usage"], include_str!("snapshots/usage.txt")),
         (
             &["usage", "report"],

@@ -29,7 +29,7 @@ pub use evidence::{Evidence, Kept, Stored};
 use migrate::{Migration, user_version};
 pub(crate) use redact::payload as redact_payload;
 pub(crate) use write::{
-    Checked, MAX_LEASE_SECS, MIN_LEASE_SECS, canonical_at, exists, has_held, lease_held,
+    Checked, MAX_LEASE_SECS, MIN_LEASE_SECS, canonical_at, exists, has_held, lease_held, owner_held,
 };
 pub use write::{KINDS, PR_FLOWS, SESSION_CHECKS, SOURCES, SPEC_BODY_MAX_BYTES, STATUSES};
 
