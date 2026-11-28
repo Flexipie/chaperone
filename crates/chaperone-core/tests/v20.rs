@@ -81,7 +81,7 @@ fn harness_checks_are_the_harness_s_on_a_v20_lane() {
     record(1, "smoke", "skipped", Some("nothing_runs")).unwrap();
     record(1, "quality_gate", "skipped", Some("no_code")).unwrap();
     ledger
-        .plan_waive(&fresh, 1, HEAD, "coded first")
+        .plan_waive(&fresh, 1, HEAD, "coded first", 2)
         .unwrap()
         .unwrap();
     for check in ["diff", "tests", "review"] {
@@ -236,17 +236,34 @@ fn the_cap_counts_code_and_only_the_owner_raises_it() {
         v.ledger
             .limit_waive(who, 1, OTHER, SIZE_WAIVER, lines, "one piece")
     };
-    refused(waive(&v.lane, 500).unwrap(), "has held lane 1");
-    refused(waive(&v.owner, 0).unwrap(), "lines, an integer above 0");
+    // The lane's own size waiver is its reason only (#340): no lines, no lift.
+    refused(waive(&v.lane, Some(500)).unwrap(), "carries no lines");
+    waive(&v.lane, None).unwrap().unwrap();
+    assert_eq!(v.ready(OTHER), over);
+    refused(
+        waive(&v.owner, Some(0)).unwrap(),
+        "lines, an integer above 0",
+    );
     refused(
         raw(&v.ledger, 1, "size_waiver", "session", json!({})),
-        "above 0",
+        "from anyone else, lines",
     );
     // Only a session's waiver counts: the harness never writes one.
     let harness = json!({"lines": 999});
     raw_as(&v.ledger, &v.lane, 1, "size_waiver", "harness", harness).unwrap();
     assert_eq!(v.ready(OTHER), over);
-    waive(&v.owner, 500).unwrap().unwrap();
+    waive(&v.owner, Some(500)).unwrap().unwrap();
+    assert_eq!(v.ready(OTHER), tests);
+    // The owner's overturn lifts it again, and the lane may not record anew.
+    let overturn = |who: &Actor| {
+        v.ledger
+            .check_overturn(who, 1, OTHER, "size_waiver", "split")
+    };
+    refused(overturn(&v.lane).unwrap(), "has held lane 1");
+    overturn(&v.owner).unwrap().unwrap();
+    assert_eq!(v.ready(OTHER), over);
+    refused(waive(&v.lane, None).unwrap(), "the owner overturned");
+    waive(&v.owner, Some(500)).unwrap().unwrap();
     assert_eq!(v.ready(OTHER), tests);
     v.diff(THIRD, 501, true);
     assert_eq!(v.ready(THIRD), over);
@@ -265,7 +282,7 @@ fn only_the_owner_raises_the_review_rounds() {
     let v = Gated::new("code");
     let waive = |who: &Actor, n| {
         v.ledger
-            .limit_waive(who, 1, HEAD, ROUNDS_WAIVER, n, "rethought")
+            .limit_waive(who, 1, HEAD, ROUNDS_WAIVER, Some(n), "rethought")
     };
     refused(waive(&v.lane, 4).unwrap(), "has held lane 1");
     refused(waive(&v.owner, 0).unwrap(), "rounds, an integer above 0");
@@ -303,7 +320,9 @@ fn a_carried_review_and_verdict_pass_on_the_amend() {
     assert_eq!(lane.ready(AMEND), blocking);
     lane.rule(&lane.owner, review, "correctness-risk", "waived");
     assert_eq!(lane.ready(AMEND), denied("plan_or_no_code", &PLAN));
-    let waive = lane.ledger.plan_waive(&lane.owner, 1, HEAD, "coded first");
+    let waive = lane
+        .ledger
+        .plan_waive(&lane.owner, 1, HEAD, "coded first", 2);
     waive.unwrap().unwrap();
     assert_eq!(lane.ready(AMEND), denied("smoke_or_no_code", &SMOKE));
     lane.claim(AMEND);
@@ -389,7 +408,9 @@ fn a_session_plan_check_or_verdict_is_no_harness_fact() {
         lane.rule(&lane.owner, review, key, "refuted");
     }
     assert_eq!(lane.ready(HEAD), denied("plan_or_no_code", &PLAN));
-    let waive = lane.ledger.plan_waive(&lane.owner, 1, HEAD, "coded first");
+    let waive = lane
+        .ledger
+        .plan_waive(&lane.owner, 1, HEAD, "coded first", 2);
     waive.unwrap().unwrap();
     lane.claim(HEAD);
     let yes = denied("verdict_is_yes", &["verdict.decision"]);

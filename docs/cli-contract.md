@@ -94,7 +94,7 @@ so a relative one is refused (`invalid_input`, nothing written).
 
 ## Commands in M1
 
-Every write except `migrate` and `hook` also takes `--agent` and `--session`, and every write but `migrate`, `hook`, `check record`, `check run`, `check waive`, `verify`, `pr open`, `merge`, `reviews record`, `usage report`, `work merged` and `attention record` takes `--dry-run`. `[x]` is optional.
+Every write except `migrate` and `hook` also takes `--agent` and `--session`, and every write but `migrate`, `hook`, `check record`, `check run`, `check waive`, `check overturn`, `verify`, `pr open`, `merge`, `reviews record`, `usage report`, `work merged` and `attention record` takes `--dry-run`. `[x]` is optional.
 
 | Command | Argv | Kind |
 | --- | --- | --- |
@@ -125,7 +125,8 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `spec decide` | `<spec> [--slice <n>] [--key <k>] --question <q> --answer <a> [--where <w>]` | write |
 | `check record` | `--work <id> --check plan_check\|quality_gate\|merge_verdict\|smoke\|kept_tests\|review_round\|size_waiver\|rounds_waiver --head <sha> --outcome ran\|skipped [--reason <r>] [--decision yes\|no] [--findings <n>] [--evidence <file>]... [--run <script>]` (a `size_waiver` or `rounds_waiver` is refused here, having no `--lines` or `--rounds`: `check waive size` and `check waive rounds` record them) | write |
 | `check run` | `diff\|tests\|review\|verdict\|plan\|smoke --work <id> [--file <plan>]` | write |
-| `check waive` | `plan --work <id> --reason <r>`, `size --work <id> --lines <n> --reason <r>`, `rounds --work <id> --rounds <n> --reason <r>` | write |
+| `check waive` | `plan --work <id> --reason <r>`, `size --work <id> [--lines <n>] --reason <r>`, `rounds --work <id> --rounds <n> --reason <r>` | write |
+| `check overturn` | `plan\|size --work <id> --reason <r>` | write |
 | `check prune` | | read, removes directories |
 | `verify` | `--work <id>` | write |
 | `pr open` | `--work <id> [--title <t>] [--draft]` | write, pushes, calls gh |
@@ -214,6 +215,13 @@ redacted. A move the table does not allow, the wrong session or a bad reason is
 refused as `finding <event>/<key> is already <status>`, not replayed. Both print
 `{event_id, work_id, kind, replayed, at, payload}`.
 
+The lane itself may make one `waive` (#340): `--kind deferred`, with `--ref` the repo rule that
+forbids the edit or the follow-up issue, on an `open` or `verified` finding of a harness review
+it cannot fix in this lane. Refused on a disputed one (it waits for its ruling), another check's,
+and one that is the owner's (titled `owner:`, overturned, or disputed twice). It stops blocking,
+a lane's deferral never reopens its own NO verdict, `pr open` lists it under "Resolved without
+the owner", and `finding overturn` makes it block again.
+
 `finding waive` takes `--kind` (#235), required: `fixed`, `disproved`, `scope`, `deferred` or
 `accepted`, and `--ref`, what backs it (the commit and test, the file:line, the owner text or
 the follow-up issue; one non-blank line of at most 500 characters). `fixed` and `disproved`
@@ -243,15 +251,18 @@ diff` and `check run review` (so `verify`) are refused (events.md, plan findings
 `finding overturn` is new (#339): the owner's answer to a stop the lane resolved without
 them. It moves a `refuted` or `waived` finding to `verified`, so it blocks again, refused from
 any session that has held the lane, and the verifier never rules on its dispute again. It
-prints as `dispute` does. `pr open` lists each dispute the verifier upheld under "Resolved
-without the owner", with the command that overturns it.
+prints as `dispute` does. `pr open` lists under "Resolved without the owner" each dispute the
+verifier upheld and each `deferred` waiver (its ref and reason), with `finding overturn`, and
+the lane's own plan waiver and size reason (#340), with `check overturn`. Its Size line adds
+`over the cap of <cap>: <why>` when the diff adds more code lines than the cap a pipeline's
+review asks about (v21 on), the why the newest size waiver's note, or `no reason recorded`.
 
 `finding list` is new (#212). It prints, oldest first, every finding of the lane's complete
 harness reviews (`check.finished` `review` from the harness with `complete: true`), of any
 commit, and of its newest plan check (#221), as items `{check_event_id, check, finding_key,
-severity, title, body, path, line, head_sha, status, reason, waiver, blocks, disputed}`. `check` is `review` or
+severity, title, body, path, line, head_sha, status, reason, waiver, waiver_ref, blocks, disputed}`. `check` is `review` or
 `plan_check`; `reason` is that of the finding's newest move, null when it has none, and `waiver`
-that move's waiver kind (#235), null when it has none; `disputed` is whether the lane has ever disputed it (#339); a plan
+that move's waiver kind (#235) and `waiver_ref` its ref (#340), null when it has none; `disputed` is whether the lane has ever disputed it (#339); a plan
 check's finding never `blocks`. `check_event_id` and `finding_key` address the finding for `finding dispute`
 and `finding waive`; `head_sha` is the commit the review read; `line` is the lens's, from the
 review's payload. `blocks` is the `no_blocking_findings` gate's rule: unsettled (`open`,
@@ -633,24 +644,38 @@ as a review lens does. It writes a `usage.reported` for the session, then one `p
 the harness producer (events.md): `ran` with the findings, or `skipped` with `reason`
 `no_answer`, never "no findings". It prints the `check.finished` as `check record` does.
 
-`check waive plan` is the owner's way past the plan check for a lane that coded before its plan
-was attacked. The lane's stamped pipeline must name a `plan` check (else `invalid_input`: a lane
+`check waive plan` is the way past the plan check for a lane that coded before its plan
+was attacked: the owner's, or the lane's own (#340) when the check cannot run now. The lane's stamped pipeline must name a `plan` check (else `invalid_input`: a lane
 on v19 records a skipped plan check with `check record`, and a waiver there would fail its
 gate). It reads the commit the lane is on as `check run` does and appends one `plan_check`
 `skipped` with `reason` `waived` and `note` the `--reason` (one non-blank line of at most 500
-characters, redacted at write), producer `session`: refused from any session that has held the
-lane, as `work ready` and `finding waive` are. The same waiver again replays (keyed as `check
+characters, redacted at write), producer `session`. From a session that has held the lane it is
+refused unless the head's harness `diff` changes code (`commit.changes_code`; with no diff on the
+head, refused: run `check run diff`) or the lane's plan checks have `plan_attempts` `skipped`
+`no_answer`, and refused once the owner has overturned a plan waiver (`check overturn plan`).
+The same waiver again replays (keyed as `check
 record`, on the payload as stored). It waives the plan check only, and gates nothing by itself:
 a gate reads it as `plan_check.reason` `waived`. It prints what `check record` prints.
 
 `check waive size --lines <n>` is the owner's escape from the size cap for a lane whose change
 only makes sense whole. It reads the lane's commit the same way and appends one `size_waiver`
-`ran` with `lines` `<n>` (above 0) and `note` the `--reason`, producer `session`, refused from any
-session that has held the lane; the same waiver again replays. `--lines` is required with `size`
-and refused with `plan` (`invalid_input`). It raises that lane's limit alone, for every commit:
+`ran` with `lines` `<n>` (above 0) and `note` the `--reason`, producer `session`; the same waiver
+again replays. From a session that has held the lane `--lines` is refused: the lane's own `check
+waive size --reason <r>` (#340) records why its change is past the cap, a `size_waiver` with no
+`lines` that lifts no gate, which `pr open` shows; from anyone else `--lines` is required. A lane
+may not record one once the owner has overturned its size waiver (`check overturn size`).
+`--lines` is refused with `plan` (`invalid_input`). It raises that lane's limit alone, for every commit:
 `code_lines_at_most` and `pr open` read it as `commit.size_waived`. Uncounted files still refuse.
 A pipeline with no `code_lines_at_most` gate (v21 on) needs none: past the cap its review asks
 what to cut (`over_cap` on the review, docs/events.md).
+
+`check overturn plan|size --work <id> --reason <r>` is new (#340): the owner's answer to a plan
+waiver or size reason the lane wrote itself. It appends one `plan_check` or `size_waiver`
+`skipped` with `reason` `overturned` and `note` the `--reason`, producer `session`, refused from
+any session that has held the lane. A plan overturn fails `plan_or_no_code` again
+(`plan_check.reason` is `overturned`); a size overturn drops an earlier `--lines` raise, so
+v20's `code_lines_at_most` applies again. After either the lane may not waive that check again.
+It prints what `check record` prints.
 
 `check waive rounds --rounds <n>` is the owner's raise of the cap on fresh reviews
 (`review_rounds`, v21: 3) for one lane, after reconsidering its approach. It appends one

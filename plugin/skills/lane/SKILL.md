@@ -24,8 +24,9 @@ variable does not last between calls). The plan, handoff JSON and `lane-state.md
   the hook denies them. `chaperone pr open` opens the PR; the owner merges.
 - Push to the base branch, push the branch yourself (but step 7's v21 fallback), merge, `--no-verify`, amend or rebase
   after `pr open` (it pushes without force).
-- `check record` anything but the smoke claim; `finding waive`, `finding overturn` and
-  `check waive` are the owner's. Editing `.chaperone/profile.toml` changes nothing: checks read the base branch's.
+- `check record` anything but the smoke claim; `finding overturn`, `check overturn`,
+  `check waive rounds`, `check waive size --lines` and every `finding waive` but
+  `--kind deferred` are the owner's. Editing `.chaperone/profile.toml` changes nothing: checks read the base branch's.
 
 ## Lane state
 
@@ -71,8 +72,10 @@ up to `plan_timeout` seconds). Then:
   `question` `chaperone finding answer <event> <key> --reason "<the answer>"`. Until each
   has an answer, `check run diff`, `check run review` and `verify` refuse. The review is
   shown the answers: an accepted one the diff does not address blocks.
-- `skipped`, `no_answer`: run again. Refused at `plan_attempts`: Needs you.
-- Refused because the commit already changes code: Needs you (the owner may waive).
+- `skipped`, `no_answer`: run again. Refused at `plan_attempts`, or because the commit
+  already changes code: the check cannot run now, so `chaperone check run diff --work $2`, then
+  `chaperone check waive plan --work $2 --reason "<why it cannot run>"`. The PR body lists it
+  and the owner can overturn it; refused after an overturn: Needs you.
 
 A lane whose diff changes no code skips step 3, and step 5 unless the base profile declares
 `[smoke]` (the verdict needs its pass). Code is every file but `.md` files and `docs/`, plus
@@ -89,8 +92,10 @@ the tree clean. Write no comment the repo's rules do not keep, and cut those you
   (`test_lines`) do not count. Over the limit, on v20 it will not pass; from v21 the review
   asks what to cut or split, and a `cut:` finding blocks like any other. Never get under by
   compressing code, removing checks or dropping behavior: cut only what the done-when does
-  not need, split a piece that stands alone into its own PR, or, on v20 when the change only
-  makes sense whole, Needs you asking the owner for `check waive size` with the lines and why.
+  not need, split a piece that stands alone into its own PR, or, when the change only makes
+  sense whole, `chaperone check waive size --work $2 --reason "<why it is needed whole>"` (no
+  `--lines`), which the PR body shows. It lifts nothing: on v21 answer each `cut:` as any
+  finding; on v20 the gate still needs the owner's `check waive size --lines`: Needs you.
   A refused companion rule names a doc the change must update: update it, or, when the
   change truly needs no edit there, commit a `No-companion: <rule> <why>` trailer.
 - Invoke the `chaperone:blast-radius` skill once; fix what it finds inside the slice.

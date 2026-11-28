@@ -153,7 +153,14 @@ fn a_lane_folds_from_its_events() {
     check(&ledger, id, "plan_check", None, Some(2));
     check(&ledger, id, "quality_gate", None, Some(0));
     check(&ledger, id, "merge_verdict", Some("yes"), None);
-    let waived = ledger.limit_waive(&actor("owner"), id, HEAD, SIZE_WAIVER, 500, "one piece");
+    let waived = ledger.limit_waive(
+        &actor("owner"),
+        id,
+        HEAD,
+        SIZE_WAIVER,
+        Some(500),
+        "one piece",
+    );
     waived.unwrap().unwrap();
     for (kind, round) in [
         ("nudged", None),
@@ -418,7 +425,7 @@ fn a_v20_lane_reads_the_harness_review() {
     mv("h", last, "k1", "verified");
     mv("owner", last, "k1", "waived");
     ledger
-        .plan_waive(&actor("owner"), id, HEAD, "coded first")
+        .plan_waive(&actor("owner"), id, HEAD, "coded first", 2)
         .unwrap()
         .unwrap();
     apply(
