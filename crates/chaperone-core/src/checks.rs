@@ -501,7 +501,12 @@ impl Ledger {
         )?;
         Ok(
             (overturned && has_held(self.conn(), work, session)?).then(|| {
-                format!("the owner overturned lane {work}'s {check} waiver: it is the owner's now")
+                let what = if check == "size_waiver" {
+                    "size"
+                } else {
+                    "plan check"
+                };
+                format!("the owner overturned lane {work}'s {what} waiver: it is the owner's now")
             }),
         )
     }
