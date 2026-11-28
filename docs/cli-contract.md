@@ -350,7 +350,7 @@ non-empty title, a string body, no other key, at most 64 KiB of UTF-8. It is sto
 lane's reviews are shown it as they are a gh read (fenced, the owner's words, data). A
 `github` lane still reads its issue with `gh` (`from: harness`) and uses the file only when
 that read fails. A bad file, or the flag on a lane already claimed (a renewal, a takeover, a
-later claim), is `invalid_input` before any write, so text is never dropped unseen. A spawner
+later claim), is `invalid_input` before any write. A spawner
 supplies it by running the lane's first claim itself, as the lane would, before the lane
 starts, with the lane's own `DAISY_AGENT` and `DAISY_SESSION`:
 
@@ -568,7 +568,7 @@ lenses are shown the files of the whole change but only `git diff <that commit> 
 to raise findings only on what it changes and that the rest was reviewed (`reviewed_since` on
 the review); after a rebase it is not an ancestor and they get the whole diff. The verifier
 and the verdict always get the whole diff. Every lens is also told what the lane is for: the work
-item's title, the issue as its first claim read it (`source_text`, labelled the owner's words and
+item's title, the issue as its first claim stored it (`source_text`, read by gh or handed in, labelled the owner's words and
 data, or why it could not be read, or that none is stored), its slice of the spec, and the `goal`
 of its newest handoff's brief, labelled the lane's own words. On the lane's first review (not
 one shown only the diff since the last) every lens is told to read the code around the change,
