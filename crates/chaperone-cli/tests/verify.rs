@@ -1331,6 +1331,97 @@ fn review_rounds_cap_a_lane_and_rereview_only_the_diff_since() {
     assert_eq!((code, &again["replayed"]), (0, &json!(true)), "{again}");
 }
 
+/// At the cap a lane gets one fresh review more by itself when its newest
+/// review left no blocking finding of the one before still blocking (#341):
+/// a harness `rounds_waiver`, once. Without that progress it stops as
+/// `review_rounds_cap_a_lane_and_rereview_only_the_diff_since` shows.
+#[test]
+fn review_rounds_grant_one_extra_round_on_progress() {
+    let mut runs = claude(json!({"findings": []}), json!([]));
+    for (at, mark) in [(3, "+BLOCK2"), (3, "+BLOCK3")] {
+        let blocker = json!({"findings": [{"severity": "blocker", "title": mark,
+            "body": "b", "path": "lib.rs", "line": null}]});
+        runs.as_array_mut().unwrap().insert(at, says(mark, blocker));
+    }
+    let lane = claimed_in("v21", runs, "");
+    lane.plan("1. do it\n");
+    lane.answer("lane", "accept");
+    let review = || lane.run("lane", &["check", "run", "review", "--work", "1"]);
+    let commit = |body: &str| {
+        git(
+            &lane.wt,
+            &["commit", "-qam", "c"],
+            &[("lib.rs", body.as_bytes())],
+        );
+    };
+    let defer = || {
+        for f in lane.findings() {
+            if f["status"] == "open" && f["severity"] == "blocker" {
+                let (event, key) = (f["check_event_id"].to_string(), f["finding_key"].as_str());
+                let args = [
+                    "finding",
+                    "waive",
+                    &event,
+                    key.unwrap(),
+                    "--kind",
+                    "deferred",
+                ];
+                let args = [&args[..], &["--ref", "#9", "--reason", "outside the slice"]].concat();
+                assert_eq!(lane.run("lane", &args).0, 0);
+            }
+        }
+    };
+    let grants = || lane.events("payload_json->>'check' = 'rounds_waiver'");
+
+    commit("a\n1\n");
+    assert_eq!(review().0, 0);
+    commit("a\nBLOCK2\n");
+    assert_eq!(review().0, 0);
+    defer();
+    commit("a\nBLOCK3\n");
+    let out = lane.verify();
+    let why = "3 finding(s) still block; the lane is at its review_rounds limit of 3 fresh \
+               reviews and has one more by itself: round 3 settled every blocking finding of \
+               round 2";
+    assert_eq!(
+        out["stopped"],
+        json!({"check": "review", "why": why}),
+        "{out}"
+    );
+    assert_eq!(grants(), 0);
+
+    commit("a\nfixed\n");
+    let (code, out) = review();
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(lane.review()["round"], json!(4));
+    let conn = rusqlite::Connection::open(&lane.db).unwrap();
+    let grant: String = conn
+        .query_row(
+            "SELECT payload_json FROM events WHERE payload_json->>'check' = 'rounds_waiver'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let grant: Value = serde_json::from_str(&grant).unwrap();
+    assert_eq!(
+        (&grant["producer"]["kind"], &grant["rounds"], &grant["note"]),
+        (
+            &json!("harness"),
+            &json!(4),
+            &json!("round 3 settled every blocking finding of round 2")
+        )
+    );
+
+    // Round 4 settled round 3's findings too, but the extra round is one.
+    defer();
+    commit("a\nagain\n");
+    let (code, err) = review();
+    assert_eq!(code, 1, "{err}");
+    let message = err["message"].as_str().unwrap();
+    assert!(message.starts_with("lane 1 has had 4 fresh reviews, its limit review_rounds 4"));
+    assert_eq!(grants(), 1);
+}
+
 /// The lenses get the whole diff again when the last reviewed commit is
 /// the head (a changed plan answer reviews it again), is not an ancestor
 /// (an amend or rebase), or when the lane merged its base

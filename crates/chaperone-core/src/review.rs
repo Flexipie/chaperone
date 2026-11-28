@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::checks::{
     BODY_CHARS, FindingMove, NON_BLOCKING_SEVERITIES, NOTE_CHARS, PLAN_FINDINGS, Recorded,
-    RunInput, findings_where,
+    RunInput, blocking, findings_where,
 };
 use crate::git::ChangedFile;
 use crate::ledger::{
@@ -56,7 +56,7 @@ pub const PROMPT_DIFF_BYTES: usize = 128 * 1024;
 pub const ATTEMPTS: &str = "review_attempts";
 /// The limit that caps a lane's fresh reviews ([`fresh`]), on a pipeline
 /// that names it (v21 on); the owner raises it for one lane with a
-/// `rounds_waiver`.
+/// `rounds_waiver`, and the harness once by one ([`extra`]).
 pub const ROUNDS: &str = "review_rounds";
 /// The limit on a commit's dispute rulings with no answer ([`rule_disputes`]),
 /// on a pipeline whose verifier rules disputes (v21 on); on one without it,
@@ -1159,8 +1159,9 @@ pub fn goal(ledger: &Ledger, item: &WorkItem) -> Result<String, LedgerError> {
 /// the original's verifier row without its rulings, and no findings of its
 /// own: they stay the original's, so none is counted twice), once: a later
 /// run on this commit replays it. Else a lane at its [`cap`] of [`fresh`]
-/// reviews, or a tree that has had the pipeline's [`ATTEMPTS`] reviews
-/// already, is refused.
+/// reviews with no [`extra`] round due, or a tree that has had the
+/// pipeline's [`ATTEMPTS`] reviews already, is refused; a due extra round
+/// is written as the harness's `rounds_waiver` once nothing refuses.
 pub fn replay(
     ledger: &Ledger,
     actor: &Actor,
@@ -1213,15 +1214,21 @@ pub fn replay(
         return Ok(ledger.carry(actor, input, newest)?.map(Some));
     }
     let (reviews, _) = fresh(ledger, input.work)?;
+    let mut grant = None;
     if let Some(cap) = cap(ledger, input.work, plan)?
         && reviews >= cap
     {
-        return Ok(Err(Refusal::InvalidInput(format!(
-            "lane {} has had {reviews} fresh reviews, its limit {ROUNDS} {cap}: needs you; the \
+        match extra(ledger, input.work)? {
+            Some(note) => grant = Some((cap + 1, note)),
+            None => {
+                return Ok(Err(Refusal::InvalidInput(format!(
+                    "lane {} has had {reviews} fresh reviews, its limit {ROUNDS} {cap}: needs you; the \
              owner can reconsider the approach, waive the findings, or raise the limit for this \
              lane with `chaperone check waive rounds --work {} --rounds <n>`",
-            input.work, input.work
-        ))));
+                    input.work, input.work
+                ))));
+            }
+        }
     }
     let done: i64 = ledger.conn().query_row(
         "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
@@ -1238,6 +1245,19 @@ pub fn replay(
              changes the tree",
             input.tree, input.head
         ))));
+    }
+    if let Some((rounds, note)) = grant {
+        let mut grant = input.clone();
+        grant.check = "rounds_waiver".into();
+        grant.findings = None;
+        grant.evidence_ref = None;
+        grant.fields = Map::from_iter([
+            ("rounds".into(), json!(rounds)),
+            ("note".into(), json!(note)),
+        ]);
+        if let Err(r) = ledger.check_run(actor, &grant)? {
+            return Ok(Err(r));
+        }
     }
     Ok(Ok(None))
 }
@@ -1274,8 +1294,9 @@ pub fn fresh(ledger: &Ledger, work: i64) -> Result<(i64, Option<String>), Ledger
     Ok((reviews, last))
 }
 
-/// Lane `work`'s limit on fresh reviews: its newest owner `rounds_waiver`'s
-/// `rounds`, else `plan`'s [`ROUNDS`]; none on a pipeline without one.
+/// Lane `work`'s limit on fresh reviews: its newest `rounds_waiver`'s
+/// `rounds` (the owner's, or the harness's [`extra`] round), else `plan`'s
+/// [`ROUNDS`]; none on a pipeline without one.
 pub fn cap(ledger: &Ledger, work: i64, plan: &Plan<'_>) -> Result<Option<i64>, LedgerError> {
     if plan.rounds.is_none() {
         return Ok(None);
@@ -1286,13 +1307,75 @@ pub fn cap(ledger: &Ledger, work: i64, plan: &Plan<'_>) -> Result<Option<i64>, L
             "SELECT json_extract(payload_json, '$.rounds') FROM events WHERE lane_id = ?1
                AND kind = 'check.finished'
                AND json_extract(payload_json, '$.check') = 'rounds_waiver'
-               AND json_extract(payload_json, '$.producer.kind') = 'session'
              ORDER BY id DESC LIMIT 1",
             [work],
             |r| r.get(0),
         )
         .optional()?;
     Ok(raised.or(plan.rounds))
+}
+
+/// The one fresh review lane `work` gets past its [`cap`] by itself (#341),
+/// as the note its `rounds_waiver` carries: none once it has had one, else
+/// only when the fresh review before its newest raised a blocking finding
+/// and none of that review's findings still blocks.
+pub fn extra(ledger: &Ledger, work: i64) -> Result<Option<String>, LedgerError> {
+    if granted(ledger, work)?.is_some() {
+        return Ok(None);
+    }
+    let conn = ledger.conn();
+    let prev: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT id, json_extract(payload_json, '$.round') FROM events
+              WHERE lane_id = ?1 AND kind = 'check.finished'
+                AND json_extract(payload_json, '$.check') = 'review'
+                AND json_extract(payload_json, '$.producer.kind') = 'harness'
+                AND json_extract(payload_json, '$.complete') = 1
+                AND json_extract(payload_json, '$.round') IS NOT NULL
+                AND json_extract(payload_json, '$.carried_from') IS NULL
+              ORDER BY id DESC LIMIT 1 OFFSET 1",
+            [work],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((prev, round)) = prev else {
+        return Ok(None);
+    };
+    let quiet = NON_BLOCKING_SEVERITIES
+        .iter()
+        .map(|s| format!("'{s}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (raised, open): (i64, i64) = conn.query_row(
+        &format!(
+            "SELECT count(*), coalesce(sum({}), 0) FROM findings
+              WHERE lane_id = ?1 AND check_event_id = ?2 AND severity NOT IN ({quiet})",
+            blocking()
+        ),
+        [work, prev],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok((raised > 0 && open == 0).then(|| {
+        format!(
+            "round {} settled every blocking finding of round {round}",
+            round + 1
+        )
+    }))
+}
+
+/// The note of lane `work`'s [`extra`] round, once the harness granted it.
+pub fn granted(ledger: &Ledger, work: i64) -> Result<Option<String>, LedgerError> {
+    Ok(ledger
+        .conn()
+        .query_row(
+            "SELECT json_extract(payload_json, '$.note') FROM events WHERE lane_id = ?1
+               AND kind = 'check.finished'
+               AND json_extract(payload_json, '$.check') = 'rounds_waiver'
+               AND json_extract(payload_json, '$.producer.kind') = 'harness'",
+            [work],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 /// `check run review` once the CLI has read the lane, under its run lock,

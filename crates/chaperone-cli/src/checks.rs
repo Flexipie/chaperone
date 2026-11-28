@@ -294,12 +294,17 @@ fn at_cap(ledger: &Ledger, item: &WorkItem, work: i64) -> Result<String, CliErro
         return Ok(String::new());
     };
     let (reviews, _) = review::fresh(ledger, work)?;
-    Ok(match review::cap(ledger, work, &plan)? {
-        Some(cap) if reviews >= cap => format!(
-            "; the lane is at its {} limit of {cap} fresh reviews: needs you",
-            review::ROUNDS
-        ),
-        _ => String::new(),
+    let Some(cap) = review::cap(ledger, work, &plan)?.filter(|cap| reviews >= *cap) else {
+        return Ok(String::new());
+    };
+    let rounds = review::ROUNDS;
+    Ok(match review::extra(ledger, work)? {
+        Some(note) => {
+            format!(
+                "; the lane is at its {rounds} limit of {cap} fresh reviews and has one more by itself: {note}"
+            )
+        }
+        None => format!("; the lane is at its {rounds} limit of {cap} fresh reviews: needs you"),
     })
 }
 
@@ -711,6 +716,11 @@ fn pr_body(
                 "- {what} by the lane: {note} (`chaperone check overturn {kind} --work {work} --reason <why>` reopens it)\n"
             );
         }
+    }
+    if let Some(note) = review::granted(ledger, work)? {
+        resolved += &format!(
+            "- extra review round by the harness: {note} (`chaperone check waive rounds --work {work} --rounds <n>` sets the limit)\n"
+        );
     }
     if !resolved.is_empty() {
         open += &format!("\nResolved without the owner:\n{resolved}");

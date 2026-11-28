@@ -253,7 +253,8 @@ them. It moves a `refuted` or `waived` finding to `verified`, so it blocks again
 any session that has held the lane, and the verifier never rules on its dispute again. It
 prints as `dispute` does. `pr open` lists under "Resolved without the owner" each dispute the
 verifier upheld and each `deferred` waiver (its ref and reason), with `finding overturn`, and
-the lane's own plan waiver and size reason (#340), with `check overturn`. Its Size line adds
+the lane's own plan waiver and size reason (#340), with `check overturn`, and the harness's
+extra review round (#341), with `check waive rounds`. Its Size line adds
 `over the cap of <cap>: <why>` when the diff adds more code lines than the cap a pipeline's
 review asks about (v21 on), the why the newest size waiver's note, or `no reason recorded`.
 
@@ -494,9 +495,14 @@ has that many fresh reviews (complete harness reviews numbered `round`, not carr
 before the limit has no `round` and does not count; an incomplete one never counts, as it
 leaves nothing to fix and `review_attempts` bounds it), or the newest owner `rounds_waiver`'s
 `rounds`, is refused (`invalid_input`, naming the limit, "needs you", and `check waive
-rounds`): two fix rounds, then the owner decides. `verify` stopping on findings that still
+rounds`): two fix rounds, then the owner decides. Once per lane the harness grants one fresh
+review more by itself instead (#341), when the fresh review before the newest raised a blocking
+finding and none of its findings still blocks (each ruled `fixed` or `refuted`, or `waived`,
+deferred included): a harness `rounds_waiver` with `rounds` the limit plus one and `note`
+"round <n> settled every blocking finding of round <n-1>", written only once the tree's
+`review_attempts` refusal below has passed. `verify` stopping on findings that still
 block at that limit adds "the lane is at its review_rounds limit of <n> fresh reviews: needs
-you". Else a tree that already has
+you", or, when that grant is due, "... and has one more by itself: <note>". Else a tree that already has
 `review_attempts` reviews by this pipeline, complete or not, is refused (`invalid_input`,
 naming the limit): a lens that fails every time would otherwise make each rerun pay for the
 others again, so the owner waives the findings or the lane pushes a commit that changes the
@@ -680,7 +686,7 @@ It prints what `check record` prints.
 `check waive rounds --rounds <n>` is the owner's raise of the cap on fresh reviews
 (`review_rounds`, v21: 3) for one lane, after reconsidering its approach. It appends one
 `rounds_waiver` the same way (`rounds` `<n>`, above 0), refused from any session that has held
-the lane; the newest one is that lane's limit, in place of the pipeline's. `--rounds` is
+the lane; the newest one, the owner's or the harness's extra round, is that lane's limit, in place of the pipeline's. `--rounds` is
 required with `rounds` and refused with `plan` and `size`, as `--lines` is refused with `rounds`.
 
 On v21 `done_verdict` is also met by `pr_merged`: the lane's current PR has a `pr.merged`
