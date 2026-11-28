@@ -612,7 +612,7 @@ pub struct Lens<T = Vec<Finding>> {
     /// The runner whose engine was down when this one answered instead.
     pub fallback: Option<Fallback>,
     /// Of a lens that left a run, the files of the checkout it read that
-    /// the change does not touch ([`outside_diff`]).
+    /// the change does not touch (`outside_diff`).
     pub read_outside_diff: Option<usize>,
 }
 
