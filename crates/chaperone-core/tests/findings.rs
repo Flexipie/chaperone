@@ -541,3 +541,79 @@ fn the_lane_defers_a_review_finding_it_cannot_fix() {
     assert!(format!("{again:?}").contains(not_one), "{again:?}");
     common::assert_consistent(&path);
 }
+
+/// The lane labels an open harness review finding that does not block
+/// with its outcome (#326): the status stays, so it still lists as open,
+/// and nothing is written for a refusal: a blocking, settled, disputed or
+/// other check's finding, an unknown outcome, no reason, or a session that
+/// never held the lane.
+#[test]
+fn the_lane_labels_a_finding_it_leaves_open() {
+    let (_dir, path, ledger) = common::ledger();
+    let (_, local) = review(&ledger, &["nit:l"]);
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    let found = [("n", "nit"), ("b", "blocker"), ("s", "nit"), ("d", "nit")]
+        .map(|(k, s)| json!({"finding_key": k, "severity": s, "title": "t", "body": "b"}));
+    let payload = json!({"check": "review", "outcome": "ran", "head_sha": "abc1234",
+        "producer": harness, "complete": true, "findings": found});
+    let m = Mutation::Event {
+        kind: EventKind::CheckFinished,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: serde_json::from_value(payload).unwrap(),
+    };
+    let at = "2026-11-28T00:00:00.000Z";
+    let check = common::committed(ledger.apply(&actor("9"), None, at, m).unwrap()).id;
+    walk(&ledger, check, "s", &["waived"]);
+    walk(&ledger, check, "d", &["disputed"]);
+    let label = |who: &str, (check, key): (i64, &str), outcome: &str, reason: &str| {
+        let input = FindingMove {
+            check_event_id: check,
+            finding_key: key.into(),
+            reason: (!reason.is_empty()).then(|| reason.into()),
+            ..FindingMove::default()
+        };
+        ledger
+            .finding_label(&actor(who), &input, outcome, false)
+            .unwrap()
+    };
+    let db = read_only(&path);
+    let events = || count(&db, "SELECT count(*) FROM events");
+    let not_one = "the lane labels an open harness review finding that does not block";
+    for (who, at, outcome, reason, said) in [
+        ("1", (local, "l"), "wrong", "r", not_one),
+        ("1", (check, "b"), "wrong", "r", not_one),
+        ("1", (check, "s"), "wrong", "r", not_one),
+        ("1", (check, "d"), "wrong", "r", not_one),
+        ("1", (check, "n"), "nope", "r", "outcome is one of"),
+        (
+            "1",
+            (check, "n"),
+            "wrong",
+            "",
+            "a label's reason is one non-blank line",
+        ),
+        (
+            "2",
+            (check, "n"),
+            "wrong",
+            "r",
+            "only the lane labels a finding",
+        ),
+    ] {
+        let before = events();
+        let got = format!("{:?}", label(who, at, outcome, reason).unwrap_err());
+        assert!(got.contains(said), "{at:?} {outcome}: {got}");
+        assert_eq!(events(), before);
+    }
+    let moved = label("1", (check, "n"), "did_not_matter", "a wording choice").unwrap();
+    assert_eq!(moved.payload.rest["label"], "did_not_matter");
+    let n = ledger.lane_findings(1).unwrap();
+    let n = n.into_iter().find(|f| f.finding_key == "n").unwrap();
+    let got = (n.status.as_str(), n.outcome.as_deref(), n.reason.as_deref());
+    assert_eq!(
+        got,
+        ("open", Some("did_not_matter"), Some("a wording choice"))
+    );
+    common::assert_consistent(&path);
+}

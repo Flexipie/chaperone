@@ -133,6 +133,10 @@ fn help_matches_snapshots() {
             include_str!("snapshots/finding-answer.txt"),
         ),
         (
+            &["finding", "label"],
+            include_str!("snapshots/finding-label.txt"),
+        ),
+        (
             &["finding", "overturn"],
             include_str!("snapshots/finding-overturn.txt"),
         ),

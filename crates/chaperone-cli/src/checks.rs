@@ -4,6 +4,7 @@
 //! worktree, and runs tests and the review's and the verdict's sessions in
 //! a checkout of its commit, before its write, under the lane's run lock.
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::{DirBuilder, File};
 use std::io::Read;
@@ -32,8 +33,8 @@ use chaperone_graph::{Companion, Required, code_globs, commands_in, declares, gl
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
-    AttentionCmd, CheckCmd, FindingCmd, JobsCmd, OverturnKind, ReviewsCmd, RunKind, UsageCmd,
-    WaiveKind,
+    AttentionCmd, CheckCmd, FindingCmd, JobsCmd, LabelArgs, OverturnKind, ReviewsCmd, RunKind,
+    UsageCmd, WaiveKind,
 };
 use crate::output::{CliError, ErrorBody, Meta, Outcome};
 use crate::work::{items, observed_head, one};
@@ -657,22 +658,32 @@ fn pr_body(
         true => "left to CI".into(),
         false => format!("passed on {head}: {}", commands.join(", ")),
     };
-    let covering = match facts.get("review.event_id") {
-        Fact::Int(id) => Some(*id),
-        _ => None,
-    };
-    let mut open = String::new();
-    for f in ledger.lane_findings(item.id)? {
+    // Every round's, the newest copy of a key (a lens's repeat of a point)
+    // deciding; a `same_as` repeat leaves the point to its original.
+    let mut seen = BTreeSet::new();
+    let mut listed = Vec::new();
+    for f in ledger.lane_findings(item.id)?.into_iter().rev() {
+        if f.check != "review" || f.same_as.is_some() || !seen.insert(f.finding_key.clone()) {
+            continue;
+        }
         let unsettled = ["open", "verified", "disputed"].contains(&f.status.as_str());
-        if Some(f.check_event_id) != covering || f.blocks || !unsettled {
+        if f.blocks || !unsettled {
             continue;
         }
         let at = f.path.map_or_else(String::new, |p| match f.line {
             Some(n) => format!(" `{p}:{n}`"),
             None => format!(" `{p}`"),
         });
-        open += &format!("- {}: {}{at}\n", f.severity, f.title);
+        let why = f.reason.unwrap_or_default();
+        let outcome = match (f.outcome, f.status.as_str()) {
+            (Some(o), _) => format!("{}: {why}", o.replace('_', " ")),
+            (None, "open") => "no outcome given".into(),
+            (None, status) => format!("{status}: {why}"),
+        };
+        listed.push(format!("- {}: {}{at}: {outcome}\n", f.severity, f.title));
     }
+    listed.reverse();
+    let mut open = listed.concat();
     if !open.is_empty() {
         open = format!("\nOpen findings, not blocking:\n{open}");
     }
@@ -1956,6 +1967,20 @@ pub fn finding(ledger: &Ledger, cmd: FindingCmd, meta: &mut Meta) -> Result<Outc
         FindingCmd::Answer(args) => ("answered", args, None),
         FindingCmd::Overturn(args) => ("verified", args, None),
         FindingCmd::List { work } => return items(ledger.lane_findings(work)?),
+        FindingCmd::Label(LabelArgs {
+            finding: args,
+            outcome,
+        }) => {
+            meta.dry_run = args.dry_run.then_some(true);
+            let input = FindingMove {
+                check_event_id: args.event,
+                finding_key: args.key,
+                reason: Some(args.reason),
+                ..FindingMove::default()
+            };
+            let label = ledger.finding_label(&args.actor.resolve(), &input, &outcome, args.dry_run);
+            return one(label??);
+        }
     };
     let (waiver_kind, waiver_ref) = waiver.unzip();
     meta.dry_run = args.dry_run.then_some(true);

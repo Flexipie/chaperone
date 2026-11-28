@@ -8,6 +8,7 @@ Commands:
   waive     Stop an open, verified or disputed finding blocking, or (scope only) release an accepted plan finding: the owner's, or a fresh agent's (--kind). The lane itself only defers (--kind deferred, with --ref the repo rule or follow-up issue) an open or verified review finding it cannot fix in the lane, never one titled owner: or overturned. Never waive a finding where a gate fails open on a path a lane can reach: fix it or ask the owner
   accept    Say the lane will act on an open plan check finding, and how. Only from a session that has held the lane; the review is shown it
   answer    Answer an open question finding, as anyone may
+  label     Give an open review finding that does not block, and that the lane leaves unfixed, its outcome. Only from a session that has held the lane; it keeps the finding's status, and `pr open` lists the outcome
   overturn  Make a refuted or waived finding block again, as verified. Refused from any session that has held the lane: the owner's. The verifier never rules on its dispute again
   help      Print this message or the help of the given subcommand(s)
 

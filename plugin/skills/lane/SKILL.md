@@ -142,6 +142,12 @@ Not while an open question is unanswered (Needs you).
 
 ## 7. Open the PR, then watch it
 
+First give every finding you leave open an outcome: each one `finding list --work $2` shows
+with `check` `review`, `status` `open`, `blocks` false and `outcome` null (one key once, its
+newest copy): `chaperone finding label <event> <key> --outcome wrong|intentional|did_not_matter
+--reason "<one line>"` (it does not hold; real, left on purpose; real, not worth a change). It
+never blocks; the PR body shows it, and one with none as "no outcome given".
+
 `chaperone pr open --work $2` pushes and opens or updates the PR, its body from the ledger.
 When the base profile's `[pr]` has a `title` (`git show origin/<base>:.chaperone/profile.toml`),
 pass `--title` filled from it: `{key}` the task's key exactly, `{type}` one of `types` that fits

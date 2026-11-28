@@ -12,7 +12,9 @@ use serde_json::Value;
 
 use super::event::{Actor, Applied, Event, EventKind, Mutation, Payload, Refusal};
 use super::{Ledger, LedgerError, check_schema, fold, redact};
-use crate::checks::{NOTE_CHARS, WAIVER_KINDS, one_line, sha_ok};
+use crate::checks::{
+    LANE_OUTCOMES, NON_BLOCKING_SEVERITIES, NOTE_CHARS, WAIVER_KINDS, one_line, sha_ok,
+};
 use crate::engine;
 use crate::pipeline::{REQUIRED_TRANSITIONS, Route};
 use crate::work::{OWNER_UI, PAUSED_BY_OWNER, SPEC_BY_KEY};
@@ -814,7 +816,8 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 ));
             };
             let to = p.status.as_deref().unwrap_or_default();
-            if !FINDING_MOVES.iter().any(|m| m.1 == to) {
+            let label = p.rest.get("label");
+            if label.is_none() && !FINDING_MOVES.iter().any(|m| m.1 == to) {
                 let statuses: BTreeSet<_> = FINDING_MOVES.iter().map(|m| m.1).collect();
                 refuse!(invalid(&format!(
                     "finding.updated status is one of {statuses:?}"
@@ -840,6 +843,42 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                     reference: format!("{check}/{key}"),
                 });
             };
+            // The lane's outcome on a finding it leaves unsettled (#326): no
+            // move, so it never settles or blocks one.
+            if let Some(outcome) = label {
+                let session = event.actor.session.as_deref().unwrap_or_default();
+                if !outcome.as_str().is_some_and(|o| LANE_OUTCOMES.contains(&o)) {
+                    refuse!(invalid(&format!("outcome is one of {LANE_OUTCOMES:?}")));
+                }
+                if !has_held(tx, lane_id, session)? {
+                    refuse!(invalid(&format!(
+                        "only the lane labels a finding; session {session} has never held lane {lane_id}"
+                    )));
+                }
+                let quiet = NON_BLOCKING_SEVERITIES.contains(&severity.as_str());
+                // Never a verified one: owner_held reads that as the owner's.
+                if to != from
+                    || to != "open"
+                    || raised_by.as_deref() != Some("review")
+                    || !quiet
+                    || p.rest.contains_key("waiver")
+                {
+                    refuse!(invalid(&format!(
+                        "the lane labels an open harness review finding that does not block, keeping its status; finding {check}/{key} is not one"
+                    )));
+                }
+                if !p
+                    .rest
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .is_some_and(one_line)
+                {
+                    refuse!(invalid(&format!(
+                        "a label's reason is one non-blank line of at most {NOTE_CHARS} characters"
+                    )));
+                }
+                return Ok(Ok(()));
+            }
             // A retry after a lost answer lands here: say so plainly.
             if from == to {
                 refuse!(invalid(&format!("finding {check}/{key} is already {to}")));

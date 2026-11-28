@@ -357,10 +357,11 @@ fn pr_open_on_v21_counts_added_lines_and_refuses_no_size() {
 }
 
 /// Two complete harness reviews of lane 1: the first on an older commit
-/// raises a blocking risk and a nit, the second on `head` an improvement
+/// raises a blocking risk, a nit and an improvement, the second on `head` that improvement
 /// and the question an unproven risk is written as, a risk, and a nit the
-/// owner waives. The body lists the second's open findings that do not
-/// block; the first round's nit never settles, so it is not.
+/// owner waives. The body lists every round's open findings that do not
+/// block, a key raised in both rounds once, each with the lane's outcome:
+/// the first round's nit too, though the second does not raise it (#326).
 #[test]
 fn pr_open_lists_the_findings_that_do_not_block() {
     let lane = lane_on("v21", &[], "");
@@ -370,7 +371,11 @@ fn pr_open_lists_the_findings_that_do_not_block() {
     let rounds = [
         (
             "abc1234",
-            json!([["risk", "r", "lib.rs", 1], ["nit", "n", null, null]]),
+            json!([
+                ["risk", "r", "lib.rs", 1],
+                ["nit", "n", null, null],
+                ["improvement", "i", "lib.rs", 2]
+            ]),
         ),
         (
             &*head,
@@ -493,11 +498,23 @@ fn pr_open_lists_the_findings_that_do_not_block() {
         payload: serde_json::from_value(p).unwrap(),
     };
     ledger.apply(&actor, None, at, m).unwrap();
+    let label = [
+        "finding",
+        "label",
+        &covering,
+        "q",
+        "--outcome",
+        "did_not_matter",
+        "--reason",
+        "only a wording choice",
+    ];
+    assert_eq!(lane.run("lane", &label).0, 0);
     assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 1);
     let open = format!(
         "- Smoke: none\n- Tokens: 5 fresh input, unknown cache write, 7 cache read, \
          3 output, in 1 sessions\n\nOpen findings, not blocking:\n\
-         - improvement: i `lib.rs:2`\n- question: q\n\nResolved without the owner:\n\
+         - nit: n: no outcome given\n- improvement: i `lib.rs:2`: no outcome given\n\
+         - question: q: did not matter: only a wording choice\n\nResolved without the owner:\n\
          - risk: r: deferred, still open: #999: outside this slice \
          (`chaperone finding overturn {first} r --reason <why>` reopens it)\n\
          - risk: r2: dispute upheld by the verifier: lib.rs:1 does say so \

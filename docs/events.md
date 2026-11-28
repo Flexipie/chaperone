@@ -218,7 +218,7 @@ the same value, a trailing slash aside, still writes.
 | --- | --- | --- |
 | `check.requested` | `reviews record`, job not done (`data.done` false) | `check` (`local_review` or `pr_review`), `job`, `head_sha`, `review` |
 | `check.finished` | `check record`, `check run`, `check waive`, `verify` (through `check run`), `reviews record` (job finished) | `check`, `outcome`, `head_sha`, `producer`, the check's fields below, optional `evidence_ref` |
-| `finding.updated` | `finding dispute`, `finding waive`, `finding accept`, `finding answer`; the other moves are core's (`Ledger::finding_update`) for the harness | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute, waive or accept, and given by `finding answer`; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits), `waiver` (required to waive, refused on any other move: `{kind, ref}`, `kind` one of `fixed`, `disproved`, `scope`, `deferred`, `accepted`; `ref` one non-blank line of at most 500 characters, required for `fixed` and `disproved` and to release an `accepted` finding; a `scope`, `deferred` or `accepted` waiver is refused from a session with any event on the lane but its own waivers of those kinds, except the lane's own `deferred` (#340), which needs `ref`) |
+| `finding.updated` | `finding dispute`, `finding waive`, `finding accept`, `finding answer`, `finding label`; the other moves are core's (`Ledger::finding_update`) for the harness | `check_event_id`, `finding_key`, `status`, `reason` (required to dispute, waive or accept, and given by `finding answer`; one non-blank line of at most 500 characters, as `attention record --note`), `head_sha` (required for `fixed`: the commit that fixes it, 7 to 40 lowercase hex digits), `waiver` (required to waive, refused on any other move: `{kind, ref}`, `kind` one of `fixed`, `disproved`, `scope`, `deferred`, `accepted`; `ref` one non-blank line of at most 500 characters, required for `fixed` and `disproved` and to release an `accepted` finding; a `scope`, `deferred` or `accepted` waiver is refused from a session with any event on the lane but its own waivers of those kinds, except the lane's own `deferred` (#340), which needs `ref`), `label` (only on the lane's `finding label`, #326: `wrong`, `intentional` or `did_not_matter`, with `status` the finding's own and `reason` required; finding statuses, below) |
 
 **Finding statuses.** A finding is folded `open`. Each `finding.updated` makes one of these
 moves, checked by the write; any other move, another status, or the same status again
@@ -230,7 +230,10 @@ is final but for a `scope` waiver. "Lane" is a session that has held the lane (a
 or the owner (the rule `work ready` uses). The lane disputes a finding, or accepts a harness
 plan check's (refused on any other check's finding), so it never settles a review's, but for
 one move (#340): it may waive an `open` or `verified` harness review finding as `deferred`, with
-a `ref`, when the finding is not the owner's (below). A `finding.updated` whose `producer.kind` is `harness` is the
+a `ref`, when the finding is not the owner's (below). A `finding.updated` carrying `label` is no move (#326):
+the lane's outcome on an `open` harness review finding whose severity does not block, from a
+session that has held the lane, with a `reason`; its `status` is the finding's own (`open`), so
+the finding stays unsettled and blocks nothing. Any other carrying `label` is `invalid_input`. A `finding.updated` whose `producer.kind` is `harness` is the
 verifier's ruling inside `check run review` (in a review, or a `dispute_ruling`): the binary
 ran the verifier, so it may make the `verified`, `refuted` and `fixed` moves whatever session
 started the run (usually the lane's own, in the background), never from `refuted` or
