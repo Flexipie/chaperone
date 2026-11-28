@@ -606,6 +606,27 @@ fn the_lane_labels_a_finding_it_leaves_open() {
         assert!(got.contains(said), "{at:?} {outcome}: {got}");
         assert_eq!(events(), before);
     }
+    // A label is no move and carries no waiver, whoever builds the payload.
+    for extra in [
+        json!({"status": "fixed", "head_sha": "abc1234"}),
+        json!({"status": "open", "waiver": {"kind": "deferred", "ref": "#9"}}),
+    ] {
+        let mut p = json!({"check_event_id": check, "finding_key": "n", "label": "wrong",
+            "reason": "r"});
+        p.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let m = Mutation::Event {
+            kind: EventKind::FindingUpdated,
+            lane_id: Some(1),
+            spec_id: None,
+            payload: serde_json::from_value(p).unwrap(),
+        };
+        let before = events();
+        let got = format!("{:?}", ledger.apply(&actor("1"), None, at, m).unwrap());
+        assert!(got.contains(not_one), "{extra}: {got}");
+        assert_eq!(events(), before);
+    }
     let moved = label("1", (check, "n"), "did_not_matter", "a wording choice").unwrap();
     assert_eq!(moved.payload.rest["label"], "did_not_matter");
     let n = ledger.lane_findings(1).unwrap();
