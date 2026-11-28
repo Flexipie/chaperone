@@ -482,6 +482,17 @@ fn pr_open_lists_the_findings_that_do_not_block() {
         "coded first",
     ];
     assert_eq!(lane.run("lane", &plan).0, 0);
+    // The harness's extra review round (#341).
+    let p = json!({"check": "rounds_waiver", "outcome": "ran", "head_sha": head, "rounds": 4,
+                   "note": "round 3 settled every blocking finding of round 2",
+                   "producer": harness});
+    let m = Mutation::Event {
+        kind: EventKind::CheckFinished,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: serde_json::from_value(p).unwrap(),
+    };
+    ledger.apply(&actor, None, at, m).unwrap();
     assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 1);
     let open = format!(
         "- Smoke: none\n- Tokens: 5 fresh input, unknown cache write, 7 cache read, \
@@ -492,7 +503,9 @@ fn pr_open_lists_the_findings_that_do_not_block() {
          - risk: r2: dispute upheld by the verifier: lib.rs:1 does say so \
          (`chaperone finding overturn {covering} r2 --reason <why>` reopens it)\n\
          - plan check waived by the lane: coded first \
-         (`chaperone check overturn plan --work 1 --reason <why>` reopens it)\n\nMade by"
+         (`chaperone check overturn plan --work 1 --reason <why>` reopens it)\n\
+         - extra review round by the harness: round 3 settled every blocking finding of \
+         round 2 (`chaperone check waive rounds --work 1 --rounds <n>` sets the limit)\n\nMade by"
     );
     let open = open.as_str();
     let body = lane.file("body.md");

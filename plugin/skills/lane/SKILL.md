@@ -133,8 +133,10 @@ Not while an open question is unanswered (Needs you).
 - `review`, "N finding(s) still block" or "review not complete"; `verdict`, "the verdict is
   not yes": read `${CLAUDE_SKILL_DIR}/findings.md`.
 - "the lane moved": you committed meanwhile. Back to 5.
-- A `why` that names `review_rounds` (the lane's fresh reviews are used up): Needs you, with
-  the findings that still block; never a commit to try another round.
+- A `why` that names `review_rounds` and ends "needs you" (the lane's fresh reviews are used
+  up): Needs you, with the findings that still block; never a commit to try another round.
+  One that says the lane "has one more by itself" (its last round settled the round before's
+  blocking findings, once per lane): fix as for `review`, back to 5.
 - Any other `why` is a refusal that says why: fix the cause or Needs you. Exit 4: another
   run holds the lane; wait for it, never start a second.
 
