@@ -373,6 +373,11 @@ pub enum WorkCmd {
         /// one newer than it (`pipeline current`'s `newer`) for a pilot lane
         #[arg(long)]
         pipeline: Option<String>,
+        /// At the first claim, the issue's text as JSON {title, body}, at most
+        /// 64 KiB, for a lane gh cannot read (a github lane uses it only when
+        /// gh fails)
+        #[arg(long)]
+        source_text_file: Option<PathBuf>,
         /// Run the real write and roll it back; meta.dry_run is true
         #[arg(long)]
         dry_run: bool,

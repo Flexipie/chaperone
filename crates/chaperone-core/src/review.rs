@@ -1188,20 +1188,7 @@ fn shown(conn: &Connection, work: i64) -> Result<String, LedgerError> {
 /// what to look at) reaches a lens.
 pub fn goal(ledger: &Ledger, item: &WorkItem) -> Result<String, LedgerError> {
     let mut goal = format!("The work item: {}\n", item.title);
-    let source: Option<String> = ledger
-        .conn()
-        .query_row(
-            "SELECT json_extract(payload_json, '$.source_text') FROM events
-             WHERE lane_id = ?1 AND kind = 'lane.claimed'
-               AND json_extract(payload_json, '$.source_text') IS NOT NULL
-             ORDER BY id DESC LIMIT 1",
-            [item.id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let source: Value = source.map_or(Value::Null, |s| {
-        serde_json::from_str(&s).unwrap_or_default()
-    });
+    let source = source_text(ledger, item.id)?;
     goal += &match (&source["error"], &source["title"]) {
         (Value::String(e), _) => {
             format!("\nThe issue's own text could not be read when the lane was claimed: {e}\n")
@@ -1241,6 +1228,24 @@ pub fn goal(ledger: &Ledger, item: &WorkItem) -> Result<String, LedgerError> {
         );
     }
     Ok(goal)
+}
+
+/// The issue text the lane's first claim stored (`source_text`), or null.
+pub fn source_text(ledger: &Ledger, work: i64) -> Result<Value, LedgerError> {
+    let source: Option<String> = ledger
+        .conn()
+        .query_row(
+            "SELECT json_extract(payload_json, '$.source_text') FROM events
+             WHERE lane_id = ?1 AND kind = 'lane.claimed'
+               AND json_extract(payload_json, '$.source_text') IS NOT NULL
+             ORDER BY id DESC LIMIT 1",
+            [work],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(source.map_or(Value::Null, |s| {
+        serde_json::from_str(&s).unwrap_or_default()
+    }))
 }
 
 /// The plan the lane's newest plan check read, for its first review.

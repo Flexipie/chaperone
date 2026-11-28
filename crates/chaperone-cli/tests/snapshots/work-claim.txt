@@ -6,15 +6,29 @@ Arguments:
   <ID>  
 
 Options:
-      --db <DB>                  Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
-      --worktree <WORKTREE>      Absolute path of the lane's worktree
-      --branch <BRANCH>          
-      --format <FORMAT>          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
-      --base-sha <BASE_SHA>      
-      --lease-secs <LEASE_SECS>  Lease length in seconds, 30..=86400 (default 900)
-      --takeover                 Take an item another pair holds LIVE; recorded with their name
-      --pipeline <PIPELINE>      At the first claim, stamp this embedded pipeline: the default, or one newer than it (`pipeline current`'s `newer`) for a pilot lane
-      --dry-run                  Run the real write and roll it back; meta.dry_run is true
-      --agent <AGENT>            Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
-      --session <SESSION>        Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
-  -h, --help                     Print help
+      --db <DB>
+          Path to the ledger (defaults to chaperone/ledger.db in the user data dir)
+      --worktree <WORKTREE>
+          Absolute path of the lane's worktree
+      --branch <BRANCH>
+          
+      --format <FORMAT>
+          Output format: json is one {ok, data, meta} object; jsonl is one item per line followed by a trailer that is the only line with an `ok` key [default: json] [possible values: json, jsonl]
+      --base-sha <BASE_SHA>
+          
+      --lease-secs <LEASE_SECS>
+          Lease length in seconds, 30..=86400 (default 900)
+      --takeover
+          Take an item another pair holds LIVE; recorded with their name
+      --pipeline <PIPELINE>
+          At the first claim, stamp this embedded pipeline: the default, or one newer than it (`pipeline current`'s `newer`) for a pilot lane
+      --source-text-file <SOURCE_TEXT_FILE>
+          At the first claim, the issue's text as JSON {title, body}, at most 64 KiB, for a lane gh cannot read (a github lane uses it only when gh fails)
+      --dry-run
+          Run the real write and roll it back; meta.dry_run is true
+      --agent <AGENT>
+          Your agent name, [a-z0-9._-]{1,40} (default: $DAISY_AGENT)
+      --session <SESSION>
+          Your session id, [A-Za-z0-9._:-]{1,120} (default: $DAISY_SESSION)
+  -h, --help
+          Print help

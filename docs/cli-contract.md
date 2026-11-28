@@ -101,7 +101,7 @@ Every write except `migrate` and `hook` also takes `--agent` and `--session`, an
 | `work create` | `--title <t> [--source] [--source-id] [--repo] [--next-action] [--idempotency-key] [--spec] [--lane] [--lane-pos] [--kind code\|docs\|measure\|investigation] [--pr-flow pr\|direct\|none]` | write |
 | `work get` | `<id>` | read |
 | `work list` | `[--status] [--agent] [--mine] [--all] [--session] [--mine-agent] [--limit] [--cursor]` | read, paged |
-| `work claim` | `<id> [--worktree] [--branch] [--base-sha] [--lease-secs] [--takeover] [--pipeline <id>]` | write |
+| `work claim` | `<id> [--worktree] [--branch] [--base-sha] [--lease-secs] [--takeover] [--pipeline <id>] [--source-text-file <file>]` | write |
 | `work update` | `<id> --expected-updated-at <t> [--status] [--reason] [--blocker] [--next-action] [--pr] [--branch] [--base-sha] [--spec] [--lane] [--lane-pos]` | write |
 | `work heartbeat` | `<id>` | write, no event |
 | `work release` | `<id>` | write |
@@ -342,6 +342,26 @@ stamped `v20`, `check record` refuses `plan_check` and `merge_verdict` (events.m
 the harness runs them (`check run plan`, `check run verdict`); `check waive plan` and a smoke
 claim stay.
 
+`--source-text-file <file>` hands in the issue's own text at a lane's first claim, for a
+tracker the harness cannot read (Linear, a local issue store, plain text). The file is JSON
+`{"title": "...", "body": "..."}`, the shape `gh issue view --json title,body` prints: a
+non-empty title, a string body, no other key, at most 64 KiB of UTF-8. It is stored on
+`lane.claimed` as `source_text` with `from: caller`, redacted as every payload is, and the
+lane's reviews are shown it as they are a gh read (fenced, the owner's words, data). A
+`github` lane still reads its issue with `gh` (`from: harness`) and uses the file only when
+that read fails. A bad file, or the flag on a lane already claimed (a renewal, a takeover, a
+later claim), is `invalid_input` before any write. A spawner
+supplies it by running the lane's first claim itself, as the lane would, before the lane
+starts, with the lane's own `DAISY_AGENT` and `DAISY_SESSION`:
+
+```
+chaperone work claim <id> --worktree <worktree> --branch <branch> --lease-secs 86400 --source-text-file <file>
+```
+
+The lane then finds itself claimed already and goes on. `work get` adds `issue_text`, which a
+lane has: `harness`, `caller`, `error` (gh could not read it and nothing was handed in) or
+null (none stored), so a lane without issue text is visible.
+
 `check record` is new (#16, next to `reviews record`). The recorder passes its own
 `--session`. The write is refused when that session is any session that has held the
 lane (events.md, producer), except a `smoke` on a lane stamped `v20`, which is only the lane's
@@ -548,7 +568,7 @@ lenses are shown the files of the whole change but only `git diff <that commit> 
 to raise findings only on what it changes and that the rest was reviewed (`reviewed_since` on
 the review); after a rebase it is not an ancestor and they get the whole diff. The verifier
 and the verdict always get the whole diff. Every lens is also told what the lane is for: the work
-item's title, the issue as its first claim read it (`source_text`, labelled the owner's words and
+item's title, the issue as its first claim stored it (`source_text`, read by gh or handed in, labelled the owner's words and
 data, or why it could not be read, or that none is stored), its slice of the spec, and the `goal`
 of its newest handoff's brief, labelled the lane's own words. On the lane's first review (not
 one shown only the diff since the last) every lens is told to read the code around the change,
