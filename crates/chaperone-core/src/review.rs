@@ -1218,7 +1218,7 @@ pub fn replay(
     if let Some(cap) = cap(ledger, input.work, plan)?
         && reviews >= cap
     {
-        match extra(ledger, input.work)? {
+        match extra(ledger, input.work, plan)? {
             Some(note) => grant = Some((cap + 1, note)),
             None => {
                 return Ok(Err(Refusal::InvalidInput(format!(
@@ -1262,6 +1262,14 @@ pub fn replay(
     Ok(Ok(None))
 }
 
+/// The SQL condition on an event that is one of lane `?1`'s [`fresh`] reviews.
+const FRESH: &str = "lane_id = ?1 AND kind = 'check.finished'
+    AND json_extract(payload_json, '$.check') = 'review'
+    AND json_extract(payload_json, '$.producer.kind') = 'harness'
+    AND json_extract(payload_json, '$.complete') = 1
+    AND json_extract(payload_json, '$.round') IS NOT NULL
+    AND json_extract(payload_json, '$.carried_from') IS NULL";
+
 /// Lane `work`'s fresh reviews (complete harness reviews numbered `round`,
 /// not carried: one from before the cap has no `round` and is not
 /// counted), and the commit of its newest complete harness review, carried
@@ -1273,11 +1281,7 @@ pub fn fresh(ledger: &Ledger, work: i64) -> Result<(i64, Option<String>), Ledger
         AND json_extract(payload_json, '$.complete') = 1";
     let conn = ledger.conn();
     let reviews = conn.query_row(
-        &format!(
-            "SELECT count(*) FROM events WHERE {complete}
-               AND json_extract(payload_json, '$.round') IS NOT NULL
-               AND json_extract(payload_json, '$.carried_from') IS NULL"
-        ),
+        &format!("SELECT count(*) FROM events WHERE {FRESH}"),
         [work],
         |r| r.get(0),
     )?;
@@ -1316,24 +1320,23 @@ pub fn cap(ledger: &Ledger, work: i64, plan: &Plan<'_>) -> Result<Option<i64>, L
 }
 
 /// The one fresh review lane `work` gets past its [`cap`] by itself (#341),
-/// as the note its `rounds_waiver` carries: none once it has had one, else
-/// only when the fresh review before its newest raised a blocking finding
-/// and none of that review's findings still blocks.
-pub fn extra(ledger: &Ledger, work: i64) -> Result<Option<String>, LedgerError> {
-    if granted(ledger, work)?.is_some() {
+/// as the note its `rounds_waiver` carries: none once it has had one or
+/// when its fresh reviews are not exactly at the cap (an owner who lowered
+/// the limit stopped it), else only when the fresh review before its
+/// newest raised a blocking finding and none of that review's findings
+/// still blocks.
+pub fn extra(ledger: &Ledger, work: i64, plan: &Plan<'_>) -> Result<Option<String>, LedgerError> {
+    let (reviews, _) = fresh(ledger, work)?;
+    if cap(ledger, work, plan)? != Some(reviews) || granted(ledger, work)?.is_some() {
         return Ok(None);
     }
     let conn = ledger.conn();
     let prev: Option<(i64, i64)> = conn
         .query_row(
-            "SELECT id, json_extract(payload_json, '$.round') FROM events
-              WHERE lane_id = ?1 AND kind = 'check.finished'
-                AND json_extract(payload_json, '$.check') = 'review'
-                AND json_extract(payload_json, '$.producer.kind') = 'harness'
-                AND json_extract(payload_json, '$.complete') = 1
-                AND json_extract(payload_json, '$.round') IS NOT NULL
-                AND json_extract(payload_json, '$.carried_from') IS NULL
-              ORDER BY id DESC LIMIT 1 OFFSET 1",
+            &format!(
+                "SELECT id, json_extract(payload_json, '$.round') FROM events WHERE {FRESH}
+                 ORDER BY id DESC LIMIT 1 OFFSET 1"
+            ),
             [work],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )

@@ -496,7 +496,8 @@ before the limit has no `round` and does not count; an incomplete one never coun
 leaves nothing to fix and `review_attempts` bounds it), or the newest `rounds_waiver`'s (the owner's or the harness's below)
 `rounds`, is refused (`invalid_input`, naming the limit, "needs you", and `check waive
 rounds`): two fix rounds, then the owner decides. Once per lane the harness grants one fresh
-review more by itself instead (#341), when the fresh review before the newest raised a blocking
+review more by itself instead (#341), when its fresh reviews are exactly at the limit (an owner
+who lowered it below them stopped the lane) and the fresh review before the newest raised a blocking
 finding and none of its findings still blocks (each ruled `fixed` or `refuted`, or `waived`,
 deferred included): a harness `rounds_waiver` with `rounds` the limit plus one and `note`
 "round <n> settled every blocking finding of round <n-1>", written only once the tree's

@@ -1333,15 +1333,17 @@ fn review_rounds_cap_a_lane_and_rereview_only_the_diff_since() {
 
 /// At the cap a lane gets one fresh review more by itself when its newest
 /// review left no blocking finding of the one before still blocking (#341):
-/// a harness `rounds_waiver`, once. Without that progress it stops as
-/// `review_rounds_cap_a_lane_and_rereview_only_the_diff_since` shows.
+/// a harness `rounds_waiver`, once, written only when nothing else refuses
+/// the run, and never past a limit the owner lowered.
 #[test]
 fn review_rounds_grant_one_extra_round_on_progress() {
     let mut runs = claude(json!({"findings": []}), json!([]));
-    for (at, mark) in [(3, "+BLOCK2"), (3, "+BLOCK3")] {
-        let blocker = json!({"findings": [{"severity": "blocker", "title": mark,
+    let runs_ = runs.as_array_mut().unwrap();
+    runs_.insert(3, json!({"when": "+FLAKY", "exit": 2}));
+    for mark in ["+BLOCK2", "+BLOCK3"] {
+        let blocker = json!({"findings": [{"severity": "blocker", "title": "x",
             "body": "b", "path": "lib.rs", "line": null}]});
-        runs.as_array_mut().unwrap().insert(at, says(mark, blocker));
+        runs_.insert(3, says(mark, blocker));
     }
     let lane = claimed_in("v21", runs, "");
     lane.plan("1. do it\n");
@@ -1353,10 +1355,11 @@ fn review_rounds_grant_one_extra_round_on_progress() {
             &["commit", "-qam", "c"],
             &[("lib.rs", body.as_bytes())],
         );
+        lane.head()
     };
-    let defer = || {
+    let defer = |head: &str| {
         for f in lane.findings() {
-            if f["status"] == "open" && f["severity"] == "blocker" {
+            if f["head_sha"] == head && f["blocks"] == true {
                 let (event, key) = (f["check_event_id"].to_string(), f["finding_key"].as_str());
                 let args = [
                     "finding",
@@ -1371,24 +1374,72 @@ fn review_rounds_grant_one_extra_round_on_progress() {
             }
         }
     };
-    let grants = || lane.events("payload_json->>'check' = 'rounds_waiver'");
+    let grants = || {
+        lane.events(
+            "payload_json->>'check' = 'rounds_waiver'
+        AND payload_json->>'$.producer.kind' = 'harness'",
+        )
+    };
+    let limit = |n: &str| {
+        let raise = [
+            "check", "waive", "rounds", "--work", "1", "--rounds", n, "--reason", "r",
+        ];
+        assert_eq!(lane.run("owner", &raise).0, 0);
+    };
+    let at_cap =
+        "finding(s) still block; the lane is at its review_rounds limit of 3 fresh reviews";
 
     commit("a\n1\n");
     assert_eq!(review().0, 0);
-    commit("a\nBLOCK2\n");
+    let second = commit("a\nBLOCK2\n");
     assert_eq!(review().0, 0);
-    defer();
-    commit("a\nBLOCK3\n");
+    // A tree whose lenses fail uses its review_attempts.
+    commit("a\nFLAKY\n");
+    review();
+    review();
+    assert_eq!(lane.review()["complete"], json!(false));
+    let third = commit("a\nBLOCK3\n");
     let out = lane.verify();
-    let why = "3 finding(s) still block; the lane is at its review_rounds limit of 3 fresh \
-               reviews and has one more by itself: round 3 settled every blocking finding of \
-               round 2";
+    let why = format!("6 {at_cap}: needs you");
     assert_eq!(
         out["stopped"],
         json!({"check": "review", "why": why}),
         "{out}"
     );
-    assert_eq!(grants(), 0);
+
+    defer(&second);
+    let out = lane.verify();
+    let why = format!(
+        "3 {at_cap} and has one more by itself: round 3 settled every blocking finding of round 2"
+    );
+    assert_eq!(
+        out["stopped"],
+        json!({"check": "review", "why": why}),
+        "{out}"
+    );
+    // An owner who lowered the limit stopped the lane: no grant.
+    limit("2");
+    commit("a\nlowered\n");
+    let (code, err) = review();
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("its limit review_rounds 2")
+    );
+    limit("3");
+    // The tree that used its attempts is refused, and the grant is not spent.
+    commit("a\nFLAKY\n");
+    let (code, err) = review();
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("its limit review_attempts"),
+        "{err}"
+    );
+    assert_eq!((code, grants()), (1, 0));
 
     commit("a\nfixed\n");
     let (code, out) = review();
@@ -1397,7 +1448,8 @@ fn review_rounds_grant_one_extra_round_on_progress() {
     let conn = rusqlite::Connection::open(&lane.db).unwrap();
     let grant: String = conn
         .query_row(
-            "SELECT payload_json FROM events WHERE payload_json->>'check' = 'rounds_waiver'",
+            "SELECT payload_json FROM events WHERE payload_json->>'check' = 'rounds_waiver'
+              ORDER BY id DESC LIMIT 1",
             [],
             |r| r.get(0),
         )
@@ -1413,7 +1465,7 @@ fn review_rounds_grant_one_extra_round_on_progress() {
     );
 
     // Round 4 settled round 3's findings too, but the extra round is one.
-    defer();
+    defer(&third);
     commit("a\nagain\n");
     let (code, err) = review();
     assert_eq!(code, 1, "{err}");

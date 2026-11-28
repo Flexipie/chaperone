@@ -298,7 +298,7 @@ fn at_cap(ledger: &Ledger, item: &WorkItem, work: i64) -> Result<String, CliErro
         return Ok(String::new());
     };
     let rounds = review::ROUNDS;
-    Ok(match review::extra(ledger, work)? {
+    Ok(match review::extra(ledger, work, &plan)? {
         Some(note) => {
             format!(
                 "; the lane is at its {rounds} limit of {cap} fresh reviews and has one more by itself: {note}"
