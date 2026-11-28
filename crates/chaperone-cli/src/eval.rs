@@ -29,7 +29,7 @@ struct Set {
 }
 
 /// A past change: `base` its merge base, an ancestor of `head`; `goal`
-/// what it was for, the intent lens's; `bug` what a review must find, none
+/// what it was for, every lens's; `bug` what a review must find, none
 /// when the change was clean; `known` real leftovers a review may find,
 /// which neither count against it nor for it.
 #[derive(Deserialize)]

@@ -2,7 +2,7 @@
 //! lane's commit should merge, in the harness's checkout of it, from facts
 //! the harness gathered or holds: the change (as the review shows it) and
 //! the harness's own results on it. Of what the lane wrote it is shown only
-//! what the change is for (as the intent lens is) and a session's smoke
+//! what the change is for (as every review lens is) and a session's smoke
 //! claim, labelled as one; never the lane's summary, merge case or what to
 //! look at.
 //!
