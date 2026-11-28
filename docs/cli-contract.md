@@ -651,8 +651,8 @@ gate). It reads the commit the lane is on as `check run` does and appends one `p
 `skipped` with `reason` `waived` and `note` the `--reason` (one non-blank line of at most 500
 characters, redacted at write), producer `session`. From a session that has held the lane it is
 refused unless the head's harness `diff` changes code (`commit.changes_code`; with no diff on the
-head, refused: run `check run diff`) or the lane's plan checks have `plan_attempts` `skipped`
-`no_answer`, and refused once the owner has overturned a plan waiver (`check overturn plan`).
+head, refused: run `check run diff`) or the head's newest plan has had `plan_attempts` `skipped`
+`no_answer` plan checks, and refused once the owner has overturned a plan waiver (`check overturn plan`).
 The same waiver again replays (keyed as `check
 record`, on the payload as stored). It waives the plan check only, and gates nothing by itself:
 a gate reads it as `plan_check.reason` `waived`. It prints what `check record` prints.
@@ -672,7 +672,7 @@ what to cut (`over_cap` on the review, docs/events.md).
 `check overturn plan|size --work <id> --reason <r>` is new (#340): the owner's answer to a plan
 waiver or size reason the lane wrote itself. It appends one `plan_check` or `size_waiver`
 `skipped` with `reason` `overturned` and `note` the `--reason`, producer `session`, refused from
-any session that has held the lane, and refused when the lane's newest `plan_check` or `size_waiver` is no waiver (nothing to overturn). The lane's own plan waiver counts the head's `no_answer` plan sessions, as the plan run's limit is per tree. A plan overturn fails `plan_or_no_code` again
+any session that has held the lane, and refused when the lane's newest `plan_check` or `size_waiver` is no waiver (nothing to overturn). The lane's own plan waiver counts the `no_answer` plan sessions of the head's newest plan (its `plan_ref`), as the plan run's limit is per tree and plan. A plan overturn fails `plan_or_no_code` again
 (`plan_check.reason` is `overturned`); a size overturn drops an earlier `--lines` raise, so
 v20's `code_lines_at_most` applies again. After either the lane may not waive that check again.
 It prints what `check record` prints.

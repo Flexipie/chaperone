@@ -377,12 +377,16 @@ impl Ledger {
         }
         let session = actor.session.as_deref().unwrap_or_default();
         if has_held(self.conn(), work, session)? {
-            // The plan run's limit is per tree: count the head's sessions.
+            // The plan run's limit is per tree and plan: count the head's newest plan's sessions.
             let failed: i64 = self.conn().query_row(
-                "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
+                "WITH runs AS (SELECT id, payload_json FROM events WHERE lane_id = ?1
+                   AND kind = 'check.finished'
                    AND json_extract(payload_json, '$.check') = 'plan_check'
-                   AND json_extract(payload_json, '$.reason') = 'no_answer'
-                   AND json_extract(payload_json, '$.head_sha') = ?2",
+                   AND json_extract(payload_json, '$.head_sha') = ?2)
+                 SELECT count(*) FROM runs
+                 WHERE json_extract(payload_json, '$.reason') = 'no_answer'
+                   AND json_extract(payload_json, '$.plan_ref') IS (SELECT
+                     json_extract(payload_json, '$.plan_ref') FROM runs ORDER BY id DESC LIMIT 1)",
                 params![work, head],
                 |r| r.get(0),
             )?;
@@ -1667,9 +1671,9 @@ mod tests {
         assert!(said(waive("lane", "abc1234", 2)).starts_with("no harness diff on abc1234"));
         diff("abc1234", false);
         assert!(said(waive("lane", "abc1234", 2)).contains("it can run, so run it"));
-        let no_answer = |head: &str| {
+        let no_answer = |head: &str, plan: &str| {
             let p = json!({"check": "plan_check", "outcome": "skipped", "head_sha": head,
-                "reason": "no_answer", "producer": {"kind": "harness"}});
+                "reason": "no_answer", "plan_ref": plan, "producer": {"kind": "harness"}});
             let m = crate::ledger::Mutation::Event {
                 kind: EventKind::CheckFinished,
                 lane_id: Some(1),
@@ -1681,10 +1685,13 @@ mod tests {
                 .unwrap();
         };
         // The limit is the head's: another commit's sessions do not count.
-        no_answer("abc1234");
-        no_answer("fed4321");
+        no_answer("abc1234", "p1");
+        no_answer("fed4321", "p2");
         assert!(said(waive("lane", "abc1234", 2)).contains("had 1 of 2 sessions"));
-        no_answer("abc1234");
+        // So is it per plan: another plan's session does not count.
+        no_answer("abc1234", "p2");
+        assert!(said(waive("lane", "abc1234", 2)).contains("had 1 of 2 sessions"));
+        no_answer("abc1234", "p2");
         waive("lane", "abc1234", 2).unwrap();
         diff("def5678", true);
         let lanes = waive("lane", "def5678", 2).unwrap();
