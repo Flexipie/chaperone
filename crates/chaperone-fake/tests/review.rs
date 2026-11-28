@@ -391,13 +391,23 @@ fn record(env: &Env, ledger: &Ledger) -> Result<Recorded, Refusal> {
 
 /// [`record`] on lane 1's commit `head` of `tree`.
 fn reviewed(env: &Env, ledger: &Ledger, head: &str, tree: &str) -> Result<Recorded, Refusal> {
-    let pipeline = pipeline();
-    let plan = review::plan(&pipeline).unwrap();
+    reviewed_on(env, ledger, &pipeline(), head, tree)
+}
+
+/// [`reviewed`] under `pipeline`.
+fn reviewed_on(
+    env: &Env,
+    ledger: &Ledger,
+    pipeline: &Pipeline,
+    head: &str,
+    tree: &str,
+) -> Result<Recorded, Refusal> {
+    let plan = review::plan(pipeline).unwrap();
     let (dir, agents, me) = (env.checkout(), env.agents(), lane_session());
     let mut input = RunInput {
         head: head.into(),
         tree: tree.into(),
-        ..input(&pipeline)
+        ..input(pipeline)
     };
     if let Some(stored) = review::replay(ledger, &me, &mut input, &plan).unwrap()? {
         return Ok(stored);
@@ -1917,25 +1927,45 @@ fn a_dispute_on_a_replayed_tree_is_ruled_alone() {
 }
 
 /// A pipeline with no `dispute_attempts` (v20) offers its verifier no
-/// dispute and tells no lens how to title an owner's finding.
+/// dispute: a fresh review whose only earlier finding is disputed starts no
+/// verifier, a ruling outside a review is refused, and no lens is told how
+/// to title an owner's finding.
 #[test]
 fn a_pipeline_without_dispute_attempts_leaves_disputes_to_the_owner() {
     let (claude, codex) = scripts(rules);
     let env = env(claude, codex, 10);
     let ledger = ledger(&env);
     record(&env, &ledger).unwrap();
-    let a = ledger.blocking_findings(1).unwrap().remove(0);
-    mv(&ledger, &lane_session(), &a, "disputed");
+    for f in ledger.blocking_findings(1).unwrap() {
+        mv(&ledger, &lane_session(), &f, "disputed");
+    }
+    let v21 = pipeline();
+    let with = review::plan(&v21).unwrap();
+    let disputed = review::disputes(&ledger, 1, &with).unwrap();
+    assert_eq!(disputed.len(), 2);
     let src = PIPELINE.replace(", dispute_attempts = 2", "");
     let v20 = Pipeline::load_with_prompts(&src, PROMPTS).unwrap();
     let plan = review::plan(&v20).unwrap();
     assert!(review::disputes(&ledger, 1, &plan).unwrap().is_empty());
-    let v21 = pipeline();
-    let with = review::plan(&v21).unwrap();
-    assert_eq!(review::disputes(&ledger, 1, &with).unwrap().len(), 1);
     rule_only(&env, json!({"rulings": []}));
+    let before = calls(&env);
+    reviewed_on(&env, &ledger, &v20, &"4".repeat(40), &"5".repeat(40)).unwrap();
+    assert_eq!(calls(&env), before + 4, "the lenses, no verifier");
     let (dir, agents) = (env.checkout(), env.agents());
-    review::run(&plan.lenses, false, &agents, &dir, &env.facts, &env.store).unwrap();
+    let refused = review::rule_disputes(
+        &ledger,
+        &lane_session(),
+        &input(&v20),
+        &plan,
+        &agents,
+        &dir,
+        &env.facts,
+        &disputed,
+        &env.store,
+    );
+    let refused = format!("{:?}", refused.unwrap().unwrap_err());
+    assert!(refused.contains("its limit dispute_attempts"), "{refused}");
+    assert_eq!(calls(&env), before + 4);
     let log = std::fs::read_to_string(env.dir.path().join("claude.log")).unwrap();
     let told: Vec<bool> = log
         .lines()
@@ -1954,4 +1984,6 @@ fn a_pipeline_without_dispute_attempts_leaves_disputes_to_the_owner() {
         })
         .collect();
     assert_eq!(told, [true, false]);
+    let left = ledger.blocking_findings(1).unwrap();
+    assert!(left.iter().all(|f| f.status == "disputed"), "{left:?}");
 }
