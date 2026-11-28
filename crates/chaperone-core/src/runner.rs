@@ -12,7 +12,7 @@
 //! A session runs in a process group of its own ([`child::run_input`]), so
 //! a Ctrl-C on chaperone does not reach it: it runs on to its own end.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
@@ -102,6 +102,10 @@ pub struct Run {
     /// of Codex's turn (tokens only).
     pub model_usage: Value,
     pub session_id: Option<String>,
+    /// The paths the session's tools named to read: Claude's `Read`
+    /// `file_path` and `Grep` `path`, each word of a Codex command. Some
+    /// are no file; the reader checks them against the checkout.
+    pub read: BTreeSet<String>,
 }
 
 #[derive(Debug)]
@@ -168,6 +172,7 @@ struct Stream {
     current: Option<String>,
     /// The tokens used when they passed the cap.
     over: Option<u64>,
+    read: BTreeSet<String>,
 }
 
 /// Claude's `modelUsage` keys, in [`Stream`]'s order.
@@ -189,7 +194,18 @@ impl Stream {
             Some("system") if self.session_id.is_none() => {
                 self.session_id = event["session_id"].as_str().map(String::from);
             }
-            Some("assistant") => self.count(&event["message"], &event["message"]["usage"]),
+            Some("assistant") => {
+                let content = event["message"]["content"].as_array().into_iter().flatten();
+                let named = content.filter(|c| c["type"] == "tool_use").filter_map(|c| {
+                    match c["name"].as_str() {
+                        Some("Read") => c["input"]["file_path"].as_str(),
+                        Some("Grep") => c["input"]["path"].as_str(),
+                        _ => None,
+                    }
+                });
+                self.read.extend(named.map(String::from));
+                self.count(&event["message"], &event["message"]["usage"])
+            }
             Some("stream_event") => match event["event"]["type"].as_str() {
                 Some("message_start") => {
                     let message = &event["event"]["message"];
@@ -257,6 +273,8 @@ struct CodexEvent {
     usage: Option<Value>,
     /// `{"message": ...}` on `turn.failed`; any other shape still fails.
     error: Option<Value>,
+    /// On `item.completed`, a `command` when the item ran one.
+    item: Option<Value>,
 }
 
 /// A new owner-only directory for one run's files, as the agent reads
@@ -401,6 +419,7 @@ impl Agent {
                 raw: String::new(),
                 model_usage: stream.model_usage(),
                 session_id: stream.session_id,
+                read: stream.read,
             };
             return Err(RunError::Failed {
                 subtype: "max_tokens".into(),
@@ -424,6 +443,7 @@ impl Agent {
             raw,
             model_usage: result.model_usage,
             session_id: result.session_id,
+            read: stream.read,
         };
         let subtype = result.subtype.unwrap_or_default();
         if result.is_error || subtype != "success" || !done.status.success() {
@@ -486,6 +506,7 @@ impl Agent {
         let done = self.run(&mut cmd, Some(ask.prompt.as_bytes()), deadline)?;
         let raw = String::from_utf8_lossy(&done.out).into_owned();
         let (mut session_id, mut model_usage, mut failed) = (None, Value::Null, None);
+        let mut read = BTreeSet::new();
         for event in raw
             .lines()
             .filter_map(|l| serde_json::from_str::<CodexEvent>(l).ok())
@@ -493,6 +514,13 @@ impl Agent {
             match event.kind.as_str() {
                 "thread.started" => session_id = event.thread_id,
                 "turn.completed" => model_usage = event.usage.unwrap_or_default(),
+                "item.completed" => {
+                    let command = event.item.as_ref().and_then(|i| i["command"].as_str());
+                    let words = command.into_iter().flat_map(|c| {
+                        c.split(|ch: char| ch.is_whitespace() || "'\"`;|&()<>".contains(ch))
+                    });
+                    read.extend(words.filter(|w| !w.is_empty()).map(String::from));
+                }
                 "turn.failed" => {
                     let said = event.error.as_ref().and_then(|e| e["message"].as_str());
                     failed = Some(said.unwrap_or("no message").to_string());
@@ -504,6 +532,7 @@ impl Agent {
             raw,
             model_usage,
             session_id,
+            read,
         };
         if let Some(message) = failed {
             return Err(RunError::Failed {

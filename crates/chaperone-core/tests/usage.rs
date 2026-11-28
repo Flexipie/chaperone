@@ -343,6 +343,7 @@ fn a_harness_session_is_one_row() {
         raw: "not stored".into(),
         model_usage: usage,
         session_id: Some("sess".into()),
+        read: Default::default(),
     };
     let labels = Map::from_iter([
         ("phase".into(), json!("review")),
@@ -352,11 +353,13 @@ fn a_harness_session_is_one_row() {
         raw: String::new(),
         model_usage: json!({"input_tokens": 50, "cached_input_tokens": 40, "output_tokens": 6}),
         session_id: Some("thread".into()),
+        read: Default::default(),
     };
     let no_id = Run {
         raw: String::new(),
         model_usage: Value::Null,
         session_id: None,
+        read: Default::default(),
     };
     let mut codex_labels = labels.clone();
     codex_labels.insert("cli".into(), json!("codex"));

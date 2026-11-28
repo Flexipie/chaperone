@@ -533,10 +533,14 @@ commit of its newest complete harness review (carried or not) is an ancestor of 
 lenses are shown the files of the whole change but only `git diff <that commit> <commit>`, told
 to raise findings only on what it changes and that the rest was reviewed (`reviewed_since` on
 the review); after a rebase it is not an ancestor and they get the whole diff. The verifier
-and the verdict always get the whole diff. Only `intent` is also told what the lane is for: the work
-item's title, its slice of the spec, and the `goal` of its newest handoff's brief; and, when
-there is one, the newest smoke on the commit as the verdict is shown it, the session's claim
-labelled as one. No lens is
+and the verdict always get the whole diff. Every lens is also told what the lane is for: the work
+item's title, the issue as its first claim read it (`source_text`, labelled the owner's words and
+data, or why it could not be read, or that none is stored), its slice of the spec, and the `goal`
+of its newest handoff's brief, labelled the lane's own words. On the lane's first review (not
+one shown only the diff since the last) every lens is told to read the code around the change,
+its callers and its tests before judging, and shown the plan its newest `plan_check` read,
+fenced and labelled data the lane wrote. Only `intent` is shown, when there is one, the newest
+smoke on the commit as the verdict is shown it, the session's claim labelled as one. No lens is
 given the handoff's summary, `merge_case` or `look_at`. Every block of text from the lane or
 a model (the file list, the diff, the goal, the findings shown to the verifier) is fenced
 one backtick longer than its longest run of backticks, so nothing in it closes the fence, and
@@ -611,7 +615,7 @@ harness shows reopens it, as the base and its profile come from the lane's own c
 tree whose verdict sessions gave no answer `verdict_attempts` times by this pipeline is refused
 (`invalid_input`, naming the limit): the owner decides. Else it asks `--version`
 of the runner's CLI, reads the change and makes a checkout as `review` does, and starts one
-fresh session there, given its prompt file, what the lane is for (as the intent lens is
+fresh session there, given its prompt file, what the lane is for (as every lens is
 told), the change (as every lens is shown it) and the harness's results as JSON: the key fields
 of the newest `diff`, `tests` and complete `review` on the commit, the findings on the lane
 that still block, from every review (labelled so, with a disputed one read `open`: the dispute
@@ -645,7 +649,7 @@ plan replays while it is the lane's newest, else is carried as a new `ran` namin
 (`carried_from`, events.md), and one whose sessions gave no answer `plan_attempts` times there is refused (the
 owner can waive the check). Neither stores the plan, which is written to the store only when a
 session runs on it. Else one fresh session in the harness's checkout of the commit (no diff is
-read) is given its prompt, what the lane is for (as the intent lens), the plan, fenced, and the
+read) is given its prompt, what the lane is for (as every review lens), the plan, fenced, and the
 commit and merge base, and answers `{findings: [...]}`
 as a review lens does. It writes a `usage.reported` for the session, then one `plan_check` with
 the harness producer (events.md): `ran` with the findings, or `skipped` with `reason`
@@ -863,7 +867,7 @@ list of the same shape for real leftovers a review may find (an older binary ref
 has it). For each entry the
 newest embedded pipeline's lenses, and the `[[review.required]]` lenses the clone's base profile requires of the change, run in a fresh checkout of `head` fetched from
 `<--repos>/<repo name>` (`checkouts/eval-<pid>-<name>` beside the ledger, removed after),
-with the entry's goal for the intent lens, no smoke, plan or earlier findings, and lenses
+with the entry's goal for every lens, no smoke, plan or earlier findings, and lenses
 skipped for size as a lane's are; then the verifier on what they found. A finding stands
 when its severity blocks and the verifier did not rule it `refuted` or `unproven`. A
 standing finding one of the entry's `known` matches (as `bug` matches) is listed under

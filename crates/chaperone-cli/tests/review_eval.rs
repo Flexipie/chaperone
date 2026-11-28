@@ -36,9 +36,9 @@ fn risk(path: &str, title: &str) -> Value {
         "line": null}]})
 }
 
-/// Each entry's head adds its own file to a demo clone; only the intent
-/// lens is shown an entry's goal, so its fake answer is keyed on it, and
-/// the verifier on the title of the finding it rules on.
+/// Each entry's head adds its own file to a demo clone; every Claude lens
+/// is shown an entry's goal, so its fake answer is keyed on it, and the
+/// verifier on the title of the finding it rules on.
 #[test]
 fn each_outcome_is_scored() {
     let dir = tempfile::tempdir().unwrap();
@@ -90,10 +90,13 @@ fn each_outcome_is_scored() {
     // A finding the verifier rules `verdict` on, by its title.
     let ruled = |name: &str, verdict: &str| {
         let finding = risk(&format!("{name}.rs"), &format!("{name}-title"));
-        let key = review::findings("intent", finding.clone()).unwrap()[0]
-            .finding_key
-            .clone();
-        let ruling = json!({"rulings": [{"key": key, "verdict": verdict, "why": "w"}]});
+        let rulings: Vec<_> = ["correctness", "design_tests", "intent"]
+            .map(|lens| {
+                let key = &review::findings(lens, finding.clone()).unwrap()[0].finding_key;
+                json!({"key": key, "verdict": verdict, "why": "w"})
+            })
+            .into();
+        let ruling = json!({ "rulings": rulings });
         (finding, says(&format!("{name}-title"), ruling))
     };
     let (refuted, refuted_ruling) = ruled("refuted", "refuted");

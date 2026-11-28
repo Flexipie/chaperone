@@ -263,6 +263,7 @@ fn review_one(
         head: e.head.clone(),
         files,
         goal: e.goal.clone(),
+        plan_text: None,
         smoke: Value::Null,
         plan: String::new(),
         code_lines: counted.then_some(lines as i64),
