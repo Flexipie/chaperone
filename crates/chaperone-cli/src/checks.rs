@@ -1527,7 +1527,7 @@ fn run_script(
 /// for a writer, with the lane's lock held. Between the check and the open
 /// a file could be swapped for one; this guards against accidents, not a
 /// lane racing its own check (no non-blocking open without libc).
-fn text_file(path: &Path, max: usize) -> Result<String, String> {
+pub(crate) fn text_file(path: &Path, max: usize) -> Result<String, String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err("not a regular file".into());

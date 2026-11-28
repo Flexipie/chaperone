@@ -174,7 +174,7 @@ stamp's top-level fields, and `lane.ready_overridden` changes no column.
 | Kind | Action | Payload |
 | --- | --- | --- |
 | `lane.created` | `create` | `title`, `source`, `source_id`, `repo`, `next_action`, `spec_id`, `lane_key`, `lane_pos`, `kind`, `pr_flow` |
-| `lane.claimed` | `claim` | `lease_secs`, `lease_expires_at`, `pipeline_id`, `pipeline_hash`, `route`, `changed` (holder, `queued` to `claimed`, and any `--worktree` as `worktree_path`, `--branch`, `--base-sha`), and on the first claim of a `github` lane `source_text`: `{title, body}` as `gh issue view` read the issue `source_id` names, redacted as prose, or `{error}` when it could not (the claim still writes) |
+| `lane.claimed` | `claim` | `lease_secs`, `lease_expires_at`, `pipeline_id`, `pipeline_hash`, `route`, `changed` (holder, `queued` to `claimed`, and any `--worktree` as `worktree_path`, `--branch`, `--base-sha`), and on a first claim with issue text `source_text`, redacted as prose: for a `github` lane `{title, body, from: "harness"}` as `gh issue view` read the issue `source_id` names, else `--source-text-file`'s `{title, body, from: "caller"}`, else `{error}` when gh could not read it (the claim still writes); for any other source the file's text or nothing. A `{title, body}` with no `from` (claims before #347) is a gh read |
 | `lane.renewed` | `renew` | `lease_secs`, `lease_expires_at`, optional `changed` (`worktree_path`, `branch`, `base_sha`) |
 | `lane.taken_over` | `takeover` | `from {agent, session}`, `reason` (`lease expired` or `forced`), `expired_at` or `live_until`, `lease_secs`, `lease_expires_at`, `changed` |
 | `lane.updated` | `update` | `changed`, optional `reason` |

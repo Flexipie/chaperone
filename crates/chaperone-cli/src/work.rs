@@ -13,7 +13,7 @@ use chaperone_core::ledger::{Actor, Ledger, Refusal};
 use chaperone_core::work::{
     ClaimInput, CreateInput, HandoffInput, UpdateInput, WorkFilter, WorkItem,
 };
-use chaperone_core::{git, merge, work};
+use chaperone_core::{git, merge, review, work};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -78,10 +78,17 @@ pub fn run(
             lease_secs,
             takeover,
             pipeline,
+            source_text_file,
             dry_run,
             actor,
         } => {
             let item = ledger.work_get(id, &ledger.now()?)??;
+            let supplied = source_text_file.as_deref().map(supplied_text).transpose()?;
+            if supplied.is_some() && item.pipeline_id.is_some() {
+                return Err(refuse(format!(
+                    "work item {id} is claimed already; --source-text-file goes with its first claim only"
+                )));
+            }
             let input = ClaimInput {
                 worktree_path: worktree,
                 branch,
@@ -92,7 +99,7 @@ pub fn run(
                 source_text: item
                     .pipeline_id
                     .is_none()
-                    .then(|| source_text(&item))
+                    .then(|| source_text(&item, supplied))
                     .flatten(),
             };
             one(ledger.work_claim(&actor.resolve(), id, &input, None, dry(dry_run))??)
@@ -264,7 +271,16 @@ pub fn run(
                 None => one(json!({ "id": id, "ready_override": ready, "on_board": false })),
             }
         }
-        WorkCmd::Get { id } => one(ledger.work_get(id, &ledger.now()?)??),
+        WorkCmd::Get { id } => {
+            let mut item = value(ledger.work_get(id, &ledger.now()?)??)?;
+            let text = review::source_text(ledger, id)?;
+            item["issue_text"] = match (&text["error"], &text["title"]) {
+                (Value::String(_), _) => json!("error"),
+                (_, Value::String(_)) => json!(text["from"].as_str().unwrap_or("harness")),
+                _ => Value::Null,
+            };
+            Ok(Outcome::One(item))
+        }
         WorkCmd::Board => output::write_board(ledger, &ledger.now()?, meta, format),
         WorkCmd::List {
             status,
@@ -380,23 +396,48 @@ pub(crate) fn one(v: impl Serialize) -> Result<Outcome, CliError> {
     Ok(Outcome::One(value(v)?))
 }
 
-/// A github lane's issue as `gh` reads it now (`{title, body}`), or why it
-/// cannot (`{error}`): a lane starts either way, and its review is told
-/// which. None for a lane of another source; `work create` refuses a
-/// github one whose `source_id` is not `owner/repo#N`.
-fn source_text(item: &WorkItem) -> Option<Value> {
-    let (repo, n) = item
+/// The issue's text the caller hands in: JSON `{title, body}` (what
+/// `gh issue view --json title,body` prints), a non-empty title, at most
+/// [`SOURCE_TEXT_BYTES`].
+fn supplied_text(path: &Path) -> Result<Value, CliError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Text {
+        title: String,
+        body: String,
+    }
+    let bad = |why: String| refuse(format!("--source-text-file {}: {why}", path.display()));
+    let raw = crate::checks::text_file(path, SOURCE_TEXT_BYTES).map_err(bad)?;
+    let t: Text = serde_json::from_str(&raw).map_err(|e| bad(e.to_string()))?;
+    if t.title.trim().is_empty() {
+        return Err(bad("the title is empty".into()));
+    }
+    Ok(json!({"title": t.title, "body": t.body, "from": "caller"}))
+}
+
+const SOURCE_TEXT_BYTES: usize = 64 * 1024;
+
+/// A github lane's issue as `gh` reads it now (`from: harness`), else the
+/// caller's text, else why gh could not (`{error}`): a lane starts either
+/// way, and its review is told which. A lane of another source has only the
+/// caller's text, or none; `work create` refuses a github one whose
+/// `source_id` is not `owner/repo#N`.
+fn source_text(item: &WorkItem, supplied: Option<Value>) -> Option<Value> {
+    let Some((repo, n)) = item
         .source_id
         .as_deref()
-        .filter(|_| item.source == "github")?
-        .rsplit_once('#')?;
+        .filter(|_| item.source == "github")
+        .and_then(|s| s.rsplit_once('#'))
+    else {
+        return supplied;
+    };
     let read = || {
         let args = ["issue", "view", n, "-R", repo, "--json", "title,body"];
         let out = child::cli("gh", OsStr::new("gh"), &args, FORGE_TIMEOUT, "")?;
         let v: Value = serde_json::from_str(&out).map_err(|e| format!("gh issue view: {e}"))?;
-        Ok(json!({"title": v["title"], "body": v["body"]}))
+        Ok(json!({"title": v["title"], "body": v["body"], "from": "harness"}))
     };
-    Some(read().unwrap_or_else(|e: String| json!({"error": e})))
+    Some(read().unwrap_or_else(|e: String| supplied.unwrap_or_else(|| json!({"error": e}))))
 }
 
 /// A v21 lane's merge as GitHub shows it (#308): the PR must be in the

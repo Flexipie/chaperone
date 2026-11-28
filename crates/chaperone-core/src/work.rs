@@ -189,8 +189,9 @@ pub struct ClaimInput {
     /// At the first claim, the default or an embedded pipeline newer than
     /// it to stamp ([`crate::pipeline::newer`]).
     pub pipeline: Option<String>,
-    /// At the first claim, the tracker's issue as the harness read it
-    /// (`{title, body}`), or why it could not (`{error}`).
+    /// At the first claim, the tracker's issue as `{title, body, from}`,
+    /// `from` the harness's read or the caller's text, or why the harness
+    /// could not read it (`{error}`).
     pub source_text: Option<Value>,
 }
 
