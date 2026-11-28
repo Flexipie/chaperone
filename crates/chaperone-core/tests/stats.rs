@@ -162,6 +162,9 @@ fn a_lane_folds_from_its_events() {
         "one piece",
     );
     waived.unwrap().unwrap();
+    // The lane's own size reason raises nothing: the owner's waiver stands.
+    let reason = ledger.limit_waive(&actor("1"), id, HEAD, SIZE_WAIVER, None, "whole");
+    reason.unwrap().unwrap();
     for (kind, round) in [
         ("nudged", None),
         ("sent_back", Some(1)),

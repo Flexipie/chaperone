@@ -755,8 +755,8 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             }
             // Under a schema 2 pipeline the harness runs these checks and its
             // gates read only its results (events.md, `check.finished`
-            // producer), so no other producer writes one there. The owner's
-            // plan waiver is the one session plan check, and a session's
+            // producer), so no other producer writes one there. A plan
+            // waiver or its overturn is the one session plan check, and a session's
             // smoke is its claim, which may not carry a harness `result`.
             let harness_only = HARNESS_CHECKS.contains(&check) && plan_waiver(p).is_none()
                 || check == "smoke" && p.rest.contains_key("result");
