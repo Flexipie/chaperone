@@ -88,10 +88,11 @@ fn the_first_claim_stores_the_issue_text() {
         assert_eq!(v["error"]["code"], "invalid_input", "{bad}: {v}");
     }
     assert!(texts("6").is_empty());
-    for id in ["1", "2", "3"] {
+    for id in ["2", "3"] {
         run(&["work", "claim", id]);
     }
-    for id in ["4", "5"] {
+    // gh's read wins over the text handed in (lane 1).
+    for id in ["1", "4", "5"] {
         run(&claim(id));
     }
     run(&["work", "release", "1"]);
@@ -132,12 +133,26 @@ fn the_first_claim_stores_the_issue_text() {
             json!("caller")
         ]
     );
+    // A text stored before `from` existed (a gh read) reads as harness.
+    let ledger = chaperone_core::ledger::Ledger::open_and_migrate(&db).unwrap();
+    let me = chaperone_core::ledger::Actor {
+        agent: Some("lane".into()),
+        session: Some("lane".into()),
+    };
+    let old = chaperone_core::work::ClaimInput {
+        source_text: Some(json!({"title": "OLD", "body": "b"})),
+        ..Default::default()
+    };
+    ledger
+        .work_claim(&me, 6, &old, None, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(run(&["work", "get", "6"])["issue_text"], "harness");
     let calls = std::fs::read_to_string(&log).unwrap();
-    let want = "issue view 1 -R o/r --json title,body\nissue view 2 -R o/r --json title,body\n\
+    let want = "issue view 2 -R o/r --json title,body\nissue view 1 -R o/r --json title,body\n\
                 issue view 4 -R o/r --json title,body\n";
     assert_eq!(calls, want);
     // The linear lane's review is told the text it was handed.
-    let ledger = chaperone_core::ledger::Ledger::open_and_migrate(&db).unwrap();
     let item = ledger.work_get(5, &ledger.now().unwrap()).unwrap().unwrap();
     let goal = chaperone_core::review::goal(&ledger, &item).unwrap();
     let want = "The issue CORE-5 as the tracker held it when the lane was claimed: the owner's \
