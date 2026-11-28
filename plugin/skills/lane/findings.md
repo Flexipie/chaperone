@@ -4,7 +4,8 @@
 
 Only a finding with `blocks` (a proven `blocker` or `risk`, not settled) or a check failing
 on this head holds a lane; no other finding, gate or round does. One that does not block is
-never fixed alone and never earns a verify: `pr open` lists it in the PR body as open. A
+never fixed alone and never earns a verify: `pr open` lists it in the PR body as open, with
+the outcome you give it before then (`finding label`, SKILL.md step 7). A
 comment one you delete or shorten in a commit you make anyway, never disputing it.
 
 ## Read them

@@ -85,6 +85,10 @@ const OUTCOMES: [&str; 5] = [
     "unlabelled",
 ];
 
+/// A finding's newest `finding.updated`: status, waiver kind and the
+/// lane's label (#326).
+type Settled = (String, Option<String>, Option<String>);
+
 #[derive(Default)]
 struct Lane {
     id: i64,
@@ -135,8 +139,7 @@ struct Lane {
     /// `next_action` does not start with `reviewing`).
     handoffs: Vec<(String, bool)>,
     reviews: Vec<Review>,
-    /// Each finding's newest `finding.updated`: status and waiver kind.
-    settled: BTreeMap<(i64, String), (String, Option<String>)>,
+    settled: BTreeMap<(i64, String), Settled>,
 }
 
 fn same_commit(a: &str, b: &str) -> bool {
@@ -342,19 +345,29 @@ impl Lane {
 
     /// Per lens, its harness review findings by outcome (an index into
     /// [`OUTCOMES`]), each once: a carried review has no `findings[]` of
-    /// its own, and a `same_as` repeat is left out (`reraised_findings`
-    /// counts it).
+    /// its own, a `same_as` repeat is left out (`reraised_findings`
+    /// counts it), and a key a later round raises again counts as its
+    /// newest copy (#326), the one `pr open` lists and the lane labels.
     fn outcomes(&self) -> BTreeMap<String, [i64; 5]> {
         let mut out: BTreeMap<String, [i64; 5]> = BTreeMap::new();
-        let harness = self.reviews.iter().filter(|r| r.check == "review");
+        let mut seen = BTreeSet::new();
+        let harness = self.reviews.iter().rev().filter(|r| r.check == "review");
         for r in harness {
             for f in r.findings.iter().filter(|f| f.same_as.is_none()) {
+                if !seen.insert(&f.key) {
+                    continue;
+                }
                 let settled = self.settled.get(&(r.event, f.key.clone()));
-                let outcome = match settled.map(|(s, kind)| (s.as_str(), kind.as_deref())) {
-                    Some(("fixed", _) | ("waived", Some("fixed"))) => 0,
-                    Some(("refuted", _) | ("waived", Some("disproved"))) => 1,
-                    Some(("waived", Some("accepted" | "scope" | "deferred"))) => 2,
-                    Some(("waived" | "answered", _)) => 4,
+                let outcome = match settled
+                    .map(|(s, kind, label)| (s.as_str(), kind.as_deref(), label.as_deref()))
+                {
+                    Some((.., Some(label))) => {
+                        OUTCOMES.iter().position(|o| *o == label).unwrap_or(4)
+                    }
+                    Some(("fixed", _, _) | ("waived", Some("fixed"), _)) => 0,
+                    Some(("refuted", _, _) | ("waived", Some("disproved"), _)) => 1,
+                    Some(("waived", Some("accepted" | "scope" | "deferred"), _)) => 2,
+                    Some(("waived" | "answered", ..)) => 4,
                     _ if f.unproven => 3,
                     _ => 4,
                 };
@@ -497,8 +510,9 @@ impl Lane {
                     text("status"),
                 ) {
                     let kind = p.pointer("/waiver/kind").and_then(Value::as_str);
-                    self.settled
-                        .insert((event, key.into()), (status.into(), kind.map(Into::into)));
+                    let label = text("label").map(Into::into);
+                    let settled = (status.into(), kind.map(Into::into), label);
+                    self.settled.insert((event, key.into()), settled);
                 }
                 if text("status") == Some("waived") {
                     *self.attention.entry("waived".into()).or_default() += 1;

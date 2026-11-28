@@ -1717,7 +1717,7 @@ fn rule(ledger: &Ledger, actor: &Actor, id: i64, payload: &Payload) -> Checked<(
             head_sha: payload.head_sha.clone().filter(|_| fixed),
             ..FindingMove::default()
         };
-        let producer = payload.rest.get("producer");
+        let producer = payload.rest.get("producer").map(|p| ("producer", p));
         if let Err(refused) = ledger.finding_move(actor, &input, producer, false)? {
             return Ok(Err(refused));
         }

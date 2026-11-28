@@ -202,6 +202,10 @@ pub struct FindingMove {
 /// the rest are countersigned: written by a session fresh to the lane.
 pub const WAIVER_KINDS: &[&str] = &["fixed", "disproved", "scope", "deferred", "accepted"];
 
+/// The outcome a lane gives a finding it leaves unsettled (#326), as
+/// `stats` `finding_outcomes` names it.
+pub const LANE_OUTCOMES: &[&str] = &["wrong", "intentional", "did_not_matter"];
+
 /// [`Ledger::limit_waive`]'s waivers: the check and the field it sets.
 pub const SIZE_WAIVER: (&str, &str) = ("size_waiver", "lines");
 pub const ROUNDS_WAIVER: (&str, &str) = ("rounds_waiver", "rounds");
@@ -247,6 +251,10 @@ pub struct LaneFinding {
     pub blocks: bool,
     /// The lane has disputed it.
     pub disputed: bool,
+    /// The lane's outcome, when its newest move is a label (#326).
+    pub outcome: Option<String>,
+    /// `<event>/<key>` of the earlier finding the verifier ruled it repeats.
+    pub same_as: Option<String>,
 }
 
 /// The SQL condition on a `findings` row raised by a complete harness
@@ -1315,13 +1323,38 @@ impl Ledger {
         self.finding_move(actor, input, None, dry_run)
     }
 
-    /// [`Ledger::finding_update`], or with `producer` the harness's ruling
+    /// The lane's outcome on a finding it leaves unsettled (#326): a
+    /// `finding.updated` that keeps its status and carries it as `label`.
+    pub fn finding_label(
+        &self,
+        actor: &Actor,
+        input: &FindingMove,
+        outcome: &str,
+        dry_run: bool,
+    ) -> Checked<Recorded> {
+        let status: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT status FROM findings WHERE check_event_id = ?1 AND finding_key = ?2",
+                params![input.check_event_id, input.finding_key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let input = FindingMove {
+            status: status.unwrap_or_default(),
+            ..input.clone()
+        };
+        self.finding_move(actor, &input, Some(("label", &json!(outcome))), dry_run)
+    }
+
+    /// [`Ledger::finding_update`], or with `extra` the lane's `label`
+    /// ([`Ledger::finding_label`]) or the harness's ruling as `producer`
     /// (`check run review`'s verifier), which only that code path sets.
     pub(crate) fn finding_move(
         &self,
         actor: &Actor,
         input: &FindingMove,
-        producer: Option<&Value>,
+        extra: Option<(&str, &Value)>,
         dry_run: bool,
     ) -> Checked<Recorded> {
         let mut payload = Payload {
@@ -1338,8 +1371,8 @@ impl Ledger {
             let waiver = json!({"kind": input.waiver_kind, "ref": input.waiver_ref});
             payload.rest.insert("waiver".into(), waiver);
         }
-        if let Some(producer) = producer {
-            payload.rest.insert("producer".into(), producer.clone());
+        if let Some((field, value)) = extra {
+            payload.rest.insert(field.into(), value.clone());
         }
         let mut lane = None;
         let (applied, _) = self.apply_planned(
@@ -1433,7 +1466,13 @@ pub(crate) fn findings_where(
                     EXISTS (SELECT 1 FROM events WHERE lane_id = ?1 AND kind = 'finding.updated'
                       AND json_extract(payload_json, '$.check_event_id') = f.check_event_id
                       AND json_extract(payload_json, '$.finding_key') = f.finding_key
-                      AND json_extract(payload_json, '$.status') = 'disputed')
+                      AND json_extract(payload_json, '$.status') = 'disputed'),
+                    (SELECT json_extract(payload_json, '$.label') FROM events
+                      WHERE id = f.event_id AND kind = 'finding.updated'),
+                    (SELECT json_extract(j.value, '$.same_as')
+                       FROM events e, json_each(e.payload_json, '$.findings') j
+                      WHERE e.id = f.check_event_id
+                        AND json_extract(j.value, '$.finding_key') = f.finding_key)
                FROM findings f WHERE lane_id = ?1 AND ({raised}) ORDER BY id",
         blocking()
     ))?;
@@ -1454,6 +1493,8 @@ pub(crate) fn findings_where(
             waiver: r.get(12)?,
             waiver_ref: r.get(13)?,
             disputed: r.get(14)?,
+            outcome: r.get(15)?,
+            same_as: r.get(16)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)

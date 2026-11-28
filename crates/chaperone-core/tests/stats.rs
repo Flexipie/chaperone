@@ -543,7 +543,8 @@ fn waivers_by_kind() {
 }
 
 /// Each harness review finding of a merged lane counts once by lens and
-/// outcome: a `same_as` repeat and an unmerged lane's do not count.
+/// outcome, a lane's label as its outcome: a `same_as` repeat, an older
+/// copy of a key raised again and an unmerged lane's do not count.
 #[test]
 fn finding_outcomes_by_lens() {
     let (_dir, path, ledger) = common::ledger();
@@ -646,7 +647,16 @@ fn finding_outcomes_by_lens() {
     mv("1", work, first, "unp2", "answered", None);
     let mut same = f("same", "codex", "question");
     same["same_as"] = json!(format!("{first}/fix"));
-    harness_review(work, json!([same]));
+    // Round two raises the nit again: its newest copy counts, as labelled.
+    let second = harness_review(work, json!([same, f("nit", "codex", "nit")]));
+    let input = FindingMove {
+        check_event_id: second,
+        finding_key: "nit".into(),
+        reason: Some("kept on purpose".into()),
+        ..FindingMove::default()
+    };
+    let label = ledger.finding_label(&actor("1"), &input, "intentional", false);
+    label.unwrap().unwrap();
     merged(&ledger, work, "2026-11-10T00:00:00.000Z");
     let open = lane(&ledger);
     harness_review(open, json!([f("x", "codex", "nit")]));
@@ -655,7 +665,7 @@ fn finding_outcomes_by_lens() {
     assert_eq!(
         got["cohort"]["finding_outcomes"],
         json!({
-            "codex": {"fixed": 0, "wrong": 0, "intentional": 1, "did_not_matter": 0, "unlabelled": 4},
+            "codex": {"fixed": 0, "wrong": 0, "intentional": 2, "did_not_matter": 0, "unlabelled": 3},
             "correctness": {"fixed": 1, "wrong": 1, "intentional": 0, "did_not_matter": 1, "unlabelled": 1},
             "intent": {"fixed": 1, "wrong": 1, "intentional": 0, "did_not_matter": 0, "unlabelled": 0},
         })

@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use chaperone_core::checks::{ATTENTION_BY, ATTENTION_TYPES, QUESTION_REASONS, WAIVER_KINDS};
+use chaperone_core::checks::{
+    ATTENTION_BY, ATTENTION_TYPES, LANE_OUTCOMES, QUESTION_REASONS, WAIVER_KINDS,
+};
 use chaperone_core::cursor::DEFAULT_LIMIT;
 use chaperone_core::ledger::{Actor, KINDS, PR_FLOWS, SESSION_CHECKS};
 use clap::builder::PossibleValuesParser;
@@ -260,6 +262,7 @@ impl Cmd {
             Cmd::Finding(FindingCmd::Waive(_)) => Some("finding waive"),
             Cmd::Finding(FindingCmd::Accept(_)) => Some("finding accept"),
             Cmd::Finding(FindingCmd::Answer(_)) => Some("finding answer"),
+            Cmd::Finding(FindingCmd::Label(_)) => Some("finding label"),
             Cmd::Finding(FindingCmd::Overturn(_)) => Some("finding overturn"),
             Cmd::Finding(FindingCmd::List { .. }) => None,
             Cmd::Evidence(EvidenceCmd::Show { .. }) => None,
@@ -913,6 +916,10 @@ pub enum FindingCmd {
     Accept(FindingArgs),
     /// Answer an open question finding, as anyone may
     Answer(FindingArgs),
+    /// Give an open review finding that does not block, and that the lane
+    /// leaves unfixed, its outcome. Only from a session that has held the
+    /// lane; it keeps the finding's status, and `pr open` lists the outcome
+    Label(LabelArgs),
     /// Make a refuted or waived finding block again, as verified. Refused
     /// from any session that has held the lane: the owner's. The verifier
     /// never rules on its dispute again
@@ -950,6 +957,17 @@ pub struct WaiveArgs {
     /// issue; one line of at most 500 characters
     #[arg(long = "ref", value_name = "REF")]
     pub reference: Option<String>,
+}
+
+/// A label: the finding, its outcome and why
+#[derive(Args, Debug)]
+pub struct LabelArgs {
+    #[command(flatten)]
+    pub finding: FindingArgs,
+    /// wrong: it does not hold; intentional: real, left as it is on purpose;
+    /// did_not_matter: real, not worth a change
+    #[arg(long, value_parser = PossibleValuesParser::new(LANE_OUTCOMES))]
+    pub outcome: String,
 }
 
 /// Interventions on a lane by the orchestrator or the owner
