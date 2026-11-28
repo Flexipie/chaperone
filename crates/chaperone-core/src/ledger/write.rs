@@ -1292,6 +1292,17 @@ mod tests {
     /// every refusal is here: the gate, the pipeline stamp, `pr.merged`,
     /// attention and usage have their own tests.
     #[test]
+    fn a_waiver_is_a_skipped_check() {
+        let p = |outcome: &str| {
+            serde_json::from_value::<Payload>(json!({"check": "plan_check",
+                "outcome": outcome, "reason": "waived"}))
+            .unwrap()
+        };
+        assert_eq!(plan_waiver(&p("skipped")), Some("waived"));
+        assert_eq!(plan_waiver(&p("ran")), None);
+    }
+
+    #[test]
     fn refusals_write_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let ledger = Ledger::open_and_migrate(&dir.path().join("ledger.db")).unwrap();

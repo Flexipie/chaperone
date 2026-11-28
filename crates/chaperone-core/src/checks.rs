@@ -357,7 +357,7 @@ impl Ledger {
     /// is on: one `plan_check` `skipped` with `reason` `waived` and the
     /// `note`. The owner's any time; the lane's own (#340) only when the
     /// check cannot run now: the head's harness diff changes code, or the
-    /// lane's plan checks had `attempts` sessions with no answer, and never
+    /// head's newest plan had `attempts` sessions with no answer, and never
     /// after the owner overturned one. The same waiver again replays.
     pub fn plan_waive(
         &self,
