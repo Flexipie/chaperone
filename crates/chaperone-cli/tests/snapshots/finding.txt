@@ -5,7 +5,7 @@ Usage: chaperone finding [OPTIONS] <COMMAND>
 Commands:
   list      Every finding of the lane's complete harness reviews, of any commit, and of its newest plan check, oldest first, with the reason of each one's newest move; blocks is true for those the no_blocking_findings gate counts
   dispute   Say an open or verified finding is wrong, citing the file:line, repo rule or task text that answers it. Only from a session that has held the lane; it blocks until the verifier rules on it at the next verify, or, for one titled owner:, overturned or disputed again, the owner
-  waive     Stop an open, verified or disputed finding blocking, or (scope only) release an accepted plan finding. Refused from any session that has held the lane: the owner's, or a fresh agent's (--kind). Never waive a finding where a gate fails open on a path a lane can reach: fix it or ask the owner
+  waive     Stop an open, verified or disputed finding blocking, or (scope only) release an accepted plan finding: the owner's, or a fresh agent's (--kind). The lane itself only defers (--kind deferred, with --ref the repo rule or follow-up issue) an open or verified review finding it cannot fix in the lane, never one titled owner: or overturned. Never waive a finding where a gate fails open on a path a lane can reach: fix it or ask the owner
   accept    Say the lane will act on an open plan check finding, and how. Only from a session that has held the lane; the review is shown it
   answer    Answer an open question finding, as anyone may
   overturn  Make a refuted or waived finding block again, as verified. Refused from any session that has held the lane: the owner's. The verifier never rules on its dispute again

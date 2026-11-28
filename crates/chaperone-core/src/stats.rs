@@ -568,8 +568,12 @@ impl Lane {
                 let measured = p.get("code_lines").and_then(Value::as_i64);
                 self.size_estimate = self.estimate.zip(measured);
             }
-            Some("size_waiver") => {
+            // A lane's size reason raises nothing; an overturn drops the raise (#340).
+            Some("size_waiver") if p.get("lines").is_some() => {
                 self.size_waiver = json!({ "lines": p.get("lines"), "head_sha": text("head_sha") });
+            }
+            Some("size_waiver") if text("reason") == Some("overturned") => {
+                self.size_waiver = Value::Null;
             }
             Some("merge_verdict") if ran => {
                 let harness =

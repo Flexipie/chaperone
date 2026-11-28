@@ -223,7 +223,10 @@ fn pr_open_refuses_what_cannot_pass() {
     let (code, err) = lane.run("lane", &waive);
     assert_eq!(code, 1, "{err}");
     assert!(
-        err["message"].as_str().unwrap().contains("has held lane 1"),
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("carries no lines"),
         "{err}"
     );
     let no_lines = ["check", "waive", "size", "--work", "1", "--reason", "r"];
@@ -236,7 +239,7 @@ fn pr_open_refuses_what_cannot_pass() {
         "check", "waive", "plan", "--work", "1", "--rounds", "2", "--reason", "r",
     ];
     for (args, says) in [
-        (&no_lines[..], "needs --lines"),
+        (&no_lines[..], "from anyone else, lines"),
         (&plan_lines[..], "--lines goes with size only"),
         (&no_rounds[..], "check waive rounds needs --rounds"),
         (&plan_rounds[..], "--rounds goes with rounds only"),
@@ -296,12 +299,50 @@ fn pr_open_on_v21_counts_added_lines_and_refuses_no_size() {
     let steps = out["steps"].as_array().unwrap();
     assert!(steps.iter().all(|s| s["check"] == "diff"), "{out}");
     let size = "- Size: 452 code lines added, 400 removed, and 0 test lines in 5 files, \
-                1 of them assets\n";
+                1 of them assets, over the cap of 400: no reason recorded\n";
     assert!(
         lane.file("body.md").contains(size),
         "{}",
         lane.file("body.md")
     );
+    // The lane records its own size reason, which the owner can overturn.
+    let reason = [
+        "check",
+        "waive",
+        "size",
+        "--work",
+        "1",
+        "--reason",
+        "one migration",
+    ];
+    assert_eq!(lane.run("lane", &reason).0, 0);
+    assert_eq!(lane.run("lane", &open).0, 0);
+    let body = lane.file("body.md");
+    assert!(
+        body.contains("assets, over the cap of 400: one migration\n"),
+        "{body}"
+    );
+    let listed = "- size reason by the lane: one migration (`chaperone check overturn size \
+                  --work 1 --reason <why>` reopens it)\n";
+    assert!(body.contains(listed), "{body}");
+    let overturn = [
+        "check", "overturn", "size", "--work", "1", "--reason", "split it",
+    ];
+    assert!(
+        lane.run("lane", &overturn).1["message"]
+            .to_string()
+            .contains("has held lane 1")
+    );
+    assert_eq!(lane.run("owner", &overturn).0, 0);
+    let again = lane.run("lane", &reason).1["message"].to_string();
+    assert!(again.contains("the owner overturned"), "{again}");
+    assert_eq!(lane.run("lane", &open).0, 0);
+    let body = lane.file("body.md");
+    assert!(
+        body.contains("over the cap of 400: no reason recorded\n"),
+        "{body}"
+    );
+    assert!(!body.contains("size reason by the lane"), "{body}");
     git(&lane.wt, &["add", "blob"], &[("blob", b"\0\x01")]);
     git(&lane.wt, &["commit", "-qm", "blob"], &[]);
     let (code, err) = lane.run("lane", &open);
@@ -342,6 +383,7 @@ fn pr_open_lists_the_findings_that_do_not_block() {
         ),
     ];
     let mut covering = String::new();
+    let mut first = String::new();
     for (sha, found) in rounds {
         let found = found.as_array().unwrap().iter().map(|f| {
             json!({"finding_key": f[1], "severity": f[0], "title": f[1], "body": "b",
@@ -363,7 +405,7 @@ fn pr_open_lists_the_findings_that_do_not_block() {
         let Applied::Committed(e) = ledger.apply(&actor, None, at, m).unwrap() else {
             panic!("not committed");
         };
-        covering = e.id.to_string();
+        first = std::mem::replace(&mut covering, e.id.to_string());
     }
     // A Codex message: no cache write reported.
     let p = json!({"source": "parent", "message_id": "m1", "session_id": "s1",
@@ -406,17 +448,68 @@ fn pr_open_lists_the_findings_that_do_not_block() {
     };
     let at = "2026-11-27T00:00:01.000Z";
     ledger.apply(&actor, None, at, m).unwrap();
+    // The lane defers the first round's risk it cannot fix here, and waives
+    // its plan check on a head whose harness diff changes code.
+    let defer = [
+        "finding",
+        "waive",
+        &first,
+        "r",
+        "--kind",
+        "deferred",
+        "--ref",
+        "#999",
+        "--reason",
+        "outside this slice",
+    ];
+    assert_eq!(lane.run("lane", &defer).0, 0);
+    let p = json!({"check": "diff", "outcome": "ran", "head_sha": head, "changes_code": true,
+                   "producer": harness});
+    let m = Mutation::Event {
+        kind: EventKind::CheckFinished,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: serde_json::from_value(p).unwrap(),
+    };
+    ledger.apply(&actor, None, at, m).unwrap();
+    let plan = [
+        "check",
+        "waive",
+        "plan",
+        "--work",
+        "1",
+        "--reason",
+        "coded first",
+    ];
+    assert_eq!(lane.run("lane", &plan).0, 0);
     assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 1);
     let open = format!(
         "- Smoke: none\n- Tokens: 5 fresh input, unknown cache write, 7 cache read, \
          3 output, in 1 sessions\n\nOpen findings, not blocking:\n\
          - improvement: i `lib.rs:2`\n- question: q\n\nResolved without the owner:\n\
+         - risk: r: deferred, still open: #999: outside this slice \
+         (`chaperone finding overturn {first} r --reason <why>` reopens it)\n\
          - risk: r2: dispute upheld by the verifier: lib.rs:1 does say so \
-         (`chaperone finding overturn {covering} r2 --reason <why>` reopens it)\n\nMade by"
+         (`chaperone finding overturn {covering} r2 --reason <why>` reopens it)\n\
+         - plan check waived by the lane: coded first \
+         (`chaperone check overturn plan --work 1 --reason <why>` reopens it)\n\nMade by"
     );
     let open = open.as_str();
     let body = lane.file("body.md");
     assert!(body.contains(open), "{body}");
+    // The owner overturns the plan waiver: the body no longer lists it.
+    let overturn = [
+        "check", "overturn", "plan", "--work", "1", "--reason", "plan it",
+    ];
+    assert_eq!(lane.run("owner", &overturn).0, 0);
+    // The fake's second `pr create` opens the PR.
+    assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 0);
+    let body = lane.file("body.md");
+    assert!(
+        body.contains("- Plan check: skipped (overturned)\n"),
+        "{body}"
+    );
+    assert!(!body.contains("plan check waived by the lane"), "{body}");
 }
 
 /// A GitHub lane's body closes its issue: by its full key before the PR

@@ -463,3 +463,81 @@ fn a_waiver_has_a_kind_a_ref_or_a_fresh_countersign() {
     assert!(shown().contains(r#""waiver":"scope""#), "{}", shown());
     common::assert_consistent(&path);
 }
+
+/// The lane defers an open or verified harness review finding it cannot
+/// fix in the lane, with a ref (#340): it stops blocking. Never one titled
+/// `owner:`, a disputed one before its ruling, another check's, or one the
+/// owner overturned, and nothing is written for a refusal.
+#[test]
+fn the_lane_defers_a_review_finding_it_cannot_fix() {
+    let (_dir, path, ledger) = common::ledger();
+    let (_, local) = review(&ledger, &["blocker:l"]);
+    let harness = json!({"kind": "harness", "bin": "chaperone", "version": "0"});
+    let found = ["a", "v", "o", "d", "x"].map(|k| {
+        let title = if k == "o" {
+            "owner: drops a table"
+        } else {
+            "t"
+        };
+        json!({"finding_key": k, "severity": "blocker", "title": title, "body": "b"})
+    });
+    let payload = json!({"check": "review", "outcome": "ran", "head_sha": "abc1234",
+        "producer": harness, "complete": true, "findings": found});
+    let m = Mutation::Event {
+        kind: EventKind::CheckFinished,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: serde_json::from_value(payload).unwrap(),
+    };
+    let at = "2026-11-28T00:00:00.000Z";
+    let check = common::committed(ledger.apply(&actor("9"), None, at, m).unwrap()).id;
+    let ruling = json!({"check_event_id": check, "finding_key": "v", "status": "verified",
+        "reason": "r", "producer": harness});
+    let m = Mutation::Event {
+        kind: EventKind::FindingUpdated,
+        lane_id: Some(1),
+        spec_id: None,
+        payload: serde_json::from_value(ruling).unwrap(),
+    };
+    ledger.apply(&actor("1"), None, at, m).unwrap();
+    walk(&ledger, check, "d", &["disputed"]);
+    let db = read_only(&path);
+    let events = || count(&db, "SELECT count(*) FROM events");
+    let not_one = "the lane defers an open or verified review finding that is not the owner's";
+    for ((check, key), kind, said) in [
+        (
+            (check, "a"),
+            ("deferred", ""),
+            "a lane's deferral needs a ref",
+        ),
+        ((check, "a"), ("disproved", "t.rs:1"), "has held lane 1"),
+        ((check, "o"), ("deferred", "#9"), not_one),
+        ((check, "d"), ("deferred", "#9"), not_one),
+        ((local, "l"), ("deferred", "#9"), not_one),
+    ] {
+        let before = events();
+        let got = format!("{:?}", waive(&ledger, check, ("1", key), kind).unwrap_err());
+        assert!(got.contains(said), "{key} {kind:?}: {got}");
+        assert_eq!(events(), before);
+    }
+    for key in ["a", "v", "x"] {
+        let moved = waive(
+            &ledger,
+            check,
+            ("1", key),
+            ("deferred", "CONTRIBUTING.md rule"),
+        );
+        assert_eq!(moved.unwrap().payload.rest["waiver"]["kind"], "deferred");
+    }
+    let blocking = || {
+        let found = ledger.blocking_findings(1).unwrap();
+        found.into_iter().map(|f| f.finding_key).collect::<Vec<_>>()
+    };
+    assert_eq!(blocking(), ["l", "o", "d"]);
+    // The owner overturns x: it blocks again, and is the owner's from then on.
+    mv(&ledger, check, ("2", "x", "verified"), "r", "").unwrap();
+    assert_eq!(blocking(), ["l", "o", "d", "x"]);
+    let again = waive(&ledger, check, ("1", "x"), ("deferred", "#9")).unwrap_err();
+    assert!(format!("{again:?}").contains(not_one), "{again:?}");
+    common::assert_consistent(&path);
+}

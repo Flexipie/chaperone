@@ -124,7 +124,7 @@ pub(crate) fn project(
                 let text = |key: &str| p.rest.get(key).and_then(Value::as_str);
                 match check {
                     "plan_check" | "merge_verdict"
-                        if harness_only && !harness && !plan_waiver(p) => {}
+                        if harness_only && !harness && plan_waiver(p).is_none() => {}
                     "plan_check" | "quality_gate" => {
                         set(&mut f, &format!("{check}.outcome"), p.outcome.as_deref());
                         set(&mut f, &format!("{check}.reason"), text("reason"));
@@ -139,8 +139,12 @@ pub(crate) fn project(
                         set(&mut f, "verdict.decision", text("decision"));
                         set(&mut f, "verdict.sha", p.head_sha.as_deref());
                     }
+                    // A lane's size reason has no lines and lifts nothing (#340).
                     "size_waiver" if producer == Some(&json!("session")) => {
-                        waived_to = p.rest.get("lines").and_then(Value::as_i64);
+                        let lines = p.rest.get("lines").and_then(Value::as_i64);
+                        if lines.is_some() || plan_waiver(p).is_some() {
+                            waived_to = lines;
+                        }
                     }
                     "smoke" => smoke = true,
                     "kept_tests" => kept = true,

@@ -78,6 +78,10 @@ fn help_matches_snapshots() {
             include_str!("snapshots/check-waive.txt"),
         ),
         (
+            &["check", "overturn"],
+            include_str!("snapshots/check-overturn.txt"),
+        ),
+        (
             &["check", "prune"],
             include_str!("snapshots/check-prune.txt"),
         ),

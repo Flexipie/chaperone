@@ -32,7 +32,8 @@ use chaperone_graph::{Companion, Required, code_globs, commands_in, declares, gl
 use serde_json::{Map, Value, json};
 
 use crate::cli::{
-    AttentionCmd, CheckCmd, FindingCmd, JobsCmd, ReviewsCmd, RunKind, UsageCmd, WaiveKind,
+    AttentionCmd, CheckCmd, FindingCmd, JobsCmd, OverturnKind, ReviewsCmd, RunKind, UsageCmd,
+    WaiveKind,
 };
 use crate::output::{CliError, ErrorBody, Meta, Outcome};
 use crate::work::{items, observed_head, one};
@@ -154,12 +155,9 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
             actor,
         } => {
             let limit = match (kind, lines, rounds) {
-                (WaiveKind::Size, Some(n), None) => Some((SIZE_WAIVER, n)),
-                (WaiveKind::Rounds, None, Some(n)) => Some((ROUNDS_WAIVER, n)),
+                (WaiveKind::Size, n, None) => Some((SIZE_WAIVER, n)),
+                (WaiveKind::Rounds, None, Some(n)) => Some((ROUNDS_WAIVER, Some(n))),
                 (WaiveKind::Plan, None, None) => None,
-                (WaiveKind::Size, None, _) => {
-                    return Err(refuse("check waive size needs --lines".into()));
-                }
                 (WaiveKind::Rounds, _, None) => {
                     return Err(refuse("check waive rounds needs --rounds".into()));
                 }
@@ -167,29 +165,49 @@ pub fn check(ledger: &Ledger, db: &Path, cmd: CheckCmd) -> Result<Outcome, CliEr
                 (_, _, Some(_)) => return Err(refuse("--rounds goes with rounds only".into())),
             };
             let item = ledger.work_get(work, &ledger.now()?)??;
+            let mut attempts = 0;
             if limit.is_none() {
-                plan::plan(lane_pipeline(&item)?).map_err(|e| {
+                (_, attempts) = plan::plan(lane_pipeline(&item)?).map_err(|e| {
                     refuse(format!(
                         "{e}; a lane on it records a skipped plan check with `check record`"
                     ))
                 })?;
             }
-            let head = observed_head(item.worktree_path.as_deref(), item.branch.as_deref())?;
-            let head = head.ok_or_else(|| {
-                refuse(format!(
-                    "work item {work} has no worktree to read its commit in"
-                ))
-            })?;
+            let head = lane_head(&item)?;
             let actor = actor.resolve();
             match limit {
                 Some((waiver, n)) => {
                     one(ledger.limit_waive(&actor, work, &head, waiver, n, &reason)??)
                 }
-                None => one(ledger.plan_waive(&actor, work, &head, &reason)??),
+                None => one(ledger.plan_waive(&actor, work, &head, &reason, attempts)??),
             }
+        }
+        CheckCmd::Overturn {
+            kind,
+            work,
+            reason,
+            actor,
+        } => {
+            let check = match kind {
+                OverturnKind::Plan => plan::EVENT_CHECK,
+                OverturnKind::Size => SIZE_WAIVER.0,
+            };
+            let head = lane_head(&ledger.work_get(work, &ledger.now()?)??)?;
+            one(ledger.check_overturn(&actor.resolve(), work, &head, check, &reason)??)
         }
         CheckCmd::Prune => one(sweep(ledger, db)?),
     }
+}
+
+/// The commit lane `item`'s worktree is on.
+fn lane_head(item: &WorkItem) -> Result<String, CliError> {
+    let head = observed_head(item.worktree_path.as_deref(), item.branch.as_deref())?;
+    head.ok_or_else(|| {
+        refuse(format!(
+            "work item {} has no worktree to read its commit in",
+            item.id
+        ))
+    })
 }
 
 /// Whether the pipeline holds a lane to the repo's tests run on this machine.
@@ -629,6 +647,7 @@ fn pr_body(
     let assets = assets.map_or_else(String::new, |n| format!(", {n} of them assets"));
     let removed = diff["removed_code"].as_u64();
     let removed = removed.map_or_else(String::new, |n| format!(", {n} removed,"));
+    let cap = review::cut_cap(lane_pipeline(item)?);
     let tests = match tests.is_null() {
         true => "left to CI".into(),
         false => format!("passed on {head}: {}", commands.join(", ")),
@@ -654,14 +673,44 @@ fn pr_body(
     }
     let mut resolved = String::new();
     for f in ledger.lane_findings(item.id)? {
-        if f.status != "refuted" || !f.disputed {
-            continue;
-        }
         let why = f.reason.unwrap_or_default();
+        let how = match (f.status.as_str(), f.waiver.as_deref()) {
+            ("refuted", _) if f.disputed => format!("dispute upheld by the verifier: {why}"),
+            ("waived", Some("deferred")) => format!(
+                "deferred, still open: {}: {why}",
+                f.waiver_ref.unwrap_or_default()
+            ),
+            _ => continue,
+        };
         resolved += &format!(
-            "- {}: {}: dispute upheld by the verifier: {why} (`chaperone finding overturn {} {} --reason <why>` reopens it)\n",
+            "- {}: {}: {how} (`chaperone finding overturn {} {} --reason <why>` reopens it)\n",
             f.severity, f.title, f.check_event_id, f.finding_key
         );
+    }
+    let work = item.id;
+    let mut size_why = None;
+    for (p, by_lane) in ledger.lane_waivers(work)? {
+        let note = p
+            .rest
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let over = p.rest.get("reason") == Some(&json!("overturned"));
+        let (what, kind) = match p.check.as_deref() {
+            Some("size_waiver") if !over => {
+                size_why = Some(note.to_string());
+                ("size reason", "size")
+            }
+            Some("plan_check") if p.rest.get("reason") == Some(&json!("waived")) => {
+                ("plan check waived", "plan")
+            }
+            _ => continue,
+        };
+        if by_lane {
+            resolved += &format!(
+                "- {what} by the lane: {note} (`chaperone check overturn {kind} --work {work} --reason <why>` reopens it)\n"
+            );
+        }
     }
     if !resolved.is_empty() {
         open += &format!("\nResolved without the owner:\n{resolved}");
@@ -684,8 +733,13 @@ fn pr_body(
             n("sessions")
         ),
     };
+    let over = cap.filter(|cap| diff["code_lines"].as_i64().is_some_and(|n| n > *cap));
+    let over = over.map_or_else(String::new, |cap| {
+        let why = size_why.unwrap_or_else(|| "no reason recorded".into());
+        format!(", over the cap of {cap}: {why}")
+    });
     body += &format!(
-        "- Size: {} code lines added{removed} and {} test lines in {} files{assets}\n\
+        "- Size: {} code lines added{removed} and {} test lines in {} files{assets}{over}\n\
          - Tests: {tests}\n- Plan check: {plan}\n- Smoke: {}\n- Tokens: {tokens}\n{open}\n\
          Made by `chaperone pr open` from the ledger.\n",
         diff["code_lines"],

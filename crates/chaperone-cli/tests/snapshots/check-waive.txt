@@ -1,4 +1,4 @@
-Waive a check the harness runs for a lane that cannot pass it now: the plan check of a lane that coded before its plan was attacked, or the size cap of a lane whose change only makes sense whole. The owner's: refused from any session that has held the lane
+Waive a check the harness runs for a lane that cannot pass it now: the plan check of a lane that coded before its plan was attacked, or the size cap of a lane whose change only makes sense whole. The lane writes its own plan waiver only when the check cannot run (the head's harness diff changes code, or its plan sessions used plan_attempts with no answer) and its size reason (no --lines); the owner can overturn either. rounds, and --lines, are the owner's
 
 Usage: chaperone check waive [OPTIONS] --work <WORK> --reason <REASON> <KIND>
 
@@ -23,7 +23,7 @@ Options:
           [possible values: json, jsonl]
 
       --lines <LINES>
-          For size only, and required there: the lane's raised `code_lines` limit
+          For size only: the lane's raised `code_lines` limit, the owner's (v20's gate reads it); the lane's own size reason has none
 
       --rounds <ROUNDS>
           For rounds only, and required there: the lane's raised `review_rounds` limit

@@ -31,6 +31,12 @@ Weigh it (`judgement.md` beside this file, "Weighing a finding"), then one of:
   open) and one the owner overturned are the owner's too: dispute it and Needs you, naming
   it and the command (`chaperone finding waive <event_id> <finding_key> --kind disproved
   --ref <ref> --reason <why>`). Never argue in prose, the PR or the handoff.
+- It holds but cannot be fixed in this lane (a repo rule forbids the edit, or it is outside
+  the slice): `chaperone finding waive <event_id> <finding_key> --kind deferred --ref "<the rule,
+  or the follow-up issue>" --reason "<why not here>"`, on an open or verified one. It stops
+  blocking and the PR body lists it; the owner may overturn it. Never for one titled `owner:`
+  (a one-way door, a gate that fails open), one the owner overturned, or a disputed one: those
+  are refused.
 
 Fix every blocking finding at once, then back to step 5 (smoke) and verify once. A third verify
 on this lane that stops at `review` or `verdict`: Needs you. A big fix round

@@ -721,9 +721,11 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             // records its own; one carrying `result` is refused below.
             let session = event.actor.session.as_deref().unwrap_or_default();
             let check = p.check.as_deref().unwrap_or_default();
+            let held = has_held(tx, lane_id, session)?;
             if SESSION_CHECKS.contains(&check)
                 && !harness
-                && has_held(tx, lane_id, session)?
+                && held
+                && !lane_waiver(p)
                 && !(check == "smoke" && stamped_schema(tx, lane_id)? == Some(2))
             {
                 refuse!(invalid(&format!(
@@ -734,7 +736,14 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                 refuse!(invalid("check.finished needs check and head_sha"));
             }
             let lines = p.rest.get("lines").and_then(Value::as_i64);
-            if check == "size_waiver" && lines.is_none_or(|n| n <= 0) {
+            // A lane's size waiver is its reason only (#340): it lifts no gate.
+            let overturn = plan_waiver(p) == Some("overturned");
+            if check == "size_waiver" && !harness && !overturn && held != lines.is_none() {
+                refuse!(invalid(
+                    "a size_waiver from the lane carries no lines; from anyone else, lines"
+                ));
+            }
+            if check == "size_waiver" && lines.is_some_and(|n| n <= 0) {
                 refuse!(invalid("a size_waiver needs lines, an integer above 0"));
             }
             let rounds = p.rest.get("rounds").and_then(Value::as_i64);
@@ -746,10 +755,10 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
             }
             // Under a schema 2 pipeline the harness runs these checks and its
             // gates read only its results (events.md, `check.finished`
-            // producer), so no other producer writes one there. The owner's
-            // plan waiver is the one session plan check, and a session's
+            // producer), so no other producer writes one there. A plan
+            // waiver or its overturn is the one session plan check, and a session's
             // smoke is its claim, which may not carry a harness `result`.
-            let harness_only = HARNESS_CHECKS.contains(&check) && !plan_waiver(p)
+            let harness_only = HARNESS_CHECKS.contains(&check) && plan_waiver(p).is_none()
                 || check == "smoke" && p.rest.contains_key("result");
             if !harness && harness_only && stamped_schema(tx, lane_id)? == Some(2) {
                 refuse!(invalid(&format!(
@@ -858,11 +867,21 @@ fn lane_guard(tx: &Transaction, event: &mut Event, lane_id: i64) -> Checked<()> 
                     "finding {check}/{key} is the owner's: its dispute is not the verifier's to rule"
                 )));
             }
+            // The lane defers a review finding it cannot fix here (#340), never
+            // one the owner holds, nor a disputed one before its ruling.
+            let kind = p.rest.get("waiver").and_then(|w| w.get("kind"));
+            let deferral = held && to == "waived" && kind == Some(&Value::from("deferred"));
+            if deferral && (!reviewed || from == "disputed" || owner_held(tx, lane_id, check, key)?)
+            {
+                refuse!(invalid(&format!(
+                    "the lane defers an open or verified review finding that is not the owner's; finding {check}/{key} is not one"
+                )));
+            }
             match by {
                 By::Lane if !held => refuse!(invalid(&format!(
                     "only the lane disputes or accepts a finding; session {session} has never held lane {lane_id}"
                 ))),
-                By::Independent if held && !ruled => refuse!(invalid(&format!(
+                By::Independent if held && !ruled && !deferral => refuse!(invalid(&format!(
                     "session {session} has held lane {lane_id}; a finding goes {to} from a session that never has"
                 ))),
                 _ => {}
@@ -939,6 +958,14 @@ fn waiver(
         }
         return Ok(Ok(()));
     }
+    if has_held(tx, lane_id, session)? {
+        if reference.is_none() {
+            refuse!(invalid(
+                "a lane's deferral needs a ref: the repo rule or the follow-up issue"
+            ));
+        }
+        return Ok(Ok(()));
+    }
     if exists(
         tx,
         "SELECT 1 FROM events WHERE lane_id = ?1 AND actor_session = ?2
@@ -975,11 +1002,22 @@ fn owner_pause(event: &Event) -> bool {
             }
 }
 
-/// The owner's plan waiver (`check waive plan`).
-pub(crate) fn plan_waiver(p: &Payload) -> bool {
-    p.check.as_deref() == Some("plan_check")
-        && p.outcome.as_deref() == Some("skipped")
-        && p.rest.get("reason") == Some(&Value::from("waived"))
+/// A plan waiver's reason (`check waive plan`): `waived`, or `overturned`
+/// for the owner's overturn of a waiver (`check overturn`), which is also
+/// a size waiver's.
+pub(crate) fn plan_waiver(p: &Payload) -> Option<&str> {
+    let reason = p.rest.get("reason").and_then(Value::as_str);
+    let plan = p.check.as_deref() == Some("plan_check") && reason == Some("waived");
+    let over = matches!(p.check.as_deref(), Some("plan_check" | "size_waiver"))
+        && reason == Some("overturned");
+    reason.filter(|_| p.outcome.as_deref() == Some("skipped") && (plan || over))
+}
+
+/// A waiver the lane writes itself (#340): its plan check's, or its size
+/// reason; never an overturn.
+fn lane_waiver(p: &Payload) -> bool {
+    let size = p.check.as_deref() == Some("size_waiver") && !p.rest.contains_key("reason");
+    size || plan_waiver(p) == Some("waived")
 }
 
 /// The schema of the pipeline lane `lane_id` is stamped with, `None` while
@@ -1253,6 +1291,17 @@ mod tests {
     /// A bad event is refused for its own reason and writes no event. Not
     /// every refusal is here: the gate, the pipeline stamp, `pr.merged`,
     /// attention and usage have their own tests.
+    #[test]
+    fn a_waiver_is_a_skipped_check() {
+        let p = |outcome: &str| {
+            serde_json::from_value::<Payload>(json!({"check": "plan_check",
+                "outcome": outcome, "reason": "waived"}))
+            .unwrap()
+        };
+        assert_eq!(plan_waiver(&p("skipped")), Some("waived"));
+        assert_eq!(plan_waiver(&p("ran")), None);
+    }
+
     #[test]
     fn refusals_write_nothing() {
         let dir = tempfile::tempdir().unwrap();

@@ -380,14 +380,19 @@ fn same_review(ledger: &Ledger, verdict: &Recorded, head: &Harness) -> Result<bo
 
 /// Whether a NO, `newest` on its tree, is reopened: a finding of the lane
 /// raised before the session that decided it was waived or refuted by an
-/// event after `newest`. Under the move table a session that has held the
-/// lane makes neither move, and a finding raised later (another tree's
-/// review) does not count, so the lane cannot reopen its own NO.
+/// event after `newest`, by the verifier or a session that never held the
+/// lane (its own deferral, #340, does not count). A finding raised later
+/// (another tree's review) does not count either, so the lane cannot
+/// reopen its own NO.
 pub fn reopened(ledger: &Ledger, work: i64, newest: &Recorded) -> Result<bool, LedgerError> {
     let found: i64 = ledger.conn().query_row(
-        "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'finding.updated' AND id > ?2
+        "SELECT count(*) FROM events e WHERE lane_id = ?1 AND kind = 'finding.updated' AND id > ?2
            AND json_extract(payload_json, '$.status') IN ('waived', 'refuted')
-           AND json_extract(payload_json, '$.check_event_id') < ?3",
+           AND json_extract(payload_json, '$.check_event_id') < ?3
+           AND (json_extract(payload_json, '$.producer.kind') IS 'harness'
+                OR NOT EXISTS (SELECT 1 FROM events c WHERE c.lane_id = ?1
+                     AND c.kind IN ('lane.claimed', 'lane.taken_over')
+                     AND c.actor_session = e.actor_session))",
         params![work, newest.event_id, session_of(newest)],
         |r| r.get(0),
     )?;
@@ -682,25 +687,30 @@ mod tests {
         let none = replay_on("abc1234", "q", 2, &facts).1.unwrap();
         assert!(none.is_none());
 
-        // The owner waives the finding the NO saw: one new session may run;
-        // its YES then stands, and a later waive does not reopen a YES.
+        // The lane's own deferral (#340) does not reopen its NO; the owner
+        // overturns it, then waives the finding the NO saw: one new session
+        // may run; its YES then stands, and a later waive does not reopen a YES.
         let owner = Actor {
             agent: Some("owner".into()),
             session: Some("o".into()),
         };
-        let waive = |key: &str| crate::checks::FindingMove {
+        let waive = |status: &str, kind: &str| crate::checks::FindingMove {
             check_event_id: 5,
-            finding_key: key.into(),
-            status: "waived".into(),
+            finding_key: "k".into(),
+            status: status.into(),
             reason: Some("not this PR".into()),
             head_sha: None,
-            waiver_kind: Some("disproved".into()),
-            waiver_ref: Some("t.rs:1".into()),
+            waiver_kind: (!kind.is_empty()).then(|| kind.into()),
+            waiver_ref: (!kind.is_empty()).then(|| "t.rs:1".into()),
         };
-        ledger
-            .finding_update(&owner, &waive("k"), false)
-            .unwrap()
-            .unwrap();
+        let mv = |who: &Actor, status: &str, kind: &str| {
+            let moved = ledger.finding_update(who, &waive(status, kind), false);
+            moved.unwrap().unwrap();
+        };
+        mv(&me(), "waived", "deferred");
+        assert!(replay_on("abc1234", "p", 2, &facts).1.unwrap().is_some());
+        mv(&owner, "verified", "");
+        mv(&owner, "waived", "disproved");
         assert!(replay_on("abc1234", "p", 2, &facts).1.unwrap().is_none());
         input.fields = fields(json!({"decision": "yes"}));
         let k = ledger.tree_key(&input, &facts.sha256).unwrap();

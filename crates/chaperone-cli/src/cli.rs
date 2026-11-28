@@ -225,6 +225,7 @@ impl Cmd {
             Cmd::Check(CheckCmd::Record { .. }) => Some("check record"),
             Cmd::Check(CheckCmd::Run { .. }) => Some("check run"),
             Cmd::Check(CheckCmd::Waive { .. }) => Some("check waive"),
+            Cmd::Check(CheckCmd::Overturn { .. }) => Some("check overturn"),
             Cmd::Check(CheckCmd::Prune) => None,
             Cmd::Verify { .. } => Some("verify"),
             Cmd::Pr(PrCmd::Open { .. }) => Some("pr open"),
@@ -701,17 +702,34 @@ pub enum CheckCmd {
     /// Waive a check the harness runs for a lane that cannot pass it now:
     /// the plan check of a lane that coded before its plan was attacked,
     /// or the size cap of a lane whose change only makes sense whole.
-    /// The owner's: refused from any session that has held the lane
+    /// The lane writes its own plan waiver only when the check cannot run
+    /// (the head's harness diff changes code, or its plan sessions used
+    /// plan_attempts with no answer) and its size reason (no --lines); the
+    /// owner can overturn either. rounds, and --lines, are the owner's
     Waive {
         kind: WaiveKind,
         #[arg(long)]
         work: i64,
-        /// For size only, and required there: the lane's raised `code_lines` limit
+        /// For size only: the lane's raised `code_lines` limit, the owner's
+        /// (v20's gate reads it); the lane's own size reason has none
         #[arg(long)]
         lines: Option<i64>,
         /// For rounds only, and required there: the lane's raised `review_rounds` limit
         #[arg(long)]
         rounds: Option<i64>,
+        /// Why; one line, kept on the event and redacted at write
+        #[arg(long)]
+        reason: String,
+        #[command(flatten)]
+        actor: ActorArgs,
+    },
+    /// Overturn a plan waiver or a size reason: the plan gate fails again,
+    /// v20's size gate applies again, and the lane may not write that waiver
+    /// again. The owner's: refused from any session that has held the lane
+    Overturn {
+        kind: OverturnKind,
+        #[arg(long)]
+        work: i64,
         /// Why; one line, kept on the event and redacted at write
         #[arg(long)]
         reason: String,
@@ -734,6 +752,15 @@ pub enum WaiveKind {
     Size,
     /// The `review_rounds` cap on fresh reviews, raised to --rounds for this lane alone (v21 on)
     Rounds,
+}
+
+/// The waivers the owner may overturn
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum OverturnKind {
+    /// The plan check's waiver
+    Plan,
+    /// The size waiver or reason
+    Size,
 }
 
 /// The checks `check run` does itself
@@ -874,9 +901,12 @@ pub enum FindingCmd {
     /// owner
     Dispute(FindingArgs),
     /// Stop an open, verified or disputed finding blocking, or (scope only)
-    /// release an accepted plan finding. Refused from any session that has
-    /// held the lane: the owner's, or a fresh agent's (--kind). Never waive a finding where a gate
-    /// fails open on a path a lane can reach: fix it or ask the owner
+    /// release an accepted plan finding: the owner's, or a fresh agent's
+    /// (--kind). The lane itself only defers (--kind deferred, with --ref the
+    /// repo rule or follow-up issue) an open or verified review finding it
+    /// cannot fix in the lane, never one titled owner: or overturned. Never
+    /// waive a finding where a gate fails open on a path a lane can reach:
+    /// fix it or ask the owner
     Waive(WaiveArgs),
     /// Say the lane will act on an open plan check finding, and how. Only
     /// from a session that has held the lane; the review is shown it
@@ -913,7 +943,7 @@ pub struct WaiveArgs {
     pub finding: FindingArgs,
     /// fixed and disproved need --ref. scope, deferred and accepted are
     /// countersigned: written by a fresh session, one with no event on the
-    /// lane but its own such waivers
+    /// lane but its own such waivers; or deferred by the lane, with --ref
     #[arg(long, value_parser = PossibleValuesParser::new(WAIVER_KINDS))]
     pub kind: String,
     /// The commit and test, the file:line, the owner text or the follow-up
