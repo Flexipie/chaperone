@@ -377,11 +377,13 @@ impl Ledger {
         }
         let session = actor.session.as_deref().unwrap_or_default();
         if has_held(self.conn(), work, session)? {
+            // The plan run's limit is per tree: count the head's sessions.
             let failed: i64 = self.conn().query_row(
                 "SELECT count(*) FROM events WHERE lane_id = ?1 AND kind = 'check.finished'
                    AND json_extract(payload_json, '$.check') = 'plan_check'
-                   AND json_extract(payload_json, '$.reason') = 'no_answer'",
-                [work],
+                   AND json_extract(payload_json, '$.reason') = 'no_answer'
+                   AND json_extract(payload_json, '$.head_sha') = ?2",
+                params![work, head],
                 |r| r.get(0),
             )?;
             let code = self
@@ -456,7 +458,8 @@ impl Ledger {
     /// `plan_check` or `size_waiver`: one `skipped` with `reason`
     /// `overturned` and the `note`. The plan gate fails again, and v20's size
     /// gate applies again; the write refuses it from a session that has held
-    /// the lane, which may not waive that check again.
+    /// the lane, which may not waive that check again. Refused unless the
+    /// lane's newest `check` is a waiver: there is nothing else to overturn.
     pub fn check_overturn(
         &self,
         actor: &Actor,
@@ -468,6 +471,21 @@ impl Ledger {
         if !one_line(note) {
             return invalid(format!(
                 "--reason is one non-blank line of at most {NOTE_CHARS} characters"
+            ));
+        }
+        let newest = self.lane_waivers(work)?.into_iter().map(|(p, _)| p);
+        let waiver = newest
+            .filter(|p| p.check.as_deref() == Some(check))
+            .any(|p| {
+                let reason = p.rest.get("reason").and_then(Value::as_str);
+                match check {
+                    "size_waiver" => reason.is_none(),
+                    _ => reason == Some("waived"),
+                }
+            });
+        if !waiver {
+            return invalid(format!(
+                "lane {work}'s newest {check} is no waiver to overturn"
             ));
         }
         let mut payload = Payload {
@@ -1649,12 +1667,32 @@ mod tests {
         assert!(said(waive("lane", "abc1234", 2)).starts_with("no harness diff on abc1234"));
         diff("abc1234", false);
         assert!(said(waive("lane", "abc1234", 2)).contains("it can run, so run it"));
-        waive("lane", "abc1234", 0).unwrap();
+        let no_answer = |head: &str| {
+            let p = json!({"check": "plan_check", "outcome": "skipped", "head_sha": head,
+                "reason": "no_answer", "producer": {"kind": "harness"}});
+            let m = crate::ledger::Mutation::Event {
+                kind: EventKind::CheckFinished,
+                lane_id: Some(1),
+                spec_id: None,
+                payload: serde_json::from_value(p).unwrap(),
+            };
+            ledger
+                .apply(&actor("lane"), None, "2026-11-28T00:00:00.000Z", m)
+                .unwrap();
+        };
+        // The limit is the head's: another commit's sessions do not count.
+        no_answer("abc1234");
+        no_answer("fed4321");
+        assert!(said(waive("lane", "abc1234", 2)).contains("had 1 of 2 sessions"));
+        no_answer("abc1234");
+        waive("lane", "abc1234", 2).unwrap();
         diff("def5678", true);
         let lanes = waive("lane", "def5678", 2).unwrap();
         assert_eq!(lanes.payload.rest["producer"]["session"], "lane");
         let overturn =
             |s: &str| ledger.check_overturn(&actor(s), 1, "def5678", "plan_check", "plan it");
+        let size = ledger.check_overturn(&actor("owner"), 1, "def5678", "size_waiver", "x");
+        assert!(said(size.unwrap()).contains("newest size_waiver is no waiver to overturn"));
         assert!(said(overturn("lane").unwrap()).starts_with("session lane has held lane 1"));
         overturn("owner").unwrap().unwrap();
         let facts = ledger.project(1, None).unwrap();

@@ -672,7 +672,7 @@ what to cut (`over_cap` on the review, docs/events.md).
 `check overturn plan|size --work <id> --reason <r>` is new (#340): the owner's answer to a plan
 waiver or size reason the lane wrote itself. It appends one `plan_check` or `size_waiver`
 `skipped` with `reason` `overturned` and `note` the `--reason`, producer `session`, refused from
-any session that has held the lane. A plan overturn fails `plan_or_no_code` again
+any session that has held the lane, and refused when the lane's newest `plan_check` or `size_waiver` is no waiver (nothing to overturn). The lane's own plan waiver counts the head's `no_answer` plan sessions, as the plan run's limit is per tree. A plan overturn fails `plan_or_no_code` again
 (`plan_check.reason` is `overturned`); a size overturn drops an earlier `--lines` raise, so
 v20's `code_lines_at_most` applies again. After either the lane may not waive that check again.
 It prints what `check record` prints.

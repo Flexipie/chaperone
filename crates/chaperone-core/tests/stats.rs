@@ -229,6 +229,11 @@ fn a_lane_folds_from_its_events() {
     assert_eq!(lane["plan_check"]["findings"], 2);
     assert_eq!(lane["quality_gate"]["outcome"], "ran");
     assert_eq!(lane["size_waiver"], json!({"lines": 500, "head_sha": HEAD}));
+    // The owner's overturn drops the raise (#340).
+    let overturn = ledger.check_overturn(&actor("owner"), id, HEAD, "size_waiver", "split");
+    overturn.unwrap().unwrap();
+    let after = stats(&ledger, Cohort::Work(vec![id]));
+    assert_eq!(after["lanes"][0]["size_waiver"], Value::Null);
     // The verdict's 7-digit sha is a prefix of the merged head.
     assert_eq!(lane["verdict_on_head"], true);
     assert_eq!(lane["head_reviewed"], true);

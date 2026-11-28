@@ -497,6 +497,19 @@ fn pr_open_lists_the_findings_that_do_not_block() {
     let open = open.as_str();
     let body = lane.file("body.md");
     assert!(body.contains(open), "{body}");
+    // The owner overturns the plan waiver: the body no longer lists it.
+    let overturn = [
+        "check", "overturn", "plan", "--work", "1", "--reason", "plan it",
+    ];
+    assert_eq!(lane.run("owner", &overturn).0, 0);
+    // The fake's second `pr create` opens the PR.
+    assert_eq!(lane.run("lane", &["pr", "open", "--work", "1"]).0, 0);
+    let body = lane.file("body.md");
+    assert!(
+        body.contains("- Plan check: skipped (overturned)\n"),
+        "{body}"
+    );
+    assert!(!body.contains("plan check waived by the lane"), "{body}");
 }
 
 /// A GitHub lane's body closes its issue: by its full key before the PR
